@@ -125,6 +125,7 @@
 #include <tools/position_relative_tool.h>
 #include <tools/zone_filler_tool.h>
 #include <tools/multichannel_tool.h>
+#include "collab/pcb_collab_tool.h"
 #include <router/router_tool.h>
 #include <autorouter/autoplace_tool.h>
 #include <netlist_reader/netlist_reader.h>
@@ -1065,6 +1066,7 @@ void PCB_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new EMBED_TOOL );
     m_toolManager->RegisterTool( new DRC_RULE_EDITOR_TOOL );
     m_toolManager->RegisterTool( new DIFF_PHASE_SKEW_TOOL );
+    m_toolManager->RegisterTool( new PCB_COLLAB_TOOL );
     m_toolManager->InitTools();
 
     for( TOOL_BASE* tool : m_toolManager->Tools() )

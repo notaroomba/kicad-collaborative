@@ -52,6 +52,7 @@
 #include <core/arraydim.h>
 #include <id.h>
 #include <kicad_curl/kicad_curl.h>
+#include <collab/collab_session.h>
 #include <kiplatform/policy.h>
 #include <libraries/library_manager.h>
 #include <macros.h>
@@ -183,6 +184,11 @@ PGM_BASE::~PGM_BASE()
 
 void PGM_BASE::Destroy()
 {
+    // The collaboration WebSocket thread holds a KICAD_CURL shared lock for the
+    // life of its connection; join it before Cleanup() takes the unique lock.
+    if( COLLAB_SESSION::Exists() )
+        COLLAB_SESSION::Shutdown();
+
     KICAD_CURL::Cleanup();
 
     APP_MONITOR::SENTRY::Instance()->Cleanup();

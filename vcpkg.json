@@ -25,7 +25,10 @@
       "name": "wxwidgets-33",
       "features": [ "webview" ]
     },
-    "curl",
+    {
+      "name": "curl",
+      "features": [ "websockets" ]
+    },
     {
       "name": "gettext",
       "features": [ "tools" ],

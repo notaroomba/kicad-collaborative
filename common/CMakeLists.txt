@@ -320,6 +320,11 @@ set( KICOMMON_SRCS
     netclass.cpp
     notifications_manager.cpp
     page_info.cpp
+    collab/collab_auth.cpp
+    collab/collab_journal.cpp
+    collab/collab_rest.cpp
+    collab/collab_session.cpp
+    collab/collab_ws_client.cpp
     oauth/oauth_loopback_server.cpp
     oauth/oauth_pkce.cpp
     oauth/oauth_session.cpp
@@ -805,6 +810,7 @@ set( COMMON_SRCS
     bitmap_base.cpp
     board_printout.cpp
     clipboard.cpp
+    collab/collab_cursor_item.cpp
     commit.cpp
     draw_panel_gal.cpp
     gal_display_options_common.cpp

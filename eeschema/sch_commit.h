@@ -36,6 +36,9 @@ class SCH_TOOL_BASE;
 #define SKIP_UNDO          0x0001
 #define APPEND_UNDO        0x0002
 #define SKIP_SET_DIRTY     0x0004
+#define SKIP_CLEANUP       0x0008    ///< Rebuild connectivity but run no schematic cleanup
+                                     ///< (used when applying remote collaboration edits, which
+                                     ///< must not mint local junction/merge KIIDs).
 
 class SCH_COMMIT : public COMMIT
 {

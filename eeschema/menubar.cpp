@@ -116,6 +116,11 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( submenuExport );
 
     fileMenu->AppendSeparator();
+    fileMenu->Add( SCH_ACTIONS::collabStartSession );
+    fileMenu->Add( SCH_ACTIONS::collabJoinSession );
+    fileMenu->Add( SCH_ACTIONS::collabLeaveSession );
+
+    fileMenu->AppendSeparator();
     fileMenu->Add( SCH_ACTIONS::compareSchematicWithFile );
 
     wxMenuItem*       historyItem = fileMenu->Add( SCH_ACTIONS::compareSchematicWithHistory );

@@ -728,6 +728,15 @@ public:
     void ClearUndoORRedoList( UNDO_REDO_LIST whichList, int aItemCount = -1 ) override;
 
     /**
+     * Drop every undo/redo entry that references the item with \a aItemId, deleting the
+     * data the stacks own for it (links and deleted-item copies).
+     *
+     * Called when a remote collaboration edit deletes an item so a later local undo/redo
+     * cannot dereference the freed pointer.
+     */
+    void PurgeItemFromUndoRedo( const KIID& aItemId );
+
+    /**
      * Clone \a aItem and owns that clone in this container.
      */
     void SaveCopyForRepeatItem( const SCH_ITEM* aItem );

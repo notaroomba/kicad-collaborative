@@ -141,7 +141,6 @@ public:
 
     EDA_ITEM* GetFirst() const { return m_entries.empty() ? nullptr : m_entries[0].m_item; }
 
-protected:
     struct COMMIT_LINE
     {
         EDA_ITEM*    m_item;                ///< Main item that is added/deleted/modified
@@ -150,6 +149,10 @@ protected:
         BASE_SCREEN* m_screen;
     };
 
+    /// Read-only access to the staged changes (used by the collaboration capture hooks).
+    const std::vector<COMMIT_LINE>& GetEntries() const { return m_entries; }
+
+protected:
     /// Should be called in Push() & Revert() methods
     void clear()
     {

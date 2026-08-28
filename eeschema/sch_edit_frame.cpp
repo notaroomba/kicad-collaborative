@@ -99,6 +99,7 @@
 #include <tools/sch_navigate_tool.h>
 #include <tools/sch_selection_tool.h>
 #include <tools/sch_find_replace_tool.h>
+#include "collab/sch_collab_tool.h"
 #include <trace_helpers.h>
 #include <unordered_set>
 #include <view/view_controls.h>
@@ -720,6 +721,7 @@ void SCH_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new SCH_NAVIGATE_TOOL );
     m_toolManager->RegisterTool( new PROPERTIES_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
+    m_toolManager->RegisterTool( new SCH_COLLAB_TOOL );
     m_toolManager->InitTools();
 
     // Run the selection tool, it is supposed to be always active

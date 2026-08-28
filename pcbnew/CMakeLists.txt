@@ -466,6 +466,8 @@ set( PCBNEW_CLASS_SRCS
     api/headless_footprint_context.cpp
     api/pcb_context.cpp
 
+    collab/pcb_collab_tool.cpp
+
     tools/array_tool.cpp
     tools/board_editor_control.cpp
     tools/board_inspection_tool.cpp

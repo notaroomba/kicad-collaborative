@@ -161,6 +161,7 @@ set( QA_EESCHEMA_SRCS
     test_bus_entry_concurrency.cpp
     test_bus_net_name_determinism.cpp
     test_bus_parsing.cpp
+    test_collab_sync.cpp
     test_sch_differ.cpp
     test_sch_merge_applier.cpp
     test_sym_lib_differ.cpp

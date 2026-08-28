@@ -338,6 +338,11 @@ public:
     static TOOL_ACTION createNetChain;
     static TOOL_ACTION showNetNavigator;
 
+    // Collaboration
+    static TOOL_ACTION collabStartSession;
+    static TOOL_ACTION collabJoinSession;
+    static TOOL_ACTION collabLeaveSession;
+
     // Drag and drop
     static TOOL_ACTION ddAppendFile;
     static TOOL_ACTION ddAddImage;

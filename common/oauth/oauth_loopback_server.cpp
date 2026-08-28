@@ -99,7 +99,9 @@ bool OAUTH_LOOPBACK_SERVER::Start()
     Bind( wxEVT_SOCKET, &OAUTH_LOOPBACK_SERVER::OnSocketEvent, this );
 
     m_server = std::move( server );
-    m_timeout.StartOnce( 120000 );
+    // Generous: the browser leg can involve a provider login, 2FA and a consent
+    // click before the code comes back.
+    m_timeout.StartOnce( 300000 );
     return m_port != 0;
 }
 

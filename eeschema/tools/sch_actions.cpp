@@ -1936,4 +1936,27 @@ TOOL_ACTION SCH_ACTIONS::copyVariant( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Copy Design Variant..." ) )
         .Tooltip( _( "Create a copy of an existing design variant." ) ) );
 
+
+// SCH_COLLAB_TOOL
+//
+TOOL_ACTION SCH_ACTIONS::collabStartSession( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.startSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Start Collaboration Session..." ) )
+        .Tooltip( _( "Upload this project to the collaboration server and copy a share link" ) )
+        .Icon( BITMAPS::library_archive ) );
+
+TOOL_ACTION SCH_ACTIONS::collabJoinSession( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.joinSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Join Shared Project..." ) )
+        .Tooltip( _( "Join a shared project from a share link" ) )
+        .Icon( BITMAPS::library_archive ) );
+
+TOOL_ACTION SCH_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.leaveSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Leave Session" ) )
+        .Tooltip( _( "Disconnect from the collaboration session" ) ) );
+
 // clang-format on

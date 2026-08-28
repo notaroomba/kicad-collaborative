@@ -503,6 +503,9 @@ set( EESCHEMA_SRCS
     libraries/legacy_symbol_library.cpp
     libraries/symbol_library_adapter.cpp
 
+    collab/sch_collab_sync.cpp
+    collab/sch_collab_tool.cpp
+
     netlist_exporters/netlist_exporter_allegro.cpp
     netlist_exporters/netlist_exporter_base.cpp
     netlist_exporters/netlist_exporter_cadstar.cpp

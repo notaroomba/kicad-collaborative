@@ -29,6 +29,8 @@
 
 #include <view/view.h>
 #include <sch_commit.h>
+#include <collab/sch_collab_sync.h>
+#include <collab/sch_collab_tool.h>
 #include <connection_graph.h>
 
 #include <functional>
@@ -459,10 +461,24 @@ void SCH_COMMIT::pushSchEdit( const wxString& aMessage, int aCommitFlags )
                     wxS( "SCH_COMMIT::pushSchEdit() %s clean up connectivity rebuild." ),
                     connectivityCleanUp == LOCAL_CLEANUP ? wxS( "local" ) : wxS( "global" ) );
 
-        if( frame )
+        // Remote collaboration applies must not run the schematic cleanup: the receiver
+        // would mint junction/merge KIIDs that differ from the author's and the documents
+        // would silently diverge.  The frame's incremental recalculation path keys off the
+        // last undo command, which does not describe this commit (remote applies skip
+        // undo), so take the schematic-level path for a full, cleanup-free rebuild.
+        if( aCommitFlags & SKIP_CLEANUP )
+        {
+            if( schematic )
+                schematic->RecalculateConnections( this, NO_CLEANUP, m_toolMgr );
+        }
+        else if( frame )
+        {
             frame->RecalculateConnections( this, connectivityCleanUp );
+        }
         else if( schematic )
+        {
             schematic->RecalculateConnections( this, connectivityCleanUp, m_toolMgr );
+        }
     }
 
     m_toolMgr->PostEvent( { TC_MESSAGE, TA_MODEL_CHANGE, AS_GLOBAL } );
@@ -481,9 +497,27 @@ void SCH_COMMIT::Push( const wxString& aMessage, int aCommitFlags )
         return;
 
     if( m_isLibEditor )
+    {
         pushLibEdit( aMessage, aCommitFlags );
+    }
     else
+    {
+        SCH_COLLAB_SYNC* sync = nullptr;
+
+        if( SCH_COLLAB_TOOL* collabTool = m_toolMgr->GetTool<SCH_COLLAB_TOOL>() )
+            sync = collabTool->GetSync();
+
+        // Serialize before-images while COMMIT_LINE::m_copy is still alive; pushSchEdit
+        // hands the copies to the undo list (or deletes them).
+        size_t preCount = sync ? sync->CaptureCommitBegin( *this, aCommitFlags ) : 0;
+
         pushSchEdit( aMessage, aCommitFlags );
+
+        // Pick up the connectivity-derived entries SCHEMATIC::CleanUp appended mid-push
+        // so junction/merge changes ship in the same atomic batch as the user edit.
+        if( sync )
+            sync->CaptureCommitEnd( *this, preCount, aCommitFlags );
+    }
 
     if( SCH_BASE_FRAME* frame = static_cast<SCH_BASE_FRAME*>( m_toolMgr->GetToolHolder() ) )
     {

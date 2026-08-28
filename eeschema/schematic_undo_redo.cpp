@@ -21,6 +21,8 @@
 #include <sch_actions.h>
 #include <sch_edit_frame.h>
 #include <tool/tool_manager.h>
+#include <collab/sch_collab_sync.h>
+#include <collab/sch_collab_tool.h>
 #include <schematic.h>
 #include <sch_bus_entry.h>
 #include <sch_commit.h>
@@ -558,6 +560,61 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
     {
         m_schematic->LoadVariants();
         UpdateVariantSelectionCtrl( m_schematic->GetVariantNamesForUI() );
+    }
+
+    // Broadcast the restored state to a live collaboration session.  Undo/redo (and
+    // tool-abort rollback) do not go through SCH_COMMIT::Push, so this is the only
+    // place the swapped-in state can be captured.  No-op when there is no session.
+    if( SCH_COLLAB_TOOL* collabTool = m_toolManager->GetTool<SCH_COLLAB_TOOL>() )
+    {
+        if( SCH_COLLAB_SYNC* sync = collabTool->GetSync() )
+        {
+            if( !sync->IsApplyingRemote() )
+                sync->CaptureUndoRedo( aList );
+        }
+    }
+}
+
+
+void SCH_EDIT_FRAME::PurgeItemFromUndoRedo( const KIID& aItemId )
+{
+    for( UNDO_REDO_CONTAINER* container : { &m_undoList, &m_redoList } )
+    {
+        for( auto cmdIt = container->m_CommandsList.begin();
+             cmdIt != container->m_CommandsList.end(); )
+        {
+            PICKED_ITEMS_LIST* cmd = *cmdIt;
+
+            for( int ii = (int) cmd->GetCount() - 1; ii >= 0; --ii )
+            {
+                const ITEM_PICKER& picker = cmd->GetItemWrapper( (unsigned) ii );
+                EDA_ITEM*          item = picker.GetItem();
+
+                if( !item || item->m_Uuid != aItemId )
+                    continue;
+
+                // Ownership rules follow PICKED_ITEMS_LIST::ClearListAndDeleteItems():
+                // links always belong to the undo/redo container; picked items belong
+                // to it only for DELETED entries and transient items.
+                if( EDA_ITEM* link = picker.GetLink() )
+                    delete link;
+
+                if( ( picker.GetFlags() & UR_TRANSIENT ) || picker.GetStatus() == UNDO_REDO::DELETED )
+                    delete item;
+
+                cmd->RemovePicker( (unsigned) ii );
+            }
+
+            if( cmd->GetCount() == 0 )
+            {
+                delete cmd;
+                cmdIt = container->m_CommandsList.erase( cmdIt );
+            }
+            else
+            {
+                ++cmdIt;
+            }
+        }
     }
 }
 
