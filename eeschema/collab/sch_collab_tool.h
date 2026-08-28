@@ -58,6 +58,9 @@ public:
     ///< Leave the session and remove all remote cursors.
     int LeaveSession( const TOOL_EVENT& aEvent );
 
+    ///< True while this frame is connected to a collaboration session.
+    bool sessionActive() const { return !m_pathByDocId.empty(); }
+
     // COLLAB_DOC_ADAPTER; all calls arrive on the UI thread.
     void OnPresenceChanged() override;
     void OnSessionStateChanged() override;
@@ -92,7 +95,6 @@ private:
                        const wxString& aLinkToken );
     void endSession();
 
-    bool sessionActive() const { return !m_pathByDocId.empty(); }
 
     ///< The displayed screen's file name, relative to the project (forward slashes).
     wxString currentSheetFile() const;
@@ -102,12 +104,6 @@ private:
 
     ///< Rebuild the remote-cursor overlay from the current peers and repaint.
     void rebuildOverlay();
-
-    ///< "https://host/j/TOKEN" or a bare token -> TOKEN (empty if unparseable).
-    static wxString parseLinkToken( const wxString& aInput );
-
-    ///< Zip the shareable files in aProjectPath (top level only); empty on failure.
-    static std::string zipProjectFiles( const wxString& aProjectPath );
 
 private:
     COLLAB_AUTH        m_auth;

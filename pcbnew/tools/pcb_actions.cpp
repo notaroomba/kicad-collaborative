@@ -3166,6 +3166,29 @@ TOOL_ACTION PCB_ACTIONS::placeGridItem( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_grid_item ) );
 
 
+// PCB_COLLAB_TOOL
+//
+TOOL_ACTION PCB_ACTIONS::collabStartSession( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.startSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Start Collaboration Session..." ) )
+        .Tooltip( _( "Upload this project to the collaboration server and copy a share link" ) )
+        .Icon( BITMAPS::library_archive ) );
+
+TOOL_ACTION PCB_ACTIONS::collabJoinSession( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.joinSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Join Shared Project..." ) )
+        .Tooltip( _( "Join a shared project from a share link" ) )
+        .Icon( BITMAPS::library_archive ) );
+
+TOOL_ACTION PCB_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.leaveSession" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Leave Session" ) )
+        .Tooltip( _( "Disconnect from the collaboration session" ) ) );
+
+
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()
 {
     static TOOL_EVENT event = TOOL_EVENT( TC_MESSAGE, TA_ACTION,

@@ -322,6 +322,7 @@ set( KICOMMON_SRCS
     page_info.cpp
     collab/collab_auth.cpp
     collab/collab_journal.cpp
+    collab/collab_project.cpp
     collab/collab_rest.cpp
     collab/collab_session.cpp
     collab/collab_ws_client.cpp

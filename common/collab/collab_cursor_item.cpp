@@ -21,6 +21,8 @@
 
 #include <deque>
 
+#include <font/font.h>
+#include <font/text_attributes.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <geometry/eda_angle.h>
 #include <math/util.h>
@@ -99,13 +101,24 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
             continue;
 
         // Name tag: a filled chip in the peer colour below-right of the pointer.
-        // The stroke font has no cheap measure here; 0.7 * height per glyph is a
-        // close-enough width estimate for a background chip.
-        const double   textH = textPx * w;
-        const double   pad = padPx * w;
-        const double   textW = 0.7 * textH * peer.label.length();
+        // Text goes through KIFONT (gal->BitmapText draws nothing on every GAL),
+        // which also gives a real measurement for the chip width.
+        KIFONT::FONT*   font = KIFONT::FONT::GetFont();
+        const double    textH = textPx * w;
+        const double    pad = padPx * w;
+
+        TEXT_ATTRIBUTES textAttrs;
+        textAttrs.m_Size = VECTOR2I( KiROUND( textH ), KiROUND( textH ) );
+        textAttrs.m_StrokeWidth = KiROUND( 0.15 * textH );
+        textAttrs.m_Halign = GR_TEXT_H_ALIGN_LEFT;
+        textAttrs.m_Valign = GR_TEXT_V_ALIGN_CENTER;
+
+        const VECTOR2I extents = font->StringBoundaryLimits( peer.label, textAttrs.m_Size,
+                                                             textAttrs.m_StrokeWidth, false, false,
+                                                             KIFONT::METRICS::Default() );
+
         const VECTOR2D chipOrigin = tip + VECTOR2D( 0.8 * cursorPx, 1.2 * cursorPx ) * w;
-        const VECTOR2D chipEnd = chipOrigin + VECTOR2D( textW + 2.0 * pad, textH + 2.0 * pad );
+        const VECTOR2D chipEnd = chipOrigin + VECTOR2D( extents.x + 2.0 * pad, textH + 2.0 * pad );
 
         gal->SetIsFill( true );
         gal->SetIsStroke( false );
@@ -119,14 +132,11 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
         gal->SetIsFill( false );
         gal->SetIsStroke( true );
         gal->SetStrokeColor( textColor );
-        gal->SetLineWidth( static_cast<float>( 0.15 * textH ) );
-        gal->SetGlyphSize( VECTOR2I( KiROUND( textH ), KiROUND( textH ) ) );
-        gal->SetHorizontalJustify( GR_TEXT_H_ALIGN_LEFT );
-        gal->SetVerticalJustify( GR_TEXT_V_ALIGN_CENTER );
+        gal->SetLineWidth( static_cast<float>( textAttrs.m_StrokeWidth ) );
 
-        gal->BitmapText( peer.label,
-                         VECTOR2I( KiROUND( chipOrigin.x + pad ),
-                                   KiROUND( ( chipOrigin.y + chipEnd.y ) / 2.0 ) ),
-                         ANGLE_0 );
+        font->Draw( gal, peer.label,
+                    VECTOR2I( KiROUND( chipOrigin.x + pad ),
+                              KiROUND( ( chipOrigin.y + chipEnd.y ) / 2.0 ) ),
+                    textAttrs, KIFONT::METRICS::Default() );
     }
 }

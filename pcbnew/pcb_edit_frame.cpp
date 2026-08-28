@@ -1117,11 +1117,29 @@ void PCB_EDIT_FRAME::setupUIConditions()
                 return group->HasDesignBlockLink();
             };
 
+    auto collabLive =
+            [this]( const SELECTION& )
+            {
+                PCB_COLLAB_TOOL* tool = m_toolManager->GetTool<PCB_COLLAB_TOOL>();
+                return tool && tool->sessionActive();
+            };
+
+    auto collabIdle =
+            [this]( const SELECTION& )
+            {
+                PCB_COLLAB_TOOL* tool = m_toolManager->GetTool<PCB_COLLAB_TOOL>();
+                return !tool || !tool->sessionActive();
+            };
+
     wxASSERT( mgr );
 
 #define ENABLE( x ) ACTION_CONDITIONS().Enable( x )
 #define CHECK( x )  ACTION_CONDITIONS().Check( x )
 // clang-format off
+
+    mgr->SetConditions( PCB_ACTIONS::collabStartSession, ENABLE( collabIdle ) );
+    mgr->SetConditions( PCB_ACTIONS::collabJoinSession,  ENABLE( collabIdle ) );
+    mgr->SetConditions( PCB_ACTIONS::collabLeaveSession, ENABLE( collabLive ) );
 
     mgr->SetConditions( ACTIONS::save,         ENABLE( SELECTION_CONDITIONS::ShowAlways ) );
     mgr->SetConditions( ACTIONS::undo,         ENABLE( undoCond ) );

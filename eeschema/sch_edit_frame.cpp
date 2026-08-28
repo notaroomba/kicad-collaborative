@@ -809,6 +809,20 @@ void SCH_EDIT_FRAME::setupUIConditions()
 #define ENABLE( x ) ACTION_CONDITIONS().Enable( x )
 #define CHECK( x )  ACTION_CONDITIONS().Check( x )
 
+    auto collabLive =
+            [this]( const SELECTION& )
+            {
+                SCH_COLLAB_TOOL* tool = m_toolManager->GetTool<SCH_COLLAB_TOOL>();
+                return tool && tool->sessionActive();
+            };
+
+    auto collabIdle =
+            [this]( const SELECTION& )
+            {
+                SCH_COLLAB_TOOL* tool = m_toolManager->GetTool<SCH_COLLAB_TOOL>();
+                return !tool || !tool->sessionActive();
+            };
+
     mgr->SetConditions( ACTIONS::save,                ENABLE( SELECTION_CONDITIONS::ShowAlways ) );
     mgr->SetConditions( ACTIONS::undo,                ENABLE( undoCond ) );
     mgr->SetConditions( ACTIONS::redo,                ENABLE( cond.RedoAvailable() ) );
@@ -821,6 +835,10 @@ void SCH_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::showRemoteSymbolPanel, CHECK( remoteSymbolCond ) );
     mgr->SetConditions( ACTIONS::toggleGrid,               CHECK( cond.GridVisible() ) );
     mgr->SetConditions( ACTIONS::toggleGridOverrides,      CHECK( cond.GridOverrides() ) );
+
+    mgr->SetConditions( SCH_ACTIONS::collabStartSession, ENABLE( collabIdle ) );
+    mgr->SetConditions( SCH_ACTIONS::collabJoinSession,  ENABLE( collabIdle ) );
+    mgr->SetConditions( SCH_ACTIONS::collabLeaveSession, ENABLE( collabLive ) );
 
     mgr->SetConditions( ACTIONS::cut,                 ENABLE( hasElements ) );
     mgr->SetConditions( ACTIONS::copy,                ENABLE( hasElements ) );

@@ -21,7 +21,7 @@
 
 #include "sch_collab_sync.h"
 
-#include <collab/collab_rest.h>
+#include <collab/collab_project.h>
 #include <kiid.h>
 #include <math/util.h>
 #include <sch_screen.h>
@@ -32,16 +32,16 @@
 #include <view/view_controls.h>
 
 #include <wx/clipbrd.h>
-#include <wx/dir.h>
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
-#include <wx/mstream.h>
 #include <wx/textdlg.h>
-#include <wx/wfstream.h>
-#include <wx/zipstrm.h>
 
 static const wxChar* const traceCollab = wxT( "COLLAB" );
+
+/// Cap on how many selection boxes ride along in a presence update; the server
+/// rejects presence payloads over 8 KB.
+static constexpr size_t MAX_PRESENCE_BOXES = 150;
 
 
 SCH_COLLAB_TOOL::SCH_COLLAB_TOOL() :
@@ -103,7 +103,7 @@ int SCH_COLLAB_TOOL::JoinSession( const TOOL_EVENT& aEvent )
     if( dlg.ShowModal() != wxID_OK )
         return 0;
 
-    wxString linkToken = parseLinkToken( dlg.GetValue() );
+    wxString linkToken = COLLAB_PROJECT::ParseLinkToken( dlg.GetValue() );
 
     if( linkToken.IsEmpty() )
     {
@@ -160,23 +160,15 @@ void SCH_COLLAB_TOOL::withSignIn( std::function<void( const wxString& aToken )> 
 
 void SCH_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLinkToken )
 {
-    wxString server = COLLAB_SESSION::ServerUrl();
+    wxString error;
 
-    std::optional<nlohmann::json> claim = COLLAB_REST::ClaimLink( server, aToken, aLinkToken );
-
-    if( !claim )
-    {
-        m_frame->ShowInfoBarError( _( "The share link is invalid or has expired." ) );
-        return;
-    }
-
-    wxString projectId = wxString::FromUTF8( claim->value( "projectId", "" ) );
-
-    std::optional<nlohmann::json> project = COLLAB_REST::GetProject( server, aToken, projectId );
+    std::optional<nlohmann::json> project =
+            COLLAB_PROJECT::ClaimAndFetch( COLLAB_SESSION::ServerUrl(), aToken, aLinkToken,
+                                           error );
 
     if( !project )
     {
-        m_frame->ShowInfoBarError( _( "Unable to fetch the shared project." ) );
+        m_frame->ShowInfoBarError( error );
         return;
     }
 
@@ -186,40 +178,19 @@ void SCH_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
 
 void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 {
-    wxString server = COLLAB_SESSION::ServerUrl();
-
-    std::string zipBytes = zipProjectFiles( m_frame->Prj().GetProjectPath() );
-
-    if( zipBytes.empty() )
-    {
-        m_frame->ShowInfoBarError( _( "No project files found to share.  Save the project "
-                                      "first." ) );
-        return;
-    }
+    wxString url;
+    wxString error;
 
     std::optional<nlohmann::json> project =
-            COLLAB_REST::CreateProject( server, aToken, m_frame->Prj().GetProjectName(),
-                                        zipBytes );
+            COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,
+                                            m_frame->Prj().GetProjectPath(),
+                                            m_frame->Prj().GetProjectName(), url, error );
 
     if( !project )
     {
-        m_frame->ShowInfoBarError( _( "Uploading the project to the collaboration server "
-                                      "failed." ) );
+        m_frame->ShowInfoBarError( error );
         return;
     }
-
-    wxString projectId = wxString::FromUTF8( project->value( "projectId", "" ) );
-
-    std::optional<nlohmann::json> link =
-            COLLAB_REST::CreateShareLink( server, aToken, projectId, wxS( "editor" ) );
-
-    if( !link )
-    {
-        m_frame->ShowInfoBarError( _( "Creating the share link failed." ) );
-        return;
-    }
-
-    wxString url = wxString::FromUTF8( link->value( "url", "" ) );
 
     if( wxTheClipboard->Open() )
     {
@@ -376,9 +347,22 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
     BOX2D    viewport = getView()->GetViewport();
 
     nlohmann::json selection = nlohmann::json::array();
+    nlohmann::json boxes = nlohmann::json::array();
 
+    // Send our own bounding boxes rather than only ids: the receiver would
+    // otherwise draw them from its own (last committed) copy, so a drag in
+    // progress would not be visible until it was committed.  Sending live
+    // geometry is also what lets a peer highlight items it does not have yet.
     for( EDA_ITEM* item : m_selectionTool->GetSelection() )
+    {
         selection.push_back( item->m_Uuid.AsStdString() );
+
+        if( boxes.size() < MAX_PRESENCE_BOXES )
+        {
+            const BOX2I bbox = item->GetBoundingBox();
+            boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+        }
+    }
 
     nlohmann::json state = {
         { "cursor", { KiROUND( cursor.x ), KiROUND( cursor.y ) } },
@@ -386,6 +370,7 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
           { KiROUND( viewport.GetOrigin().x ), KiROUND( viewport.GetOrigin().y ),
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selection },
+        { "boxes", boxes },
         { "sheetFile", sheetFile.ToStdString( wxConvUTF8 ) },
         { "sheetPath", m_frame->GetCurrentSheet().PathAsString().ToStdString( wxConvUTF8 ) },
     };
@@ -506,7 +491,21 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 draw.hasCursor = true;
             }
 
-            if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+            // Prefer the sender's own geometry (live during their drags); fall
+            // back to resolving ids locally for peers on an older client.
+            if( peer.state.contains( "boxes" ) && peer.state[ "boxes" ].is_array() )
+            {
+                for( const nlohmann::json& box : peer.state[ "boxes" ] )
+                {
+                    if( !box.is_array() || box.size() < 4 )
+                        continue;
+
+                    draw.selectionBoxes.emplace_back(
+                            VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
+                            VECTOR2I( box[ 2 ].get<int>(), box[ 3 ].get<int>() ) );
+                }
+            }
+            else if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
             {
                 for( const nlohmann::json& id : peer.state[ "selection" ] )
                 {
@@ -535,74 +534,6 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
 
     if( m_frame->GetCanvas() )
         m_frame->GetCanvas()->Refresh();
-}
-
-
-wxString SCH_COLLAB_TOOL::parseLinkToken( const wxString& aInput )
-{
-    wxString input = aInput;
-    input.Trim( true ).Trim( false );
-
-    int pos = input.Find( wxS( "/j/" ) );
-
-    if( pos != wxNOT_FOUND )
-        input = input.Mid( pos + 3 );
-
-    // Strip any trailing URL components.
-    input = input.BeforeFirst( '/' ).BeforeFirst( '?' ).BeforeFirst( '#' );
-
-    return input;
-}
-
-
-std::string SCH_COLLAB_TOOL::zipProjectFiles( const wxString& aProjectPath )
-{
-    wxArrayString files;
-    wxDir::GetAllFiles( aProjectPath, &files, wxEmptyString, wxDIR_FILES );
-
-    wxMemoryOutputStream memStream;
-    int                  entries = 0;
-
-    {
-        wxZipOutputStream zipStream( memStream );
-
-        for( size_t i = 0; i < files.GetCount(); ++i )
-        {
-            wxFileName fn( files[ i ] );
-            wxString   ext = fn.GetExt().Lower();
-            wxString   name = fn.GetFullName();
-
-            bool wanted = ext == wxS( "kicad_pro" ) || ext == wxS( "kicad_sch" )
-                          || ext == wxS( "kicad_pcb" ) || name == wxS( "sym-lib-table" )
-                          || name == wxS( "fp-lib-table" );
-
-            if( !wanted )
-                continue;
-
-            wxFFileInputStream input( files[ i ] );
-
-            if( !input.IsOk() )
-                continue;
-
-            zipStream.PutNextEntry( name );
-            zipStream.Write( input );
-            entries++;
-        }
-
-        if( !zipStream.Close() || entries == 0 )
-            return std::string();
-    }
-
-    size_t size = memStream.GetSize();
-
-    if( size == 0 )
-        return std::string();
-
-    std::string bytes;
-    bytes.resize( size );
-    memStream.CopyTo( bytes.data(), size );
-
-    return bytes;
 }
 
 

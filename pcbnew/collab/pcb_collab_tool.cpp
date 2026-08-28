@@ -19,19 +19,29 @@
 
 #include "pcb_collab_tool.h"
 
+#include <collab/collab_project.h>
 #include <kiid.h>
 #include <math/util.h>
 #include <tool/actions.h>
+#include <tools/pcb_actions.h>
 #include <tools/pcb_selection.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 
+#include <wx/clipbrd.h>
 #include <wx/filename.h>
+#include <wx/msgdlg.h>
+#include <wx/textdlg.h>
+
+/// Cap on how many selection boxes ride along in a presence update; the server
+/// rejects presence payloads over 8 KB.
+static constexpr size_t MAX_PRESENCE_BOXES = 150;
 
 
 PCB_COLLAB_TOOL::PCB_COLLAB_TOOL() :
         PCB_TOOL_BASE( "pcbnew.Collab" ),
-        m_presenceDirty( false )
+        m_presenceDirty( false ),
+        m_ownsSession( false )
 {
     m_timer.SetOwner( this );
     Bind( wxEVT_TIMER, &PCB_COLLAB_TOOL::onTimer, this );
@@ -51,8 +61,8 @@ PCB_COLLAB_TOOL::~PCB_COLLAB_TOOL()
 
 bool PCB_COLLAB_TOOL::Init()
 {
-    // Passive tool with no menus; the 100 ms tick is a cheap no-op until
-    // eeschema brings the shared session live.
+    // The 100 ms tick is a cheap no-op until a session (started here or in
+    // eeschema) goes live.
     m_timer.Start( 100 );
 
     return true;
@@ -65,11 +75,15 @@ void PCB_COLLAB_TOOL::Reset( RESET_REASON aReason )
 
     if( aReason == SHUTDOWN )
     {
-        // Leave the doc while the frame and view are still alive; the tool
-        // destructor runs too late to touch either.
+        // Leave the session while the frame and view are still alive; the tool
+        // destructor runs too late to touch either.  Closing the board editor
+        // must not disconnect a session eeschema owns, so only a session we
+        // started ourselves is torn down wholesale.
         m_timer.Stop();
 
-        if( !m_docId.IsEmpty() )
+        if( m_ownsSession )
+            endSession();
+        else
             leaveDoc();
 
         return;
@@ -82,9 +96,189 @@ void PCB_COLLAB_TOOL::Reset( RESET_REASON aReason )
 }
 
 
+int PCB_COLLAB_TOOL::StartSession( const TOOL_EVENT& aEvent )
+{
+    withSignIn(
+            [this]( const wxString& aToken )
+            {
+                startWithToken( aToken );
+            } );
+
+    return 0;
+}
+
+
+int PCB_COLLAB_TOOL::JoinSession( const TOOL_EVENT& aEvent )
+{
+    PCB_EDIT_FRAME*   editFrame = frame<PCB_EDIT_FRAME>();
+    wxTextEntryDialog dlg( editFrame, _( "Share link or invite token:" ),
+                           _( "Join Shared Project" ) );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return 0;
+
+    wxString linkToken = COLLAB_PROJECT::ParseLinkToken( dlg.GetValue() );
+
+    if( linkToken.IsEmpty() )
+    {
+        editFrame->ShowInfoBarError( _( "The share link could not be understood." ) );
+        return 0;
+    }
+
+    withSignIn(
+            [this, linkToken]( const wxString& aToken )
+            {
+                joinWithToken( aToken, linkToken );
+            } );
+
+    return 0;
+}
+
+
+int PCB_COLLAB_TOOL::LeaveSession( const TOOL_EVENT& aEvent )
+{
+    endSession();
+
+    return 0;
+}
+
+
+void PCB_COLLAB_TOOL::withSignIn( std::function<void( const wxString& aToken )> aContinuation )
+{
+    wxString token = COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() );
+
+    if( !token.IsEmpty() )
+    {
+        aContinuation( token );
+        return;
+    }
+
+    wxString error;
+
+    bool started = m_auth.SignIn(
+            COLLAB_SESSION::ServerUrl(),
+            [this, aContinuation]( bool aSuccess, const wxString& aTokenOrError )
+            {
+                if( aSuccess )
+                    aContinuation( aTokenOrError );
+                else
+                    frame<PCB_EDIT_FRAME>()->ShowInfoBarError( aTokenOrError );
+            },
+            error );
+
+    if( !started )
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError( error );
+}
+
+
+void PCB_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLinkToken )
+{
+    wxString error;
+
+    std::optional<nlohmann::json> project =
+            COLLAB_PROJECT::ClaimAndFetch( COLLAB_SESSION::ServerUrl(), aToken, aLinkToken,
+                                           error );
+
+    if( !project )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError( error );
+        return;
+    }
+
+    beginSession( *project, aToken, aLinkToken );
+}
+
+
+void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+    wxString        url;
+    wxString        error;
+
+    std::optional<nlohmann::json> project =
+            COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,
+                                            editFrame->Prj().GetProjectPath(),
+                                            editFrame->Prj().GetProjectName(), url, error );
+
+    if( !project )
+    {
+        editFrame->ShowInfoBarError( error );
+        return;
+    }
+
+    if( wxTheClipboard->Open() )
+    {
+        wxTheClipboard->SetData( new wxTextDataObject( url ) );
+        wxTheClipboard->Close();
+    }
+
+    beginSession( *project, aToken, wxEmptyString );
+
+    wxMessageBox( wxString::Format( _( "Share link copied to the clipboard:\n%s" ), url ),
+                  _( "Collaboration Session" ), wxOK | wxICON_INFORMATION, editFrame );
+}
+
+
+void PCB_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxString& aToken,
+                                    const wxString& aLinkToken )
+{
+    endSession();
+
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // Publish the full doc list so the schematic editor can find its own docs.
+    session.SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
+
+    wxString file = boardFile();
+
+    if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
+    {
+        for( const nlohmann::json& doc : aProject[ "docs" ] )
+        {
+            if( doc.value( "docType", "" ) != "kicad_pcb" )
+                continue;
+
+            if( wxString::FromUTF8( doc.value( "path", "" ) ) != file )
+                continue;
+
+            wxString docId = wxString::FromUTF8( doc.value( "docId", "" ) );
+
+            if( docId.IsEmpty() )
+                continue;
+
+            m_docId = docId;
+            m_docPath = file;
+            break;
+        }
+    }
+
+    if( m_docId.IsEmpty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError( _( "The shared project contains no board "
+                                                      "matching this one." ) );
+        return;
+    }
+
+    m_ownsSession = true;
+
+    session.Connect( aToken, aLinkToken );
+    session.JoinDoc( m_docId, std::nullopt, this );
+}
+
+
+void PCB_COLLAB_TOOL::endSession()
+{
+    leaveDoc();
+    m_ownsSession = false;
+
+    COLLAB_SESSION::Get().Disconnect();
+}
+
+
 void PCB_COLLAB_TOOL::leaveDoc()
 {
-    COLLAB_SESSION::Get().LeaveDoc( m_docId );
+    if( !m_docId.IsEmpty() )
+        COLLAB_SESSION::Get().LeaveDoc( m_docId );
 
     m_docId.clear();
     m_docPath.clear();
@@ -131,8 +325,9 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         // The doc registration is torn down here, on the tick after the session
         // ends, rather than from OnSessionStateChanged(): the session notifies
         // its adapters while iterating its doc map, so leaving mid-callback
-        // would invalidate its iterator.
-        if( !m_docId.IsEmpty() )
+        // would invalidate its iterator.  A session we started ourselves is
+        // still CONNECTING at this point, so leave that join alone.
+        if( !m_ownsSession && !m_docId.IsEmpty() )
             leaveDoc();
 
         return;
@@ -181,9 +376,22 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
     BOX2D    viewport = getView()->GetViewport();
 
     nlohmann::json selectionIds = nlohmann::json::array();
+    nlohmann::json boxes = nlohmann::json::array();
 
+    // Send our own bounding boxes rather than only ids: the receiver would
+    // otherwise draw them from its own (last committed) copy, so a drag in
+    // progress would not be visible until it was committed.  Sending live
+    // geometry is also what lets a peer highlight items it does not have yet.
     for( EDA_ITEM* item : selection() )
+    {
         selectionIds.push_back( item->m_Uuid.AsStdString() );
+
+        if( boxes.size() < MAX_PRESENCE_BOXES )
+        {
+            const BOX2I bbox = item->GetBoundingBox();
+            boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+        }
+    }
 
     nlohmann::json state = {
         { "cursor", { KiROUND( cursor.x ), KiROUND( cursor.y ) } },
@@ -191,6 +399,7 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
           { KiROUND( viewport.GetOrigin().x ), KiROUND( viewport.GetOrigin().y ),
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selectionIds },
+        { "boxes", boxes },
         { "sheetFile", file.ToStdString( wxConvUTF8 ) },
     };
 
@@ -243,7 +452,21 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                 draw.hasCursor = true;
             }
 
-            if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+            // Prefer the sender's own geometry (live during their drags); fall
+            // back to resolving ids locally for peers on an older client.
+            if( peer.state.contains( "boxes" ) && peer.state[ "boxes" ].is_array() )
+            {
+                for( const nlohmann::json& box : peer.state[ "boxes" ] )
+                {
+                    if( !box.is_array() || box.size() < 4 )
+                        continue;
+
+                    draw.selectionBoxes.emplace_back(
+                            VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
+                            VECTOR2I( box[ 2 ].get<int>(), box[ 3 ].get<int>() ) );
+                }
+            }
+            else if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
             {
                 for( const nlohmann::json& id : peer.state[ "selection" ] )
                 {
@@ -277,6 +500,10 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
 
 void PCB_COLLAB_TOOL::setTransitions()
 {
+    Go( &PCB_COLLAB_TOOL::StartSession,      PCB_ACTIONS::collabStartSession.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::JoinSession,       PCB_ACTIONS::collabJoinSession.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::LeaveSession,      PCB_ACTIONS::collabLeaveSession.MakeEvent() );
+
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::UnselectedEvent );

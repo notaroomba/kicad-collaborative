@@ -19,6 +19,9 @@
 
 #pragma once
 
+#include <functional>
+
+#include <collab/collab_auth.h>
 #include <collab/collab_cursor_item.h>
 #include <collab/collab_session.h>
 #include <tools/pcb_tool_base.h>
@@ -31,9 +34,9 @@
  * viewport and selection with the collaboration server, and draws the other
  * participants' cursors and selections on the canvas.
  *
- * Passive tool with no actions of its own: sessions are started, joined and left
- * from eeschema.  The session only joins schematic docs itself, so this tool
- * watches the shared session and joins the board's own doc once it goes live.
+ * A session can be started or joined from here, or from eeschema.  In the latter
+ * case the schematic editor only joins schematic docs, so this tool watches the
+ * shared session and joins the board's own doc once it goes live.
  */
 class PCB_COLLAB_TOOL : public wxEvtHandler, public PCB_TOOL_BASE, public COLLAB_DOC_ADAPTER
 {
@@ -46,6 +49,18 @@ public:
 
     /// @copydoc TOOL_INTERACTIVE::Reset()
     void Reset( RESET_REASON aReason ) override;
+
+    ///< Upload the current project and copy a share link to the clipboard.
+    int StartSession( const TOOL_EVENT& aEvent );
+
+    ///< Join a project from a pasted share link.
+    int JoinSession( const TOOL_EVENT& aEvent );
+
+    ///< Leave the session and remove all remote cursors.
+    int LeaveSession( const TOOL_EVENT& aEvent );
+
+    ///< True while this frame is connected to a collaboration session.
+    bool sessionActive() const { return m_ownsSession || !m_docId.IsEmpty(); }
 
     // COLLAB_DOC_ADAPTER; all calls arrive on the UI thread.
     void OnPresenceChanged() override;
@@ -60,6 +75,17 @@ private:
     ///< 100 ms tick: join the board doc when the session is live, then send presence.
     void onTimer( wxTimerEvent& aEvent );
 
+    ///< Run aContinuation with a bearer token, signing in interactively if needed.
+    void withSignIn( std::function<void( const wxString& aToken )> aContinuation );
+
+    void joinWithToken( const wxString& aToken, const wxString& aLinkToken );
+    void startWithToken( const wxString& aToken );
+
+    ///< Connect and join the board doc of aProject (a server project json).
+    void beginSession( const nlohmann::json& aProject, const wxString& aToken,
+                       const wxString& aLinkToken );
+    void endSession();
+
     ///< Leave the board doc and remove all remote cursors.
     void leaveDoc();
 
@@ -70,6 +96,7 @@ private:
     void rebuildOverlay();
 
 private:
+    COLLAB_AUTH        m_auth;
     wxTimer            m_timer;
     COLLAB_CURSOR_ITEM m_cursorItem;
 
@@ -77,4 +104,5 @@ private:
     wxString       m_docPath;    ///< project-relative board path the doc was joined for
     nlohmann::json m_lastSentState;
     bool           m_presenceDirty;
+    bool           m_ownsSession; ///< this tool connected the session, rather than eeschema
 };

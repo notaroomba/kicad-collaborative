@@ -682,6 +682,11 @@ public:
 
     /// Grid Item
     static TOOL_ACTION placeGridItem;
+
+    /// Collaboration
+    static TOOL_ACTION collabStartSession;
+    static TOOL_ACTION collabJoinSession;
+    static TOOL_ACTION collabLeaveSession;
 };
 
 class PCB_EVENTS

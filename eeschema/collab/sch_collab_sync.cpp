@@ -41,6 +41,7 @@
 #include <sch_sheet_path.h>
 #include <sch_symbol.h>
 #include <schematic.h>
+#include <tool/tool_manager.h>
 #include <tools/sch_selection.h>
 #include <tools/sch_selection_tool.h>
 #include <undo_redo_container.h>

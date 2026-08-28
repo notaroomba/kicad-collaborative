@@ -163,6 +163,11 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( submenuFabOutputs );
 
     fileMenu->AppendSeparator();
+    fileMenu->Add( PCB_ACTIONS::collabStartSession );
+    fileMenu->Add( PCB_ACTIONS::collabJoinSession );
+    fileMenu->Add( PCB_ACTIONS::collabLeaveSession );
+
+    fileMenu->AppendSeparator();
     fileMenu->Add( PCB_ACTIONS::boardSetup );
 
     fileMenu->AppendSeparator();
