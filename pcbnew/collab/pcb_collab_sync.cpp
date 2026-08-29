@@ -1212,10 +1212,23 @@ void PCB_COLLAB_SYNC::OnSnapshotRequest()
 
         io.FormatBoardToFormatter( &formatter, m_frame->GetBoard(), nullptr );
 
-        wxString server = COLLAB_SESSION::ServerUrl();
+        // Serialization needs the live board (UI thread); the upload of the
+        // self-contained string does not — a slow server must not hitch the
+        // editor.  Plain std::strings cross the thread boundary.
+        std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+        std::string token =
+                COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+        std::string docId = m_docId.ToStdString( wxConvUTF8 );
+        long long   seq = m_lastAppliedSeq;
+        std::string payload = formatter.GetString();
 
-        COLLAB_REST::UploadSnapshot( server, COLLAB_AUTH::StoredToken( server ), m_docId,
-                                     m_lastAppliedSeq, formatter.GetString() );
+        COLLAB_SESSION::Get().RunAsync(
+                [server, token, docId, seq, payload]()
+                {
+                    COLLAB_REST::UploadSnapshot( wxString::FromUTF8( server ),
+                                                 wxString::FromUTF8( token ),
+                                                 wxString::FromUTF8( docId ), seq, payload );
+                } );
     }
     catch( const IO_ERROR& ioe )
     {

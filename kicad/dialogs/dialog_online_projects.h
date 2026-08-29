@@ -23,6 +23,7 @@
 
 #include <collab/collab_auth.h>
 #include <dialog_shim.h>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 class KICAD_MANAGER_FRAME;
@@ -39,12 +40,17 @@ class DIALOG_ONLINE_PROJECTS : public DIALOG_SHIM
 {
 public:
     DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent );
+    ~DIALOG_ONLINE_PROJECTS() override;
 
     /// The .kicad_pro the user chose to open, or empty.  Valid after ShowModal().
     wxString GetProjectToOpen() const { return m_projectToOpen; }
 
 private:
     void refresh();
+
+    ///< Fill the list from fetched /me + /api/projects results (UI thread).
+    void populate( const nlohmann::json& aMe, const nlohmann::json& aListing );
+
     void updateSignInState();
 
     ///< The listing row currently selected, or nullptr.
@@ -70,6 +76,10 @@ private:
 
 private:
     KICAD_MANAGER_FRAME* m_frame;
+
+    ///< Cleared by the destructor so async completions can tell the dialog is
+    ///< gone before touching it.
+    std::shared_ptr<bool> m_alive;
     COLLAB_AUTH          m_auth;
 
     wxStaticText*        m_signedInLabel;

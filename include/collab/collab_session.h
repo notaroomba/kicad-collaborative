@@ -19,6 +19,11 @@
 
 #pragma once
 
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <map>
 #include <memory>
 #include <optional>
@@ -101,6 +106,14 @@ public:
     /// The collab server base URL (KICAD_COLLAB_SERVER env var or built-in default).
     static wxString ServerUrl();
 
+    /**
+     * Run a blocking task (REST calls, mostly) on the session's worker thread
+     * instead of the UI thread.  Tasks run in order.  Marshal any UI work back
+     * with wxTheApp->CallAfter, guarded against the caller being destroyed.
+     * The worker is joined in Shutdown(), before curl global cleanup.
+     */
+    void RunAsync( std::function<void()> aTask );
+
     STATE GetState() const { return m_state; }
     bool  IsLive() const { return m_state == STATE::LIVE; }
 
@@ -174,6 +187,12 @@ private:
     std::unique_ptr<COLLAB_WS_CLIENT> m_ws;
     STATE                             m_state = STATE::DISCONNECTED;
     wxString                          m_disconnectReason;
+
+    std::thread                       m_worker;
+    std::mutex                        m_workMutex;
+    std::condition_variable           m_workCv;
+    std::deque<std::function<void()>> m_workQueue;
+    bool                              m_workStop = false;
     nlohmann::json                    m_projectDocs;
     wxString                          m_token;
     wxString                          m_linkToken;

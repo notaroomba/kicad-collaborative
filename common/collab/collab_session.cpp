@@ -51,8 +51,73 @@ COLLAB_SESSION& COLLAB_SESSION::Get()
 
 void COLLAB_SESSION::Shutdown()
 {
-    if( s_instance )
-        s_instance->Disconnect();
+    if( !s_instance )
+        return;
+
+    // Join the worker before curl global cleanup: a task mid-request holds
+    // curl state that must not outlive it.
+    {
+        std::unique_lock<std::mutex> lock( s_instance->m_workMutex );
+        s_instance->m_workStop = true;
+    }
+
+    s_instance->m_workCv.notify_all();
+
+    if( s_instance->m_worker.joinable() )
+        s_instance->m_worker.join();
+
+    s_instance->Disconnect();
+}
+
+
+void COLLAB_SESSION::RunAsync( std::function<void()> aTask )
+{
+    std::unique_lock<std::mutex> lock( m_workMutex );
+
+    if( m_workStop )
+        return;     // shutting down: drop the task
+
+    m_workQueue.push_back( std::move( aTask ) );
+
+    if( !m_worker.joinable() )
+    {
+        m_worker = std::thread(
+                [this]()
+                {
+                    for( ;; )
+                    {
+                        std::function<void()> task;
+
+                        {
+                            std::unique_lock<std::mutex> workLock( m_workMutex );
+
+                            m_workCv.wait( workLock,
+                                           [this]()
+                                           {
+                                               return m_workStop || !m_workQueue.empty();
+                                           } );
+
+                            if( m_workStop && m_workQueue.empty() )
+                                return;
+
+                            task = std::move( m_workQueue.front() );
+                            m_workQueue.pop_front();
+                        }
+
+                        try
+                        {
+                            task();
+                        }
+                        catch( ... )
+                        {
+                            // A background task must never take the app down.
+                        }
+                    }
+                } );
+    }
+
+    lock.unlock();
+    m_workCv.notify_one();
 }
 
 

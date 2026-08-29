@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <dialog_shim.h>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <wx/timer.h>
 
@@ -41,6 +42,7 @@ class DIALOG_SHARE_PROJECT : public DIALOG_SHIM
 public:
     DIALOG_SHARE_PROJECT( wxWindow* aParent, const wxString& aProjectId,
                           const wxString& aProjectName );
+    ~DIALOG_SHARE_PROJECT() override;
 
 private:
     void refreshMembers();
@@ -48,6 +50,8 @@ private:
     void onCreateLink( wxCommandEvent& aEvent );
     void onInviteText( wxCommandEvent& aEvent );
     void onSearchTimer( wxTimerEvent& aEvent );
+    ///< Render one search response into the results list (UI thread).
+    void showSearchResults( const nlohmann::json& aUsers );
     void onResultSelected( wxCommandEvent& aEvent );
     void onInvite( wxCommandEvent& aEvent );
     void onRemove( wxCommandEvent& aEvent );
@@ -65,6 +69,10 @@ private:
     wxButton*           m_removeButton;
 
     wxTimer                     m_searchTimer;
+
+    std::shared_ptr<bool> m_alive;      ///< async-completion liveness guard
+
+    int            m_searchGeneration = 0; ///< drops stale search results
     std::vector<nlohmann::json> m_resultRows;   ///< rows behind m_results
     std::vector<nlohmann::json> m_memberRows;   ///< rows behind m_members
     bool                        m_suppressSearch;

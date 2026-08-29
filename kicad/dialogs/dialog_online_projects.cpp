@@ -27,6 +27,7 @@
 #include <paths.h>
 #include <project.h>
 
+#include <wx/app.h>
 #include <wx/button.h>
 #include <wx/clipbrd.h>
 #include <wx/dataview.h>
@@ -149,6 +150,13 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
 }
 
 
+DIALOG_ONLINE_PROJECTS::~DIALOG_ONLINE_PROJECTS()
+{
+    if( m_alive )
+        *m_alive = false;
+}
+
+
 void DIALOG_ONLINE_PROJECTS::updateSignInState()
 {
     if( m_myLogin.IsEmpty() )
@@ -181,20 +189,63 @@ void DIALOG_ONLINE_PROJECTS::refresh()
         return;
     }
 
-    if( std::optional<nlohmann::json> me = COLLAB_REST::Me( server, token ) )
-    {
-        m_myLogin = wxString::FromUTF8( me->value( "login", "" ) );
-        m_myUserId = me->value( "id", -1LL );
-    }
+    // Fetch off the UI thread: an unreachable server must not freeze the
+    // dialog for the whole curl timeout.
+    if( !m_alive )
+        m_alive = std::make_shared<bool>( true );
+
+    wxVector<wxVariant> loadingRow;
+    loadingRow.push_back( wxVariant( _( "Loading..." ) ) );
+
+    for( unsigned int i = 1; i < m_list->GetColumnCount(); i++ )
+        loadingRow.push_back( wxVariant( wxString() ) );
+
+    m_list->AppendItem( loadingRow );
+
+    std::shared_ptr<bool> alive = m_alive;
+    std::string           serverStd = server.ToStdString( wxConvUTF8 );
+    std::string           tokenStd = token.ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, serverStd, tokenStd]()
+            {
+                std::optional<nlohmann::json> me =
+                        COLLAB_REST::Me( wxString::FromUTF8( serverStd ),
+                                         wxString::FromUTF8( tokenStd ) );
+                std::optional<nlohmann::json> listing =
+                        COLLAB_REST::ListProjects( wxString::FromUTF8( serverStd ),
+                                                   wxString::FromUTF8( tokenStd ) );
+
+                nlohmann::json meJson = me ? *me : nlohmann::json::object();
+                nlohmann::json listingJson = listing ? *listing : nlohmann::json::object();
+
+                wxTheApp->CallAfter(
+                        [this, alive, meJson, listingJson]()
+                        {
+                            if( !*alive )
+                                return;
+
+                            populate( meJson, listingJson );
+                        } );
+            } );
+}
+
+
+void DIALOG_ONLINE_PROJECTS::populate( const nlohmann::json& aMe,
+                                       const nlohmann::json& aListing )
+{
+    m_list->DeleteAllItems();
+    m_projects.clear();
+
+    m_myLogin = wxString::FromUTF8( aMe.value( "login", "" ) );
+    m_myUserId = aMe.value( "id", -1LL );
 
     updateSignInState();
 
-    std::optional<nlohmann::json> listing = COLLAB_REST::ListProjects( server, token );
-
-    if( !listing || !listing->contains( "projects" ) )
+    if( !aListing.contains( "projects" ) )
         return;
 
-    for( const nlohmann::json& project : ( *listing )[ "projects" ] )
+    for( const nlohmann::json& project : aListing[ "projects" ] )
     {
         wxVector<wxVariant> row;
         row.push_back( wxVariant( wxString::FromUTF8( project.value( "name", "" ) ) ) );
