@@ -106,6 +106,16 @@ void COLLAB_SESSION::Connect( const wxString& aToken, const wxString& aLinkToken
 {
     Disconnect();
 
+    // A libcurl without ws/wss (e.g. the macOS system one) would otherwise fail
+    // inside the reconnect loop forever with no diagnostic.
+    if( !COLLAB_WS_CLIENT::IsSupported() )
+    {
+        wxLogWarning( wxS( "Collaboration is unavailable: this libcurl was built without "
+                           "WebSocket support." ) );
+        setState( STATE::DISCONNECTED );
+        return;
+    }
+
     m_generation++;
     m_token = aToken;
     m_linkToken = aLinkToken;

@@ -477,6 +477,12 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "api.enable_server",
             &m_Api.enable_server, false ) );
 
+    m_params.emplace_back( new PARAM<bool>( "collab.save_missing_libraries",
+            &m_Collab.save_missing_libraries, true ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "collab.local_library_dir",
+            &m_Collab.local_library_dir, wxS( "collab-libs" ) ) );
+
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "dialog.controls",
             [&]() -> nlohmann::json
             {

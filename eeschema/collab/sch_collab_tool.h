@@ -29,6 +29,7 @@
 #include <sch_edit_frame.h>
 #include <tools/sch_tool_base.h>
 
+#include <wx/datetime.h>
 #include <wx/timer.h>
 
 class SCH_COLLAB_SYNC;
@@ -91,9 +92,15 @@ private:
     void startWithToken( const wxString& aToken );
 
     ///< Connect and join every schematic doc of aProject (a server project json).
+    ///< With aConnect false the process-wide session is reused rather than
+    ///< (re)connected — for joining docs of a session another editor owns.
     void beginSession( const nlohmann::json& aProject, const wxString& aToken,
-                       const wxString& aLinkToken );
+                       const wxString& aLinkToken, bool aConnect = true );
     void endSession();
+
+    ///< Rejoin the live session recorded beside a cloud project copy (link.json),
+    ///< silently.  No-op without a stored token or link file.
+    void tryAutoJoin();
 
 
     ///< The displayed screen's file name, relative to the project (forward slashes).
@@ -118,5 +125,7 @@ private:
     nlohmann::json m_lastSentState;
     wxString       m_lastSentDocId;
     wxString       m_lastSheetFile;
+    wxDateTime     m_lastPresenceSend;  ///< for the idle keepalive
     bool           m_presenceDirty;
+    wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
 };

@@ -81,6 +81,16 @@ void KICAD_API_SERVER::Start()
 
     wxFileName socket;
 
+    // Allow multiple instances (or tests) to run their own API servers side by
+    // side without fighting over the default socket.
+    if( m_socketPathOverride.IsEmpty() )
+    {
+        wxString envPath;
+
+        if( wxGetEnv( wxS( "KICAD_API_SOCKET_PATH" ), &envPath ) && !envPath.IsEmpty() )
+            m_socketPathOverride = envPath;
+    }
+
     if( m_socketPathOverride.IsEmpty() )
     {
 #ifdef __WXMAC__

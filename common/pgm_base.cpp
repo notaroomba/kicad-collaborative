@@ -355,6 +355,15 @@ bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
     loc.Init();
 #endif
 
+    // Automated/scripted runs cannot click through wxLogGui's modal flush; route
+    // diagnostics to stderr instead.
+    {
+        wxString logToStderr;
+
+        if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), &logToStderr ) && !logToStderr.IsEmpty() )
+            wxLog::SetActiveTarget( new wxLogStderr() );
+    }
+
     // Just make sure we init precreate any folders early for later code
     // In particular, the user cache path is the most likely to be hit by startup code
     PATHS::EnsureUserPathsExist();

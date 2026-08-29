@@ -21,9 +21,12 @@
 
 #include <deque>
 
+#include <algorithm>
+
 #include <font/font.h>
 #include <font/text_attributes.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <gal/painter.h>
 #include <geometry/eda_angle.h>
 #include <math/util.h>
 #include <view/view.h>
@@ -69,6 +72,43 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 
     for( const REMOTE_PEER_DRAW& peer : m_peers )
     {
+        // Ghosts of items the peer is live-dragging: we have our own copy, so render
+        // the real thing through the painter, translated to the peer's reported
+        // position.  Drawn first so the peer-coloured overlays sit on top.
+        if( !peer.ghostItems.empty() )
+        {
+            KIGFX::PAINTER* painter = aView->GetPainter();
+
+            for( const REMOTE_GHOST_ITEM& ghost : peer.ghostItems )
+            {
+                if( !ghost.item )
+                    continue;
+
+                gal->Save();
+                gal->Translate( ghost.offset );
+
+                for( int layer : ghost.item->ViewGetLayers() )
+                    painter->Draw( ghost.item, layer );
+
+                gal->Restore();
+            }
+        }
+
+        // In-flight route/wire segments, semi-transparent in the peer colour.
+        if( !peer.ghostSegs.empty() )
+        {
+            gal->SetIsFill( false );
+            gal->SetIsStroke( true );
+            gal->SetStrokeColor( peer.color.WithAlpha( 0.55 ) );
+
+            for( const REMOTE_GHOST_SEG& seg : peer.ghostSegs )
+            {
+                gal->SetLineWidth( static_cast<float>(
+                        std::max( static_cast<double>( seg.width ), 1.5 * w ) ) );
+                gal->DrawLine( seg.a, seg.b );
+            }
+        }
+
         // Selection outlines: thin screen-constant rectangles in the peer colour.
         gal->SetIsFill( false );
         gal->SetIsStroke( true );
@@ -134,9 +174,16 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
         gal->SetStrokeColor( textColor );
         gal->SetLineWidth( static_cast<float>( textAttrs.m_StrokeWidth ) );
 
-        font->Draw( gal, peer.label,
-                    VECTOR2I( KiROUND( chipOrigin.x + pad ),
-                              KiROUND( ( chipOrigin.y + chipEnd.y ) / 2.0 ) ),
-                    textAttrs, KIFONT::METRICS::Default() );
+        // The chip fill was rasterized at this depth; with GL_LESS, equal-depth
+        // text fragments over it would be discarded — step closer to the viewer.
+        {
+            KIGFX::GAL_SCOPED_ATTRS depthScope( *gal, KIGFX::GAL_SCOPED_ATTRS::LAYER_DEPTH );
+            gal->AdvanceDepth();
+
+            font->Draw( gal, peer.label,
+                        VECTOR2I( KiROUND( chipOrigin.x + pad ),
+                                  KiROUND( ( chipOrigin.y + chipEnd.y ) / 2.0 ) ),
+                        textAttrs, KIFONT::METRICS::Default() );
+        }
     }
 }

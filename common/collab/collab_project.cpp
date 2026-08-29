@@ -31,8 +31,10 @@
 
 std::string COLLAB_PROJECT::ZipProjectFiles( const wxString& aProjectPath )
 {
+    // Recurse: hierarchical projects keep sub-sheets in subdirectories.  The
+    // extension whitelist keeps backups, journals and outputs out of the upload.
     wxArrayString files;
-    wxDir::GetAllFiles( aProjectPath, &files, wxEmptyString, wxDIR_FILES );
+    wxDir::GetAllFiles( aProjectPath, &files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
 
     wxMemoryOutputStream memStream;
     int                  entries = 0;
@@ -46,19 +48,32 @@ std::string COLLAB_PROJECT::ZipProjectFiles( const wxString& aProjectPath )
             wxString   ext = fn.GetExt().Lower();
             wxString   name = fn.GetFullName();
 
+            // Design files, project-local libraries (.kicad_sym, .pretty footprints),
+            // 3D models and library tables all travel with the project; the type is
+            // detected from the extension here and again on the server.
             bool wanted = ext == wxS( "kicad_pro" ) || ext == wxS( "kicad_sch" )
-                          || ext == wxS( "kicad_pcb" ) || name == wxS( "sym-lib-table" )
-                          || name == wxS( "fp-lib-table" );
+                          || ext == wxS( "kicad_pcb" ) || ext == wxS( "kicad_sym" )
+                          || ext == wxS( "kicad_mod" ) || ext == wxS( "kicad_dru" )
+                          || ext == wxS( "kicad_wks" ) || ext == wxS( "step" )
+                          || ext == wxS( "stp" ) || ext == wxS( "wrl" ) || ext == wxS( "wrz" )
+                          || name == wxS( "sym-lib-table" ) || name == wxS( "fp-lib-table" )
+                          || name == wxS( "design-block-lib-table" );
 
             if( !wanted )
                 continue;
+
+            // Store the project-relative path (forward slashes) so sub-sheets
+            // land where the peer's document map expects them.
+            wxFileName rel( files[ i ] );
+            rel.MakeRelativeTo( aProjectPath );
+            wxString entryName = rel.GetFullPath( wxPATH_UNIX );
 
             wxFFileInputStream input( files[ i ] );
 
             if( !input.IsOk() )
                 continue;
 
-            zipStream.PutNextEntry( name );
+            zipStream.PutNextEntry( entryName );
             zipStream.Write( input );
             entries++;
         }
@@ -153,6 +168,10 @@ wxString COLLAB_PROJECT::ParseLinkToken( const wxString& aInput )
     wxString input = aInput;
     input.Trim( true ).Trim( false );
 
+    // The web landing page's "Open in KiCad" button uses this scheme.
+    if( input.StartsWith( wxS( "kicad-collab://join/" ) ) )
+        input = input.Mid( wxString( wxS( "kicad-collab://join/" ) ).length() );
+
     int pos = input.Find( wxS( "/j/" ) );
 
     if( pos != wxNOT_FOUND )
@@ -162,4 +181,133 @@ wxString COLLAB_PROJECT::ParseLinkToken( const wxString& aInput )
     input = input.BeforeFirst( '/' ).BeforeFirst( '?' ).BeforeFirst( '#' );
 
     return input;
+}
+
+
+static wxString localLinkPath( const wxString& aProjectPath, const wxString& aProjectName )
+{
+    wxFileName dir( aProjectPath, wxEmptyString );
+    dir.AppendDir( aProjectName + wxS( ".collab" ) );
+
+    return wxFileName( dir.GetPath(), wxS( "link.json" ) ).GetFullPath();
+}
+
+
+void COLLAB_PROJECT::WriteLocalLink( const wxString& aProjectPath, const wxString& aProjectName,
+                                     const wxString& aServer, const wxString& aProjectId )
+{
+    wxFileName file( localLinkPath( aProjectPath, aProjectName ) );
+
+    if( !file.DirExists() && !wxFileName::Mkdir( file.GetPath(), wxS_DIR_DEFAULT,
+                                                 wxPATH_MKDIR_FULL ) )
+        return;
+
+    nlohmann::json link = {
+        { "server", aServer.ToStdString( wxConvUTF8 ) },
+        { "projectId", aProjectId.ToStdString( wxConvUTF8 ) },
+    };
+
+    wxFFileOutputStream out( file.GetFullPath() );
+
+    if( out.IsOk() )
+    {
+        std::string text = link.dump( 2 );
+        out.Write( text.data(), text.size() );
+    }
+}
+
+
+wxString COLLAB_PROJECT::ReadLocalLink( const wxString& aProjectPath,
+                                        const wxString& aProjectName, wxString& aServer )
+{
+    wxFileName file( localLinkPath( aProjectPath, aProjectName ) );
+
+    if( !file.FileExists() )
+        return wxEmptyString;
+
+    wxFFileInputStream in( file.GetFullPath() );
+
+    if( !in.IsOk() )
+        return wxEmptyString;
+
+    std::string text;
+    text.resize( in.GetLength() );
+    in.Read( text.data(), text.size() );
+
+    try
+    {
+        nlohmann::json link = nlohmann::json::parse( text );
+
+        aServer = wxString::FromUTF8( link.value( "server", "" ) );
+        return wxString::FromUTF8( link.value( "projectId", "" ) );
+    }
+    catch( ... )
+    {
+        return wxEmptyString;
+    }
+}
+
+
+bool COLLAB_PROJECT::DownloadAndExtract( const wxString& aServer, const wxString& aToken,
+                                         const wxString& aProjectId,
+                                         const wxString& aProjectName,
+                                         const wxString& aTargetDir, wxString& aProFile,
+                                         wxString& aError )
+{
+    aProFile.clear();
+
+    std::optional<std::string> archive =
+            COLLAB_REST::DownloadArchive( aServer, aToken, aProjectId );
+
+    if( !archive )
+    {
+        aError = _( "Unable to download the shared project." );
+        return false;
+    }
+
+    if( !wxFileName::DirExists( aTargetDir )
+        && !wxFileName::Mkdir( aTargetDir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
+    {
+        aError = _( "Unable to create the project directory." );
+        return false;
+    }
+
+    wxMemoryInputStream memStream( archive->data(), archive->size() );
+    wxZipInputStream    zipStream( memStream );
+
+    std::unique_ptr<wxZipEntry> entry;
+
+    while( entry.reset( zipStream.GetNextEntry() ), entry )
+    {
+        if( entry->IsDir() )
+            continue;
+
+        // The server sanitizes uploads, but never trust archive paths anyway.
+        wxString name = entry->GetName( wxPATH_UNIX );
+
+        if( name.IsEmpty() || name.StartsWith( wxS( "/" ) ) || name.Contains( wxS( ".." ) )
+            || name.Contains( wxS( ":" ) ) )
+            continue;
+
+        wxFileName target( aTargetDir + wxFileName::GetPathSeparator()
+                           + wxFileName( name, wxPATH_UNIX ).GetFullPath() );
+
+        if( !target.DirExists()
+            && !wxFileName::Mkdir( target.GetPath(), wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
+            continue;
+
+        wxFFileOutputStream out( target.GetFullPath() );
+
+        if( !out.IsOk() )
+            continue;
+
+        zipStream.Read( out );
+
+        if( target.GetExt() == wxS( "kicad_pro" ) && aProFile.IsEmpty() )
+            aProFile = target.GetFullPath();
+    }
+
+    WriteLocalLink( aTargetDir, aProjectName, aServer, aProjectId );
+
+    return true;
 }

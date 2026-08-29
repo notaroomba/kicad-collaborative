@@ -19,6 +19,8 @@
 
 #include "sch_collab_sync.h"
 
+#include <set>
+
 #include <collab/collab_auth.h>
 #include <collab/collab_rest.h>
 #include <collab/collab_session.h>
@@ -30,7 +32,11 @@
 #include <diff_merge/sch_diff_utils.h>
 #include <ki_exception.h>
 #include <lib_symbol.h>
+#include <libraries/library_manager.h>
+#include <libraries/library_table.h>
+#include <pgm_base.h>
 #include <project.h>
+#include <settings/common_settings.h>
 #include <richio.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
@@ -1002,8 +1008,25 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     SCH_COMMIT             commit( m_frame->GetToolManager() );
     std::vector<SCH_ITEM*> removedItems;
 
+    // A REMOVED + ADDED pair for the same id in one batch would stage the same
+    // live object as both a removal and a modification in one commit — the
+    // removal wins and the item is destroyed.  Collapse: the ADDED alone upserts.
+    std::set<std::string> reAddedIds;
+
     for( const nlohmann::json& change : aOp.changes )
     {
+        if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
+            reAddedIds.insert( change.value( "id", "" ) );
+    }
+
+    for( const nlohmann::json& change : aOp.changes )
+    {
+        if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
+            && reAddedIds.count( change.value( "id", "" ) ) )
+        {
+            continue;
+        }
+
         SCH_ITEM* removedItem = nullptr;
 
         SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), screen, change, &commit,
@@ -1025,5 +1048,101 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
 
         m_frame->PurgeItemFromUndoRedo( uuid );
         delete item;
+    }
+
+    saveMissingLibraries( aOp.changes );
+}
+
+
+void SCH_COLLAB_SYNC::saveMissingLibraries( const nlohmann::json& aChanges )
+{
+    COMMON_SETTINGS* settings = Pgm().GetCommonSettings();
+
+    if( !settings || !settings->m_Collab.save_missing_libraries )
+        return;
+
+    LIBRARY_MANAGER& manager = Pgm().GetLibraryManager();
+
+    for( const nlohmann::json& change : aChanges )
+    {
+        if( !change.is_object() || change.value( "typeName", "" ) != "SCH_SYMBOL" )
+            continue;
+
+        std::string kind = change.value( "kind", "" );
+
+        if( kind != "ADDED" && kind != "MODIFIED" )
+            continue;
+
+        KIID      id( wxString::FromUTF8( change.value( "id", "" ) ) );
+        SCH_ITEM* item = m_frame->Schematic().ResolveItem( id, nullptr, true );
+
+        if( !item || item->Type() != SCH_SYMBOL_T )
+            continue;
+
+        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+        wxString    nickname = symbol->GetLibId().GetLibNickname();
+
+        if( nickname.IsEmpty() || m_savedLibNicknames.count( nickname )
+            || !symbol->GetLibSymbolRef() )
+        {
+            continue;
+        }
+
+        m_savedLibNicknames.insert( nickname );
+
+        std::optional<LIBRARY_MANAGER_ADAPTER*> adapter =
+                manager.Adapter( LIBRARY_TABLE_TYPE::SYMBOL );
+
+        if( !adapter || ( *adapter )->HasLibrary( nickname ) )
+            continue;
+
+        // The library this symbol claims to come from does not exist here: keep a
+        // project-local copy (from the embedded definition) so the reference
+        // resolves for us too.
+        wxString sanitized = nickname;
+        sanitized.Replace( wxS( "/" ), wxS( "_" ) );
+        sanitized.Replace( wxS( ":" ), wxS( "_" ) );
+
+        wxFileName libFile( m_frame->Prj().GetProjectPath(), sanitized );
+        libFile.AppendDir( settings->m_Collab.local_library_dir );
+        libFile.SetExt( wxS( "kicad_sym" ) );
+
+        if( !libFile.DirExists() && !wxFileName::Mkdir( libFile.GetPath(), wxS_DIR_DEFAULT,
+                                                        wxPATH_MKDIR_FULL ) )
+            continue;
+
+        try
+        {
+            SCH_IO_KICAD_SEXPR io;
+
+            // The plugin takes ownership of the copy.
+            LIB_SYMBOL* copy = new LIB_SYMBOL( *symbol->GetLibSymbolRef() );
+            copy->SetName( symbol->GetLibId().GetLibItemName() );
+            io.SaveSymbol( libFile.GetFullPath(), copy );
+        }
+        catch( const IO_ERROR& ioe )
+        {
+            wxLogTrace( traceCollab, wxS( "saveMissingLibraries: save failed: %s" ),
+                        ioe.What() );
+            continue;
+        }
+
+        std::optional<LIBRARY_TABLE*> table =
+                manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT );
+
+        if( !table )
+            continue;
+
+        LIBRARY_TABLE_ROW& row = ( *table )->InsertRow();
+        row.SetNickname( nickname );
+        row.SetURI( wxS( "${KIPRJMOD}/" ) + settings->m_Collab.local_library_dir + wxS( "/" )
+                    + sanitized + wxS( ".kicad_sym" ) );
+        row.SetType( wxS( "KiCad" ) );
+
+        ( *table )->Save();
+        manager.ReloadTables( LIBRARY_TABLE_SCOPE::PROJECT, { LIBRARY_TABLE_TYPE::SYMBOL } );
+
+        wxLogTrace( traceCollab, wxS( "saved collaborator library '%s' to %s" ), nickname,
+                    libFile.GetFullPath() );
     }
 }

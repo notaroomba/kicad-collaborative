@@ -71,4 +71,52 @@ KICOMMON_API bool UploadSnapshot( const wxString& aServerUrl, const wxString& aT
                                   const wxString& aDocId, long long aSeq,
                                   const std::string& aBytes );
 
+/// GET /api/projects -> { projects: [ { projectId, name, ownerId, ownerLogin, role,
+/// docCount, createdAt, updatedAt } ] }, most recently edited first.
+KICOMMON_API std::optional<nlohmann::json> ListProjects( const wxString& aServerUrl,
+                                                         const wxString& aToken );
+
+/// DELETE /api/projects/{id} (owner only).
+KICOMMON_API bool DeleteProject( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aProjectId );
+
+/// PATCH /api/projects/{id} { name } (owner only).
+KICOMMON_API bool RenameProject( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aProjectId, const wxString& aName );
+
+/// GET /api/users/search?q= -> { users: [ { login, name, avatarUrl, userId, source } ] }
+/// where source is "server" (has an account here) or "github".
+KICOMMON_API std::optional<nlohmann::json> SearchUsers( const wxString& aServerUrl,
+                                                        const wxString& aToken,
+                                                        const wxString& aQuery );
+
+/**
+ * POST /api/projects/{id}/invites: grant by GitHub login or email (owner only).
+ * -> { ok, status: "granted"|"pending", ... }.  Exactly one of login/email is used;
+ * pass the other empty.
+ */
+KICOMMON_API std::optional<nlohmann::json> Invite( const wxString& aServerUrl,
+                                                   const wxString& aToken,
+                                                   const wxString& aProjectId,
+                                                   const wxString& aLogin,
+                                                   const wxString& aEmail,
+                                                   const wxString& aRole );
+
+/// GET /api/projects/{id}/members -> { ownerId, members: [...], pending: [...] } (owner only).
+KICOMMON_API std::optional<nlohmann::json> ListMembers( const wxString& aServerUrl,
+                                                        const wxString& aToken,
+                                                        const wxString& aProjectId );
+
+/// DELETE /api/projects/{id}/members/{userId} (owner only).
+KICOMMON_API bool RemoveMember( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId, long long aUserId );
+
+/// DELETE /api/projects/{id}/invites/{inviteId} (owner only).
+KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId, long long aInviteId );
+
+/// GET /api/me -> { id, login, name, email, avatarUrl }.
+KICOMMON_API std::optional<nlohmann::json> Me( const wxString& aServerUrl,
+                                              const wxString& aToken );
+
 } // namespace COLLAB_REST

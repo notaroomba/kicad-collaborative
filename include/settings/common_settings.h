@@ -209,6 +209,16 @@ public:
         bool enable_server;
     };
 
+    struct COLLAB
+    {
+        /// Save footprints/symbols arriving from collaborators whose library is not
+        /// available locally into a project-local library.
+        bool save_missing_libraries;
+
+        /// Directory (relative to the project) those libraries are written to.
+        wxString local_library_dir;
+    };
+
     COMMON_SETTINGS();
 
     virtual ~COMMON_SETTINGS();
@@ -270,6 +280,8 @@ public:
     PACKAGE_MANAGER     m_PackageManager;
     GIT                 m_Git;
     API                 m_Api;
+
+    COLLAB              m_Collab;
 
     /// Extra directories to search for 3D models, added by the user through
     /// the 3D model migration dialog.  Persists across sessions.
