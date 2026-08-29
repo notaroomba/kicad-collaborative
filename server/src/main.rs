@@ -162,6 +162,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        // SVG previews are ~10x smaller compressed; pages benefit too.
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;

@@ -320,8 +320,11 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
 
     beginSession( *project, aToken, wxEmptyString );
 
-    wxMessageBox( wxString::Format( _( "Share link copied to the clipboard:\n%s" ), url ),
-                  _( "Collaboration Session" ), wxOK | wxICON_INFORMATION, editFrame );
+    // An infobar, not a modal: a message box here wedges scripted flows, and
+    // File > Copy Share Link can re-mint the link at any time.
+    editFrame->ShowInfoBarMsg(
+            wxString::Format( _( "Session started — share link copied to the clipboard: %s" ),
+                              url ) );
 }
 
 

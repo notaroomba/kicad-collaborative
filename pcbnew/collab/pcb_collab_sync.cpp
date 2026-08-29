@@ -33,6 +33,7 @@
 #include <footprint.h>
 #include <pcb_plotter.h>
 #include <pcb_plot_params.h>
+#include <settings/color_settings.h>
 #include <reporter.h>
 #include <wx/ffile.h>
 #include <pcb_group.h>
