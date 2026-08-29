@@ -46,7 +46,8 @@ public:
     DIALOG_PCB_COMMENTS( wxWindow* aParent, const nlohmann::json* aComments,
                          const VECTOR2I& aNewAnchor,
                          std::function<void( const wxString&, long long )> aPost,
-                         std::function<void( long long, bool )> aResolve );
+                         std::function<void( long long, bool )> aResolve,
+                         std::function<void( const VECTOR2I& )> aFocus );
 
     /// Re-render from the (tool-owned) comment array after a live update.
     void Reload();
@@ -61,6 +62,7 @@ private:
 
     std::function<void( const wxString&, long long )> m_post;
     std::function<void( long long, bool )>            m_resolve;
+    std::function<void( const VECTOR2I& )>            m_focus;
 
     wxDataViewListCtrl* m_threads;
     wxTextCtrl*         m_thread;
@@ -68,6 +70,7 @@ private:
     wxButton*           m_replyBtn;
     wxButton*           m_resolveBtn;
     wxButton*           m_newBtn;
+    wxButton*           m_showBtn;
 
     std::vector<long long> m_rowRootIds;
 };

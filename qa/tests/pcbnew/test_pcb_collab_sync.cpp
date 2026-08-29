@@ -36,6 +36,8 @@
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
+#include <generators_mgr.h>
+#include <pcb_generator.h>
 #include <pcb_group.h>
 #include <pcb_track.h>
 #include <richio.h>
@@ -152,6 +154,43 @@ BOOST_AUTO_TEST_CASE( GroupMembershipTravels )
     // IsLocked() walks it and crashed a live receiver on exactly this.
     BOOST_CHECK( twin1->GetParentGroup() == nullptr );
     BOOST_CHECK( !twin1->IsLocked() );
+}
+
+
+BOOST_AUTO_TEST_CASE( GeneratorRoundTrips )
+{
+    // Tuning patterns are PCB_GROUP subclasses created through the generators
+    // registry; they must survive the same sexpr + groupMembers transfer.
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+
+    PCB_GENERATOR* gen = GENERATORS_MGR::Instance().CreateFromType( wxS( "meanders" ) );
+    BOOST_REQUIRE( gen != nullptr );
+
+    gen->SetLayer( F_Cu );
+    gen->AddItem( track );
+    m_authoring->Add( gen );
+
+    nlohmann::json change = MakeChange( gen, "ADDED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( gen );
+    change[ "groupMembers" ] = { track->m_Uuid.AsStdString() };
+
+    BOOST_REQUIRE( !change[ "sexpr" ].get<std::string>().empty() );
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    PCB_GENERATOR* applied =
+            dynamic_cast<PCB_GENERATOR*>( m_receiving->ResolveItem( gen->m_Uuid, true ) );
+
+    BOOST_REQUIRE( applied != nullptr );
+    BOOST_CHECK( applied->GetGeneratorType() == gen->GetGeneratorType() );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 1 );
+    BOOST_CHECK( twin->GetParentGroup() == applied );
+
+    // Removal releases the member cleanly, like a plain group.
+    change = MakeChange( gen, "REMOVED" );
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+    BOOST_CHECK( m_receiving->ResolveItem( gen->m_Uuid, true ) == nullptr );
+    BOOST_CHECK( twin->GetParentGroup() == nullptr );
 }
 
 
