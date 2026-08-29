@@ -75,6 +75,9 @@ public:
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
     void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
     void OnComment( const nlohmann::json& aMsg ) override;
+
+    ///< Open the comment-threads dialog (modeless view over m_comments).
+    int ShowComments( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -135,6 +138,15 @@ private:
 
     ///< Rebuild the overlay's comment pins from m_comments.
     void rebuildCommentPins();
+
+    ///< The open comments dialog, if any (modeless; owned by wx).
+    class DIALOG_PCB_COMMENTS* m_commentsDlg = nullptr;
+
+    ///< Post a comment or reply off-thread; the broadcast updates state.
+    void postComment( const wxString& aBody, long long aParentId, const VECTOR2I& aAnchor );
+
+    ///< Flip a thread's resolved state off-thread.
+    void resolveComment( long long aRootId, bool aResolved );
 
     std::unique_ptr<PCB_COLLAB_SYNC> m_sync;  ///< live while the board doc is joined
 

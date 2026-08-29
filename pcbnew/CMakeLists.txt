@@ -466,6 +466,7 @@ set( PCBNEW_CLASS_SRCS
     api/headless_footprint_context.cpp
     api/pcb_context.cpp
 
+    collab/dialog_pcb_comments.cpp
     collab/pcb_collab_sync.cpp
     collab/pcb_collab_tool.cpp
 

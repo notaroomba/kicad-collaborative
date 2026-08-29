@@ -3188,6 +3188,12 @@ TOOL_ACTION PCB_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Leave Session" ) )
         .Tooltip( _( "Disconnect from the collaboration session" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::collabComments( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.comments" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Comments..." ) )
+        .Tooltip( _( "Browse, answer and resolve the shared project's comment threads" ) ) );
+
 
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()
 {

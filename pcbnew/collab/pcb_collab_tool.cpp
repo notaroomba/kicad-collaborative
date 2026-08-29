@@ -23,6 +23,7 @@
 
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
+#include "dialog_pcb_comments.h"
 #include <kiid.h>
 #include <router/pns_arc.h>
 #include <router/pns_drag_algo.h>
@@ -531,6 +532,104 @@ void PCB_COLLAB_TOOL::OnComment( const nlohmann::json& aMsg )
         fprintf( stderr, "COLLAB comment %s: id=%lld\n", action.c_str(), id );
 
     rebuildCommentPins();
+
+    if( m_commentsDlg )
+        m_commentsDlg->Reload();
+}
+
+
+int PCB_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
+{
+    if( m_docId.IsEmpty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                _( "Comments live on shared projects; start or join a session first." ) );
+        return 0;
+    }
+
+    if( m_commentsDlg )
+    {
+        m_commentsDlg->Raise();
+        return 0;
+    }
+
+    VECTOR2I anchor = frame<PCB_EDIT_FRAME>()->GetCanvas()->GetViewControls()
+                              ->GetCursorPosition();
+
+    m_commentsDlg = new DIALOG_PCB_COMMENTS(
+            frame<PCB_EDIT_FRAME>(), &m_comments, anchor,
+            [this, anchor]( const wxString& aBody, long long aParentId )
+            {
+                postComment( aBody, aParentId, anchor );
+            },
+            [this]( long long aRootId, bool aResolved )
+            {
+                resolveComment( aRootId, aResolved );
+            } );
+
+    m_commentsDlg->Bind( wxEVT_CLOSE_WINDOW,
+                         [this]( wxCloseEvent& aClose )
+                         {
+                             m_commentsDlg = nullptr;
+                             aClose.Skip();
+                         } );
+
+    // wx destroys the dialog on close (Destroy via Close default handling
+    // needs an explicit call for modeless dialogs).
+    m_commentsDlg->Bind( wxEVT_BUTTON,
+                         [this]( wxCommandEvent& aCmd )
+                         {
+                             if( aCmd.GetId() == wxID_CANCEL && m_commentsDlg )
+                             {
+                                 DIALOG_PCB_COMMENTS* dlg = m_commentsDlg;
+                                 m_commentsDlg = nullptr;
+                                 dlg->Destroy();
+                                 return;
+                             }
+
+                             aCmd.Skip();
+                         } );
+
+    m_commentsDlg->Show();
+    return 0;
+}
+
+
+void PCB_COLLAB_TOOL::postComment( const wxString& aBody, long long aParentId,
+                                   const VECTOR2I& aAnchor )
+{
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+    std::string docId = m_docId.ToStdString( wxConvUTF8 );
+    std::string body = aBody.ToStdString( wxConvUTF8 );
+    long long   x = aAnchor.x;
+    long long   y = aAnchor.y;
+
+    COLLAB_SESSION::Get().RunAsync(
+            [server, token, docId, body, aParentId, x, y]()
+            {
+                COLLAB_REST::CreateComment( wxString::FromUTF8( server ),
+                                            wxString::FromUTF8( token ),
+                                            wxString::FromUTF8( docId ),
+                                            wxString::FromUTF8( body ), x, y, aParentId );
+            } );
+}
+
+
+void PCB_COLLAB_TOOL::resolveComment( long long aRootId, bool aResolved )
+{
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [server, token, aRootId, aResolved]()
+            {
+                COLLAB_REST::SetCommentResolved( wxString::FromUTF8( server ),
+                                                 wxString::FromUTF8( token ), aRootId,
+                                                 aResolved );
+            } );
 }
 
 
@@ -999,6 +1098,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::StartSession,      PCB_ACTIONS::collabStartSession.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::JoinSession,       PCB_ACTIONS::collabJoinSession.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::LeaveSession,      PCB_ACTIONS::collabLeaveSession.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::ShowComments,      PCB_ACTIONS::collabComments.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

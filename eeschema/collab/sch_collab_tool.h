@@ -70,6 +70,7 @@ public:
     void OnSnapshot( const nlohmann::json& aSnapshotMsg ) override;
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
     void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
+    void OnComment( const nlohmann::json& aMsg ) override;
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -121,6 +122,19 @@ private:
     std::unique_ptr<SCH_COLLAB_SYNC> m_sync;      ///< live while a session is active
 
     std::map<wxString, wxString> m_docIdByPath;   ///< project-relative path -> server doc id
+
+    ///< docId -> that doc's comments (REST shape), fetched on join and kept
+    ///< fresh by live `comment` broadcasts.
+    std::map<wxString, nlohmann::json> m_commentsByDoc;
+
+    ///< Guards async comment-fetch completions against tool teardown.
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>( true );
+
+    ///< Fetch every joined doc's comments off-thread.
+    void fetchComments();
+
+    ///< Rebuild the overlay's comment pins for the displayed sheet.
+    void rebuildCommentPins();
     std::map<wxString, wxString> m_pathByDocId;
 
     nlohmann::json m_lastSentState;
