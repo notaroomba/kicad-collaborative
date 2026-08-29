@@ -21,16 +21,17 @@ pub enum ClientMsg {
         /// Bearer JWT.  Web clients may send "" and authenticate with the
         /// session cookie riding the WebSocket upgrade request instead.
         token: String,
-        #[serde(rename = "clientId")]
+        #[serde(default, rename = "clientId")]
         client_id: Option<String>,
-        #[serde(rename = "linkToken")]
+        #[serde(default, rename = "linkToken")]
         link_token: Option<String>,
+        #[serde(default)]
         client: Option<String>,
     },
     join_doc {
         #[serde(rename = "docId")]
         doc_id: Uuid,
-        #[serde(rename = "sinceSeq")]
+        #[serde(default, rename = "sinceSeq")]
         since_seq: Option<i64>,
     },
     leave_doc {
@@ -42,7 +43,7 @@ pub enum ClientMsg {
         doc_id: Uuid,
         #[serde(rename = "clientOpId")]
         client_op_id: String,
-        #[serde(rename = "baseSeq")]
+        #[serde(default, rename = "baseSeq")]
         base_seq: Option<i64>,
         changes: Value,
     },
@@ -194,6 +195,18 @@ pub struct ItemChangeWire {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimal_web_hello_parses() {
+        // A browser client omits optional keys instead of sending nulls.
+        let text = r#"{"type":"hello","proto":1,"token":"","clientId":"web-1"}"#;
+        let msg: ClientMsg = serde_json::from_str(text).unwrap();
+        assert!(matches!(msg, ClientMsg::hello { link_token: None, client: None, .. }));
+
+        let op = r#"{"type":"op","docId":"64912f74-6834-4aa6-98ff-55c3faec0bbf","clientOpId":"web:1","changes":[]}"#;
+        let msg: ClientMsg = serde_json::from_str(op).unwrap();
+        assert!(matches!(msg, ClientMsg::op { base_seq: None, .. }));
+    }
 
     #[test]
     fn client_hello_round_trips() {

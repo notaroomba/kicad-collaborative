@@ -261,55 +261,198 @@ pub async fn live_page(
 <title>{name} live — KiCad Collaborative</title>{STYLE}
 <style>
   body {{ max-width: 1100px; }}
-  #stage {{ position: relative; background: #f4f1e6; border-radius: 8px; }}
+  #stage {{ position: relative; background: #f4f1e6; border-radius: 8px; touch-action: none; }}
   #stage img, #stage svg {{ display: block; width: 100%; height: auto; }}
   #overlay {{ position: absolute; inset: 0; pointer-events: none; }}
   #status {{ font-size: .85rem; opacity: .7; margin-top: 8px; }}
   .chip {{ display:inline-block; padding: 2px 8px; border-radius: 999px; background: #d9822b22; }}
+  .chip.err {{ background: #c0392b22; }}
 </style></head><body>
 <p><a href="/p/{id}" class="muted">&larr; {name}</a></p>
 <div id="stage">
-  <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false">
-  <svg id="overlay"></svg>
+  <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false" draggable="false">
+  <svg id="overlay"><g id="peersG"></g><g id="dragG"></g></svg>
 </div>
 <div id="status">connecting&hellip;</div>
 {join_note}
 <script>
+const PROJECT_ID = "{id}";
 const DOC_ID = "{doc_id}";
 const CAN_JOIN = {can_join};
 const NS = "http://www.w3.org/2000/svg";
+const stage = document.getElementById("stage");
 const overlay = document.getElementById("overlay");
+const peersG = document.getElementById("peersG");
+const dragG = document.getElementById("dragG");
 const statusEl = document.getElementById("status");
+let ws = null;
 let editsSeen = 0;
+let opN = 0;
+let viewOnly = false;
+let vb = [0, 0, 297, 210];
+let items = [];            // footprints: {{id, lib, x, y}} in nm
+let drag = null;           // {{fp, curMm: [x, y]}}
+let lastPresence = 0;
+
+function setStatus(extra) {{
+  const mode = viewOnly ? '<span class="chip err">view-only</span>'
+             : items.length ? '<span class="chip">drag a footprint to move it</span>' : "";
+  const edits = editsSeen ? ` &middot; ${{editsSeen}} edit(s) since load` : "";
+  statusEl.innerHTML = `live${{edits}} ${{mode}} ${{extra || ""}}`;
+}}
 
 async function setup() {{
   // Copy the base SVG's viewBox so overlay coordinates line up; presence
   // coordinates are nanometres, the SVG user space is millimetres.
   const text = await (await fetch(document.getElementById("base").src)).text();
   const m = text.match(/viewBox="([^"]+)"/);
-  if (m) overlay.setAttribute("viewBox", m[1]);
+  if (m) {{ vb = m[1].split(/\s+/).map(Number); overlay.setAttribute("viewBox", m[1]); }}
   if (!CAN_JOIN) {{ statusEl.textContent = "static preview (not signed in)"; return; }}
 
+  fetch(`/api/projects/${{PROJECT_ID}}/board-items`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {{ if (j) {{ items = j.footprints || []; setStatus(); }} }})
+    .catch(() => {{}});
+
+  connect();
+}}
+
+let retries = 0;
+function connect() {{
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${{proto}}://${{location.host}}/ws`);
-  ws.onopen = () => ws.send(JSON.stringify({{ type: "hello", proto: 1, token: "", clientId: "web-" + Math.random().toString(36).slice(2, 10) }}));
-  ws.onclose = () => statusEl.textContent = "disconnected — reload to reconnect";
+  ws = new WebSocket(`${{proto}}://${{location.host}}/ws`);
+  ws.onopen = () => ws.send(JSON.stringify({{ type: "hello", proto: 1, token: "", clientId: "web-" + Math.random().toString(36).slice(2, 10), linkToken: null, client: "web" }}));
+  ws.onclose = () => {{
+    peersG.replaceChildren();
+    const delay = Math.min(15000, 1000 * Math.pow(2, retries++));
+    statusEl.textContent = `disconnected — reconnecting in ${{Math.round(delay / 1000)}}s`;
+    setTimeout(connect, delay);
+  }};
   ws.onmessage = (ev) => {{
     const msg = JSON.parse(ev.data);
-    if (msg.type === "hello_ok") ws.send(JSON.stringify({{ type: "join_doc", docId: DOC_ID }}));
-    if (msg.type === "doc_info") statusEl.textContent = `live &middot; ${{(msg.peers || []).length}} peer(s) here`;
+    if (msg.type === "hello_ok") {{ retries = 0; ws.send(JSON.stringify({{ type: "join_doc", docId: DOC_ID }})); }}
+    if (msg.type === "doc_info") setStatus(`&middot; ${{(msg.peers || []).length}} peer(s) here`);
     if (msg.type === "presence") drawPeers(msg.peers || {{}});
-    if (msg.type === "op" || msg.type === "ops") {{
-      editsSeen++;
-      statusEl.innerHTML = `live &middot; <span class="chip">${{editsSeen}} edit(s) since load — reload to refresh the render</span>`;
+    if (msg.type === "error" && msg.code === "permission_denied") {{
+      viewOnly = true;
+      drag = null;
+      dragG.replaceChildren();
+      setStatus();
     }}
+    if (msg.type === "op") {{ editsSeen++; noteRemoteOp(msg); setStatus(); }}
+    if (msg.type === "ops") {{ editsSeen += (msg.ops || []).length; setStatus(); }}
   }};
 }}
 
+// Keep the hit-test index roughly current: our own moves are applied
+// optimistically at send time, and peer moves that travel as position deltas
+// are folded in here.  Whole-item replaces just mark the render stale.
+function noteRemoteOp(msg) {{
+  for (const c of msg.changes || []) {{
+    if (c.kind !== "MODIFIED" || c.typeName !== "FOOTPRINT") continue;
+    const fp = items.find((f) => f.id === c.id);
+    if (!fp) continue;
+    for (const p of c.properties || []) {{
+      if (p.name === "Position X" && p.after) fp.x = p.after.v;
+      if (p.name === "Position Y" && p.after) fp.y = p.after.v;
+    }}
+  }}
+}}
+
+function stageMm(ev) {{
+  const rect = stage.getBoundingClientRect();
+  return [
+    vb[0] + ((ev.clientX - rect.left) / rect.width) * vb[2],
+    vb[1] + ((ev.clientY - rect.top) / rect.height) * vb[3],
+  ];
+}}
+
+function pxPerMm() {{
+  return overlay.clientWidth > 0 ? overlay.clientWidth / vb[2] : 4;
+}}
+
+function sendPresence(mmPos) {{
+  const now = Date.now();
+  if (!ws || ws.readyState !== 1 || now - lastPresence < 80) return;
+  lastPresence = now;
+  ws.send(JSON.stringify({{ type: "presence", docId: DOC_ID,
+    state: {{ cursor: [Math.round(mmPos[0] * 1e6), Math.round(mmPos[1] * 1e6)] }} }}));
+}}
+
+stage.addEventListener("pointerdown", (ev) => {{
+  if (viewOnly || !items.length || !ws || ws.readyState !== 1) return;
+  const [x, y] = stageMm(ev);
+  let best = null, bestD = 5; // grab radius: 5 mm
+  for (const fp of items) {{
+    const d = Math.hypot(fp.x / 1e6 - x, fp.y / 1e6 - y);
+    if (d < bestD) {{ best = fp; bestD = d; }}
+  }}
+  if (!best) return;
+  drag = {{ fp: best, curMm: [x, y] }};
+  stage.setPointerCapture(ev.pointerId);
+  drawDrag();
+  ev.preventDefault();
+}});
+
+stage.addEventListener("pointermove", (ev) => {{
+  const mm = stageMm(ev);
+  sendPresence(mm);
+  if (drag) {{ drag.curMm = mm; drawDrag(); }}
+}});
+
+stage.addEventListener("pointerup", () => {{
+  if (!drag) return;
+  const fp = drag.fp;
+  const nx = Math.round(drag.curMm[0] * 1e6);
+  const ny = Math.round(drag.curMm[1] * 1e6);
+  drag = null;
+  dragG.replaceChildren();
+  if (nx === fp.x && ny === fp.y) return;
+  // The wire form the desktop applier consumes: a MODIFIED change whose
+  // property deltas match PROPERTY_DELTA::FromJson (only `after` is applied).
+  ws.send(JSON.stringify({{ type: "op", docId: DOC_ID, clientOpId: `web:${{++opN}}`, baseSeq: null,
+    changes: [{{ id: fp.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
+      {{ name: "Position X", before: {{ type: "int", v: fp.x }}, after: {{ type: "int", v: nx }} }},
+      {{ name: "Position Y", before: {{ type: "int", v: fp.y }}, after: {{ type: "int", v: ny }} }},
+    ] }}] }}));
+  fp.x = nx; fp.y = ny;
+  editsSeen++;
+  setStatus("&middot; move sent");
+}});
+
+document.addEventListener("keydown", (ev) => {{
+  if (ev.key === "Escape" && drag) {{ drag = null; dragG.replaceChildren(); }}
+}});
+
+function drawDrag() {{
+  dragG.replaceChildren();
+  if (!drag) return;
+  const s = pxPerMm();
+  const [x, y] = drag.curMm;
+  const line = document.createElementNS(NS, "line");
+  line.setAttribute("x1", drag.fp.x / 1e6); line.setAttribute("y1", drag.fp.y / 1e6);
+  line.setAttribute("x2", x); line.setAttribute("y2", y);
+  line.setAttribute("stroke", "#d9822b"); line.setAttribute("stroke-dasharray", `${{4 / s}} ${{3 / s}}`);
+  line.setAttribute("stroke-width", 1.5 / s);
+  dragG.appendChild(line);
+  const dot = document.createElementNS(NS, "circle");
+  dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 4 / s);
+  dot.setAttribute("fill", "none"); dot.setAttribute("stroke", "#d9822b");
+  dot.setAttribute("stroke-width", 1.5 / s);
+  dragG.appendChild(dot);
+  const label = document.createElementNS(NS, "text");
+  label.setAttribute("x", x + 6 / s); label.setAttribute("y", y - 6 / s);
+  label.setAttribute("fill", "#d9822b"); label.setAttribute("font-size", 12 / s);
+  label.setAttribute("font-family", "system-ui, sans-serif");
+  label.setAttribute("paint-order", "stroke"); label.setAttribute("stroke", "white");
+  label.setAttribute("stroke-width", 3 / s);
+  label.textContent = drag.fp.lib.split(":").pop();
+  dragG.appendChild(label);
+}}
+
 function drawPeers(peers) {{
-  overlay.replaceChildren();
-  const vb = (overlay.getAttribute("viewBox") || "0 0 297 210").split(/\s+/).map(Number);
-  const pxPerMm = overlay.clientWidth > 0 ? overlay.clientWidth / vb[2] : 4;
+  peersG.replaceChildren();
+  const s = pxPerMm();
   const mm = (nm) => nm / 1e6;
 
   for (const p of Object.values(peers)) {{
@@ -322,9 +465,9 @@ function drawPeers(peers) {{
       line.setAttribute("x1", mm(g[0])); line.setAttribute("y1", mm(g[1]));
       line.setAttribute("x2", mm(g[2])); line.setAttribute("y2", mm(g[3]));
       line.setAttribute("stroke", color); line.setAttribute("stroke-opacity", "0.55");
-      line.setAttribute("stroke-width", Math.max(mm(g[4] || 0), 2 / pxPerMm));
+      line.setAttribute("stroke-width", Math.max(mm(g[4] || 0), 2 / s));
       line.setAttribute("stroke-linecap", "round");
-      overlay.appendChild(line);
+      peersG.appendChild(line);
     }}
 
     for (const b of st.boxes || []) {{
@@ -332,26 +475,26 @@ function drawPeers(peers) {{
       rect.setAttribute("x", mm(b[0])); rect.setAttribute("y", mm(b[1]));
       rect.setAttribute("width", mm(b[2])); rect.setAttribute("height", mm(b[3]));
       rect.setAttribute("fill", "none"); rect.setAttribute("stroke", color);
-      rect.setAttribute("stroke-width", 1.5 / pxPerMm);
-      overlay.appendChild(rect);
+      rect.setAttribute("stroke-width", 1.5 / s);
+      peersG.appendChild(rect);
     }}
 
     if (Array.isArray(st.cursor)) {{
-      const x = mm(st.cursor[0]), y = mm(st.cursor[1]), s = 14 / pxPerMm;
+      const x = mm(st.cursor[0]), y = mm(st.cursor[1]), t = 14 / s;
       const tri = document.createElementNS(NS, "path");
-      tri.setAttribute("d", `M ${{x}} ${{y}} L ${{x + 0.38 * s}} ${{y + s}} L ${{x + s}} ${{y + 0.38 * s}} Z`);
+      tri.setAttribute("d", `M ${{x}} ${{y}} L ${{x + 0.38 * t}} ${{y + t}} L ${{x + t}} ${{y + 0.38 * t}} Z`);
       tri.setAttribute("fill", color); tri.setAttribute("stroke", "white");
-      tri.setAttribute("stroke-width", 1 / pxPerMm);
-      overlay.appendChild(tri);
+      tri.setAttribute("stroke-width", 1 / s);
+      peersG.appendChild(tri);
 
       const label = document.createElementNS(NS, "text");
-      label.setAttribute("x", x + 1.1 * s); label.setAttribute("y", y + 1.7 * s);
-      label.setAttribute("fill", color); label.setAttribute("font-size", 12 / pxPerMm);
+      label.setAttribute("x", x + 1.1 * t); label.setAttribute("y", y + 1.7 * t);
+      label.setAttribute("fill", color); label.setAttribute("font-size", 12 / s);
       label.setAttribute("font-family", "system-ui, sans-serif");
       label.setAttribute("paint-order", "stroke"); label.setAttribute("stroke", "white");
-      label.setAttribute("stroke-width", 3 / pxPerMm);
+      label.setAttribute("stroke-width", 3 / s);
       label.textContent = name;
-      overlay.appendChild(label);
+      peersG.appendChild(label);
     }}
   }}
 }}

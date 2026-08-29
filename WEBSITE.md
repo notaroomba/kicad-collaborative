@@ -49,9 +49,17 @@ format is plain JSON).
 - [ ] **W5 — Gallery polish.** Project descriptions, owner attribution,
   updated-at, preview freshness (re-render when snapshot seq advances), and a
   "clone to my account" button (server-side copy).
-- [ ] **W6 — Web editing spike.** From the WASM protocol crate: select + move a
-  footprint from the browser (property-delta MODIFIED op), applied live by
-  desktop peers. Requires nothing from the C++ model — the op is pure JSON.
+- [x] **W6 — Web editing spike.** Move a footprint from the browser: the live
+  page now hit-tests against `GET /api/projects/{id}/board-items` (footprint
+  uuid + position scraped from the latest board snapshot), lets an editor-role
+  viewer drag one, and sends a MODIFIED op whose property deltas ("Position X"
+  / "Position Y", `{type:"int", v:<nm>}`) match `PROPERTY_DELTA::FromJson` —
+  nothing from the C++ model needed, the op is pure JSON.  Verified e2e: a real
+  pointer drag in the browser moved D4 to the identical nanometre position on
+  both live desktop editors; a viewer-role drag got `permission_denied` and the
+  page flipped to a "view-only" chip with no error spam.  The page also sends
+  cursor presence now, auto-reconnects with backoff (rejoining the doc), and
+  folds peers' position deltas back into its hit-test index.
 
 ## Standing e2e polish checklist (every loop iteration picks at least one)
 
@@ -71,6 +79,21 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   in-flight/recent changes after applying a remote op — valid because acks and
   broadcasts share one in-order stream, so anything unacked is provably newer.)
 - [ ] Viewer-role client: every edit path rejected cleanly, no error spam.
+  (Web client: done — a viewer's drag gets `permission_denied` and the page
+  shows a "view-only" chip and stops offering drags.  Desktop client still to
+  verify.)
+- [x] Optional wire fields must tolerate being absent, not just null — the
+  protocol crate now marks them `#[serde(default)]` and pins a minimal
+  browser hello in a test (a bare `{{type,proto,token,clientId}}` hello was
+  rejected as `bad_message`).
+- [x] clientId stays stable across reconnects: clients echo back the
+  server-assigned `uid:` prefixed id, and the server now strips its own
+  repeated prefix instead of growing one per reconnect (op dedup and presence
+  identity depend on it).
+- [ ] Rotating JWT_SECRET (or restarting with an unset one) sends connected
+  editors `auth_failed`, which permanently disconnects them by design — but
+  the editor shows no banner explaining why.  Surface a "session signed out —
+  rejoin" notice instead of a silent disconnect.
 - [ ] Share dialog: invite → revoke → re-invite; pending → sign-in → granted.
 - [ ] Checkpoint → restore while a peer is live (reset banner UX).
 - [ ] Online Projects: open the same cloud project twice; second open reuses the
