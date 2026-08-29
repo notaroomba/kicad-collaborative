@@ -175,3 +175,18 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   joins the worker without hanging.  (Remaining sync REST: project
   download/upload and the invite actions — one-shot user-initiated
   operations behind explicit buttons.)
+- [x] Board groups sync fully (they used to sync removal only).  Group
+  changes travel as the group's own sexpr plus a `groupMembers` uuid list
+  resolved against the receiving board (a lone fragment's member ids cannot
+  resolve at parse time); groups apply after their members within a batch;
+  missing members are skipped and re-asserted by the next replace (LWW).
+  Covered by two new QA cases and verified live across three editors:
+  create → both receivers grouped the same two tracks; remove → gone
+  everywhere, members intact.  Found live and fixed: removing a group left
+  members' back-pointers dangling at the freed group and `IsLocked()`
+  crashed a receiver — the applier now releases members before deletion
+  (QA asserts it).  Generators (tuning patterns) ride the same path but
+  have no live verification yet.  Mixed-version note: an old client skips
+  a group op it cannot apply while still advancing its sequence, so after
+  an upgrade the missed group appears only after the next reconcile or
+  fresh snapshot join.

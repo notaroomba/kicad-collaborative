@@ -36,6 +36,7 @@
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
+#include <pcb_group.h>
 #include <pcb_track.h>
 #include <richio.h>
 #include <zone.h>
@@ -96,6 +97,99 @@ struct PCB_COLLAB_SYNC_FIXTURE
 
 
 BOOST_FIXTURE_TEST_SUITE( PcbCollabSync, PCB_COLLAB_SYNC_FIXTURE )
+
+
+BOOST_AUTO_TEST_CASE( GroupMembershipTravels )
+{
+    // Two tracks exist on both boards; the author groups them.
+    PCB_TRACK* twin1 = nullptr;
+    PCB_TRACK* twin2 = nullptr;
+    PCB_TRACK* track1 = MakeTrackPair( &twin1 );
+    PCB_TRACK* track2 = MakeTrackPair( &twin2 );
+
+    PCB_GROUP* group = new PCB_GROUP( m_authoring.get() );
+    group->SetName( wxS( "power" ) );
+    group->AddItem( track1 );
+    group->AddItem( track2 );
+    m_authoring->Add( group );
+
+    nlohmann::json change = MakeChange( group, "ADDED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( group );
+    change[ "groupMembers" ] = { track1->m_Uuid.AsStdString(), track2->m_Uuid.AsStdString() };
+
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    PCB_GROUP* applied =
+            dynamic_cast<PCB_GROUP*>( m_receiving->ResolveItem( group->m_Uuid, true ) );
+
+    BOOST_REQUIRE( applied != nullptr );
+    BOOST_CHECK( applied->GetName() == wxS( "power" ) );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 2 );
+    BOOST_CHECK( twin1->GetParentGroup() == applied );
+    BOOST_CHECK( twin2->GetParentGroup() == applied );
+
+    // Member removal travels as a whole-item replace with the shorter list.
+    group->RemoveItem( track2 );
+    change = MakeChange( group, "MODIFIED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( group );
+    change[ "groupMembers" ] = { track1->m_Uuid.AsStdString() };
+
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    applied = dynamic_cast<PCB_GROUP*>( m_receiving->ResolveItem( group->m_Uuid, true ) );
+    BOOST_REQUIRE( applied != nullptr );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 1 );
+    BOOST_CHECK( twin2->GetParentGroup() == nullptr );
+
+    // Group removal leaves the members on the board.
+    change = MakeChange( group, "REMOVED" );
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    BOOST_CHECK( m_receiving->ResolveItem( group->m_Uuid, true ) == nullptr );
+    BOOST_CHECK( m_receiving->ResolveItem( twin1->m_Uuid, true ) == twin1 );
+
+    // The members must not keep a back-pointer at the deleted group —
+    // IsLocked() walks it and crashed a live receiver on exactly this.
+    BOOST_CHECK( twin1->GetParentGroup() == nullptr );
+    BOOST_CHECK( !twin1->IsLocked() );
+}
+
+
+BOOST_AUTO_TEST_CASE( GroupWithMissingMemberIsGraceful )
+{
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+
+    // The second member exists only on the authoring board.
+    PCB_TRACK* authorOnly = new PCB_TRACK( m_authoring.get() );
+    authorOnly->SetStart( VECTOR2I( 5000000, 5000000 ) );
+    authorOnly->SetEnd( VECTOR2I( 6000000, 5000000 ) );
+    authorOnly->SetWidth( 250000 );
+    authorOnly->SetLayer( F_Cu );
+    m_authoring->Add( authorOnly );
+
+    PCB_GROUP* group = new PCB_GROUP( m_authoring.get() );
+    group->SetName( wxS( "partial" ) );
+    group->AddItem( track );
+    group->AddItem( authorOnly );
+    m_authoring->Add( group );
+
+    nlohmann::json change = MakeChange( group, "ADDED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( group );
+    change[ "groupMembers" ] = { track->m_Uuid.AsStdString(),
+                                 authorOnly->m_Uuid.AsStdString() };
+
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    PCB_GROUP* applied =
+            dynamic_cast<PCB_GROUP*>( m_receiving->ResolveItem( group->m_Uuid, true ) );
+
+    BOOST_REQUIRE( applied != nullptr );
+
+    // The unknown member is skipped, the known one is grouped.
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 1 );
+    BOOST_CHECK( twin->GetParentGroup() == applied );
+}
 
 
 BOOST_AUTO_TEST_CASE( ModifiedPropertiesConverge )
