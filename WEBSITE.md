@@ -105,7 +105,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   editors `auth_failed`, which permanently disconnects them by design — but
   the editor shows no banner explaining why.  Surface a "session signed out —
   rejoin" notice instead of a silent disconnect.
-- [ ] Share dialog: invite → revoke → re-invite; pending → sign-in → granted.
+- [x] Share dialog: invite → revoke → re-invite; verified through the API the
+  dialog drives: member revoke, instant re-grant for existing accounts, the
+  never-downgrade rule (re-inviting an editor as viewer keeps editor), email
+  invite → pending listed → pending revoke.  (The last leg — pending →
+  sign-in → granted — needs a real GitHub OAuth round-trip and stays manual.)
 - [ ] Checkpoint → restore while a peer is live (reset banner UX).
 - [ ] Online Projects: open the same cloud project twice; second open reuses the
   local copy without re-downloading.
