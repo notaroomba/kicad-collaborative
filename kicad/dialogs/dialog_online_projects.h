@@ -60,6 +60,7 @@ private:
     void onUpload( wxCommandEvent& aEvent );
     void onJoinLink( wxCommandEvent& aEvent );
     void onRename( wxCommandEvent& aEvent );
+    void onTogglePublic( wxCommandEvent& aEvent );
     void onDelete( wxCommandEvent& aEvent );
     void onItemActivated( wxDataViewEvent& aEvent );
     void onUpdateUI( wxUpdateUIEvent& aEvent );
@@ -77,6 +78,7 @@ private:
     wxButton*            m_openButton;
     wxButton*            m_shareButton;
     wxButton*            m_renameButton;
+    wxButton*            m_publicButton;
     wxButton*            m_deleteButton;
 
     std::vector<nlohmann::json> m_projects;   ///< rows behind m_list, same order

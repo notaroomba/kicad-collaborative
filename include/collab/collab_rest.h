@@ -84,6 +84,10 @@ KICOMMON_API bool DeleteProject( const wxString& aServerUrl, const wxString& aTo
 KICOMMON_API bool RenameProject( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId, const wxString& aName );
 
+/// PATCH /api/projects/{id} { public } (owner only): gallery visibility.
+KICOMMON_API bool SetProjectPublic( const wxString& aServerUrl, const wxString& aToken,
+                                    const wxString& aProjectId, bool aPublic );
+
 /// GET /api/users/search?q= -> { users: [ { login, name, avatarUrl, userId, source } ] }
 /// where source is "server" (has an account here) or "github".
 KICOMMON_API std::optional<nlohmann::json> SearchUsers( const wxString& aServerUrl,
