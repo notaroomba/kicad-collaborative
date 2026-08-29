@@ -1029,6 +1029,8 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
         return;
 
     std::vector<REMOTE_PEER_DRAW> draws;
+
+    std::set<KIID>                ghostedNow;
     wxString                      docId = currentDocId();
     wxString                      sheetFile = currentSheetFile();
 
@@ -1097,7 +1099,10 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
 
                         // Only ghost items that are actually displaced (i.e. mid-drag).
                         if( std::abs( offset.x ) > 1 || std::abs( offset.y ) > 1 )
+                        {
                             draw.ghostItems.push_back( { item, offset } );
+                            ghostedNow.insert( item->m_Uuid );
+                        }
                     }
                 }
             }
@@ -1137,6 +1142,34 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 draws.push_back( std::move( draw ) );
             }
         }
+    }
+
+    // Hide the stationary original while a peer's live-drag ghost replaces
+    // it; restore the moment the ghost clears.
+    for( const KIID& id : ghostedNow )
+    {
+        if( m_ghostHidden.insert( id ).second )
+        {
+            if( SCH_ITEM* item = m_frame->Schematic().ResolveItem( id, nullptr, true ) )
+                view->Hide( item, true );
+        }
+    }
+
+    for( auto it = m_ghostHidden.begin(); it != m_ghostHidden.end(); )
+    {
+        if( ghostedNow.count( *it ) )
+        {
+            ++it;
+            continue;
+        }
+
+        if( SCH_ITEM* item = m_frame->Schematic().ResolveItem( *it, nullptr, true ) )
+        {
+            view->Hide( item, false );
+            view->Update( item );
+        }
+
+        it = m_ghostHidden.erase( it );
     }
 
     m_cursorItem.SetPeers( std::move( draws ) );

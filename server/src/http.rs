@@ -425,17 +425,36 @@ pub async fn board_items(
         // "(transform (translate x y) ...)", older ones "(at x y [rot])".
         // For the legacy form the first "(at" in the block is the
         // footprint's own — header fields precede all children.
-        let parse_pair = |rest: &str| -> Option<(f64, f64)> {
-            let close = rest.find(')')?;
-            let mut nums = rest[..close].split_whitespace();
-            let x: f64 = nums.next()?.parse().ok()?;
-            let y: f64 = nums.next()?.parse().ok()?;
-            Some((x, y))
+        let parse_nums = |rest: &str| -> Vec<f64> {
+            match rest.find(')') {
+                Some(close) => rest[..close]
+                    .split_whitespace()
+                    .filter_map(|n| n.parse().ok())
+                    .collect(),
+                None => Vec::new(),
+            }
         };
-        let at = block
-            .find("(translate ")
-            .and_then(|p| parse_pair(&block[p + 11..]))
-            .or_else(|| block.find("(at ").and_then(|p| parse_pair(&block[p + 4..])));
+        // Newer generators: (transform (translate x y) (rotate r)); legacy: (at x y [r]).
+        let (at, rot) = if let Some(p) = block.find("(translate ") {
+            let pair = parse_nums(&block[p + 11..]);
+            let rot = block
+                .find("(rotate ")
+                .map(|rp| parse_nums(&block[rp + 8..]))
+                .and_then(|v| v.first().copied())
+                .unwrap_or(0.0);
+            (
+                (pair.len() >= 2).then(|| (pair[0], pair[1])),
+                rot,
+            )
+        } else if let Some(p) = block.find("(at ") {
+            let nums = parse_nums(&block[p + 4..]);
+            (
+                (nums.len() >= 2).then(|| (nums[0], nums[1])),
+                nums.get(2).copied().unwrap_or(0.0),
+            )
+        } else {
+            (None, 0.0)
+        };
 
         if let (false, Some((x_mm, y_mm))) = (uuid.is_empty(), at) {
             items.push(json!({
@@ -443,6 +462,7 @@ pub async fn board_items(
                 "lib": lib,
                 "x": (x_mm * 1e6) as i64,
                 "y": (y_mm * 1e6) as i64,
+                "rot": rot,
             }));
         }
     }

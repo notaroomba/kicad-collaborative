@@ -331,8 +331,10 @@ pub async fn live_page(
 <title>{name} live — KiCad Collaborative</title>{STYLE}
 <style>
   body {{ max-width: 1100px; }}
-  #stage {{ position: relative; background: #f4f1e6; border-radius: 8px; touch-action: none; }}
-  #stage img, #stage svg {{ display: block; width: 100%; height: auto; }}
+  #stage {{ position: relative; background: #f4f1e6; border-radius: 8px; touch-action: none;
+            overflow: hidden; }}
+  #world {{ transform-origin: 0 0; position: relative; }}
+  #world img, #world svg {{ display: block; width: 100%; height: auto; }}
   #overlay {{ position: absolute; inset: 0; pointer-events: none; }}
   #status {{ font-size: .85rem; opacity: .7; margin-top: 8px; }}
   .chip {{ display:inline-block; padding: 2px 8px; border-radius: 999px; background: #d9822b22; }}
@@ -349,12 +351,16 @@ pub async fn live_page(
 </style></head><body>
 <p><a href="/p/{id}" class="muted">&larr; {name}</a></p>
 <div id="stage">
-  <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false" draggable="false">
-  <svg id="overlay"><g id="peersG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
+  <div id="world">
+    <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false" draggable="false">
+    <svg id="overlay"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
+  </div>
   <div id="cmtPanel"></div>
 </div>
 <div id="status">connecting&hellip;</div>
-<p><button class="btn secondary" id="modeBtn">&#128172; Add comment</button></p>
+<p><button class="btn secondary" id="modeBtn">&#128172; Add comment</button>
+<span class="muted" style="font-size:.82rem"> &nbsp; scroll to zoom &middot; right-drag to pan &middot;
+click a part to select &middot; drag to move &middot; R rotates &middot; Del deletes &middot; Esc clears</span></p>
 {join_note}
 <script>
 const PROJECT_ID = "{id}";
@@ -362,8 +368,10 @@ const DOC_ID = "{doc_id}";
 const CAN_JOIN = {can_join};
 const NS = "http://www.w3.org/2000/svg";
 const stage = document.getElementById("stage");
+const world = document.getElementById("world");
 const overlay = document.getElementById("overlay");
 const peersG = document.getElementById("peersG");
+const selG = document.getElementById("selG");
 const dragG = document.getElementById("dragG");
 const statusEl = document.getElementById("status");
 let ws = null;
@@ -371,20 +379,74 @@ let editsSeen = 0;
 let opN = 0;
 let viewOnly = false;
 let vb = [0, 0, 297, 210];
-let items = [];            // footprints: {{id, lib, x, y}} in nm
-let drag = null;           // {{fp, curMm: [x, y]}}
+let items = [];            // footprints: {{id, lib, x, y, rot}} in nm / degrees
+let selected = null;       // a footprint from `items`
+let drag = null;           // {{fp, curMm: [x, y], moved}}
 let lastPresence = 0;
+
+// ---- zoom & pan ----
+let zoom = 1, panX = 0, panY = 0;
+
+function applyView() {{
+  world.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{zoom}})`;
+  drawComments();
+  drawSelection();
+}}
+
+stage.addEventListener("wheel", (ev) => {{
+  ev.preventDefault();
+  const rect = stage.getBoundingClientRect();
+  const cx = ev.clientX - rect.left, cy = ev.clientY - rect.top;
+  const factor = Math.pow(1.0018, -ev.deltaY);
+  const next = Math.min(14, Math.max(0.6, zoom * factor));
+  panX = cx - (cx - panX) * (next / zoom);
+  panY = cy - (cy - panY) * (next / zoom);
+  zoom = next;
+  applyView();
+}}, {{ passive: false }});
+
+let pan = null;
+stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
+stage.addEventListener("pointerdown", (ev) => {{
+  if (ev.button === 2 || ev.button === 1) {{
+    pan = {{ x: ev.clientX - panX, y: ev.clientY - panY }};
+    stage.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  }}
+}});
+stage.addEventListener("pointermove", (ev) => {{
+  if (pan) {{ panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; applyView(); }}
+}});
+stage.addEventListener("pointerup", (ev) => {{
+  if (pan && (ev.button === 2 || ev.button === 1)) pan = null;
+}});
+
+// ---- live render refresh: previews are pushed by the editors; once ops have
+// happened, poll the render until a fresh one loads. ----
+let renderDirtySince = 0;
+let renderTimer = 0;
+
+function scheduleRenderRefresh() {{
+  renderDirtySince = Date.now();
+  if (renderTimer) return;
+  renderTimer = setInterval(() => {{
+    if (Date.now() - renderDirtySince > 120000) {{ clearInterval(renderTimer); renderTimer = 0; return; }}
+    const probe = new Image();
+    probe.onload = () => {{
+      document.getElementById("base").src = probe.src;
+    }};
+    probe.src = `/api/projects/{id}/preview.svg?fit=false&v=${{Date.now()}}`;
+  }}, 8000);
+}}
 
 function setStatus(extra) {{
   const mode = viewOnly ? '<span class="chip err">view-only</span>'
-             : items.length ? '<span class="chip">drag a footprint to move it</span>' : "";
+             : items.length ? '<span class="chip">live editing enabled</span>' : "";
   const edits = editsSeen ? ` &middot; ${{editsSeen}} edit(s) since load` : "";
   statusEl.innerHTML = `live${{edits}} ${{mode}} ${{extra || ""}}`;
 }}
 
 async function setup() {{
-  // Copy the base SVG's viewBox so overlay coordinates line up; presence
-  // coordinates are nanometres, the SVG user space is millimetres.
   const text = await (await fetch(document.getElementById("base").src)).text();
   const m = text.match(/viewBox="([^"]+)"/);
   if (m) {{ vb = m[1].split(/\s+/).map(Number); overlay.setAttribute("viewBox", m[1]); }}
@@ -416,94 +478,187 @@ function connect() {{
     if (msg.type === "presence") drawPeers(msg.peers || {{}});
     if (msg.type === "error" && msg.code === "permission_denied") {{
       viewOnly = true;
-      drag = null;
-      dragG.replaceChildren();
+      drag = null; selected = null;
+      dragG.replaceChildren(); selG.replaceChildren();
       setStatus();
     }}
     if (msg.type === "comment") noteCommentMsg(msg);
-    if (msg.type === "op") {{ editsSeen++; noteRemoteOp(msg); setStatus(); }}
-    if (msg.type === "ops") {{ editsSeen += (msg.ops || []).length; setStatus(); }}
+    if (msg.type === "op") {{ editsSeen++; noteRemoteOp(msg); setStatus(); scheduleRenderRefresh(); }}
+    if (msg.type === "ops") {{ editsSeen += (msg.ops || []).length; setStatus(); scheduleRenderRefresh(); }}
   }};
 }}
 
-// Keep the hit-test index roughly current: our own moves are applied
-// optimistically at send time, and peer moves that travel as position deltas
-// are folded in here.  Whole-item replaces just mark the render stale.
 function noteRemoteOp(msg) {{
   for (const c of msg.changes || []) {{
-    if (c.kind !== "MODIFIED" || c.typeName !== "FOOTPRINT") continue;
+    if (c.typeName !== "FOOTPRINT") continue;
+    if (c.kind === "REMOVED") {{
+      items = items.filter((f) => f.id !== c.id);
+      if (selected && selected.id === c.id) {{ selected = null; drawSelection(); }}
+      continue;
+    }}
     const fp = items.find((f) => f.id === c.id);
-    if (!fp) continue;
+    if (!fp || c.kind !== "MODIFIED") continue;
     for (const p of c.properties || []) {{
       if (p.name === "Position X" && p.after) fp.x = p.after.v;
       if (p.name === "Position Y" && p.after) fp.y = p.after.v;
+      if (p.name === "Orientation" && p.after) fp.rot = p.after.v;
     }}
   }}
+  drawSelection();
 }}
 
-function stageMm(ev) {{
-  const rect = stage.getBoundingClientRect();
+function worldMm(ev) {{
+  const rect = world.getBoundingClientRect();
   return [
     vb[0] + ((ev.clientX - rect.left) / rect.width) * vb[2],
     vb[1] + ((ev.clientY - rect.top) / rect.height) * vb[3],
   ];
 }}
+const stageMm = worldMm;
 
 function pxPerMm() {{
-  return overlay.clientWidth > 0 ? overlay.clientWidth / vb[2] : 4;
+  const rect = world.getBoundingClientRect();
+  return rect.width > 0 ? rect.width / vb[2] : 4;
 }}
 
-function sendPresence(mmPos) {{
+function sendPresence(mmPos, ghostSegs) {{
   const now = Date.now();
-  if (!ws || ws.readyState !== 1 || now - lastPresence < 80) return;
+  if (!ws || ws.readyState !== 1 || (now - lastPresence < 80 && !ghostSegs)) return;
   lastPresence = now;
-  ws.send(JSON.stringify({{ type: "presence", docId: DOC_ID,
-    state: {{ cursor: [Math.round(mmPos[0] * 1e6), Math.round(mmPos[1] * 1e6)] }} }}));
+  const state = {{ cursor: [Math.round(mmPos[0] * 1e6), Math.round(mmPos[1] * 1e6)] }};
+  if (ghostSegs) state.ghost = ghostSegs;
+  ws.send(JSON.stringify({{ type: "presence", docId: DOC_ID, state }}));
 }}
 
-stage.addEventListener("pointerdown", (ev) => {{
-  if (viewOnly || !items.length || !ws || ws.readyState !== 1) return;
-  const [x, y] = stageMm(ev);
-  let best = null, bestD = 5; // grab radius: 5 mm
+function sendOp(changes) {{
+  ws.send(JSON.stringify({{ type: "op", docId: DOC_ID, clientOpId: `web:${{++opN}}`,
+                            baseSeq: null, changes }}));
+  editsSeen++;
+  scheduleRenderRefresh();
+}}
+
+function nearestFootprint(x, y, radiusMm) {{
+  let best = null, bestD = radiusMm;
   for (const fp of items) {{
     const d = Math.hypot(fp.x / 1e6 - x, fp.y / 1e6 - y);
     if (d < bestD) {{ best = fp; bestD = d; }}
   }}
-  if (!best) return;
-  drag = {{ fp: best, curMm: [x, y] }};
+  return best;
+}}
+
+function drawSelection() {{
+  selG.replaceChildren();
+  if (!selected) return;
+  const s = pxPerMm();
+  const x = selected.x / 1e6, y = selected.y / 1e6;
+  const ring = document.createElementNS(NS, "circle");
+  ring.setAttribute("cx", x); ring.setAttribute("cy", y); ring.setAttribute("r", 10 / s);
+  ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "#d9822b");
+  ring.setAttribute("stroke-width", 2.5 / s); ring.setAttribute("stroke-dasharray", `${{5 / s}} ${{3 / s}}`);
+  selG.appendChild(ring);
+  const label = document.createElementNS(NS, "text");
+  label.setAttribute("x", x + 12 / s); label.setAttribute("y", y - 12 / s);
+  label.setAttribute("fill", "#d9822b"); label.setAttribute("font-size", 12 / s);
+  label.setAttribute("font-family", "system-ui, sans-serif");
+  label.setAttribute("paint-order", "stroke"); label.setAttribute("stroke", "white");
+  label.setAttribute("stroke-width", 3 / s);
+  label.textContent = `${{selected.lib.split(":").pop()}} (${{Math.round(selected.rot || 0)}}\u00b0)`;
+  selG.appendChild(label);
+}}
+
+document.addEventListener("keydown", (ev) => {{
+  if (ev.target.tagName === "TEXTAREA" || ev.target.tagName === "INPUT") return;
+  if (ev.key === "Escape") {{
+    drag = null; selected = null;
+    dragG.replaceChildren(); drawSelection();
+    return;
+  }}
+  if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
+  if (ev.key === "r" || ev.key === "R") {{
+    const before = selected.rot || 0;
+    const after = (before + 90) % 360;
+    sendOp([{{ id: selected.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
+      {{ name: "Orientation", before: {{ type: "double", v: before }}, after: {{ type: "double", v: after }} }},
+    ] }}]);
+    selected.rot = after;
+    drawSelection();
+    setStatus("&middot; rotated");
+  }}
+  if (ev.key === "Delete" || ev.key === "Backspace") {{
+    sendOp([{{ id: selected.id, typeName: "FOOTPRINT", kind: "REMOVED", properties: [] }}]);
+    items = items.filter((f) => f.id !== selected.id);
+    selected = null;
+    drawSelection();
+    setStatus("&middot; deleted");
+  }}
+}});
+
+function moveOp(fp, nxNm, nyNm) {{
+  return {{ id: fp.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
+    {{ name: "Position X", before: {{ type: "int", v: fp.x }}, after: {{ type: "int", v: nxNm }} }},
+    {{ name: "Position Y", before: {{ type: "int", v: fp.y }}, after: {{ type: "int", v: nyNm }} }},
+  ] }};
+}}
+
+let lastLiveMove = 0;
+
+stage.addEventListener("pointerdown", (ev) => {{
+  if (ev.button !== 0) return;   // pan handles the other buttons
+  if (viewOnly || !items.length || !ws || ws.readyState !== 1 || commentMode) return;
+  const [x, y] = worldMm(ev);
+  const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
+  if (!best) {{ selected = null; drawSelection(); return; }}
+  drag = {{ fp: best, startMm: [x, y], curMm: [x, y], moved: false }};
   stage.setPointerCapture(ev.pointerId);
-  drawDrag();
   ev.preventDefault();
 }});
 
 stage.addEventListener("pointermove", (ev) => {{
-  const mm = stageMm(ev);
-  sendPresence(mm);
-  if (drag) {{ drag.curMm = mm; drawDrag(); }}
+  const mm = worldMm(ev);
+  if (!drag) {{ sendPresence(mm); return; }}
+  drag.curMm = mm;
+  if (!drag.moved && Math.hypot(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1]) > 0.4) drag.moved = true;
+  if (!drag.moved) return;
+  drawDrag();
+
+  // Figma-live: stream the position while dragging, throttled — peers see the
+  // part move, not jump on release (LWW makes the stream safe).
+  const now = Date.now();
+  if (now - lastLiveMove > 150) {{
+    lastLiveMove = now;
+    sendOp([moveOp(drag.fp, Math.round(mm[0] * 1e6), Math.round(mm[1] * 1e6))]);
+  }}
+
+  // Ghost box for the desktops' overlay too.
+  const s = 4;   // half-size mm
+  const g = [[mm[0]-s, mm[1]-s, mm[0]+s, mm[1]-s], [mm[0]+s, mm[1]-s, mm[0]+s, mm[1]+s],
+             [mm[0]+s, mm[1]+s, mm[0]-s, mm[1]+s], [mm[0]-s, mm[1]+s, mm[0]-s, mm[1]-s]]
+    .map((seg) => [Math.round(seg[0]*1e6), Math.round(seg[1]*1e6), Math.round(seg[2]*1e6), Math.round(seg[3]*1e6), 100000]);
+  sendPresence(mm, g);
 }});
 
-stage.addEventListener("pointerup", () => {{
-  if (!drag) return;
+stage.addEventListener("pointerup", (ev) => {{
+  if (ev.button !== 0 || !drag) return;
   const fp = drag.fp;
+  const wasMoved = drag.moved;
   const nx = Math.round(drag.curMm[0] * 1e6);
   const ny = Math.round(drag.curMm[1] * 1e6);
   drag = null;
   dragG.replaceChildren();
-  if (nx === fp.x && ny === fp.y) return;
-  // The wire form the desktop applier consumes: a MODIFIED change whose
-  // property deltas match PROPERTY_DELTA::FromJson (only `after` is applied).
-  ws.send(JSON.stringify({{ type: "op", docId: DOC_ID, clientOpId: `web:${{++opN}}`, baseSeq: null,
-    changes: [{{ id: fp.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
-      {{ name: "Position X", before: {{ type: "int", v: fp.x }}, after: {{ type: "int", v: nx }} }},
-      {{ name: "Position Y", before: {{ type: "int", v: fp.y }}, after: {{ type: "int", v: ny }} }},
-    ] }}] }}));
-  fp.x = nx; fp.y = ny;
-  editsSeen++;
-  setStatus("&middot; move sent");
-}});
+  sendPresence([nx / 1e6, ny / 1e6], []);   // clear the ghost
 
-document.addEventListener("keydown", (ev) => {{
-  if (ev.key === "Escape" && drag) {{ drag = null; dragG.replaceChildren(); }}
+  if (!wasMoved) {{
+    selected = fp;
+    drawSelection();
+    return;
+  }}
+
+  if (nx !== fp.x || ny !== fp.y)
+    sendOp([moveOp(fp, nx, ny)]);
+
+  fp.x = nx; fp.y = ny;
+  if (selected && selected.id === fp.id) drawSelection();
+  setStatus("&middot; move sent");
 }});
 
 function drawDrag() {{

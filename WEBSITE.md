@@ -320,3 +320,23 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   (`KICAD_QA_DUMP_SHEET_SEXPR`) now produces genuine formatter output for
   wire harnesses; replaying it against the live editor materialized the
   sheet ("creating screen" / "screen attached") with the editor healthy.
+- [x] **Online editor v1 (loop 21).**  The live page graduated from "editing
+  spike" to a real editor: scroll-zoom toward the cursor + right-drag pan
+  (world-transform container, so all overlay math survives), click-select
+  with a ring + rotation readout, R rotates 90 deg (the "Orientation" double
+  property), Del/Backspace deletes, and drags STREAM live position ops at
+  150 ms so peers watch the part move instead of jump on release; the board
+  render auto-refreshes from the pushed previews after edits.  Verified
+  e2e: a drag produced 3+ ops with both desktops converging on the exact
+  final position; rotate -90 -> 0 landed on both; delete removed D4
+  everywhere and a checkpoint restore's automatic reconcile resurrected it
+  at the checkpoint position on all three editors.
+- [x] **Peers see drags properly now (reported).**  Receivers hide the
+  stationary original while a peer's live-drag ghost replaces it (the part
+  was visible twice — old position plus ghost), restore it the moment the
+  ghost clears, and drive KiCad's own dynamic-connectivity ratsnest for the
+  ghosted items so the airwires stretch on every screen just like on the
+  mover's.  Exercised with a 20-tick synthetic drag stream against three
+  live editors: hide -> ratsnest -> unhide cycled cleanly, no crashes.
+  Next Figma-parity candidates from the deep dive: click-a-peer to follow
+  their viewport, track-drag ghosts beyond the router, and live text edits.
