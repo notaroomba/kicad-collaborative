@@ -30,6 +30,8 @@
 #include <wx/filefn.h>
 #include <wx/log.h>
 #include <wx/filename.h>
+#include <wx/process.h>
+#include <wx/utils.h>
 #include <json_common.h>
 #include <wildcards_and_files_ext.h>
 
@@ -84,6 +86,7 @@ public:
                 nlohmann::json j;
                 j["username"] = std::string( m_username.mb_str() );
                 j["hostname"] = std::string( m_hostname.mb_str() );
+                j["pid"] = static_cast<long>( wxGetProcessId() );
                 std::string lock_info = j.dump();
                 file.Write( lock_info );
                 file.Close();
@@ -102,11 +105,13 @@ public:
                     nlohmann::json j = nlohmann::json::parse( std::string( lock_info.mb_str() ) );
                     m_username = wxString( j.at( "username" ).get<std::string>() );
                     m_hostname = wxString( j.at( "hostname" ).get<std::string>() );
+                    m_ownerPid = j.value( "pid", 0L );
                 }
                 catch( const std::exception& parseError )
                 {
                     m_username = wxEmptyString;
                     m_hostname = wxEmptyString;
+                    m_ownerPid = 0;
                     wxLogTrace( LCK, "Unreadable lock contents for %s: %s", filename,
                                 parseError.what() );
                 }
@@ -229,6 +234,18 @@ public:
         return true;
     }
 
+    /**
+     * @return true when the lock records a process id on this host that is no
+     *         longer running — a leftover from a crash or kill, safe to reclaim.
+     */
+    bool OwnerProcessIsDead()
+    {
+        if( m_ownerPid <= 0 || m_hostname != wxGetHostName() )
+            return false;
+
+        return !wxProcess::Exists( static_cast<int>( m_ownerPid ) );
+    }
+
     bool IsLockedByMe()
     {
         // Empty owner means the lock file could not be parsed (e.g. partial cloud sync).
@@ -256,6 +273,8 @@ public:
      */
     wxString GetErrorMsg(){ return m_errorMsg; }
 
+    long GetOwnerPid() const { return m_ownerPid; }
+
     bool Locked() const
     {
         return m_fileCreated;
@@ -275,6 +294,7 @@ private:
     wxString m_originalFile;
     wxString m_lockFilename;
     wxString m_username;
+    long     m_ownerPid = 0;
     wxString m_hostname;
     bool m_fileCreated;
     bool m_status;

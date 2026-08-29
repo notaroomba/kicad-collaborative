@@ -284,10 +284,12 @@ bool EDA_DRAW_FRAME::LockFile( const wxString& aFileName )
 
     if( !m_file_checker->Valid() && m_file_checker->IsLockedByMe() )
     {
-        // If we cannot acquire the lock but we appear to be the one who locked it, check to see if
-        // there is another KiCad instance running.  If there is not, then we can override the lock.
-        // This could happen if KiCad crashed or was interrupted.
-        if( !Pgm().SingleInstance()->IsAnotherRunning() )
+        // If we cannot acquire the lock but we appear to be the one who locked it, reclaim it
+        // when the owning process is provably gone (the lock records its pid), or — for locks
+        // without a pid — when no other KiCad instance is running.  Leftover locks like these
+        // come from crashes or kills, and multi-instance collaboration sessions make the
+        // "no other instance" heuristic alone too conservative.
+        if( m_file_checker->OwnerProcessIsDead() || !Pgm().SingleInstance()->IsAnotherRunning() )
             m_file_checker->OverrideLock();
     }
 

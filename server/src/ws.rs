@@ -47,49 +47,7 @@ pub async fn ws_handler(
         })
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-#[allow(non_camel_case_types)]
-enum ClientMsg {
-    hello {
-        proto: u32,
-        token: String,
-        #[serde(rename = "clientId")]
-        client_id: Option<String>,
-        #[serde(rename = "linkToken")]
-        link_token: Option<String>,
-        #[allow(dead_code)]
-        client: Option<String>,
-    },
-    join_doc {
-        #[serde(rename = "docId")]
-        doc_id: Uuid,
-        #[serde(rename = "sinceSeq")]
-        since_seq: Option<i64>,
-    },
-    leave_doc {
-        #[serde(rename = "docId")]
-        doc_id: Uuid,
-    },
-    op {
-        #[serde(rename = "docId")]
-        doc_id: Uuid,
-        #[serde(rename = "clientOpId")]
-        client_op_id: String,
-        #[serde(rename = "baseSeq")]
-        base_seq: Option<i64>,
-        changes: Value,
-    },
-    presence {
-        #[serde(rename = "docId")]
-        doc_id: Uuid,
-        state: Value,
-    },
-    resync {
-        #[serde(rename = "docId")]
-        doc_id: Uuid,
-    },
-}
+use kicad_collab_protocol::ClientMsg;
 
 struct JoinedDoc {
     tx: mpsc::Sender<DocMsg>,
