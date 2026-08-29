@@ -23,6 +23,7 @@
 #include <collab/collab_rest.h>
 #include <collab/collab_session.h>
 
+#include <wx/app.h>
 #include <wx/button.h>
 #include <wx/choice.h>
 #include <wx/clipbrd.h>
@@ -184,6 +185,13 @@ void DIALOG_SHARE_PROJECT::onInviteText( wxCommandEvent& aEvent )
 }
 
 
+DIALOG_SHARE_PROJECT::~DIALOG_SHARE_PROJECT()
+{
+    if( m_alive )
+        *m_alive = false;
+}
+
+
 void DIALOG_SHARE_PROJECT::onSearchTimer( wxTimerEvent& aEvent )
 {
     wxString query = m_inviteText->GetValue().Trim( true ).Trim( false );
@@ -197,13 +205,49 @@ void DIALOG_SHARE_PROJECT::onSearchTimer( wxTimerEvent& aEvent )
 
     wxString server = COLLAB_SESSION::ServerUrl();
 
-    std::optional<nlohmann::json> found =
-            COLLAB_REST::SearchUsers( server, COLLAB_AUTH::StoredToken( server ), query );
+    // Search off the UI thread: typing must stay smooth even when the server
+    // (or the GitHub proxy behind it) is slow.  A generation counter drops
+    // results that arrive after a newer query.
+    if( !m_alive )
+        m_alive = std::make_shared<bool>( true );
 
-    if( !found || !found->contains( "users" ) )
-        return;
+    int generation = ++m_searchGeneration;
 
-    for( const nlohmann::json& user : ( *found )[ "users" ] )
+    std::shared_ptr<bool> alive = m_alive;
+    std::string serverStd = server.ToStdString( wxConvUTF8 );
+    std::string tokenStd = COLLAB_AUTH::StoredToken( server ).ToStdString( wxConvUTF8 );
+    std::string queryStd = query.ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, generation, serverStd, tokenStd, queryStd]()
+            {
+                std::optional<nlohmann::json> found =
+                        COLLAB_REST::SearchUsers( wxString::FromUTF8( serverStd ),
+                                                  wxString::FromUTF8( tokenStd ),
+                                                  wxString::FromUTF8( queryStd ) );
+
+                nlohmann::json users = found && found->contains( "users" )
+                                               ? ( *found )[ "users" ]
+                                               : nlohmann::json::array();
+
+                wxTheApp->CallAfter(
+                        [this, alive, generation, users]()
+                        {
+                            if( !*alive || generation != m_searchGeneration )
+                                return;
+
+                            showSearchResults( users );
+                        } );
+            } );
+}
+
+
+void DIALOG_SHARE_PROJECT::showSearchResults( const nlohmann::json& aUsers )
+{
+    m_results->Clear();
+    m_resultRows.clear();
+
+    for( const nlohmann::json& user : aUsers )
     {
         wxString login = wxString::FromUTF8( user.value( "login", "" ) );
         wxString name = wxString::FromUTF8( user.value( "name", "" ) );

@@ -163,3 +163,15 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   Simulated with SIGSTOP/SIGCONT on a live editor: frozen 50 s (past the 30 s
   presence eviction) while a peer edited, the woken instance caught up on the
   missed op within seconds, and its own next edit propagated to every peer.
+- [x] Blocking REST on the UI thread (from the report's "Still open" list):
+  the session now owns a worker thread (`COLLAB_SESSION::RunAsync`, joined in
+  Shutdown before curl cleanup).  Snapshot uploads — which fire every few
+  minutes per editor since the freshness change — serialize on the UI thread
+  but upload in the background; the Online Projects listing shows a
+  "Loading..." row and fetches off-thread (destroy-safe via a liveness
+  guard); the share-dialog typeahead searches off-thread with a generation
+  counter so stale results never paint over newer ones.  Verified live: a
+  freshness snapshot landed through the worker path, and a clean app quit
+  joins the worker without hanging.  (Remaining sync REST: project
+  download/upload and the invite actions — one-shot user-initiated
+  operations behind explicit buttons.)

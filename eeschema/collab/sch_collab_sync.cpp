@@ -1159,10 +1159,23 @@ void SCH_COLLAB_SYNC::OnSnapshotRequest()
 
         plugin.FormatSchematicToFormatter( &formatter, sheet, &m_frame->Schematic() );
 
-        wxString server = COLLAB_SESSION::ServerUrl();
+        // Serialization needs the live schematic (UI thread); the upload of
+        // the self-contained string does not — a slow server must not hitch
+        // the editor.  Plain std::strings cross the thread boundary.
+        std::string serverStd = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+        std::string token =
+                COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+        std::string docIdStd = docId.ToStdString( wxConvUTF8 );
+        long long   seq = m_lastAppliedSeq[ docId ];
+        std::string payload = formatter.GetString();
 
-        COLLAB_REST::UploadSnapshot( server, COLLAB_AUTH::StoredToken( server ), docId,
-                                     m_lastAppliedSeq[ docId ], formatter.GetString() );
+        COLLAB_SESSION::Get().RunAsync(
+                [serverStd, token, docIdStd, seq, payload]()
+                {
+                    COLLAB_REST::UploadSnapshot( wxString::FromUTF8( serverStd ),
+                                                 wxString::FromUTF8( token ),
+                                                 wxString::FromUTF8( docIdStd ), seq, payload );
+                } );
     }
     catch( const IO_ERROR& ioe )
     {
