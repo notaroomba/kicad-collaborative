@@ -71,6 +71,8 @@ public:
     virtual void OnPeerLeft( const wxString& aClientId ) {}
     virtual void OnSnapshotRequest() {}
     virtual void OnReset( const wxString& aDocId, long long aSeq ) {}
+    /// A comment thread changed (REST-driven; relayed live by the server).
+    virtual void OnComment( const nlohmann::json& aMsg ) {}
     virtual void OnSessionStateChanged() {}
 };
 

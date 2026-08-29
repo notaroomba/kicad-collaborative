@@ -59,7 +59,7 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
     KIGFX::GAL*  gal = aView->GetGAL();
     const double scale = gal->GetWorldScale();
 
-    if( scale <= 0.0 || m_peers.empty() )
+    if( scale <= 0.0 || ( m_peers.empty() && m_commentPins.empty() ) )
         return;
 
     // World units per screen pixel, so everything holds a constant on-screen size.
@@ -184,6 +184,47 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
                         VECTOR2I( KiROUND( chipOrigin.x + pad ),
                                   KiROUND( ( chipOrigin.y + chipEnd.y ) / 2.0 ) ),
                         textAttrs, KIFONT::METRICS::Default() );
+        }
+    }
+
+    // Comment-thread pins: a numbered bubble at each thread's anchor, muted
+    // once the thread is resolved.
+    if( !m_commentPins.empty() )
+    {
+        KIFONT::FONT* font = KIFONT::FONT::GetFont();
+        const double  pinPx = 9.0;
+        const double  digitPx = 10.0;
+
+        const COLOR4D openColor( 0.85, 0.51, 0.17, 0.92 );
+        const COLOR4D resolvedColor( 0.6, 0.65, 0.67, 0.55 );
+
+        for( const COMMENT_PIN& pin : m_commentPins )
+        {
+            const COLOR4D color = pin.resolved ? resolvedColor : openColor;
+
+            gal->SetIsFill( true );
+            gal->SetIsStroke( true );
+            gal->SetFillColor( color );
+            gal->SetStrokeColor( COLOR4D( 1.0, 1.0, 1.0, 0.9 ) );
+            gal->SetLineWidth( static_cast<float>( 1.5 * w ) );
+            gal->DrawCircle( pin.pos, KiROUND( pinPx * w ) );
+
+            TEXT_ATTRIBUTES textAttrs;
+            textAttrs.m_Size = VECTOR2I( KiROUND( digitPx * w ), KiROUND( digitPx * w ) );
+            textAttrs.m_StrokeWidth = KiROUND( 0.18 * digitPx * w );
+            textAttrs.m_Halign = GR_TEXT_H_ALIGN_CENTER;
+            textAttrs.m_Valign = GR_TEXT_V_ALIGN_CENTER;
+
+            gal->SetIsFill( false );
+            gal->SetIsStroke( true );
+            gal->SetStrokeColor( COLOR4D( 1.0, 1.0, 1.0, 1.0 ) );
+            gal->SetLineWidth( static_cast<float>( textAttrs.m_StrokeWidth ) );
+
+            KIGFX::GAL_SCOPED_ATTRS depthScope( *gal, KIGFX::GAL_SCOPED_ATTRS::LAYER_DEPTH );
+            gal->AdvanceDepth();
+
+            font->Draw( gal, wxString::Format( wxS( "%d" ), pin.count ), pin.pos, textAttrs,
+                        KIFONT::METRICS::Default() );
         }
     }
 }

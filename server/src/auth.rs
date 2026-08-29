@@ -108,6 +108,23 @@ pub fn verify_jwt(state: &AppState, token: &str) -> Option<Claims> {
 /// Extractor: authenticated user via Bearer token or session cookie.
 pub struct AuthUser(pub User);
 
+/// Like AuthUser but never rejects: anonymous requests yield None.  For
+/// endpoints where signed-out access is meaningful (public-project reads).
+pub struct MaybeAuthUser(pub Option<User>);
+
+impl FromRequestParts<AppState> for MaybeAuthUser {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(MaybeAuthUser(
+            AuthUser::from_request_parts(parts, state).await.ok().map(|u| u.0),
+        ))
+    }
+}
+
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 

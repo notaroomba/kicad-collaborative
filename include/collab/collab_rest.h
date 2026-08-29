@@ -120,6 +120,21 @@ KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aTok
                                 const wxString& aProjectId, long long aInviteId );
 
 /// GET /api/me -> { id, login, name, email, avatarUrl }.
+/// GET /api/docs/{id}/comments -> { comments: [...] }
+KICOMMON_API std::optional<nlohmann::json> ListComments( const wxString& aServerUrl,
+                                                         const wxString& aToken,
+                                                         const wxString& aDocId );
+
+/// POST a new comment (aParentId < 0 for a new thread at aX/aY nm).
+KICOMMON_API std::optional<nlohmann::json> CreateComment( const wxString& aServerUrl,
+                                                          const wxString& aToken,
+                                                          const wxString& aDocId,
+                                                          const wxString& aBody, long long aX,
+                                                          long long aY, long long aParentId );
+
+KICOMMON_API bool SetCommentResolved( const wxString& aServerUrl, const wxString& aToken,
+                                      long long aCommentId, bool aResolved );
+
 KICOMMON_API std::optional<nlohmann::json> Me( const wxString& aServerUrl,
                                               const wxString& aToken );
 
