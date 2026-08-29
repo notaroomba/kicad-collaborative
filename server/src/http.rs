@@ -433,6 +433,176 @@ pub async fn board_items(
 }
 
 #[derive(Deserialize)]
+pub struct NewCommentRequest {
+    pub body: String,
+    #[serde(default)]
+    pub x: i64,
+    #[serde(default)]
+    pub y: i64,
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCommentRequest {
+    pub resolved: Option<bool>,
+}
+
+/// Comment access: any member may read and write (commenting is the viewer
+/// role's superpower); anyone may read on public projects.
+async fn comment_access(
+    state: &AppState,
+    jar: &axum_extra::extract::CookieJar,
+    auth_user: Option<&persist::User>,
+    doc_id: Uuid,
+    write: bool,
+) -> Result<(persist::Document, Option<persist::User>), AppError> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    let project =
+        persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
+
+    let user = match auth_user {
+        Some(u) => Some(u.clone()),
+        None => auth::user_from_jar(state, jar).await,
+    };
+
+    let member_role = match &user {
+        Some(u) => persist::effective_role(&state.pool, u.id, doc.project_id).await?,
+        None => None,
+    };
+
+    if write {
+        if user.is_none() || (member_role.is_none() && !project.public) {
+            return Err(AppError::Forbidden);
+        }
+    } else if member_role.is_none() && !project.public {
+        return Err(AppError::Forbidden);
+    }
+
+    Ok((doc, user))
+}
+
+pub async fn list_comments(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(doc_id): Path<Uuid>,
+) -> AppResult<Response> {
+    let _ = comment_access(&state, &jar, None, doc_id, false).await?;
+
+    let comments: Vec<_> = persist::list_comments(&state.pool, doc_id)
+        .await?
+        .iter()
+        .map(persist::Comment::to_json)
+        .collect();
+
+    Ok(Json(json!({ "comments": comments })).into_response())
+}
+
+pub async fn create_comment(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(doc_id): Path<Uuid>,
+    Json(req): Json<NewCommentRequest>,
+) -> AppResult<Response> {
+    let (_, user) = comment_access(&state, &jar, None, doc_id, true).await?;
+    let user = user.ok_or(AppError::Forbidden)?;
+
+    let body = req.body.trim();
+
+    if body.is_empty() || body.len() > 4000 {
+        return Err(AppError::BadRequest("comment must be 1-4000 characters".into()));
+    }
+
+    // A reply inherits its thread; it must reference a root on the same doc.
+    if let Some(parent_id) = req.parent_id {
+        let parent =
+            persist::get_comment(&state.pool, parent_id).await?.ok_or(AppError::NotFound)?;
+
+        if parent.doc_id != doc_id || parent.parent_id.is_some() {
+            return Err(AppError::BadRequest("parentId must be a root comment here".into()));
+        }
+    }
+
+    let comment = persist::insert_comment(&state.pool, doc_id, req.parent_id, user.id, req.x,
+                                          req.y, body)
+        .await?;
+
+    if let Some(tx) = state.registry.existing(doc_id) {
+        let _ = tx
+            .send(crate::doc_actor::DocMsg::Comment {
+                payload: json!({ "action": "added", "comment": comment.to_json() }),
+            })
+            .await;
+    }
+
+    Ok(Json(comment.to_json()).into_response())
+}
+
+pub async fn update_comment(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateCommentRequest>,
+) -> AppResult<Response> {
+    let comment = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    let (doc, user) = comment_access(&state, &jar, None, comment.doc_id, true).await?;
+    let user = user.ok_or(AppError::Forbidden)?;
+
+    // Anyone who can comment may resolve/unresolve (the Figma model); only
+    // the author or the project owner may do anything else later.
+    let Some(resolved) = req.resolved else {
+        return Err(AppError::BadRequest("nothing to update".into()));
+    };
+
+    let _ = (doc, user);
+    persist::set_comment_resolved(&state.pool, id, resolved).await?;
+
+    let updated = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+
+    if let Some(tx) = state.registry.existing(updated.doc_id) {
+        let _ = tx
+            .send(crate::doc_actor::DocMsg::Comment {
+                payload: json!({ "action": "updated", "comment": updated.to_json() }),
+            })
+            .await;
+    }
+
+    Ok(Json(updated.to_json()).into_response())
+}
+
+pub async fn delete_comment(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    let comment = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    let (_, user) = comment_access(&state, &jar, None, comment.doc_id, true).await?;
+    let user = user.ok_or(AppError::Forbidden)?;
+
+    let doc =
+        persist::get_document(&state.pool, comment.doc_id).await?.ok_or(AppError::NotFound)?;
+    let owner_id =
+        persist::get_project(&state.pool, doc.project_id).await?.map(|p| p.owner_id);
+
+    if comment.author_id != user.id && owner_id != Some(user.id) {
+        return Err(AppError::Forbidden);
+    }
+
+    persist::delete_comment(&state.pool, id).await?;
+
+    if let Some(tx) = state.registry.existing(comment.doc_id) {
+        let _ = tx
+            .send(crate::doc_actor::DocMsg::Comment {
+                payload: json!({ "action": "deleted",
+                                 "comment": { "id": id, "docId": comment.doc_id } }),
+            })
+            .await;
+    }
+
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+#[derive(Deserialize)]
 pub struct PreviewQuery {
     pub fit: Option<bool>,
 }

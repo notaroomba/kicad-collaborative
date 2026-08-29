@@ -340,13 +340,24 @@ pub async fn live_page(
   #status {{ font-size: .85rem; opacity: .7; margin-top: 8px; }}
   .chip {{ display:inline-block; padding: 2px 8px; border-radius: 999px; background: #d9822b22; }}
   .chip.err {{ background: #c0392b22; }}
+  #cmtPanel {{ position: absolute; display: none; background: #fff; color: #222;
+              border: 1px solid #0003; border-radius: 10px; padding: 10px 12px;
+              min-width: 260px; max-width: 340px; box-shadow: 0 6px 24px #0003;
+              font-size: .88rem; z-index: 5; }}
+  #cmtPanel .meta {{ opacity: .6; font-size: .78rem; }}
+  #cmtPanel .cbody {{ margin: 2px 0 8px; white-space: pre-wrap; }}
+  #cmtPanel textarea {{ width: 100%; box-sizing: border-box; }}
+  #cmtPanel button {{ font-size: .82rem; }}
+  #modeBtn {{ margin-top: 8px; }}
 </style></head><body>
 <p><a href="/p/{id}" class="muted">&larr; {name}</a></p>
 <div id="stage">
   <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false" draggable="false">
-  <svg id="overlay"><g id="peersG"></g><g id="dragG"></g></svg>
+  <svg id="overlay"><g id="peersG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
+  <div id="cmtPanel"></div>
 </div>
 <div id="status">connecting&hellip;</div>
+<p><button class="btn secondary" id="modeBtn">&#128172; Add comment</button></p>
 {join_note}
 <script>
 const PROJECT_ID = "{id}";
@@ -412,6 +423,7 @@ function connect() {{
       dragG.replaceChildren();
       setStatus();
     }}
+    if (msg.type === "comment") noteCommentMsg(msg);
     if (msg.type === "op") {{ editsSeen++; noteRemoteOp(msg); setStatus(); }}
     if (msg.type === "ops") {{ editsSeen += (msg.ops || []).length; setStatus(); }}
   }};
@@ -572,7 +584,132 @@ function drawPeers(peers) {{
   }}
 }}
 
+// ---- comments ----
+const cmtG = document.getElementById("cmtG");
+const cmtPanel = document.getElementById("cmtPanel");
+const modeBtn = document.getElementById("modeBtn");
+let comments = [];            // roots + replies, server order
+let commentMode = false;
+let openThread = null;        // root comment id whose panel is open
+
+async function loadComments() {{
+  try {{
+    const r = await fetch(`/api/docs/${{DOC_ID}}/comments`);
+    if (r.ok) {{ comments = (await r.json()).comments || []; drawComments(); }}
+  }} catch (e) {{}}
+}}
+
+function noteCommentMsg(msg) {{
+  const c = msg.comment || {{}};
+  const inner = c.comment || {{}};
+  if (c.action === "deleted") comments = comments.filter((x) => x.id !== inner.id && x.parentId !== inner.id);
+  else if (c.action === "updated") comments = comments.map((x) => (x.id === inner.id ? inner : x));
+  else if (c.action === "added" && !comments.some((x) => x.id === inner.id)) comments.push(inner);
+  drawComments();
+  if (openThread !== null) showThread(openThread);
+}}
+
+function drawComments() {{
+  cmtG.replaceChildren();
+  const s = pxPerMm();
+  for (const c of comments) {{
+    if (c.parentId) continue;
+    const x = c.x / 1e6, y = c.y / 1e6, r = 9 / s;
+    const pin = document.createElementNS(NS, "g");
+    pin.setAttribute("cursor", "pointer");
+    const bubble = document.createElementNS(NS, "circle");
+    bubble.setAttribute("cx", x); bubble.setAttribute("cy", y); bubble.setAttribute("r", r);
+    bubble.setAttribute("fill", c.resolved ? "#9aa" : "#d9822b");
+    bubble.setAttribute("stroke", "white"); bubble.setAttribute("stroke-width", 1.5 / s);
+    bubble.setAttribute("fill-opacity", c.resolved ? "0.55" : "0.92");
+    pin.appendChild(bubble);
+    const glyph = document.createElementNS(NS, "text");
+    glyph.setAttribute("x", x); glyph.setAttribute("y", y + 3.2 / s);
+    glyph.setAttribute("text-anchor", "middle"); glyph.setAttribute("fill", "white");
+    glyph.setAttribute("font-size", 10 / s); glyph.setAttribute("font-family", "system-ui, sans-serif");
+    glyph.textContent = String(comments.filter((x) => x.id === c.id || x.parentId === c.id).length);
+    pin.appendChild(glyph);
+    pin.addEventListener("pointerdown", (ev) => {{ ev.stopPropagation(); }});
+    pin.addEventListener("click", (ev) => {{ ev.stopPropagation(); showThread(c.id); }});
+    cmtG.appendChild(pin);
+  }}
+}}
+
+function esc(t) {{
+  const d = document.createElement("span"); d.textContent = t; return d.innerHTML;
+}}
+
+function panelAt(xNm, yNm) {{
+  const rect = stage.getBoundingClientRect();
+  const px = ((xNm / 1e6 - vb[0]) / vb[2]) * rect.width;
+  const py = ((yNm / 1e6 - vb[1]) / vb[3]) * rect.height;
+  cmtPanel.style.left = Math.min(px + 14, rect.width - 350) + "px";
+  cmtPanel.style.top = Math.max(0, py - 10) + "px";
+  cmtPanel.style.display = "block";
+}}
+
+function showThread(rootId) {{
+  const root = comments.find((c) => c.id === rootId);
+  if (!root) {{ cmtPanel.style.display = "none"; openThread = null; return; }}
+  openThread = rootId;
+  const thread = [root, ...comments.filter((c) => c.parentId === rootId)];
+  cmtPanel.innerHTML = thread.map((c) =>
+    `<div class="meta">${{esc(c.authorLogin)}} &middot; ${{c.createdAt.slice(0, 16).replace("T", " ")}}</div>
+     <div class="cbody">${{esc(c.body)}}</div>`).join("")
+    + (CAN_JOIN ? `<textarea id="replyText" rows="2" placeholder="Reply&hellip;"></textarea>
+       <p><button class="btn" id="replyBtn">Reply</button>
+       <button class="btn secondary" id="resolveBtn">${{root.resolved ? "Reopen" : "Resolve"}}</button>
+       <button class="btn secondary" id="closeBtn">Close</button></p>` :
+       `<p><button class="btn secondary" id="closeBtn">Close</button></p>`);
+  panelAt(root.x, root.y);
+  document.getElementById("closeBtn").onclick = () => {{ cmtPanel.style.display = "none"; openThread = null; }};
+  const replyBtn = document.getElementById("replyBtn");
+  if (replyBtn) replyBtn.onclick = async () => {{
+    const text = document.getElementById("replyText").value.trim();
+    if (!text) return;
+    await fetch(`/api/docs/${{DOC_ID}}/comments`, {{ method: "POST",
+      headers: {{ "content-type": "application/json" }},
+      body: JSON.stringify({{ body: text, parentId: rootId }}) }});
+  }};
+  const resolveBtn = document.getElementById("resolveBtn");
+  if (resolveBtn) resolveBtn.onclick = async () => {{
+    await fetch(`/api/comments/${{rootId}}`, {{ method: "PATCH",
+      headers: {{ "content-type": "application/json" }},
+      body: JSON.stringify({{ resolved: !root.resolved }}) }});
+  }};
+}}
+
+modeBtn.onclick = () => {{
+  commentMode = !commentMode;
+  modeBtn.textContent = commentMode ? "\u2715 Click the board to place your comment" : "\ud83d\udcac Add comment";
+}};
+
+stage.addEventListener("click", (ev) => {{
+  if (!commentMode) return;
+  commentMode = false;
+  modeBtn.textContent = "\ud83d\udcac Add comment";
+  const [x, y] = stageMm(ev);
+  const xNm = Math.round(x * 1e6), yNm = Math.round(y * 1e6);
+  openThread = null;
+  cmtPanel.innerHTML = `<div class="meta">New comment</div>
+    <textarea id="newText" rows="3" placeholder="Say something about this spot&hellip;"></textarea>
+    <p><button class="btn" id="postBtn">Post</button>
+    <button class="btn secondary" id="cancelBtn">Cancel</button></p>`;
+  panelAt(xNm, yNm);
+  document.getElementById("newText").focus();
+  document.getElementById("cancelBtn").onclick = () => cmtPanel.style.display = "none";
+  document.getElementById("postBtn").onclick = async () => {{
+    const text = document.getElementById("newText").value.trim();
+    if (!text) return;
+    cmtPanel.style.display = "none";
+    await fetch(`/api/docs/${{DOC_ID}}/comments`, {{ method: "POST",
+      headers: {{ "content-type": "application/json" }},
+      body: JSON.stringify({{ body: text, x: xNm, y: yNm }}) }});
+  }};
+}});
+
 setup();
+loadComments();
 </script>
 </body></html>"##,
         id = id,

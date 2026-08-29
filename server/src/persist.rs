@@ -486,6 +486,101 @@ pub async fn add_invite(
 
 // ---------- Snapshots & ops ----------
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Comment {
+    pub id: i64,
+    pub doc_id: Uuid,
+    pub parent_id: Option<i64>,
+    pub author_id: i64,
+    pub author_login: String,
+    pub x_nm: i64,
+    pub y_nm: i64,
+    pub body: String,
+    pub resolved: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Comment {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "docId": self.doc_id,
+            "parentId": self.parent_id,
+            "authorId": self.author_id,
+            "authorLogin": self.author_login,
+            "x": self.x_nm,
+            "y": self.y_nm,
+            "body": self.body,
+            "resolved": self.resolved,
+            "createdAt": self.created_at.to_rfc3339(),
+        })
+    }
+}
+
+const COMMENT_COLS: &str = "c.id, c.doc_id, c.parent_id, c.author_id, u.login AS author_login,
+                            c.x_nm, c.y_nm, c.body, c.resolved, c.created_at";
+
+pub async fn list_comments(pool: &PgPool, doc_id: Uuid) -> DbResult<Vec<Comment>> {
+    sqlx::query_as::<_, Comment>(&format!(
+        "SELECT {COMMENT_COLS} FROM comments c JOIN users u ON u.id = c.author_id
+         WHERE c.doc_id = $1 ORDER BY c.id"
+    ))
+    .bind(doc_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn insert_comment(
+    pool: &PgPool,
+    doc_id: Uuid,
+    parent_id: Option<i64>,
+    author_id: i64,
+    x_nm: i64,
+    y_nm: i64,
+    body: &str,
+) -> DbResult<Comment> {
+    sqlx::query_as::<_, Comment>(&format!(
+        "WITH ins AS (
+            INSERT INTO comments (doc_id, parent_id, author_id, x_nm, y_nm, body)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+         )
+         SELECT {} FROM ins c JOIN users u ON u.id = c.author_id",
+        COMMENT_COLS
+    ))
+    .bind(doc_id)
+    .bind(parent_id)
+    .bind(author_id)
+    .bind(x_nm)
+    .bind(y_nm)
+    .bind(body)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn get_comment(pool: &PgPool, id: i64) -> DbResult<Option<Comment>> {
+    sqlx::query_as::<_, Comment>(&format!(
+        "SELECT {COMMENT_COLS} FROM comments c JOIN users u ON u.id = c.author_id
+         WHERE c.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn set_comment_resolved(pool: &PgPool, id: i64, resolved: bool) -> DbResult<bool> {
+    let res = sqlx::query("UPDATE comments SET resolved = $2 WHERE id = $1")
+        .bind(id)
+        .bind(resolved)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn delete_comment(pool: &PgPool, id: i64) -> DbResult<bool> {
+    let res = sqlx::query("DELETE FROM comments WHERE id = $1").bind(id).execute(pool).await?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub async fn insert_snapshot(
     pool: &PgPool,
     doc_id: Uuid,
