@@ -775,6 +775,17 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 
     m_resyncPending[ docId ] = false;
 
+    // v1 does not hot-load the snapshot into the open schematic wholesale,
+    // but a rejected own op needs its optimistic application undone: restore
+    // just the touched items from the server's file.
+    auto rollbackIt = m_pendingRollback.find( docId );
+
+    if( rollbackIt != m_pendingRollback.end() && !rollbackIt->second.empty()
+        && aSnapshotMsg.contains( "file" ) )
+    {
+        rollbackFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
+    }
+
     std::erase_if( m_queue,
                    [&]( const PENDING_OP& aPending )
                    {
@@ -832,6 +843,19 @@ void SCH_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
         return;
 
     wxString docId = it->second.docId;
+
+    // Remember which items the rejected op touched: the resync snapshot
+    // below carries the server's state for them.
+    if( it->second.changes.is_array() )
+    {
+        for( const nlohmann::json& change : it->second.changes )
+        {
+            if( change.is_object() )
+                m_pendingRollback[ docId ].insert(
+                        KIID( wxString::FromUTF8( change.value( "id", "" ) ) ) );
+        }
+    }
+
     m_unacked.erase( it );
 
     // Rejected is as final as acked for replay purposes: the server will
@@ -874,6 +898,103 @@ void SCH_COLLAB_SYNC::ReplayUnacked()
 
     for( const auto& [clientOpId, op] : m_unacked )
         session.SendOp( op.docId, clientOpId, std::nullopt, op.changes );
+}
+
+
+void SCH_COLLAB_SYNC::rollbackFromSnapshot( const wxString& aDocId,
+                                             const std::string& aFileText )
+{
+    SCH_SCREEN* screen = screenForDocId( aDocId );
+
+    auto pendIt = m_pendingRollback.find( aDocId );
+
+    if( pendIt == m_pendingRollback.end() )
+        return;
+
+    std::set<KIID> ids;
+    ids.swap( pendIt->second );
+    m_pendingRollback.erase( pendIt );
+
+    if( !screen || aFileText.empty() )
+        return;
+
+    // Parse the server's file the way the item applier parses fragments: the
+    // snapshot is a complete kicad_sch document, which LoadContent accepts.
+    SCH_SHEET tempSheet;
+
+    // Screen object on heap is owned by the sheet (the paste-path pattern).
+    SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
+    tempSheet.SetScreen( tempScreen );
+
+    STRING_LINE_READER reader( aFileText, wxS( "collab-snapshot" ) );
+    SCH_IO_KICAD_SEXPR plugin;
+
+    try
+    {
+        plugin.LoadContent( reader, &tempSheet );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "rollback: snapshot parse failed: %s" ), ioe.What() );
+        return;
+    }
+
+    // Synthesize one upsert (or removal) per touched item from the server's
+    // state and run it through the same applier as any remote op.
+    nlohmann::json changes = nlohmann::json::array();
+
+    for( const KIID& id : ids )
+    {
+        SCH_ITEM* item = nullptr;
+
+        for( SCH_ITEM* candidate : tempScreen->Items() )
+        {
+            if( candidate->m_Uuid == id )
+            {
+                item = candidate;
+                break;
+            }
+        }
+
+        nlohmann::json change;
+        change[ "id" ] = id.AsStdString();
+
+        if( item )
+        {
+            std::string sexpr =
+                    SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, item );
+
+            if( sexpr.empty() )
+                continue;
+
+            change[ "kind" ] = "ADDED";     // upsert: replace with server state
+            change[ "typeName" ] = item->GetClass().ToStdString( wxConvUTF8 );
+            change[ "sexpr" ] = std::move( sexpr );
+        }
+        else
+        {
+            // We added it, the server refused it: take it back out.
+            change[ "kind" ] = "REMOVED";
+            change[ "typeName" ] = "";
+        }
+
+        changes.push_back( std::move( change ) );
+    }
+
+    if( changes.empty() )
+        return;
+
+    PENDING_OP op;
+    op.docId = aDocId;
+    op.seq = m_lastAppliedSeq[ aDocId ];
+    op.changes = std::move( changes );
+
+    // Genuinely newer own in-flight edits re-assert over the rollback inside
+    // applyOp, which is the right precedence for an editor; a viewer has none.
+    applyOp( op );
+
+    if( m_frame->GetCanvas() )
+        m_frame->GetCanvas()->Refresh();
 }
 
 
