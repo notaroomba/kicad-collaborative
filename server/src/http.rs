@@ -296,6 +296,93 @@ pub async fn preview_svg(
     Ok(([(header::CONTENT_TYPE, "image/svg+xml")], svg).into_response())
 }
 
+/// Best-effort footprint index for the web viewer's hit-testing: uuid, lib id
+/// and position scraped from the latest board snapshot.  This is a read-only
+/// convenience for the browser — the authoritative document semantics still
+/// live entirely in the editors.
+pub async fn board_items(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+
+    if !project.public {
+        let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
+        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
+    }
+
+    let docs = persist::project_documents(&state.pool, id).await?;
+    let doc = docs
+        .iter()
+        .find(|d| d.doc_type == "kicad_pcb")
+        .ok_or_else(|| AppError::BadRequest("project has no board".into()))?;
+
+    let (seq, content) =
+        persist::latest_snapshot(&state.pool, doc.id).await?.ok_or(AppError::NotFound)?;
+    let text = String::from_utf8_lossy(&content);
+
+    let mut items = Vec::new();
+    let mut idx = 0usize;
+
+    while let Some(rel) = text[idx..].find("(footprint \"") {
+        let start = idx + rel;
+        // Balanced-paren scan for the block end.
+        let mut depth = 0i32;
+        let mut end = start;
+        for (off, ch) in text[start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + off + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if end <= start {
+            break;
+        }
+        let block = &text[start..end];
+        idx = end;
+
+        let lib = block
+            .strip_prefix("(footprint \"")
+            .and_then(|r| r.split('"').next())
+            .unwrap_or("")
+            .to_string();
+        let uuid = block
+            .find("(uuid \"")
+            .and_then(|p| block[p + 7..].split('"').next())
+            .unwrap_or("")
+            .to_string();
+        // The first "(at x y [rot])" in the block is the footprint's own: the
+        // header fields precede all children in the sexpr output.
+        let at = block.find("(at ").and_then(|p| {
+            let rest = &block[p + 4..];
+            let close = rest.find(')')?;
+            let mut nums = rest[..close].split_whitespace();
+            let x: f64 = nums.next()?.parse().ok()?;
+            let y: f64 = nums.next()?.parse().ok()?;
+            Some((x, y))
+        });
+
+        if let (false, Some((x_mm, y_mm))) = (uuid.is_empty(), at) {
+            items.push(json!({
+                "id": uuid,
+                "lib": lib,
+                "x": (x_mm * 1e6) as i64,
+                "y": (y_mm * 1e6) as i64,
+            }));
+        }
+    }
+
+    Ok(Json(json!({ "docId": doc.id, "seq": seq, "footprints": items })).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct PreviewQuery {
     pub fit: Option<bool>,

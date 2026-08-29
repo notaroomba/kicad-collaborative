@@ -7,7 +7,6 @@ use axum::extract::State;
 use axum::response::Response;
 use futures_util::stream::StreamExt;
 use futures_util::SinkExt;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -157,14 +156,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     // clientId keys the doc-actor client map and the op-dedup index, so it must
     // be namespaced by the authenticated user: otherwise anyone who can read a
     // peer's id (it ships in doc_info) can evict them or spoof their ops. The
-    // client's own suffix is preserved so dedup survives reconnects.
-    let client_id = format!(
-        "{}:{}",
-        user.id,
-        client_id
+    // client's own suffix is preserved so dedup survives reconnects — and since
+    // clients echo back the assigned id (own prefix included) when they
+    // reconnect, any repetition of our own prefix is stripped first so the id
+    // stays stable instead of growing one "uid:" per reconnect.
+    let client_id = {
+        let raw = client_id
             .filter(|c| c.len() <= 128)
-            .unwrap_or_else(|| format!("c-{}", Uuid::new_v4()))
-    );
+            .unwrap_or_else(|| format!("c-{}", Uuid::new_v4()));
+        let own_prefix = format!("{}:", user.id);
+        let mut suffix = raw.as_str();
+        while let Some(rest) = suffix.strip_prefix(&own_prefix) {
+            suffix = rest;
+        }
+        format!("{}{}", own_prefix, suffix)
+    };
     let color_idx = state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len();
     let peer = PeerInfo {
         client_id: client_id.clone(),
