@@ -34,7 +34,7 @@ class wxButton;
  * session worker) and come back as live `comment` broadcasts, on which the
  * tool calls Reload().
  */
-class DIALOG_PCB_COMMENTS : public wxDialog
+class DIALOG_COLLAB_COMMENTS : public wxDialog
 {
 public:
     /**
@@ -43,7 +43,7 @@ public:
      * @param aPost       callback( body, parentId or -1 ) — posts off-thread.
      * @param aResolve    callback( rootId, resolved ).
      */
-    DIALOG_PCB_COMMENTS( wxWindow* aParent, const nlohmann::json* aComments,
+    DIALOG_COLLAB_COMMENTS( wxWindow* aParent, const nlohmann::json* aComments,
                          const VECTOR2I& aNewAnchor,
                          std::function<void( const wxString&, long long )> aPost,
                          std::function<void( long long, bool )> aResolve,
@@ -51,6 +51,9 @@ public:
 
     /// Re-render from the (tool-owned) comment array after a live update.
     void Reload();
+
+    /// Select (and scroll to) one thread, e.g. after a pin was clicked.
+    void SelectThread( long long aRootId );
 
 private:
     long long selectedRootId() const;

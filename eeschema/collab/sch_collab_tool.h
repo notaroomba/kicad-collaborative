@@ -77,6 +77,9 @@ public:
 
     ///< Copy an invite link for the current session to the clipboard.
     int CopyShareLink( const TOOL_EVENT& aEvent );
+
+    ///< Open the comment-threads dialog for the displayed sheet's doc.
+    int ShowComments( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -141,6 +144,19 @@ private:
 
     ///< The version-history sidebar pane (created lazily; owned by AUI).
     class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
+
+    ///< The open comments dialog, if any (modeless; views the displayed doc).
+    class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
+
+    ///< The doc id the open dialog was built for (sheet switches invalidate it).
+    wxString m_commentsDlgDocId;
+
+    ///< Post a comment or reply on aDocId off-thread.
+    void postComment( const wxString& aDocId, const wxString& aBody, long long aParentId,
+                      const VECTOR2I& aAnchor );
+
+    ///< Flip a thread's resolved state off-thread.
+    void resolveComment( long long aRootId, bool aResolved );
 
     ///< Create the pane if needed; bind it to the current project.
     class COLLAB_HISTORY_PANEL* historyPanel();

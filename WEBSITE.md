@@ -281,3 +281,14 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   11-second image load that turned out to be the embedded test browser's own
   throttled proxy — real clients fetch the compressed SVG in ~0.13 s from
   the production edge.  Production redeployed and verified.
+- [x] **Pin click-to-open (pcbnew) + comments dialog in eeschema (loop 18).**
+  Clicking empty canvas within a comment pin's grab radius opens the
+  Comments dialog focused on that thread (the pins are overlay drawings the
+  selection tool cannot see, so the cleared-selection event does the
+  hit-test).  The comments dialog moved to common
+  (`DIALOG_COLLAB_COMMENTS`) and eeschema now has the full thread UI too —
+  File > Comments..., per displayed sheet, live-reloading on broadcasts,
+  with post/resolve off the UI thread.  (eeschema's IPC API has no
+  RunAction handler, so its dialog rides on the pcbnew-verified shared
+  component + green QA; the pin click needs a human mouse — both are
+  one-click user-verifiable.)  All three collab QA suites green.

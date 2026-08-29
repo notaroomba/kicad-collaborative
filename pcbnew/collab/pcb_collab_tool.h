@@ -84,6 +84,12 @@ public:
 
     ///< Copy an invite link for the current session to the clipboard.
     int CopyShareLink( const TOOL_EVENT& aEvent );
+
+    ///< Open the comments dialog focused on aRootId's thread.
+    void openThread( long long aRootId );
+
+    ///< The root comment whose pin covers aPos, or -1.
+    long long pinAt( const VECTOR2I& aPos ) const;
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -146,7 +152,7 @@ private:
     void rebuildCommentPins();
 
     ///< The open comments dialog, if any (modeless; owned by wx).
-    class DIALOG_PCB_COMMENTS* m_commentsDlg = nullptr;
+    class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 
     ///< The version-history sidebar pane (created lazily; owned by AUI).
     class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;

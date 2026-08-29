@@ -23,7 +23,7 @@
 
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
-#include "dialog_pcb_comments.h"
+#include <dialogs/dialog_collab_comments.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <router/pns_arc.h>
@@ -39,6 +39,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection.h>
+#include <gal/graphics_abstraction_layer.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 
@@ -671,7 +672,7 @@ int PCB_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
     VECTOR2I anchor = frame<PCB_EDIT_FRAME>()->GetCanvas()->GetViewControls()
                               ->GetCursorPosition();
 
-    m_commentsDlg = new DIALOG_PCB_COMMENTS(
+    m_commentsDlg = new DIALOG_COLLAB_COMMENTS(
             frame<PCB_EDIT_FRAME>(), &m_comments, anchor,
             [this, anchor]( const wxString& aBody, long long aParentId )
             {
@@ -700,7 +701,7 @@ int PCB_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
                          {
                              if( aCmd.GetId() == wxID_CANCEL && m_commentsDlg )
                              {
-                                 DIALOG_PCB_COMMENTS* dlg = m_commentsDlg;
+                                 DIALOG_COLLAB_COMMENTS* dlg = m_commentsDlg;
                                  m_commentsDlg = nullptr;
                                  dlg->Destroy();
                                  return;
@@ -845,7 +846,67 @@ int PCB_COLLAB_TOOL::onSelectionChange( const TOOL_EVENT& aEvent )
 {
     m_presenceDirty = true;
 
+    // A click that selected nothing may still be a comment-pin hit: the pins
+    // are overlay drawings, invisible to the selection tool.
+    if( aEvent.Matches( EVENTS::ClearedEvent ) && !m_comments.empty() )
+    {
+        VECTOR2I  cursor = frame<PCB_EDIT_FRAME>()->GetCanvas()->GetViewControls()
+                                   ->GetCursorPosition( false );
+        long long root = pinAt( cursor );
+
+        if( root >= 0 )
+            openThread( root );
+    }
+
     return 0;
+}
+
+
+long long PCB_COLLAB_TOOL::pinAt( const VECTOR2I& aPos ) const
+{
+    KIGFX::VIEW* view = getView();
+
+    if( !view )
+        return -1;
+
+    // The pin bubble is 9 screen px; accept a slightly larger grab radius.
+    double radius = 14.0 / view->GetGAL()->GetWorldScale();
+
+    long long best = -1;
+    double    bestDist = radius;
+
+    for( const nlohmann::json& c : m_comments )
+    {
+        if( !c.is_object() || jsonNumber( c, "parentId", -1 ) >= 0 )
+            continue;
+
+        VECTOR2I pos( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+        double   dist = ( pos - aPos ).EuclideanNorm();
+
+        if( dist <= bestDist )
+        {
+            best = jsonNumber( c, "id", -1 );
+            bestDist = dist;
+        }
+    }
+
+    return best;
+}
+
+
+void PCB_COLLAB_TOOL::openThread( long long aRootId )
+{
+    if( !m_commentsDlg )
+    {
+        TOOL_EVENT dummy;
+        ShowComments( dummy );
+    }
+
+    if( m_commentsDlg )
+    {
+        m_commentsDlg->SelectThread( aRootId );
+        m_commentsDlg->Raise();
+    }
 }
 
 

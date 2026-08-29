@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "dialog_pcb_comments.h"
+#include <dialogs/dialog_collab_comments.h>
 
 #include <wx/button.h>
 #include <wx/dataview.h>
@@ -36,7 +36,7 @@ long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aD
 } // namespace
 
 
-DIALOG_PCB_COMMENTS::DIALOG_PCB_COMMENTS(
+DIALOG_COLLAB_COMMENTS::DIALOG_COLLAB_COMMENTS(
         wxWindow* aParent, const nlohmann::json* aComments, const VECTOR2I& aNewAnchor,
         std::function<void( const wxString&, long long )> aPost,
         std::function<void( long long, bool )> aResolve,
@@ -151,7 +151,7 @@ DIALOG_PCB_COMMENTS::DIALOG_PCB_COMMENTS(
 }
 
 
-void DIALOG_PCB_COMMENTS::Reload()
+void DIALOG_COLLAB_COMMENTS::Reload()
 {
     long long selected = selectedRootId();
 
@@ -193,7 +193,22 @@ void DIALOG_PCB_COMMENTS::Reload()
 }
 
 
-long long DIALOG_PCB_COMMENTS::selectedRootId() const
+void DIALOG_COLLAB_COMMENTS::SelectThread( long long aRootId )
+{
+    for( size_t row = 0; row < m_rowRootIds.size(); row++ )
+    {
+        if( m_rowRootIds[ row ] == aRootId )
+        {
+            m_threads->SelectRow( (int) row );
+            m_threads->EnsureVisible( m_threads->RowToItem( (int) row ) );
+            onSelectionChanged();
+            break;
+        }
+    }
+}
+
+
+long long DIALOG_COLLAB_COMMENTS::selectedRootId() const
 {
     int row = m_threads ? m_threads->GetSelectedRow() : wxNOT_FOUND;
 
@@ -204,7 +219,7 @@ long long DIALOG_PCB_COMMENTS::selectedRootId() const
 }
 
 
-void DIALOG_PCB_COMMENTS::onSelectionChanged()
+void DIALOG_COLLAB_COMMENTS::onSelectionChanged()
 {
     long long root = selectedRootId();
 

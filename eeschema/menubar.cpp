@@ -119,6 +119,7 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( SCH_ACTIONS::collabStartSession );
     fileMenu->Add( SCH_ACTIONS::collabJoinSession );
     fileMenu->Add( SCH_ACTIONS::collabCopyLink );
+    fileMenu->Add( SCH_ACTIONS::collabComments );
     fileMenu->Add( SCH_ACTIONS::collabHistory );
     fileMenu->Add( SCH_ACTIONS::collabLeaveSession );
 
