@@ -292,3 +292,25 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   RunAction handler, so its dialog rides on the pcbnew-verified shared
   component + green QA; the pin click needs a human mouse — both are
   one-click user-verifiable.)  All three collab QA suites green.
+- [x] **Sheet-file sync mid-session (loop 19).**  Hierarchical sheets now
+  transfer: capture allows sheet add/replace/removal; the applier preserves
+  the live screen across upserts (fragments parse screen-less) and gives a
+  brand-new sheet an empty screen; the engine's ensureSheetDocs creates the
+  server doc mid-session (`POST /api/projects/{id}/docs`, idempotent by
+  path), authors upload the new sheet's content as snapshot 0, and both
+  sides register + join the new doc — receivers mark it reconcile-pending
+  so the join snapshot populates the empty screen through the proven
+  reconcile.  QA covers the full round trip with the real wire format
+  (add with fresh screen, screen-preserving replace, removal).  The wire
+  e2e also proved doc discovery on rejoin (a restarting client picks up the
+  mid-session doc from the project listing) — and cost half a day to a
+  self-inflicted pair of gotchas: a hand-crafted sheet sexpr the parser
+  silently rejects (the real formatter's output round-trips fine), and
+  "dead" editors that were actually children killed by their launching
+  shell's timeout (the documented nohup gotcha, forgotten twice).
+- [x] Copy Share Link UX: instant "creating..." infobar on first click, the
+  link cached per session for instant repeat copies, cache cleared on
+  session end.  (First-mint can sit behind snapshot uploads on the worker
+  for a few seconds — the reported "doesn't copy" was pasting before the
+  mint landed, with no feedback; viewer-role windows correctly refuse with
+  an error infobar.)

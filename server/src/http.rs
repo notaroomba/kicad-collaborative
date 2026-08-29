@@ -980,6 +980,81 @@ pub struct SnapshotQuery {
     pub seq: i64,
 }
 
+/// Latest snapshot bytes for one document (members only) — the receiver-side
+/// download when a peer adds a new sheet file mid-session.
+pub async fn doc_content(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(doc_id): Path<Uuid>,
+) -> AppResult<Response> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    persist::effective_role(&state.pool, user.id, doc.project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+
+    let Some((seq, content)) = persist::latest_snapshot(&state.pool, doc_id).await? else {
+        return Err(AppError::NotFound);
+    };
+
+    let mut response = (
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        content,
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-snapshot-seq"),
+        axum::http::HeaderValue::from_str(&seq.to_string()).unwrap(),
+    );
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+pub struct NewDocRequest {
+    pub path: String,
+    #[serde(rename = "docType")]
+    pub doc_type: Option<String>,
+}
+
+/// Add a document to an existing project mid-session — a hierarchical sheet
+/// created during live editing needs a server doc for its new file.  The
+/// caller uploads the initial content as snapshot 0 afterwards.  Idempotent:
+/// an existing doc at the same path is returned as-is.
+pub async fn create_doc(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<NewDocRequest>,
+) -> AppResult<Response> {
+    let role = persist::effective_role(&state.pool, user.id, id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if role != "editor" {
+        return Err(AppError::Forbidden);
+    }
+
+    let Some(path) = safe_zip_name(&req.path) else {
+        return Err(AppError::BadRequest("bad path".into()));
+    };
+    if !allowed_file(&path) {
+        return Err(AppError::BadRequest("file type not allowed".into()));
+    }
+
+    for existing in persist::project_documents(&state.pool, id).await? {
+        if existing.path == path {
+            return Ok(Json(json!({ "docId": existing.id, "path": existing.path,
+                                   "docType": existing.doc_type, "existing": true }))
+                .into_response());
+        }
+    }
+
+    let doc_type = req.doc_type.unwrap_or_else(|| doc_type_for(&path).to_string());
+    let doc = persist::create_document(&state.pool, id, &path, &doc_type).await?;
+
+    Ok(Json(json!({ "docId": doc.id, "path": doc.path, "docType": doc.doc_type,
+                    "existing": false }))
+        .into_response())
+}
+
 #[derive(Deserialize)]
 pub struct PreviewUploadQuery {
     pub seq: i64,

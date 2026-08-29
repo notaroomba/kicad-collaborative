@@ -120,6 +120,17 @@ KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aTok
                                 const wxString& aProjectId, long long aInviteId );
 
 /// GET /api/me -> { id, login, name, email, avatarUrl }.
+/// POST /api/projects/{id}/docs — add a document mid-session (idempotent by
+/// path); returns { docId, path, docType, existing }.
+KICOMMON_API std::optional<nlohmann::json> CreateDoc( const wxString& aServerUrl,
+                                                      const wxString& aToken,
+                                                      const wxString& aProjectId,
+                                                      const wxString& aPath );
+
+/// GET /api/docs/{id}/content — the latest snapshot bytes (empty on failure).
+KICOMMON_API std::string FetchDocContent( const wxString& aServerUrl, const wxString& aToken,
+                                          const wxString& aDocId );
+
 /// POST /api/docs/{id}/preview?seq=N&fit=... — a client-rendered SVG preview.
 KICOMMON_API bool UploadPreview( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aDocId, long long aSeq, bool aFit,

@@ -39,6 +39,7 @@
 
 #include <schematic.h>
 #include <sch_screen.h>
+#include <sch_sheet.h>
 #include <sch_sheet_path.h>
 #include <sch_symbol.h>
 #include <settings/settings_manager.h>
@@ -126,6 +127,63 @@ struct COLLAB_SYNC_FIXTURE
 
 
 BOOST_FIXTURE_TEST_SUITE( CollabSync, COLLAB_SYNC_FIXTURE )
+
+
+BOOST_AUTO_TEST_CASE( SheetAddRoundTrips )
+{
+    // The author adds a hierarchical sheet; the receiver must materialize it
+    // with a fresh (empty) screen — the doc join fills the content in later.
+    SCH_SHEET_PATH authorPath;
+    SCH_SYMBOL*    anySymbol = FindAnySymbol( *m_authoring, &authorPath );
+    BOOST_REQUIRE( anySymbol != nullptr );
+    SCH_SCREEN* authorScreen = authorPath.LastScreen();
+
+    SCH_SHEET* sheet = new SCH_SHEET( authorScreen, VECTOR2I( schIUScale.MilsToIU( 8000 ),
+                                                              schIUScale.MilsToIU( 1000 ) ) );
+    sheet->SetName( wxS( "SubTest" ) );
+    sheet->SetFileName( wxS( "subtest.kicad_sch" ) );
+    sheet->SetScreen( new SCH_SCREEN( m_authoring.get() ) );
+    authorScreen->Append( sheet );
+    m_authoring->RefreshHierarchy();
+
+    std::string sexpr = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, sheet );
+    BOOST_REQUIRE( !sexpr.empty() );
+
+    nlohmann::json change = MakeChange( sheet, "ADDED" );
+    change[ "sexpr" ] = sexpr;
+
+    SCH_SCREEN* twinScreen = nullptr;
+    FindTwin( *m_receiving, anySymbol->m_Uuid, &twinScreen );
+    BOOST_REQUIRE( twinScreen != nullptr );
+
+    BOOST_REQUIRE(
+            SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, change, nullptr ) );
+
+    SCH_SCREEN* foundScreen = nullptr;
+    SCH_ITEM*   applied = FindTwin( *m_receiving, sheet->m_Uuid, &foundScreen );
+
+    BOOST_REQUIRE( applied != nullptr );
+    BOOST_REQUIRE( applied->Type() == SCH_SHEET_T );
+
+    SCH_SHEET* appliedSheet = static_cast<SCH_SHEET*>( applied );
+    BOOST_CHECK( appliedSheet->GetFileName() == wxS( "subtest.kicad_sch" ) );
+    BOOST_REQUIRE( appliedSheet->GetScreen() != nullptr );
+
+    // Upsert-replace must keep the live screen (the fragment has none).
+    nlohmann::json replace = MakeChange( sheet, "MODIFIED" );
+    replace[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, sheet );
+
+    SCH_SCREEN* keep = appliedSheet->GetScreen();
+    BOOST_REQUIRE(
+            SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, replace, nullptr ) );
+    BOOST_CHECK( appliedSheet->GetScreen() == keep );
+
+    // Removal detaches the sheet.
+    nlohmann::json removal = MakeChange( sheet, "REMOVED" );
+    BOOST_REQUIRE(
+            SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, removal, nullptr ) );
+    BOOST_CHECK( FindTwin( *m_receiving, sheet->m_Uuid, nullptr ) == nullptr );
+}
 
 
 BOOST_AUTO_TEST_CASE( ModifiedPropertiesConverge )

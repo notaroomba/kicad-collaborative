@@ -338,6 +338,7 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
     // The sync engine must exist before the joins so it sees the join-time messages.
     m_sync = std::make_unique<SCH_COLLAB_SYNC>( m_frame, m_docIdByPath );
+    m_sync->SetAdapter( this );
 
     // Picks up ops left unacknowledged by a previous run (crash, or offline edits).
     m_sync->OpenJournal( m_frame->Prj().GetProjectPath(), m_frame->Prj().GetProjectName() );
@@ -369,6 +370,7 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
 void SCH_COLLAB_TOOL::endSession()
 {
+    m_cachedShareLink.clear();
     m_timer.Stop();
     m_sync.reset();
 
@@ -782,6 +784,24 @@ int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
         return 0;
     }
 
+    // Repeat clicks copy instantly; the first mint happens on the worker and
+    // can sit behind snapshot uploads for a few seconds.
+    if( !m_cachedShareLink.IsEmpty() )
+    {
+        if( wxTheClipboard->Open() )
+        {
+            wxTheClipboard->SetData( new wxTextDataObject( m_cachedShareLink ) );
+            wxTheClipboard->Close();
+        }
+
+        m_frame->ShowInfoBarMsg(
+                _( "Share link copied to the clipboard." ) );
+        return 0;
+    }
+
+    m_frame->ShowInfoBarMsg(
+            _( "Creating a share link... it lands on the clipboard in a moment." ) );
+
     std::shared_ptr<bool> alive = m_alive;
     std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
     std::string token =
@@ -820,6 +840,8 @@ int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 
                             m_frame->ShowInfoBarMsg(
                                     _( "Share link copied to the clipboard." ) );
+
+                            m_cachedShareLink = wxString::FromUTF8( url );
                         } );
             } );
 

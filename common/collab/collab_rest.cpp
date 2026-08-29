@@ -324,6 +324,37 @@ bool COLLAB_REST::RevokeInvite( const wxString& aServerUrl, const wxString& aTok
 }
 
 
+std::optional<nlohmann::json> COLLAB_REST::CreateDoc( const wxString& aServerUrl,
+                                                      const wxString& aToken,
+                                                      const wxString& aProjectId,
+                                                      const wxString& aPath )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/docs" ),
+                  aToken );
+
+    nlohmann::json body = { { "path", aPath.ToStdString( wxConvUTF8 ) } };
+    curl.SetPostFields( body.dump() );
+
+    return performJson( curl );
+}
+
+
+std::string COLLAB_REST::FetchDocContent( const wxString& aServerUrl, const wxString& aToken,
+                                          const wxString& aDocId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/docs/" ) + aDocId + wxS( "/content" ), aToken );
+
+    int code = curl.Perform();
+
+    if( code != CURLE_OK || curl.GetResponseStatusCode() != 200 )
+        return std::string();
+
+    return curl.GetBuffer();
+}
+
+
 bool COLLAB_REST::UploadPreview( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aDocId, long long aSeq, bool aFit,
                                  const std::string& aSvg )
