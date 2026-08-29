@@ -65,6 +65,10 @@ pub enum DocMsg {
         client_id: String,
         state: Value,
     },
+    /// A comment changed via REST; relay to every connected client.
+    Comment {
+        payload: Value,
+    },
     Resync {
         client_id: String,
     },
@@ -201,6 +205,11 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                             c.presence = Some(state.clone());
                             presence_dirty.insert(client_id, Some(state));
                         }
+                    }
+                    DocMsg::Comment { payload } => {
+                        let msg = json!({ "type": "comment", "docId": doc_id,
+                                          "comment": payload }).to_string();
+                        broadcast_all(&mut clients, &mut presence_dirty, doc_id, &msg);
                     }
                     DocMsg::Reset { seq } => {
                         head_seq = head_seq.max(seq);

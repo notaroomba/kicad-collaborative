@@ -190,3 +190,17 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   a group op it cannot apply while still advancing its sequence, so after
   an upgrade the missed group appears only after the next reconcile or
   fresh snapshot join.
+- [x] **Comments layer (server + web).**  Pinned comment threads on documents,
+  the Figma model: a root comment carries a board position (nm), replies
+  thread under it, anyone who can comment may resolve/reopen.  REST under
+  `/api/docs/{id}/comments` + `/api/comments/{id}` (migration 0005); every
+  mutation broadcasts a `comment` message through the doc actor so open
+  clients update live (the protocol crate pins the shape).  The live page
+  grew numbered pins (muted when resolved), a click-to-place compose panel,
+  and a thread popover with reply/resolve.  Verified e2e with real clicks:
+  alice placed a comment; carol — a *viewer*, commenting is the viewer
+  role's superpower — replied and resolved via REST with both broadcasts
+  arriving live on an open page; anonymous read works on public projects,
+  anonymous write is refused (403); the desktop editors received the
+  unknown `comment` broadcasts and stayed connected (graceful by design —
+  in-editor pins are the next step).

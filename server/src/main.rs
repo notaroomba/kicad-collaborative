@@ -131,6 +131,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}/preview.svg", get(http::preview_svg))
         .route("/api/projects/{id}/board-items", get(http::board_items))
         .route("/api/projects/{id}/clone", post(http::clone_project))
+        .route(
+            "/api/docs/{id}/comments",
+            get(http::list_comments).post(http::create_comment),
+        )
+        .route(
+            "/api/comments/{id}",
+            axum::routing::patch(http::update_comment).delete(http::delete_comment),
+        )
         .route("/gallery", get(pages::gallery_page))
         .route("/p/{id}", get(pages::project_page))
         .route("/p/{id}/live", get(pages::live_page))

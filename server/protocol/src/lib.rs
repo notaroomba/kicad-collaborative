@@ -159,6 +159,12 @@ pub enum ServerMsg {
         code: String,
         #[serde(rename = "docId", skip_serializing_if = "Option::is_none")]
         doc_id: Option<Uuid>,
+    },    /// A comment thread changed (added / updated / deleted); the payload is
+    /// the REST representation plus an "action" tag.
+    comment {
+        #[serde(rename = "docId")]
+        doc_id: Uuid,
+        comment: Value,
     },
 }
 
@@ -206,6 +212,14 @@ mod tests {
         let op = r#"{"type":"op","docId":"64912f74-6834-4aa6-98ff-55c3faec0bbf","clientOpId":"web:1","changes":[]}"#;
         let msg: ClientMsg = serde_json::from_str(op).unwrap();
         assert!(matches!(msg, ClientMsg::op { base_seq: None, .. }));
+    }
+
+    #[test]
+    fn comment_broadcast_shape() {
+        let text = r#"{"type":"comment","docId":"64912f74-6834-4aa6-98ff-55c3faec0bbf",
+                       "comment":{"action":"added","comment":{"id":1,"body":"hi"}}}"#;
+        let msg: ServerMsg = serde_json::from_str(text).unwrap();
+        assert!(matches!(msg, ServerMsg::comment { .. }));
     }
 
     #[test]
