@@ -1084,6 +1084,20 @@ install( FILES ${BITMAP_ARCHIVE_PATH}
     DESTINATION ${KICAD_DATA}/resources
     )
 
+# Running from the build tree on macOS: the apps resolve their data dir inside
+# the bundle, which only the install step populates — so every toolbar icon is
+# a "?" in dev builds.  Mirror the archive into the bundles after it builds.
+if( APPLE )
+    foreach( _bundle kicad/KiCad.app pcbnew/pcbnew.app eeschema/eeschema.app )
+        add_custom_command( TARGET bitmap_archive_build POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    ${CMAKE_BINARY_DIR}/${_bundle}/Contents/SharedSupport/resources
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${BITMAP_ARCHIVE_PATH}
+                    ${CMAKE_BINARY_DIR}/${_bundle}/Contents/SharedSupport/resources/images.tar.gz
+            VERBATIM )
+    endforeach()
+endif()
+
 if( MAINTAIN_PNGS )
 
     # Inkscape is required to convert SVG files to PNG files.

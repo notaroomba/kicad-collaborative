@@ -24,6 +24,7 @@
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include "dialog_pcb_comments.h"
+#include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <router/pns_arc.h>
 #include <router/pns_drag_algo.h>
@@ -365,6 +366,7 @@ void PCB_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
     // Publish the full doc list so the schematic editor can find its own docs.
     session.SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
+    session.SetProjectId( wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
 
     m_ownsSession = true;
 
@@ -415,6 +417,7 @@ void PCB_COLLAB_TOOL::joinDoc( const wxString& aDocId, const wxString& aDocPath 
 
     m_docId = aDocId;
     m_docPath = aDocPath;
+    m_projectId = COLLAB_SESSION::Get().ProjectId();
 
     // The sync engine must exist before the join so it sees the join-time messages.
     m_sync = std::make_unique<PCB_COLLAB_SYNC>( editFrame, m_docId );
@@ -425,6 +428,61 @@ void PCB_COLLAB_TOOL::joinDoc( const wxString& aDocId, const wxString& aDocPath 
     COLLAB_SESSION::Get().JoinDoc( m_docId, std::nullopt, this );
 
     fetchComments();
+
+    // Surface the version history beside the canvas for the session.
+    if( COLLAB_HISTORY_PANEL* panel = historyPanel() )
+    {
+        frame<PCB_EDIT_FRAME>()->GetAuiManager().GetPane( panel ).Show();
+        frame<PCB_EDIT_FRAME>()->GetAuiManager().Update();
+    }
+}
+
+
+COLLAB_HISTORY_PANEL* PCB_COLLAB_TOOL::historyPanel()
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+
+    if( !editFrame )
+        return nullptr;
+
+    if( !m_historyPanel )
+    {
+        m_historyPanel = new COLLAB_HISTORY_PANEL( editFrame, editFrame );
+
+        editFrame->GetAuiManager().AddPane(
+                m_historyPanel, wxAuiPaneInfo()
+                                        .Name( wxS( "CollabHistory" ) )
+                                        .Caption( _( "History" ) )
+                                        .Right()
+                                        .Layer( 3 )
+                                        .Position( 2 )
+                                        .CloseButton( true )
+                                        .MinSize( 240, 180 )
+                                        .BestSize( 300, 240 )
+                                        .Hide() );
+    }
+
+    m_historyPanel->SetProject( m_projectId );
+
+    return m_historyPanel;
+}
+
+
+int PCB_COLLAB_TOOL::ShowHistory( const TOOL_EVENT& aEvent )
+{
+    COLLAB_HISTORY_PANEL* panel = historyPanel();
+
+    if( !panel )
+        return 0;
+
+    wxAuiPaneInfo& pane = frame<PCB_EDIT_FRAME>()->GetAuiManager().GetPane( panel );
+    pane.Show( !pane.IsShown() );
+    frame<PCB_EDIT_FRAME>()->GetAuiManager().Update();
+
+    if( pane.IsShown() )
+        panel->RefreshHistory();
+
+    return 0;
 }
 
 
@@ -697,6 +755,10 @@ void PCB_COLLAB_TOOL::leaveDoc()
     m_presenceDirty = false;
 
     m_comments = nlohmann::json::array();
+    m_projectId.clear();
+
+    if( m_historyPanel )
+        m_historyPanel->SetProject( wxEmptyString );
 
     if( KIGFX::VIEW* view = getView() )
     {
@@ -1103,6 +1165,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::JoinSession,       PCB_ACTIONS::collabJoinSession.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::LeaveSession,      PCB_ACTIONS::collabLeaveSession.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::ShowComments,      PCB_ACTIONS::collabComments.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

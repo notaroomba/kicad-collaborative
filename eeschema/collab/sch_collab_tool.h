@@ -71,6 +71,9 @@ public:
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
     void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
     void OnComment( const nlohmann::json& aMsg ) override;
+
+    ///< Toggle the version-history sidebar pane.
+    int ShowHistory( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -132,6 +135,12 @@ private:
 
     ///< Fetch every joined doc's comments off-thread.
     void fetchComments();
+
+    ///< The version-history sidebar pane (created lazily; owned by AUI).
+    class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
+
+    ///< Create the pane if needed; bind it to the current project.
+    class COLLAB_HISTORY_PANEL* historyPanel();
 
     ///< Rebuild the overlay's comment pins for the displayed sheet.
     void rebuildCommentPins();

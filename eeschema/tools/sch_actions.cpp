@@ -1959,4 +1959,10 @@ TOOL_ACTION SCH_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Leave Session" ) )
         .Tooltip( _( "Disconnect from the collaboration session" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::collabHistory( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.history" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "History" ) )
+        .Tooltip( _( "Show the shared project's version history panel" ) ) );
+
 // clang-format on

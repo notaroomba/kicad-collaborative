@@ -324,6 +324,50 @@ bool COLLAB_REST::RevokeInvite( const wxString& aServerUrl, const wxString& aTok
 }
 
 
+std::optional<nlohmann::json> COLLAB_REST::ListCheckpoints( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/checkpoints" ),
+                  aToken );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::CreateCheckpoint( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId,
+                                                             const wxString& aName )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/checkpoints" ),
+                  aToken );
+
+    nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
+    curl.SetPostFields( body.dump() );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::RestoreCheckpoint( const wxString& aServerUrl,
+                                                              const wxString& aToken,
+                                                              const wxString& aProjectId,
+                                                              const wxString& aName )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/restore" ),
+                  aToken );
+
+    nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
+    curl.SetPostFields( body.dump() );
+
+    return performJson( curl );
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::ListComments( const wxString& aServerUrl,
                                                           const wxString& aToken,
                                                           const wxString& aDocId )

@@ -235,3 +235,22 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   preserved, removal releases the member cleanly.
 - [x] Comments dialog: "Show on Board" centers the canvas on the selected
   thread's pin (FocusOnLocation).
+- [x] **Deployed to production.**  https://kicad-collab-production.up.railway.app
+  — Dockerfile build stages pinned to bookworm (the rust:1-slim base had moved
+  to a newer glibc than the runtime image and the binary refused to start),
+  migrations 0002–0005 applied on boot, real GitHub OAuth configured, and the
+  desktop's built-in DEFAULT_SERVER already points there.  Smoke-tested:
+  healthz/gallery 200 over TLS, wss handshake works, bad token gets a clean
+  auth_failed.  Previews are off in production until the image grows a
+  kicad-cli layer (the gallery degrades gracefully without them).
+- [x] **Toolbar icons fixed.**  Dev-tree builds on macOS showed every icon as
+  "?" because images.tar.gz only reaches the app bundles during the install
+  step; a POST_BUILD hook now mirrors the archive into all three bundles
+  (and the error line is gone from every launch log).
+- [x] **History sidebar panel (both editors).**  A docked "History" pane
+  (File > History toggles it; it auto-shows when a session starts) lists the
+  project's named checkpoints newest-first with doc counts, and offers
+  Checkpoint... / Restore / Refresh — all REST off the UI thread, restore
+  confirmed with a warning dialog and healed everywhere by the automatic
+  reconcile.  The session now publishes the project id so whichever editor
+  joined second can still bind the panel.

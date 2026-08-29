@@ -247,6 +247,8 @@ public:
     /**
      * @return the #WX_INFOBAR that can be displayed on the top of the canvas.
      */
+    wxAuiManager& GetAuiManager() { return m_auimgr; }
+
     WX_INFOBAR* GetInfoBar() { return m_infoBar; }
 
     /**

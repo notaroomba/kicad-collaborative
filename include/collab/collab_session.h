@@ -165,6 +165,10 @@ public:
      * The current project's docs array (from the server project json), so editors
      * other than the one that started the session can find their own doc ids.
      */
+    /// The joined project's server id (set by whichever editor starts/joins).
+    void SetProjectId( const wxString& aProjectId ) { m_projectId = aProjectId; }
+    const wxString& ProjectId() const { return m_projectId; }
+
     void SetProjectDocs( const nlohmann::json& aDocs ) { m_projectDocs = aDocs; }
     const nlohmann::json& ProjectDocs() const { return m_projectDocs; }
 
@@ -189,6 +193,7 @@ private:
     std::unique_ptr<COLLAB_WS_CLIENT> m_ws;
     STATE                             m_state = STATE::DISCONNECTED;
     wxString                          m_disconnectReason;
+    wxString                          m_projectId;
 
     std::thread                       m_worker;
     std::mutex                        m_workMutex;

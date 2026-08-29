@@ -120,6 +120,24 @@ KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aTok
                                 const wxString& aProjectId, long long aInviteId );
 
 /// GET /api/me -> { id, login, name, email, avatarUrl }.
+/// GET /api/projects/{id}/checkpoints -> { checkpoints: [ { name, docId, path, seq, createdAt } ] }
+KICOMMON_API std::optional<nlohmann::json> ListCheckpoints( const wxString& aServerUrl,
+                                                            const wxString& aToken,
+                                                            const wxString& aProjectId );
+
+/// POST /api/projects/{id}/checkpoints { name }
+KICOMMON_API std::optional<nlohmann::json> CreateCheckpoint( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId,
+                                                             const wxString& aName );
+
+/// POST /api/projects/{id}/restore { name } — owner only; live editors
+/// reconcile automatically from the reset broadcast.
+KICOMMON_API std::optional<nlohmann::json> RestoreCheckpoint( const wxString& aServerUrl,
+                                                              const wxString& aToken,
+                                                              const wxString& aProjectId,
+                                                              const wxString& aName );
+
 /// GET /api/docs/{id}/comments -> { comments: [...] }
 KICOMMON_API std::optional<nlohmann::json> ListComments( const wxString& aServerUrl,
                                                          const wxString& aToken,
