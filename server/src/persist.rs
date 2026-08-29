@@ -650,6 +650,38 @@ pub async fn latest_snapshot_seq(pool: &PgPool, doc_id: Uuid) -> DbResult<i64> {
     Ok(row.get("seq"))
 }
 
+/// Upsert the latest client-rendered preview for one (doc, variant).
+pub async fn upsert_preview(
+    pool: &PgPool,
+    doc_id: Uuid,
+    fit: bool,
+    seq: i64,
+    svg: &[u8],
+) -> DbResult<()> {
+    sqlx::query(
+        "INSERT INTO doc_previews (doc_id, fit, seq, svg) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (doc_id, fit) DO UPDATE
+           SET seq = EXCLUDED.seq, svg = EXCLUDED.svg, created_at = now()
+         WHERE doc_previews.seq <= EXCLUDED.seq",
+    )
+    .bind(doc_id)
+    .bind(fit)
+    .bind(seq)
+    .bind(svg)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_preview(pool: &PgPool, doc_id: Uuid, fit: bool) -> DbResult<Option<(i64, Vec<u8>)>> {
+    let row = sqlx::query("SELECT seq, svg FROM doc_previews WHERE doc_id = $1 AND fit = $2")
+        .bind(doc_id)
+        .bind(fit)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| (r.get("seq"), r.get("svg"))))
+}
+
 pub async fn head_seq(pool: &PgPool, doc_id: Uuid) -> DbResult<i64> {
     let row = sqlx::query(
         "SELECT GREATEST(

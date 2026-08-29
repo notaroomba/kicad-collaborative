@@ -190,6 +190,9 @@ private:
     ///< project-local library, so the reference resolves here too.
     void saveMissingLibraries( const nlohmann::json& aChanges );
 
+    ///< Render the board to an SVG string with KiCad's plotter (UI thread).
+    std::string plotPreviewSvg( bool aFitPageToBoard );
+
 private:
     PCB_EDIT_FRAME* m_frame;
     wxString        m_docId;          ///< the board's server doc id
