@@ -179,6 +179,7 @@ pub async fn list_projects(
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub public: Option<bool>,
+    pub description: Option<String>,
 }
 
 pub async fn update_project(
@@ -195,10 +196,14 @@ pub async fn update_project(
     if name == Some("") {
         return Err(AppError::BadRequest("name must not be blank".into()));
     }
-    if name.is_none() && req.public.is_none() {
+    let description = req.description.as_deref().map(str::trim);
+    if description.is_some_and(|d| d.len() > 2000) {
+        return Err(AppError::BadRequest("description too long (2000 chars max)".into()));
+    }
+    if name.is_none() && req.public.is_none() && description.is_none() {
         return Err(AppError::BadRequest("nothing to update".into()));
     }
-    persist::update_project(&state.pool, id, name, req.public).await?;
+    persist::update_project(&state.pool, id, name, req.public, description).await?;
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -207,11 +212,50 @@ pub async fn gallery(State(state): State<AppState>) -> AppResult<Response> {
     let projects: Vec<_> = persist::list_public_projects(&state.pool, 100)
         .await?
         .into_iter()
-        .map(|(p, owner_login)| {
-            json!({ "projectId": p.id, "name": p.name, "ownerLogin": owner_login })
+        .map(|e| {
+            json!({ "projectId": e.id, "name": e.name, "description": e.description,
+                    "ownerLogin": e.owner_login, "docCount": e.doc_count,
+                    "updatedAt": e.updated_at.to_rfc3339() })
         })
         .collect();
     Ok(Json(json!({ "projects": projects })).into_response())
+}
+
+/// Copy a visible project into the caller's account: a private copy of every
+/// document at its latest checkpointed snapshot.  Live ops past the newest
+/// snapshot are not included — the server has no document model to apply
+/// them; the actor's snapshot-freshness requests keep that gap small.
+pub async fn clone_project(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+
+    if !project.public {
+        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::NotFound)?;
+    }
+
+    let name = format!("{} (copy)", project.name);
+    let clone = persist::create_project(&state.pool, user.id, &name).await?;
+
+    if !project.description.is_empty() {
+        persist::update_project(&state.pool, clone.id, None, None, Some(&project.description))
+            .await?;
+    }
+
+    for doc in persist::project_documents(&state.pool, id).await? {
+        let new_doc =
+            persist::create_document(&state.pool, clone.id, &doc.path, &doc.doc_type).await?;
+        if let Some((_, content)) = persist::latest_snapshot(&state.pool, doc.id).await? {
+            persist::insert_snapshot(&state.pool, new_doc.id, 0, &content, Some("cloned"),
+                                     Some(user.id))
+                .await?;
+        }
+    }
+
+    Ok(Json(json!({ "projectId": clone.id, "name": name })).into_response())
 }
 
 /// Render (and cache) an SVG preview of a project's board via kicad-cli.
@@ -359,16 +403,21 @@ pub async fn board_items(
             .and_then(|p| block[p + 7..].split('"').next())
             .unwrap_or("")
             .to_string();
-        // The first "(at x y [rot])" in the block is the footprint's own: the
-        // header fields precede all children in the sexpr output.
-        let at = block.find("(at ").and_then(|p| {
-            let rest = &block[p + 4..];
+        // Two position forms exist in the wild: newer generators write
+        // "(transform (translate x y) ...)", older ones "(at x y [rot])".
+        // For the legacy form the first "(at" in the block is the
+        // footprint's own — header fields precede all children.
+        let parse_pair = |rest: &str| -> Option<(f64, f64)> {
             let close = rest.find(')')?;
             let mut nums = rest[..close].split_whitespace();
             let x: f64 = nums.next()?.parse().ok()?;
             let y: f64 = nums.next()?.parse().ok()?;
             Some((x, y))
-        });
+        };
+        let at = block
+            .find("(translate ")
+            .and_then(|p| parse_pair(&block[p + 11..]))
+            .or_else(|| block.find("(at ").and_then(|p| parse_pair(&block[p + 4..])));
 
         if let (false, Some((x_mm, y_mm))) = (uuid.is_empty(), at) {
             items.push(json!({

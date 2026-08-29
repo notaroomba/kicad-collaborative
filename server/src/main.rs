@@ -130,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/gallery", get(http::gallery))
         .route("/api/projects/{id}/preview.svg", get(http::preview_svg))
         .route("/api/projects/{id}/board-items", get(http::board_items))
+        .route("/api/projects/{id}/clone", post(http::clone_project))
         .route("/gallery", get(pages::gallery_page))
         .route("/p/{id}", get(pages::project_page))
         .route("/p/{id}/live", get(pages::live_page))

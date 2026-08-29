@@ -118,24 +118,31 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
     } else {
         projects
             .iter()
-            .map(|(p, owner)| {
+            .map(|e| {
                 let img = if previews {
                     format!(
                         r#"<a href="/p/{id}"><img loading="lazy" alt="Board preview of {name}"
                              src="/api/projects/{id}/preview.svg"></a>"#,
-                        id = p.id,
-                        name = esc(&p.name)
+                        id = e.id,
+                        name = esc(&e.name)
                     )
                 } else {
                     String::new()
                 };
+                let blurb = if e.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#"<p class="blurb">{}</p>"#, esc(&e.description))
+                };
                 format!(
                     r#"<div class="tile">{img}
   <div class="tmeta"><a href="/p/{id}"><b>{name}</b></a>
-  <span class="muted">by {owner}</span></div></div>"#,
-                    id = p.id,
-                    name = esc(&p.name),
-                    owner = esc(owner),
+  <span class="muted">by {owner}</span>{blurb}
+  <span class="muted small">updated {updated}</span></div></div>"#,
+                    id = e.id,
+                    name = esc(&e.name),
+                    owner = esc(&e.owner_login),
+                    updated = e.updated_at.format("%Y-%m-%d"),
                 )
             })
             .collect()
@@ -153,6 +160,8 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
                background: #f4f1e6; padding: 8px; box-sizing: border-box; }}
   .tmeta {{ padding: 10px 14px; }}
   .tmeta a {{ color: inherit; text-decoration: none; }}
+  .tmeta .blurb {{ margin: 6px 0 4px; font-size: .9rem; opacity: .85; }}
+  .tmeta .small {{ font-size: .8rem; display: block; margin-top: 2px; }}
 </style></head><body>
 <h1>Gallery</h1>
 <p class="muted">Public projects shared by the community. Everything else on this server stays private.</p>
@@ -180,6 +189,8 @@ pub async fn project_page(
 
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let owner_login = owner.map(|o| o.login).unwrap_or_else(|| "unknown".into());
+    let is_owner = viewer.as_ref().is_some_and(|u| u.id == project.owner_id);
+    let signed_in = viewer.is_some();
     let docs = persist::project_documents(&state.pool, id).await?;
 
     let doc_rows: String = docs
@@ -200,20 +211,82 @@ pub async fn project_page(
         String::new()
     };
 
+    let description_html = if is_owner {
+        format!(
+            r#"<div id="descBox">
+  <p id="descText" class="desc">{d}</p>
+  <p><button class="btn secondary" id="descEdit">Edit description</button></p>
+  <form id="descForm" style="display:none">
+    <textarea id="descInput" rows="3" maxlength="2000"
+      placeholder="What is this project?">{d}</textarea>
+    <p><button class="btn" type="submit">Save</button>
+       <button class="btn secondary" type="button" id="descCancel">Cancel</button></p>
+  </form>
+</div>
+<script>
+const box = document.getElementById("descBox");
+const form = document.getElementById("descForm");
+document.getElementById("descEdit").onclick = () => {{
+  document.getElementById("descText").style.display = "none";
+  document.getElementById("descEdit").style.display = "none";
+  form.style.display = "block";
+}};
+document.getElementById("descCancel").onclick = () => location.reload();
+form.onsubmit = async (ev) => {{
+  ev.preventDefault();
+  const r = await fetch("/api/projects/{id}", {{ method: "PATCH",
+    headers: {{ "content-type": "application/json" }},
+    body: JSON.stringify({{ description: document.getElementById("descInput").value }}) }});
+  if (r.ok) location.reload(); else alert("Save failed: " + (await r.text()));
+}};
+</script>"#,
+            d = esc(&project.description),
+            id = id,
+        )
+    } else if project.description.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<p class="desc">{}</p>"#, esc(&project.description))
+    };
+
+    let clone_html = if signed_in {
+        format!(
+            r#"<p><button class="btn secondary" id="cloneBtn">Clone to my account</button></p>
+<script>
+document.getElementById("cloneBtn").onclick = async () => {{
+  const r = await fetch("/api/projects/{id}/clone", {{ method: "POST" }});
+  if (!r.ok) {{ alert("Clone failed: " + (await r.text())); return; }}
+  const j = await r.json();
+  location.href = "/p/" + j.projectId;
+}};
+</script>"#
+        )
+    } else {
+        String::new()
+    };
+
     Ok(Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} — KiCad Collaborative</title>{STYLE}<style>body {{ max-width: 860px; }}</style></head><body>
+<title>{name} — KiCad Collaborative</title>{STYLE}<style>
+  body {{ max-width: 860px; }}
+  .desc {{ white-space: pre-wrap; }}
+  #descForm textarea {{ width: 100%; box-sizing: border-box; }}
+</style></head><body>
 <p><a href="/gallery" class="muted">&larr; Gallery</a></p>
 <div class="card">
   <h1>{name}</h1>
   <p class="muted">by <b>{owner}</b>{vis}</p>
+  {description}
   {preview}
   <ul>{doc_rows}</ul>
+  {clone}
   <p class="muted">To edit, join from KiCad: <b>File &rarr; Online Projects…</b></p>
 </div></body></html>"#,
         name = esc(&project.name),
         owner = esc(&owner_login),
         vis = if project.public { " &middot; public" } else { " &middot; private" },
+        description = description_html,
+        clone = clone_html,
     ))
     .into_response())
 }

@@ -20,6 +20,7 @@ pub struct Project {
     pub owner_id: i64,
     pub name: String,
     pub public: bool,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -176,44 +177,53 @@ pub async fn update_project(
     id: Uuid,
     name: Option<&str>,
     public: Option<bool>,
+    description: Option<&str>,
 ) -> DbResult<bool> {
     let res = sqlx::query(
-        "UPDATE projects SET name = COALESCE($2, name), public = COALESCE($3, public)
+        "UPDATE projects SET name = COALESCE($2, name), public = COALESCE($3, public),
+                             description = COALESCE($4, description)
          WHERE id = $1",
     )
     .bind(id)
     .bind(name)
     .bind(public)
+    .bind(description)
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
 }
 
-/// Gallery: every public project, most recently created first.
-pub async fn list_public_projects(pool: &PgPool, limit: i64) -> DbResult<Vec<(Project, String)>> {
-    let rows = sqlx::query(
-        "SELECT p.id, p.owner_id, p.name, p.public, u.login
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GalleryEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub owner_login: String,
+    pub doc_count: i64,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Gallery: every public project, most recently edited first.  "Edited" is
+/// the newest op or snapshot in any of its docs, like the user listing.
+pub async fn list_public_projects(pool: &PgPool, limit: i64) -> DbResult<Vec<GalleryEntry>> {
+    sqlx::query_as::<_, GalleryEntry>(
+        "SELECT p.id, p.name, p.description, u.login AS owner_login,
+                (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count,
+                GREATEST(
+                    p.created_at,
+                    COALESCE((SELECT MAX(o.created_at) FROM ops o
+                              JOIN documents d ON d.id = o.doc_id
+                              WHERE d.project_id = p.id), p.created_at),
+                    COALESCE((SELECT MAX(s.created_at) FROM snapshots s
+                              JOIN documents d ON d.id = s.doc_id
+                              WHERE d.project_id = p.id), p.created_at)
+                ) AS updated_at
          FROM projects p JOIN users u ON u.id = p.owner_id
-         WHERE p.public ORDER BY p.created_at DESC LIMIT $1",
+         WHERE p.public ORDER BY updated_at DESC LIMIT $1",
     )
     .bind(limit)
     .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            (
-                Project {
-                    id: r.get("id"),
-                    owner_id: r.get("owner_id"),
-                    name: r.get("name"),
-                    public: r.get("public"),
-                },
-                r.get("login"),
-            )
-        })
-        .collect())
+    .await
 }
 
 /// Documents, ops, snapshots, permissions and share links all cascade.
@@ -309,7 +319,7 @@ pub async fn delete_pending_invite(pool: &PgPool, project_id: Uuid, perm_id: i64
 
 pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResult<Project> {
     sqlx::query_as::<_, Project>(
-        "INSERT INTO projects (owner_id, name) VALUES ($1, $2) RETURNING id, owner_id, name, public",
+        "INSERT INTO projects (owner_id, name) VALUES ($1, $2)\n         RETURNING id, owner_id, name, public, description",
     )
     .bind(owner_id)
     .bind(name)
@@ -318,7 +328,9 @@ pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResul
 }
 
 pub async fn get_project(pool: &PgPool, id: Uuid) -> DbResult<Option<Project>> {
-    sqlx::query_as::<_, Project>("SELECT id, owner_id, name, public FROM projects WHERE id = $1")
+    sqlx::query_as::<_, Project>(
+        "SELECT id, owner_id, name, public, description FROM projects WHERE id = $1",
+    )
         .bind(id)
         .fetch_optional(pool)
         .await

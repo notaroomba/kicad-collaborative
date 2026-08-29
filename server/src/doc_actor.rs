@@ -14,6 +14,20 @@ const REAP_AFTER: Duration = Duration::from_secs(60);
 const SNAPSHOT_LAG_OPS: i64 = 500;
 const SNAPSHOT_REQUEST_COOLDOWN: Duration = Duration::from_secs(60);
 
+/// With any un-snapshotted ops at all, ask for a fresh snapshot this often —
+/// it is what keeps gallery previews and clones close to the live document.
+/// Overridable for tests.
+fn snapshot_fresh_interval() -> Duration {
+    static INTERVAL: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *INTERVAL.get_or_init(|| {
+        std::env::var("SNAPSHOT_FRESH_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::from_secs(300))
+    })
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PeerInfo {
     #[serde(rename = "clientId")]
@@ -91,6 +105,7 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
     let mut presence_dirty: HashMap<String, Option<Value>> = HashMap::new();
     let mut empty_since = Some(Instant::now());
     let mut last_snapshot_request = Instant::now() - SNAPSHOT_REQUEST_COOLDOWN;
+    let mut last_snapshot_check = Instant::now();
     let mut flush = tokio::time::interval(PRESENCE_FLUSH);
     flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -213,6 +228,13 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                 }
             }
             _ = flush.tick() => {
+                if last_snapshot_check.elapsed() >= Duration::from_secs(60)
+                    .min(snapshot_fresh_interval())
+                {
+                    last_snapshot_check = Instant::now();
+                    maybe_request_snapshot(&pool, doc_id, head_seq, &clients,
+                                           &mut last_snapshot_request).await;
+                }
                 // Evict stale presence (client stopped refreshing but is still connected).
                 let now = Instant::now();
                 for (id, c) in clients.iter_mut() {
@@ -498,11 +520,18 @@ async fn maybe_request_snapshot(
     clients: &HashMap<String, ClientState>,
     last_request: &mut Instant,
 ) {
-    if last_request.elapsed() < SNAPSHOT_REQUEST_COOLDOWN {
+    if last_request.elapsed() < SNAPSHOT_REQUEST_COOLDOWN.min(snapshot_fresh_interval()) {
         return;
     }
     let snap_seq = persist::latest_snapshot_seq(pool, doc_id).await.unwrap_or(0);
-    if head_seq - snap_seq <= SNAPSHOT_LAG_OPS {
+    let lag = head_seq - snap_seq;
+    if lag <= 0 {
+        return;
+    }
+    // A big lag is a catch-up problem (join cost) and snapshots on the short
+    // cooldown; a small one is only a freshness problem and waits the longer
+    // interval.
+    if lag <= SNAPSHOT_LAG_OPS && last_request.elapsed() < snapshot_fresh_interval() {
         return;
     }
     // Pick one editor deterministically (lowest clientId).

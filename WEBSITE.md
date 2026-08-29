@@ -46,9 +46,20 @@ format is plain JSON).
   ClientMsg/ServerMsg/ItemChangeWire serde types, consumed by the server's
   WebSocket handler, unit-tested against the documented wire shapes, and
   verified to compile standalone for `wasm32-unknown-unknown`.
-- [ ] **W5 — Gallery polish.** Project descriptions, owner attribution,
-  updated-at, preview freshness (re-render when snapshot seq advances), and a
-  "clone to my account" button (server-side copy).
+- [x] **W5 — Gallery polish.** Project descriptions (`projects.description`,
+  PATCH-able by the owner, inline edit form on the project page), gallery
+  cards with blurb / owner / updated-at (newest-edit ordering), preview
+  freshness (doc actors now request a snapshot whenever any ops are
+  un-snapshotted — every 5 min, `SNAPSHOT_FRESH_SECS` overrides for tests —
+  instead of only past a 500-op lag, so previews and clones track the live
+  document), and `POST /api/projects/{id}/clone`: a private copy of every doc
+  at its latest snapshot, with a "Clone to my account" button on the project
+  page.  Verified e2e: description edit round-trips through the real form;
+  a fresh snapshot landed automatically (seq 0 → 42) and re-rendered the
+  preview; bob's clone contains all 5 docs at the fresh snapshot.  Found in
+  passing: the new-generator snapshot format positions footprints with
+  `(transform (translate …))` while older files use `(at …)` — the
+  board-items scraper now handles both.
 - [x] **W6 — Web editing spike.** Move a footprint from the browser: the live
   page now hit-tests against `GET /api/projects/{id}/board-items` (footprint
   uuid + position scraped from the latest board snapshot), lets an editor-role
