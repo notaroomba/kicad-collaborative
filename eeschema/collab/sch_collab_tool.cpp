@@ -287,8 +287,11 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 
     beginSession( *project, aToken, wxEmptyString );
 
-    wxMessageBox( wxString::Format( _( "Share link copied to the clipboard:\n%s" ), url ),
-                  _( "Collaboration Session" ), wxOK | wxICON_INFORMATION, m_frame );
+    // An infobar, not a modal: a message box here wedges scripted flows, and
+    // File > Copy Share Link can re-mint the link at any time.
+    m_frame->ShowInfoBarMsg(
+            wxString::Format( _( "Session started — share link copied to the clipboard: %s" ),
+                              url ) );
 }
 
 

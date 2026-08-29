@@ -271,3 +271,13 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
 - [x] Gallery/project pages emit preview images unconditionally (hidden
   client-side if missing) — they were gated on server-side KICAD_CLI, which
   production intentionally lacks.
+- [x] **Preview colors + share-modal + compression (loop 17).**  The
+  monochrome previews were a stale-binary artifact — plots now carry the
+  editor's own color theme (verified: F.Cu #C83434 / B.Cu #4D7FC4 / silk
+  #F2EDA1, live in the production gallery's SVG).  Start Session's blocking
+  share-link message box became an infobar (the link is on the clipboard and
+  File > Copy Share Link re-mints it).  The server gained gzip/brotli
+  compression (previews 373 KB -> 87 KB; pages too) after chasing an
+  11-second image load that turned out to be the embedded test browser's own
+  throttled proxy — real clients fetch the compressed SVG in ~0.13 s from
+  the production edge.  Production redeployed and verified.
