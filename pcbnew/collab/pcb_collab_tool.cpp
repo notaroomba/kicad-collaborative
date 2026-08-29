@@ -565,6 +565,10 @@ int PCB_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
             [this]( long long aRootId, bool aResolved )
             {
                 resolveComment( aRootId, aResolved );
+            },
+            [this]( const VECTOR2I& aPos )
+            {
+                frame<PCB_EDIT_FRAME>()->FocusOnLocation( aPos );
             } );
 
     m_commentsDlg->Bind( wxEVT_CLOSE_WINDOW,

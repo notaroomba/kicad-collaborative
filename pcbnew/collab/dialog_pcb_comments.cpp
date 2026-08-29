@@ -39,13 +39,15 @@ long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aD
 DIALOG_PCB_COMMENTS::DIALOG_PCB_COMMENTS(
         wxWindow* aParent, const nlohmann::json* aComments, const VECTOR2I& aNewAnchor,
         std::function<void( const wxString&, long long )> aPost,
-        std::function<void( long long, bool )> aResolve ) :
+        std::function<void( long long, bool )> aResolve,
+        std::function<void( const VECTOR2I& )> aFocus ) :
         wxDialog( aParent, wxID_ANY, _( "Comments" ), wxDefaultPosition, wxSize( 640, 460 ),
                   wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER ),
         m_comments( aComments ),
         m_newAnchor( aNewAnchor ),
         m_post( std::move( aPost ) ),
-        m_resolve( std::move( aResolve ) )
+        m_resolve( std::move( aResolve ) ),
+        m_focus( std::move( aFocus ) )
 {
     wxBoxSizer* top = new wxBoxSizer( wxVERTICAL );
 
@@ -69,8 +71,10 @@ DIALOG_PCB_COMMENTS::DIALOG_PCB_COMMENTS(
     m_replyBtn = new wxButton( this, wxID_ANY, _( "Reply" ) );
     m_resolveBtn = new wxButton( this, wxID_ANY, _( "Resolve" ) );
     m_newBtn = new wxButton( this, wxID_ANY, _( "New Comment at Crosshair" ) );
+    m_showBtn = new wxButton( this, wxID_ANY, _( "Show on Board" ) );
     buttons->Add( m_replyBtn, 0, wxRIGHT, 5 );
     buttons->Add( m_resolveBtn, 0, wxRIGHT, 5 );
+    buttons->Add( m_showBtn, 0, wxRIGHT, 5 );
     buttons->Add( m_newBtn, 0, wxRIGHT, 5 );
     buttons->AddStretchSpacer();
     buttons->Add( new wxButton( this, wxID_CANCEL, _( "Close" ) ), 0 );
@@ -111,6 +115,25 @@ DIALOG_PCB_COMMENTS::DIALOG_PCB_COMMENTS(
                                 }
                             }
                         } );
+
+    m_showBtn->Bind( wxEVT_BUTTON,
+                     [this]( wxCommandEvent& )
+                     {
+                         long long root = selectedRootId();
+
+                         if( root < 0 )
+                             return;
+
+                         for( const nlohmann::json& c : *m_comments )
+                         {
+                             if( jsonNumber( c, "id", -1 ) == root )
+                             {
+                                 m_focus( VECTOR2I( jsonNumber( c, "x", 0 ),
+                                                    jsonNumber( c, "y", 0 ) ) );
+                                 break;
+                             }
+                         }
+                     } );
 
     m_newBtn->Bind( wxEVT_BUTTON,
                     [this]( wxCommandEvent& )
@@ -188,6 +211,7 @@ void DIALOG_PCB_COMMENTS::onSelectionChanged()
     m_thread->Clear();
     m_replyBtn->Enable( root >= 0 );
     m_resolveBtn->Enable( root >= 0 );
+    m_showBtn->Enable( root >= 0 );
 
     if( root < 0 )
         return;

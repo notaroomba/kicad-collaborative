@@ -230,3 +230,8 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   displayed sheet) — verified live: a schematic-doc comment loaded on join
   and a resolve broadcast reached the running editor.  Pin click-to-open
   in the canvas remains the polish item on top.
+- [x] Generators (tuning patterns) round-trip through the group transfer —
+  QA-covered (`GeneratorRoundTrips`): sexpr + membership apply, type
+  preserved, removal releases the member cleanly.
+- [x] Comments dialog: "Show on Board" centers the canvas on the selected
+  thread's pin (FocusOnLocation).
