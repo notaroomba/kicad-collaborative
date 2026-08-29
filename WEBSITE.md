@@ -340,3 +340,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   live editors: hide -> ratsnest -> unhide cycled cleanly, no crashes.
   Next Figma-parity candidates from the deep dive: click-a-peer to follow
   their viewport, track-drag ghosts beyond the router, and live text edits.
+- [x] **Follow a peer's viewport (loop 22).**  The Figma follow gesture in
+  pcbnew: click a collaborator's cursor on canvas to follow their viewport
+  (same hit-test family as comment pins), or use File > Follow Next Peer to
+  cycle; any manual pan/zoom — or the peer leaving — breaks the follow with
+  an infobar.  Verified live: a synthetic peer parked at a distinctive
+  viewport, the cycle action reached it, and alice's own outgoing presence
+  showed her viewport snapped to the target region (aspect-corrected).
+  eeschema parity is queued.

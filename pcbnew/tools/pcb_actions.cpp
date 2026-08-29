@@ -3206,6 +3206,13 @@ TOOL_ACTION PCB_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Copy Share Link" ) )
         .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::collabFollow( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.follow" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Follow Next Peer" ) )
+        .Tooltip( _( "Follow a collaborator's viewport (also: click their cursor); pan or zoom "
+                     "to stop" ) ) );
+
 
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()
 {
