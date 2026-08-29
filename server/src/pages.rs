@@ -407,6 +407,7 @@ stage.addEventListener("wheel", (ev) => {{
 }}, {{ passive: false }});
 
 let followPeer = null;   // clientId being followed
+let peerState = {{}};     // cumulative presence: clientId -> {{user, state}}
 
 let stageW = 0;   // last known laid-out width (a hidden tab reads 0)
 
@@ -510,8 +511,24 @@ function connect() {{
   ws.onmessage = (ev) => {{
     const msg = JSON.parse(ev.data);
     if (msg.type === "hello_ok") {{ retries = 0; ws.send(JSON.stringify({{ type: "join_doc", docId: DOC_ID }})); }}
-    if (msg.type === "doc_info") setStatus(`&middot; ${{(msg.peers || []).length}} peer(s) here`);
-    if (msg.type === "presence") {{ drawPeers(msg.peers || {{}}); applyFollowWeb(msg.peers || {{}}); }}
+    if (msg.type === "doc_info") {{
+      peerState = {{}};
+      setStatus(`&middot; ${{(msg.peers || []).length}} peer(s) here`);
+    }}
+    if (msg.type === "presence") {{
+      // Presence is a DELTA: only changed peers arrive, null means gone.
+      for (const [cid, entry] of Object.entries(msg.peers || {{}})) {{
+        if (entry === null) delete peerState[cid];
+        else peerState[cid] = entry;
+      }}
+      drawPeers(peerState);
+      applyFollowWeb(peerState);
+    }}
+    if (msg.type === "peer_left" && msg.clientId) {{
+      delete peerState[msg.clientId];
+      drawPeers(peerState);
+      applyFollowWeb(peerState);
+    }}
     if (msg.type === "error" && msg.code === "permission_denied") {{
       viewOnly = true;
       drag = null; selected = null;

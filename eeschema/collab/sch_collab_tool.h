@@ -162,6 +162,15 @@ private:
     ///< pan/zoom.
     void applyFollow();
 
+    ///< The root comment whose pin covers aPos on the displayed sheet, or -1.
+    long long pinAt( const VECTOR2I& aPos ) const;
+
+    ///< The clientId of the peer whose cursor is near aPos, or empty.
+    wxString peerCursorAt( const VECTOR2I& aPos ) const;
+
+    ///< Open the comments dialog focused on aRootId's thread.
+    void openThread( long long aRootId );
+
     ///< The open comments dialog, if any (modeless; views the displayed doc).
     class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 
