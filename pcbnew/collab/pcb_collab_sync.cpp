@@ -31,6 +31,7 @@
 #include <diff_merge/kicad_diff_types.h>
 #include <diff_merge/property_diff.h>
 #include <footprint.h>
+#include <pcb_group.h>
 #include <ki_exception.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -69,12 +70,13 @@ bool typeSyncs( const BOARD_ITEM* aItem )
 }
 
 
-/// Types whose ADDED / whole-item-replace ops are deferred: a lone PCB_GROUP or
-/// PCB_GENERATOR fragment cannot resolve its member UUIDs.
+/// Groups and generators transfer too: their sexpr carries the item's own
+/// properties, and membership travels beside it as a "groupMembers" uuid list
+/// resolved against the receiving board (a lone fragment's member uuids cannot
+/// resolve on the parse board).
 bool typeSupportsSexprTransfer( const BOARD_ITEM* aItem )
 {
-    return typeSyncs( aItem ) && aItem->Type() != PCB_GROUP_T
-           && aItem->Type() != PCB_GENERATOR_T;
+    return typeSyncs( aItem );
 }
 
 
@@ -154,6 +156,11 @@ BOARD_ITEM* parseItemSexpr( const std::string& aSexpr, const KIID& aExpectedId )
     std::unique_ptr<BOARD> temp( static_cast<BOARD*>( parsed ) );
 
     BOARD_ITEM* found = temp->ResolveItem( aExpectedId, true );
+
+    // A parsed group's resolved members (nested fragments) point into the
+    // temp board; membership is rebuilt from the wire's uuid list instead.
+    if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( found ) )
+        group->RemoveAll();
 
     if( !found || found->GetParent() != temp.get() )
     {
@@ -311,6 +318,12 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
             if( !item )
                 return true;    // already gone: delete beats concurrent modify (LWW)
 
+            // A removed group must release its members first: their back-
+            // pointers would dangle at the deleted group otherwise (IsLocked
+            // walks them, and crashed on exactly that).
+            if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( item ) )
+                group->RemoveAll();
+
             if( aCommit )
             {
                 aCommit->Remove( item );
@@ -345,11 +358,18 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
             if( ZONE* zone = dynamic_cast<ZONE*>( fresh ) )
                 zone->SetNeedRefill( true );
 
+            BOARD_ITEM* live = nullptr;
+
             if( item )
             {
                 // Upsert-replace: highest seq wins wholesale.
                 if( aCommit )
                     aCommit->Modify( item );
+
+                // Old members' back-pointers must be cleared before the swap
+                // hands the live item the parsed (empty) member list.
+                if( PCB_GROUP* liveGroup = dynamic_cast<PCB_GROUP*>( item ) )
+                    liveGroup->RemoveAll();
 
                 // A footprint or table swap moves the child objects (pads, fields,
                 // cells) into `fresh`, which is deleted below; evict the old
@@ -389,6 +409,7 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                     aView->Add( item );
 
                 delete fresh;
+                live = item;
             }
             else if( kind == "ADDED" )
             {
@@ -401,11 +422,42 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                     aCommit->Add( fresh );
                 else
                     aBoard->Add( fresh );
+
+                live = fresh;
             }
             else
             {
                 // Replace of an item deleted in the meantime: delete beats modify.
                 delete fresh;
+            }
+
+            // Group membership travels by uuid and resolves against this
+            // board; members not (yet) present are skipped, and a later
+            // replace re-asserts them (LWW).
+            if( live && aChange.contains( "groupMembers" ) )
+            {
+                if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( live ) )
+                {
+                    group->RemoveAll();
+
+                    for( const nlohmann::json& memberId :
+                         aChange.value( "groupMembers", nlohmann::json::array() ) )
+                    {
+                        if( !memberId.is_string() )
+                            continue;
+
+                        BOARD_ITEM* member = aBoard->ResolveItem(
+                                KIID( wxString::FromUTF8(
+                                        memberId.get<std::string>() ) ),
+                                true );
+
+                        if( member && member != group
+                            && ( !member->GetParent() || member->GetParent() == aBoard ) )
+                        {
+                            group->AddItem( member );
+                        }
+                    }
+                }
             }
 
             return true;
@@ -668,6 +720,18 @@ void PCB_COLLAB_SYNC::captureItem( BOARD_ITEM* aItem, BOARD_ITEM* aBefore, int a
     if( !sexpr.empty() )
         wire[ "sexpr" ] = sexpr;
 
+    // Membership travels by uuid: the sexpr's member ids are board-local
+    // pointers on the receiving side and resolve there instead.
+    if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( aItem ) )
+    {
+        nlohmann::json members = nlohmann::json::array();
+
+        for( EDA_ITEM* member : group->GetItems() )
+            members.push_back( member->m_Uuid.AsStdString() );
+
+        wire[ "groupMembers" ] = std::move( members );
+    }
+
     if( !m_batch.is_array() )
         m_batch = nlohmann::json::array();
 
@@ -916,6 +980,16 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
         change[ "typeName" ] = aItem->GetClass().ToStdString( wxConvUTF8 );
         change[ "sexpr" ] = std::move( aSexpr );
 
+        if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( aItem ) )
+        {
+            nlohmann::json members = nlohmann::json::array();
+
+            for( EDA_ITEM* member : group->GetItems() )
+                members.push_back( member->m_Uuid.AsStdString() );
+
+            change[ "groupMembers" ] = std::move( members );
+        }
+
         if( BOARD_CONNECTED_ITEM* conn = dynamic_cast<BOARD_CONNECTED_ITEM*>( aItem ) )
             change[ "netName" ] = conn->GetNetname().ToStdString( wxConvUTF8 );
 
@@ -1065,6 +1139,16 @@ void PCB_COLLAB_SYNC::rollbackFromSnapshot( const std::string& aFileText )
             change[ "kind" ] = "ADDED";     // upsert: replace with server state
             change[ "typeName" ] = item->GetClass().ToStdString( wxConvUTF8 );
             change[ "sexpr" ] = std::move( sexpr );
+
+            if( PCB_GROUP* group = dynamic_cast<PCB_GROUP*>( item ) )
+            {
+                nlohmann::json members = nlohmann::json::array();
+
+                for( EDA_ITEM* member : group->GetItems() )
+                    members.push_back( member->m_Uuid.AsStdString() );
+
+                change[ "groupMembers" ] = std::move( members );
+            }
 
             if( BOARD_CONNECTED_ITEM* conn = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
                 change[ "netName" ] = conn->GetNetname().ToStdString( wxConvUTF8 );
@@ -1368,8 +1452,16 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
             reAddedIds.insert( change.value( "id", "" ) );
     }
 
+    // Two passes: a group change resolves member uuids against the board, so
+    // members added in the same batch must land first.
+    for( int pass : { 0, 1 } )
     for( const nlohmann::json& change : aOp.changes )
     {
+        bool isGroup = change.is_object() && change.contains( "groupMembers" );
+
+        if( ( pass == 1 ) != isGroup )
+            continue;
+
         if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
             && reAddedIds.count( change.value( "id", "" ) ) )
         {
@@ -1418,8 +1510,14 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
                 ownReAdded.insert( change.value( "id", "" ) );
         }
 
+        for( int pass : { 0, 1 } )
         for( const nlohmann::json& change : aOwnChanges )
         {
+            bool isGroup = change.is_object() && change.contains( "groupMembers" );
+
+            if( ( pass == 1 ) != isGroup )
+                continue;
+
             if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
                 && ownReAdded.count( change.value( "id", "" ) ) )
             {
