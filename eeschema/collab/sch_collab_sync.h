@@ -25,6 +25,7 @@
 #include <string>
 
 #include <collab/collab_journal.h>
+#include <kiid.h>
 #include <nlohmann/json.hpp>
 #include <wx/event.h>
 #include <wx/string.h>
@@ -131,6 +132,14 @@ public:
      */
     void OnOpRejected( const wxString& aClientOpId );
 
+private:
+    ///< Replace the items named by rejected ops with their state in the
+    ///< server's resync snapshot (or remove them if the server has no such
+    ///< item), undoing our optimistic local application.
+    void rollbackFromSnapshot( const wxString& aDocId, const std::string& aFileText );
+
+public:
+
     /**
      * Attach the on-disk op journal for a project and re-stage anything left
      * unacknowledged by a previous run (a crash, or edits made while offline).
@@ -204,6 +213,10 @@ private:
     ///< them, so a concurrent remote op with a lower seq cannot clobber our newer
     ///< edit (LWW).
     std::map<wxString, std::map<long long, nlohmann::json>> m_ownRecent;
+
+    ///< docId -> items touched by server-rejected ops, awaiting rollback from
+    ///< the next resync snapshot.
+    std::map<wxString, std::set<KIID>> m_pendingRollback;
 
     COLLAB_JOURNAL              m_journal;
 
