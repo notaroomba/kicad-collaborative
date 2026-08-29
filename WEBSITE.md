@@ -368,3 +368,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   cursors now persist instead of flickering.  eeschema also gained pcbnew's
   canvas clicks: comment pins open their thread, and clicking a peer's
   cursor toggles follow.
+- [x] **Production web-editor e2e + status polish (loop 25).**  A real
+  pointer drag on the PRODUCTION live page (cookie-authed over wss through
+  the Railway edge) moved D4 on the production-connected desktop editor and
+  was restored — the full editor stack is verified in production, not just
+  locally.  Also: the editors' status bar now shows the collaborator count
+  ("Collaboration: live · N collaborator(s)", refreshed when peers
+  join/leave), and the web follow-stop message no longer mislabels a manual
+  stop as the peer leaving.

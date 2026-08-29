@@ -420,7 +420,7 @@ function knownStageW() {{
 function applyFollowWeb(peers) {{
   if (!followPeer) return;
   const entry = peers[followPeer];
-  if (!entry) {{ followPeer = null; setStatus("&middot; peer left"); return; }}
+  if (!entry) {{ followPeer = null; setStatus("&middot; stopped following (they left)"); return; }}
   const vp = (entry.state || {{}}).viewport;
   if (!vp || vp.length < 4 || vp[2] <= 0) return;
   const w = knownStageW();
