@@ -29,10 +29,19 @@ pub const PEER_COLORS: [&str; 8] = [
     "#e05d44", "#4477ee", "#22aa66", "#d4a017", "#9b59b6", "#e67e22", "#16a2b8", "#e83e8c",
 ];
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+) -> Response {
+    // Web viewers authenticate with the session cookie riding the upgrade
+    // request; native clients put a bearer token in the hello frame instead.
+    let cookie_token =
+        jar.get(crate::auth::COOKIE_NAME).map(|c| c.value().to_string()).unwrap_or_default();
+
     ws.max_message_size(MAX_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
-            if let Err(e) = handle_socket(socket, state).await {
+            if let Err(e) = handle_socket(socket, state, cookie_token).await {
                 tracing::debug!("ws connection ended: {e:#}");
             }
         })
@@ -113,7 +122,7 @@ async fn reject(out_tx: &mpsc::Sender<String>, writer: &tokio::task::JoinHandle<
     let _ = writer;
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState) -> anyhow::Result<()> {
+async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String) -> anyhow::Result<()> {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Outbound pump: everything (doc actors and this task) sends pre-serialized
@@ -169,6 +178,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) -> anyhow::Result<()>
         .await;
         anyhow::bail!("unsupported protocol {proto}");
     }
+    let token = if token.is_empty() { cookie_token } else { token };
+
     let Some(claims) = auth::verify_jwt(&state, &token) else {
         reject(&out_tx, &writer, json!({ "type": "error", "code": "auth_failed" })).await;
         anyhow::bail!("auth failed");

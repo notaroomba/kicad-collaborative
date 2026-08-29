@@ -19,6 +19,7 @@ pub struct Project {
     pub id: Uuid,
     pub owner_id: i64,
     pub name: String,
+    pub public: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -128,9 +129,185 @@ pub async fn fill_pending_grants(
     Ok(())
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ProjectListing {
+    pub id: Uuid,
+    pub name: String,
+    pub owner_id: i64,
+    pub owner_login: String,
+    pub role: String,
+    pub doc_count: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Every project the user owns or has a claimed grant on, most recently
+/// edited first. "Edited" is the newest op or snapshot in any of its docs.
+pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec<ProjectListing>> {
+    sqlx::query_as::<_, ProjectListing>(
+        "SELECT p.id, p.name, p.owner_id, u.login AS owner_login,
+                CASE WHEN p.owner_id = $1 THEN 'editor' ELSE perm.role END AS role,
+                (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count,
+                p.created_at,
+                GREATEST(
+                    p.created_at,
+                    COALESCE((SELECT MAX(o.created_at) FROM ops o
+                              JOIN documents d ON d.id = o.doc_id
+                              WHERE d.project_id = p.id), p.created_at),
+                    COALESCE((SELECT MAX(s.created_at) FROM snapshots s
+                              JOIN documents d ON d.id = s.doc_id
+                              WHERE d.project_id = p.id), p.created_at)
+                ) AS updated_at
+         FROM projects p
+         JOIN users u ON u.id = p.owner_id
+         LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
+         WHERE p.owner_id = $1 OR perm.user_id IS NOT NULL
+         ORDER BY updated_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn update_project(
+    pool: &PgPool,
+    id: Uuid,
+    name: Option<&str>,
+    public: Option<bool>,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        "UPDATE projects SET name = COALESCE($2, name), public = COALESCE($3, public)
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(public)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Gallery: every public project, most recently created first.
+pub async fn list_public_projects(pool: &PgPool, limit: i64) -> DbResult<Vec<(Project, String)>> {
+    let rows = sqlx::query(
+        "SELECT p.id, p.owner_id, p.name, p.public, u.login
+         FROM projects p JOIN users u ON u.id = p.owner_id
+         WHERE p.public ORDER BY p.created_at DESC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                Project {
+                    id: r.get("id"),
+                    owner_id: r.get("owner_id"),
+                    name: r.get("name"),
+                    public: r.get("public"),
+                },
+                r.get("login"),
+            )
+        })
+        .collect())
+}
+
+/// Documents, ops, snapshots, permissions and share links all cascade.
+pub async fn delete_project(pool: &PgPool, id: Uuid) -> DbResult<bool> {
+    let res = sqlx::query("DELETE FROM projects WHERE id = $1").bind(id).execute(pool).await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Prefix match on login or display name, for the share-dialog typeahead.
+pub async fn search_users(pool: &PgPool, query: &str, limit: i64) -> DbResult<Vec<User>> {
+    let escaped =
+        query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    sqlx::query_as::<_, User>(
+        "SELECT id, github_id, login, name, email, avatar_url FROM users
+         WHERE lower(login) LIKE lower($1) || '%'
+            OR lower(COALESCE(name, '')) LIKE lower($1) || '%'
+         ORDER BY lower(login) LIMIT $2",
+    )
+    .bind(escaped)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn find_user_by_login(pool: &PgPool, login: &str) -> DbResult<Option<User>> {
+    sqlx::query_as::<_, User>(
+        "SELECT id, github_id, login, name, email, avatar_url FROM users
+         WHERE lower(login) = lower($1)
+         ORDER BY id LIMIT 1",
+    )
+    .bind(login)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn find_user_by_email(pool: &PgPool, email: &str) -> DbResult<Option<User>> {
+    sqlx::query_as::<_, User>(
+        "SELECT id, github_id, login, name, email, avatar_url FROM users
+         WHERE lower(email) = lower($1)
+         ORDER BY id LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Grant a role directly (invitee already has an account), never downgrading.
+pub async fn grant_role(pool: &PgPool, project_id: Uuid, user_id: i64, role: &str) -> DbResult<()> {
+    sqlx::query(
+        "INSERT INTO permissions (project_id, user_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (project_id, user_id) DO UPDATE
+           SET role = CASE WHEN permissions.role = 'editor' THEN 'editor' ELSE EXCLUDED.role END",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .bind(role)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Pending (unclaimed) invites on a project: (permission id, login, email, role).
+pub async fn list_pending_invites(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> DbResult<Vec<(i64, Option<String>, Option<String>, String)>> {
+    let rows = sqlx::query(
+        "SELECT id, invited_login, invited_email, role FROM permissions
+         WHERE project_id = $1 AND user_id IS NULL
+         ORDER BY id",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get("id"), r.get("invited_login"), r.get("invited_email"), r.get("role")))
+        .collect())
+}
+
+pub async fn delete_pending_invite(pool: &PgPool, project_id: Uuid, perm_id: i64) -> DbResult<bool> {
+    let res = sqlx::query(
+        "DELETE FROM permissions WHERE id = $1 AND project_id = $2 AND user_id IS NULL",
+    )
+    .bind(perm_id)
+    .bind(project_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResult<Project> {
     sqlx::query_as::<_, Project>(
-        "INSERT INTO projects (owner_id, name) VALUES ($1, $2) RETURNING id, owner_id, name",
+        "INSERT INTO projects (owner_id, name) VALUES ($1, $2) RETURNING id, owner_id, name, public",
     )
     .bind(owner_id)
     .bind(name)
@@ -139,7 +316,7 @@ pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResul
 }
 
 pub async fn get_project(pool: &PgPool, id: Uuid) -> DbResult<Option<Project>> {
-    sqlx::query_as::<_, Project>("SELECT id, owner_id, name FROM projects WHERE id = $1")
+    sqlx::query_as::<_, Project>("SELECT id, owner_id, name, public FROM projects WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
         .await
@@ -185,7 +362,9 @@ pub async fn effective_role(pool: &PgPool, user_id: i64, project_id: Uuid) -> Db
     let row = sqlx::query(
         "SELECT CASE
                   WHEN p.owner_id = $1 THEN 'editor'
-                  ELSE perm.role
+                  WHEN perm.role IS NOT NULL THEN perm.role
+                  WHEN p.public THEN 'viewer'
+                  ELSE NULL
                 END AS role
          FROM projects p
          LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
@@ -269,9 +448,17 @@ pub async fn add_invite(
     role: &str,
     created_by: i64,
 ) -> DbResult<()> {
+    // No unique constraint covers pending rows (user_id is NULL), so guard
+    // against duplicate invites here.
     sqlx::query(
         "INSERT INTO permissions (project_id, invited_login, invited_email, role, created_by)
-         VALUES ($1, $2, $3, $4, $5)",
+         SELECT $1, $2, $3, $4, $5
+         WHERE NOT EXISTS (
+             SELECT 1 FROM permissions
+             WHERE project_id = $1 AND user_id IS NULL
+               AND invited_login IS NOT DISTINCT FROM $2
+               AND invited_email IS NOT DISTINCT FROM $3
+         )",
     )
     .bind(project_id)
     .bind(invited_login)
