@@ -376,3 +376,12 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   ("Collaboration: live · N collaborator(s)", refreshed when peers
   join/leave), and the web follow-stop message no longer mislabels a manual
   stop as the peer leaving.
+- [x] **Consolidation pass (loop 26).**  Verified the speculative claims and
+  audited the delta-bug class: peer TRACK drags do ghost through the generic
+  path (15-tick synthetic drag with a real track id, hide/ratsnest/unhide
+  cycled, all editors stable); the desktop session accumulates presence
+  deltas correctly (the bug was web-only); and the production retention
+  sweep already exists (daily: ops 7 days behind unnamed snapshots, unnamed
+  snapshots 30 days keeping the newest, named checkpoints never touched).
+  Full battery green: 3 C++ collab QA suites, 6 server tests, 5 protocol
+  tests, and a live fleet round-trip converging on all editors.
