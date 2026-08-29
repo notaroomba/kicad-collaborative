@@ -394,3 +394,8 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   local board file was hand-drifted (D4 moved to 120,60 on disk), and her
   relaunched editor came up at exact server truth — the join healed the
   divergence automatically.  Both collab QA suites green.
+- [x] Join-reconcile cost measured (loop 28): 44 ms for the full StickHub
+  board (1,529 items compared) — imperceptible at join; a gated stderr
+  diagnostic now reports changes/unchanged/duration on every reconcile.
+  The measurement run itself healed one drifted item on a routine
+  relaunch, i.e. the feature is already doing quiet useful work.

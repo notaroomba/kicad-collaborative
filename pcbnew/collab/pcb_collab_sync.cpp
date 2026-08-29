@@ -36,6 +36,7 @@
 #include <settings/color_settings.h>
 #include <reporter.h>
 #include <wx/ffile.h>
+#include <wx/stopwatch.h>
 #include <pcb_group.h>
 #include <ki_exception.h>
 #include <netinfo.h>
@@ -941,6 +942,9 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
     if( !board || aFileText.empty() )
         return;
 
+    // This runs on every join, so its cost is worth watching in the field.
+    wxStopWatch reconcileTimer;
+
     PCB_IO_KICAD_SEXPR     io;
     std::unique_ptr<BOARD> server;
 
@@ -1062,8 +1066,11 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
             changes.push_back( upsertChange( item, std::move( sexpr ) ) );
     }
 
-    wxLogTrace( traceCollab, wxS( "reconcile: %zu changes, %d unchanged" ),
-                (size_t) changes.size(), kept );
+    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+    {
+        fprintf( stderr, "COLLAB reconcile: %zu changes, %d unchanged, %ldms\n",
+                 (size_t) changes.size(), kept, reconcileTimer.Time() );
+    }
 
     if( !changes.empty() )
     {
