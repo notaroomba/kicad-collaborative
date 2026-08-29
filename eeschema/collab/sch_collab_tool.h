@@ -148,6 +148,9 @@ private:
     ///< The version-history sidebar pane (created lazily; owned by AUI).
     class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
 
+    ///< Items currently hidden because a peer's live-drag ghost replaces them.
+    std::set<KIID> m_ghostHidden;
+
     ///< The open comments dialog, if any (modeless; views the displayed doc).
     class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 

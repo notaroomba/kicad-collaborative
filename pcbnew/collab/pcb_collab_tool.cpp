@@ -39,6 +39,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection.h>
+#include <connectivity/connectivity_data.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <view/view.h>
 #include <view/view_controls.h>
@@ -841,6 +842,33 @@ void PCB_COLLAB_TOOL::leaveDoc()
 
     if( KIGFX::VIEW* view = getView() )
     {
+        for( const KIID& id : m_ghostHidden )
+        {
+            if( BOARD_ITEM* item = board() ? board()->ResolveItem( id, true ) : nullptr )
+            {
+                view->Hide( item, false );
+                item->RunOnChildren( [&]( BOARD_ITEM* aChild )
+                                     {
+                                         view->Hide( aChild, false );
+                                     },
+                                     RECURSE_MODE::RECURSE );
+            }
+        }
+
+        m_ghostHidden.clear();
+
+        if( m_ghostDynamicData )
+        {
+            m_ghostDynamicData.reset();
+            m_ghostRatsItems.clear();
+
+            if( board() )
+            {
+                if( std::shared_ptr<CONNECTIVITY_DATA> conn = board()->GetConnectivity() )
+                    conn->ClearLocalRatsnest();
+            }
+        }
+
         m_cursorItem.SetPeers( {} );
         m_cursorItem.SetCommentPins( {} );
         view->Remove( &m_cursorItem );
@@ -1166,6 +1194,9 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
 
     std::vector<REMOTE_PEER_DRAW> draws;
     wxString                      file = boardFile();
+    std::set<KIID>                ghostedNow;
+    std::vector<BOARD_ITEM*>      ratsItems;
+    VECTOR2I                      ratsOffset;
 
     if( !m_docId.IsEmpty() )
     {
@@ -1236,6 +1267,9 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                             continue;
 
                         draw.ghostItems.push_back( { item, offset } );
+                        ghostedNow.insert( item->m_Uuid );
+                        ratsItems.push_back( item );
+                        ratsOffset = offset;
 
                         item->RunOnChildren(
                                 [&]( BOARD_ITEM* aChild )
@@ -1283,6 +1317,83 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                 draws.push_back( std::move( draw ) );
             }
         }
+    }
+
+    // The mover sees live airwires from the part being dragged; peers should
+    // too.  Reuse the move tool's dynamic-connectivity machinery for the
+    // ghosted items.
+    if( std::shared_ptr<CONNECTIVITY_DATA> conn = board()->GetConnectivity() )
+    {
+        if( !ratsItems.empty() )
+        {
+            if( m_ghostDynamicData && m_ghostRatsItems != ratsItems )
+            {
+                m_ghostDynamicData.reset();
+                conn->ClearLocalRatsnest();
+            }
+
+            if( !m_ghostDynamicData )
+            {
+                m_ghostDynamicData =
+                        std::make_unique<CONNECTIVITY_DATA>( conn, ratsItems, true );
+                conn->BlockRatsnestItems( ratsItems );
+                m_ghostRatsItems = ratsItems;
+                m_ghostLastOffset = VECTOR2I( 0, 0 );
+            }
+
+            m_ghostDynamicData->Move( ratsOffset - m_ghostLastOffset );
+            m_ghostLastOffset = ratsOffset;
+            conn->ComputeLocalRatsnest( m_ghostRatsItems, m_ghostDynamicData.get() );
+        }
+        else if( m_ghostDynamicData )
+        {
+            m_ghostDynamicData.reset();
+            m_ghostRatsItems.clear();
+            conn->ClearLocalRatsnest();
+        }
+    }
+
+    // The ghost copy renders at the live position; the stationary original
+    // under it must vanish or every peer sees the part twice (reported: "the
+    // old position still shows until they release").  Hide originals while
+    // ghosted, restore them the moment the ghost clears.
+    for( const KIID& id : ghostedNow )
+    {
+        if( m_ghostHidden.insert( id ).second )
+        {
+            if( BOARD_ITEM* item = board()->ResolveItem( id, true ) )
+            {
+                view->Hide( item, true );
+                item->RunOnChildren( [&]( BOARD_ITEM* aChild )
+                                     {
+                                         view->Hide( aChild, true );
+                                     },
+                                     RECURSE_MODE::RECURSE );
+            }
+        }
+    }
+
+    for( auto it = m_ghostHidden.begin(); it != m_ghostHidden.end(); )
+    {
+        if( ghostedNow.count( *it ) )
+        {
+            ++it;
+            continue;
+        }
+
+        if( BOARD_ITEM* item = board()->ResolveItem( *it, true ) )
+        {
+            view->Hide( item, false );
+            view->Update( item );
+            item->RunOnChildren( [&]( BOARD_ITEM* aChild )
+                                 {
+                                     view->Hide( aChild, false );
+                                     view->Update( aChild );
+                                 },
+                                 RECURSE_MODE::RECURSE );
+        }
+
+        it = m_ghostHidden.erase( it );
     }
 
     m_cursorItem.SetPeers( std::move( draws ) );

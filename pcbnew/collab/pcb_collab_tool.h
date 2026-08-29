@@ -42,6 +42,8 @@ class PCB_COLLAB_SYNC;
  * case the schematic editor only joins schematic docs, so this tool watches the
  * shared session and joins the board's own doc once it goes live.
  */
+class CONNECTIVITY_DATA;
+
 class PCB_COLLAB_TOOL : public wxEvtHandler, public PCB_TOOL_BASE, public COLLAB_DOC_ADAPTER
 {
 public:
@@ -93,6 +95,15 @@ public:
 
     ///< The root comment whose pin covers aPos, or -1.
     long long pinAt( const VECTOR2I& aPos ) const;
+
+    ///< Items currently hidden because a peer's live-drag ghost replaces them.
+    std::set<KIID> m_ghostHidden;
+
+    ///< Dynamic connectivity for the peer-ghost ratsnest (same machinery the
+    ///< local move tool uses), alive only while a peer drags.
+    std::unique_ptr<CONNECTIVITY_DATA> m_ghostDynamicData;
+    std::vector<BOARD_ITEM*>           m_ghostRatsItems;
+    VECTOR2I                           m_ghostLastOffset;
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -155,7 +166,7 @@ private:
     void rebuildCommentPins();
 
     ///< The open comments dialog, if any (modeless; owned by wx).
-    class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
+class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 
     ///< The version-history sidebar pane (created lazily; owned by AUI).
     class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
