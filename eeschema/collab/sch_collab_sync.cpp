@@ -775,15 +775,26 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 
     m_resyncPending[ docId ] = false;
 
-    // v1 does not hot-load the snapshot into the open schematic wholesale,
-    // but a rejected own op needs its optimistic application undone: restore
-    // just the touched items from the server's file.
-    auto rollbackIt = m_pendingRollback.find( docId );
-
-    if( rollbackIt != m_pendingRollback.end() && !rollbackIt->second.empty()
-        && aSnapshotMsg.contains( "file" ) )
+    if( m_reconcilePending.count( docId ) && aSnapshotMsg.contains( "file" ) )
     {
-        rollbackFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
+        // A doc reset: the server's file is the document now.  Reconcile the
+        // whole screen; any pending targeted rollback is subsumed.
+        m_reconcilePending.erase( docId );
+        m_pendingRollback.erase( docId );
+        reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
+    }
+    else
+    {
+        // v1 does not hot-load the snapshot into the open schematic wholesale,
+        // but a rejected own op needs its optimistic application undone:
+        // restore just the touched items from the server's file.
+        auto rollbackIt = m_pendingRollback.find( docId );
+
+        if( rollbackIt != m_pendingRollback.end() && !rollbackIt->second.empty()
+            && aSnapshotMsg.contains( "file" ) )
+        {
+            rollbackFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
+        }
     }
 
     std::erase_if( m_queue,
@@ -898,6 +909,114 @@ void SCH_COLLAB_SYNC::ReplayUnacked()
 
     for( const auto& [clientOpId, op] : m_unacked )
         session.SendOp( op.docId, clientOpId, std::nullopt, op.changes );
+}
+
+
+void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
+                                              const std::string& aFileText )
+{
+    SCH_SCREEN* screen = screenForDocId( aDocId );
+
+    if( !screen || aFileText.empty() )
+        return;
+
+    SCH_SHEET tempSheet;
+
+    // Screen object on heap is owned by the sheet (the paste-path pattern).
+    SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
+    tempSheet.SetScreen( tempScreen );
+
+    STRING_LINE_READER reader( aFileText, wxS( "collab-reset" ) );
+    SCH_IO_KICAD_SEXPR plugin;
+
+    try
+    {
+        plugin.LoadContent( reader, &tempSheet );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "reconcile: snapshot parse failed: %s" ), ioe.What() );
+        return;
+    }
+
+    std::map<KIID, SCH_ITEM*> serverItems;
+
+    for( SCH_ITEM* item : tempScreen->Items() )
+    {
+        if( item->Type() != SCH_MARKER_T )
+            serverItems[ item->m_Uuid ] = item;
+    }
+
+    nlohmann::json changes = nlohmann::json::array();
+    std::set<KIID> localIds;
+
+    for( SCH_ITEM* local : screen->Items() )
+    {
+        // ERC markers are local diagnostics, not document content.
+        if( local->Type() == SCH_MARKER_T )
+            continue;
+
+        localIds.insert( local->m_Uuid );
+
+        auto it = serverItems.find( local->m_Uuid );
+
+        if( it == serverItems.end() )
+        {
+            nlohmann::json change;
+            change[ "id" ] = local->m_Uuid.AsStdString();
+            change[ "kind" ] = "REMOVED";
+            change[ "typeName" ] = "";
+            changes.push_back( std::move( change ) );
+            continue;
+        }
+
+        std::string localSexpr =
+                SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), screen, local );
+        std::string serverSexpr =
+                SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, it->second );
+
+        if( localSexpr.empty() || serverSexpr.empty() || localSexpr == serverSexpr )
+            continue;
+
+        nlohmann::json change;
+        change[ "id" ] = it->second->m_Uuid.AsStdString();
+        change[ "kind" ] = "ADDED";
+        change[ "typeName" ] = it->second->GetClass().ToStdString( wxConvUTF8 );
+        change[ "sexpr" ] = std::move( serverSexpr );
+        changes.push_back( std::move( change ) );
+    }
+
+    for( auto& [id, item] : serverItems )
+    {
+        if( localIds.count( id ) )
+            continue;
+
+        std::string sexpr = SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, item );
+
+        if( sexpr.empty() )
+            continue;
+
+        nlohmann::json change;
+        change[ "id" ] = id.AsStdString();
+        change[ "kind" ] = "ADDED";
+        change[ "typeName" ] = item->GetClass().ToStdString( wxConvUTF8 );
+        change[ "sexpr" ] = std::move( sexpr );
+        changes.push_back( std::move( change ) );
+    }
+
+    if( !changes.empty() )
+    {
+        PENDING_OP op;
+        op.docId = aDocId;
+        op.seq = m_lastAppliedSeq[ aDocId ];
+        op.changes = std::move( changes );
+        applyOp( op );
+    }
+
+    if( m_frame->GetCanvas() )
+        m_frame->GetCanvas()->Refresh();
+
+    m_frame->ShowInfoBarMsg( _( "Schematic synchronized with the restored version." ) );
 }
 
 
@@ -1052,15 +1171,32 @@ void SCH_COLLAB_SYNC::OnSnapshotRequest()
 }
 
 
-void SCH_COLLAB_SYNC::OnReset( long long aSeq )
+void SCH_COLLAB_SYNC::OnReset( const wxString& aDocId, long long aSeq )
 {
-    wxLogTrace( traceCollab, wxS( "server reset to seq %lld" ), aSeq );
+    wxLogTrace( traceCollab, wxS( "server reset of %s to seq %lld" ), aDocId, aSeq );
 
-    m_queue.clear();
-    m_unacked.clear();
+    // Everything in flight for this doc predates the restored state.
+    std::erase_if( m_queue,
+                   [&]( const PENDING_OP& aPending )
+                   {
+                       return aPending.docId == aDocId;
+                   } );
 
-    m_frame->ShowInfoBarError( _( "The shared project was reset on the server.  Leave and "
-                                  "rejoin the session to resynchronize." ) );
+    std::erase_if( m_unacked,
+                   [&]( const auto& aEntry )
+                   {
+                       return aEntry.second.docId == aDocId;
+                   } );
+
+    m_pendingRollback.erase( aDocId );
+
+    // Pull the restored file and reconcile the open screen against it.
+    m_reconcilePending.insert( aDocId );
+    m_resyncPending[ aDocId ] = true;
+    COLLAB_SESSION::Get().RequestResync( aDocId );
+
+    m_frame->ShowInfoBarMsg( _( "The shared project was restored to an earlier version on "
+                                "the server; synchronizing this schematic..." ) );
 }
 
 

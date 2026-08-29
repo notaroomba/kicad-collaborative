@@ -145,6 +145,11 @@ private:
     ///< item), undoing our optimistic local application.
     void rollbackFromSnapshot( const std::string& aFileText );
 
+    ///< Reconcile the whole open board against the server's snapshot: upsert
+    ///< items that differ or are missing locally, remove local items the
+    ///< server does not have.  Used after a doc reset (checkpoint restore).
+    void reconcileFromSnapshot( const std::string& aFileText );
+
 public:
 
     /**
@@ -217,6 +222,10 @@ private:
     ///< Items touched by server-rejected ops, awaiting rollback from the next
     ///< resync snapshot.
     std::set<KIID> m_pendingRollback;
+
+    ///< A doc reset arrived (checkpoint restore); the next resync snapshot is
+    ///< reconciled wholesale instead of item-by-item.
+    bool m_reconcilePending = false;
 
     COLLAB_JOURNAL              m_journal;
 

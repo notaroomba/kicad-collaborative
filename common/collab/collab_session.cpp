@@ -508,7 +508,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
     else if( type == "reset" )
     {
         if( adapter )
-            adapter->OnReset( aMsg.value( "seq", 0LL ) );
+            adapter->OnReset( docId, aMsg.value( "seq", 0LL ) );
     }
 }
 

@@ -630,7 +630,7 @@ void PCB_COLLAB_TOOL::OnSnapshotRequest()
 }
 
 
-void PCB_COLLAB_TOOL::OnReset( long long aSeq )
+void PCB_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 {
     if( m_sync )
         m_sync->OnReset( aSeq );

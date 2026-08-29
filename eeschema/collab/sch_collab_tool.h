@@ -71,7 +71,7 @@ public:
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
     void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
     void OnSnapshotRequest() override;
-    void OnReset( long long aSeq ) override;
+    void OnReset( const wxString& aDocId, long long aSeq ) override;
 
     ///< The live-editing sync engine, or nullptr when no session is active.
     SCH_COLLAB_SYNC* GetSync() const { return m_sync.get(); }

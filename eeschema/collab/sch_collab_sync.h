@@ -138,6 +138,11 @@ private:
     ///< item), undoing our optimistic local application.
     void rollbackFromSnapshot( const wxString& aDocId, const std::string& aFileText );
 
+    ///< Reconcile a whole screen against the server's snapshot: upsert items
+    ///< that differ or are missing locally, remove local items the server does
+    ///< not have.  Used after a doc reset (checkpoint restore).
+    void reconcileFromSnapshot( const wxString& aDocId, const std::string& aFileText );
+
 public:
 
     /**
@@ -149,7 +154,7 @@ public:
     /// Re-send every unacknowledged op; call once the session goes live again.
     void ReplayUnacked();
     void OnSnapshotRequest();
-    void OnReset( long long aSeq );
+    void OnReset( const wxString& aDocId, long long aSeq );
 
 private:
     struct PENDING_OP
@@ -217,6 +222,10 @@ private:
     ///< docId -> items touched by server-rejected ops, awaiting rollback from
     ///< the next resync snapshot.
     std::map<wxString, std::set<KIID>> m_pendingRollback;
+
+    ///< Docs whose reset arrived (checkpoint restore); their next resync
+    ///< snapshot is reconciled wholesale instead of item-by-item.
+    std::set<wxString> m_reconcilePending;
 
     COLLAB_JOURNAL              m_journal;
 

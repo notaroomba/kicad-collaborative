@@ -804,11 +804,21 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     m_resyncPending = false;
     m_queue.clear();
 
-    // v1 does not hot-load the snapshot into the open board wholesale, but a
-    // rejected own op needs its optimistic application undone: restore just
-    // the touched items from the server's file.
-    if( !m_pendingRollback.empty() && aSnapshotMsg.contains( "file" ) )
+    if( m_reconcilePending && aSnapshotMsg.contains( "file" ) )
+    {
+        // A doc reset: the server's file is the document now.  Reconcile the
+        // whole board; any pending targeted rollback is subsumed.
+        m_reconcilePending = false;
+        m_pendingRollback.clear();
+        reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ) );
+    }
+    else if( !m_pendingRollback.empty() && aSnapshotMsg.contains( "file" ) )
+    {
+        // v1 does not hot-load the snapshot into the open board wholesale, but
+        // a rejected own op needs its optimistic application undone: restore
+        // just the touched items from the server's file.
         rollbackFromSnapshot( aSnapshotMsg.value( "file", "" ) );
+    }
 
     // Replay the ops since the snapshot through the normal queue.
     for( const nlohmann::json& opJson : aSnapshotMsg.value( "thenOps",
@@ -826,6 +836,172 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     }
 
     wxWakeUpIdle();
+}
+
+
+namespace
+{
+/// Net numbers are board-local (identity travels by name), so blank them out
+/// before comparing serialized items across boards.
+std::string normalizeNetNumbers( const std::string& aSexpr )
+{
+    std::string out;
+    out.reserve( aSexpr.size() );
+
+    for( size_t i = 0; i < aSexpr.size(); )
+    {
+        if( aSexpr.compare( i, 5, "(net " ) == 0 )
+        {
+            out += "(net ";
+            i += 5;
+
+            while( i < aSexpr.size() && isdigit( (unsigned char) aSexpr[i] ) )
+                i++;
+        }
+        else
+        {
+            out += aSexpr[i++];
+        }
+    }
+
+    return out;
+}
+} // anonymous namespace
+
+
+void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
+{
+    BOARD* board = m_frame->GetBoard();
+
+    if( !board || aFileText.empty() )
+        return;
+
+    PCB_IO_KICAD_SEXPR     io;
+    std::unique_ptr<BOARD> server;
+
+    try
+    {
+        BOARD_ITEM* parsed = io.Parse( wxString::FromUTF8( aFileText ) );
+
+        if( !parsed )
+            return;
+
+        if( parsed->Type() != PCB_T )
+        {
+            delete parsed;
+            return;
+        }
+
+        server.reset( static_cast<BOARD*>( parsed ) );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "reconcile: snapshot parse failed: %s" ), ioe.What() );
+        return;
+    }
+
+    std::map<KIID, BOARD_ITEM*> serverItems;
+
+    for( BOARD_ITEM* item : server->GetItemSet() )
+    {
+        if( typeSyncs( item ) )
+            serverItems[ item->m_Uuid ] = item;
+    }
+
+    auto upsertChange = []( BOARD_ITEM* aItem, std::string aSexpr ) -> nlohmann::json
+    {
+        nlohmann::json change;
+        change[ "id" ] = aItem->m_Uuid.AsStdString();
+        change[ "kind" ] = "ADDED";
+        change[ "typeName" ] = aItem->GetClass().ToStdString( wxConvUTF8 );
+        change[ "sexpr" ] = std::move( aSexpr );
+
+        if( BOARD_CONNECTED_ITEM* conn = dynamic_cast<BOARD_CONNECTED_ITEM*>( aItem ) )
+            change[ "netName" ] = conn->GetNetname().ToStdString( wxConvUTF8 );
+
+        if( aItem->Type() == PCB_FOOTPRINT_T )
+        {
+            nlohmann::json padNets = nlohmann::json::object();
+
+            for( PAD* pad : static_cast<FOOTPRINT*>( aItem )->Pads() )
+                padNets[ pad->GetNumber().ToStdString( wxConvUTF8 ) ] =
+                        pad->GetNetname().ToStdString( wxConvUTF8 );
+
+            change[ "padNets" ] = std::move( padNets );
+        }
+
+        return change;
+    };
+
+    nlohmann::json changes = nlohmann::json::array();
+    std::set<KIID>  localIds;
+    int             kept = 0;
+
+    for( BOARD_ITEM* local : board->GetItemSet() )
+    {
+        if( !typeSyncs( local ) )
+            continue;
+
+        localIds.insert( local->m_Uuid );
+
+        auto it = serverItems.find( local->m_Uuid );
+
+        if( it == serverItems.end() )
+        {
+            // The restored document does not have it.
+            nlohmann::json change;
+            change[ "id" ] = local->m_Uuid.AsStdString();
+            change[ "kind" ] = "REMOVED";
+            change[ "typeName" ] = "";
+            changes.push_back( std::move( change ) );
+            continue;
+        }
+
+        if( !typeSupportsSexprTransfer( it->second ) )
+        {
+            kept++;
+            continue;
+        }
+
+        std::string localSexpr = PCB_COLLAB::FormatItemSexpr( local );
+        std::string serverSexpr = PCB_COLLAB::FormatItemSexpr( it->second );
+
+        if( localSexpr.empty() || serverSexpr.empty()
+            || normalizeNetNumbers( localSexpr ) == normalizeNetNumbers( serverSexpr ) )
+        {
+            kept++;
+            continue;
+        }
+
+        changes.push_back( upsertChange( it->second, std::move( serverSexpr ) ) );
+    }
+
+    for( auto& [id, item] : serverItems )
+    {
+        if( localIds.count( id ) || !typeSupportsSexprTransfer( item ) )
+            continue;
+
+        std::string sexpr = PCB_COLLAB::FormatItemSexpr( item );
+
+        if( !sexpr.empty() )
+            changes.push_back( upsertChange( item, std::move( sexpr ) ) );
+    }
+
+    wxLogTrace( traceCollab, wxS( "reconcile: %zu changes, %d unchanged" ),
+                (size_t) changes.size(), kept );
+
+    if( !changes.empty() )
+    {
+        PENDING_OP op;
+        op.seq = m_lastAppliedSeq;
+        op.changes = std::move( changes );
+        applyOp( op );
+    }
+
+    if( m_frame->GetCanvas() )
+        m_frame->GetCanvas()->Refresh();
+
+    m_frame->ShowInfoBarMsg( _( "Board synchronized with the restored version." ) );
 }
 
 
@@ -1052,11 +1228,18 @@ void PCB_COLLAB_SYNC::OnReset( long long aSeq )
 {
     wxLogTrace( traceCollab, wxS( "server reset to seq %lld" ), aSeq );
 
+    // Everything in flight predates the restored state.
     m_queue.clear();
     m_unacked.clear();
+    m_pendingRollback.clear();
 
-    m_frame->ShowInfoBarError( _( "The shared project was reset on the server.  Leave and "
-                                  "rejoin the session to resynchronize." ) );
+    // Pull the restored file and reconcile the open board against it.
+    m_reconcilePending = true;
+    m_resyncPending = true;
+    COLLAB_SESSION::Get().RequestResync( m_docId );
+
+    m_frame->ShowInfoBarMsg( _( "The shared project was restored to an earlier version on "
+                                "the server; synchronizing this board..." ) );
 }
 
 
