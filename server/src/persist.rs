@@ -512,6 +512,31 @@ pub async fn insert_snapshot(
     Ok(())
 }
 
+/// Insert-only variant for client-driven snapshot uploads: never overwrites an
+/// existing row — a snapshot at some seq, once written, is immutable (named
+/// checkpoint rows especially must survive later freshness uploads racing in
+/// at a stale seq).  Returns whether a row was written.
+pub async fn insert_snapshot_new(
+    pool: &PgPool,
+    doc_id: Uuid,
+    seq: i64,
+    content: &[u8],
+    uploader_id: Option<i64>,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        "INSERT INTO snapshots (doc_id, seq, content, name, uploader_id)
+         VALUES ($1, $2, $3, NULL, $4)
+         ON CONFLICT (doc_id, seq) DO NOTHING",
+    )
+    .bind(doc_id)
+    .bind(seq)
+    .bind(content)
+    .bind(uploader_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub async fn latest_snapshot(pool: &PgPool, doc_id: Uuid) -> DbResult<Option<(i64, Vec<u8>)>> {
     let row = sqlx::query(
         "SELECT seq, content FROM snapshots WHERE doc_id = $1 ORDER BY seq DESC LIMIT 1",

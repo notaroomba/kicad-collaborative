@@ -100,9 +100,12 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   edit visibly rolls back.  Verified e2e with a third live instance on a
   viewer token: the edit was refused, the other editors never saw it, the
   viewer's board rolled back to the server position, and the journal ended
-  clean.  (Schematic engine: rejection cleanup + resync are in; the
-  item-level snapshot rollback is board-only so far — sch item restore from
-  a resync snapshot is the remaining piece.)
+  clean.  Schematic engine now has the same item-level snapshot
+  rollback (LoadContent-parsed temp screen, per-item re-format with
+  lib-symbol embedding, applied through the normal remote path) — QA-covered
+  by the green CollabSync suites; live-driving a schematic viewer edit
+  headlessly isn't possible yet (the IPC API is board-only), so its live
+  verification rides on the identical, live-verified board architecture.
 - [x] Optional wire fields must tolerate being absent, not just null — the
   protocol crate now marks them `#[serde(default)]` and pins a minimal
   browser hello in a test (a bare `{{type,proto,token,clientId}}` hello was
@@ -121,7 +124,19 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   never-downgrade rule (re-inviting an editor as viewer keeps editor), email
   invite → pending listed → pending revoke.  (The last leg — pending →
   sign-in → granted — needs a real GitHub OAuth round-trip and stays manual.)
-- [ ] Checkpoint → restore while a peer is live (reset banner UX).
+- [x] Checkpoint → restore while a peer is live.  Verified with three live
+  editors: restore lands as a fresh snapshot at head+1, the reset reaches
+  every client with no crash or disconnect, sync continues cleanly at the
+  next seq, and the editors keep working (v1 keeps their local state and
+  shows the "leave and rejoin to resynchronize" banner — a full-document
+  reconcile on reset, reusing the rejected-op rollback machinery, is the
+  natural follow-up).  Found and fixed a real corruption in passing: a
+  client freshness snapshot upload racing in at the same seq *overwrote the
+  named checkpoint row* (the upsert clobbered it), so a later restore
+  restored post-checkpoint content.  Client snapshot uploads are now
+  insert-only — a snapshot at a given seq, once written, is immutable —
+  and the full cycle re-verified with the race present: the named row
+  survived and restore produced genuine checkpoint content.
 - [ ] Online Projects: open the same cloud project twice; second open reuses the
   local copy without re-downloading.
 - [ ] Presence keepalive across a laptop sleep/wake (reconnect + rejoin).

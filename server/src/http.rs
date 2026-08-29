@@ -820,8 +820,13 @@ pub async fn upload_snapshot(
     if q.seq < latest {
         return Err(AppError::BadRequest(format!("seq {} is older than snapshot {latest}", q.seq)));
     }
-    persist::insert_snapshot(&state.pool, doc_id, q.seq, &body, None, Some(user.id)).await?;
-    Ok(Json(json!({ "ok": true, "docId": doc_id, "seq": q.seq })).into_response())
+    // Insert-only: a snapshot at this seq may already exist (another client
+    // answered the same freshness request, or this seq is a named checkpoint,
+    // which an update would silently clobber — that corrupted a restore once).
+    let written =
+        persist::insert_snapshot_new(&state.pool, doc_id, q.seq, &body, Some(user.id)).await?;
+    Ok(Json(json!({ "ok": true, "docId": doc_id, "seq": q.seq, "written": written }))
+        .into_response())
 }
 
 // ---------- Version history ----------
