@@ -796,26 +796,15 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 
     m_resyncPending[ docId ] = false;
 
-    if( m_reconcilePending.count( docId ) && aSnapshotMsg.contains( "file" ) )
+    if( aSnapshotMsg.contains( "file" ) )
     {
-        // A doc reset: the server's file is the document now.  Reconcile the
-        // whole screen; any pending targeted rollback is subsumed.
+        // Every snapshot catch-up reconciles the screen against the server's
+        // file: heals stale/drifted local copies on join, serves doc resets,
+        // and subsumes the targeted rejected-op rollback.  Diff-based, so a
+        // matching screen is a no-op.
         m_reconcilePending.erase( docId );
         m_pendingRollback.erase( docId );
         reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
-    }
-    else
-    {
-        // v1 does not hot-load the snapshot into the open schematic wholesale,
-        // but a rejected own op needs its optimistic application undone:
-        // restore just the touched items from the server's file.
-        auto rollbackIt = m_pendingRollback.find( docId );
-
-        if( rollbackIt != m_pendingRollback.end() && !rollbackIt->second.empty()
-            && aSnapshotMsg.contains( "file" ) )
-        {
-            rollbackFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
-        }
     }
 
     std::erase_if( m_queue,
@@ -1027,17 +1016,21 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
 
     if( !changes.empty() )
     {
+        size_t count = changes.size();
+
         PENDING_OP op;
         op.docId = aDocId;
         op.seq = m_lastAppliedSeq[ aDocId ];
         op.changes = std::move( changes );
         applyOp( op );
+
+        m_frame->ShowInfoBarMsg( wxString::Format(
+                _( "Schematic synchronized with the server (%zu item(s) updated)." ),
+                count ) );
     }
 
     if( m_frame->GetCanvas() )
         m_frame->GetCanvas()->Refresh();
-
-    m_frame->ShowInfoBarMsg( _( "Schematic synchronized with the restored version." ) );
 }
 
 
