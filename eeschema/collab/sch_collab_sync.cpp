@@ -816,6 +816,7 @@ void SCH_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     marker.authorClientId = COLLAB_SESSION::Get().ClientId();
 
     m_queue.push_back( std::move( marker ) );
+    m_ownRecent[ it->second.docId ][ aSeq ] = std::move( it->second.changes );
     m_unacked.erase( it );
     m_journal.Ack( aClientOpId );
 
@@ -957,6 +958,13 @@ void SCH_COLLAB_SYNC::drainQueue()
 
         long long& lastApplied = m_lastAppliedSeq[ op.docId ];
 
+        // Once lastApplied passes one of our own ops, every future remote op has
+        // a higher seq and wins legitimately; the retained copy can go.
+        auto& ownRecent = m_ownRecent[ op.docId ];
+
+        while( !ownRecent.empty() && ownRecent.begin()->first <= lastApplied )
+            ownRecent.erase( ownRecent.begin() );
+
         if( m_resyncPending[ op.docId ] )
             continue;   // dropped; the resync tail supersedes anything queued
 
@@ -1034,6 +1042,66 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
 
         if( removedItem )
             removedItems.push_back( removedItem );
+    }
+
+    // Last-writer-wins repair: acks and broadcasts share one in-order stream, so
+    // any of our ops still unacked here — and any acked with seq > this op's —
+    // is provably NEWER than this remote op.  Re-assert our changes for the
+    // items it touched, or a concurrent older edit would clobber ours on our
+    // side only and the documents would diverge.
+    std::set<std::string> remoteIds;
+
+    for( const nlohmann::json& change : aOp.changes )
+    {
+        if( change.is_object() )
+            remoteIds.insert( change.value( "id", "" ) );
+    }
+
+    auto reassert = [&]( const nlohmann::json& aOwnChanges )
+    {
+        if( !aOwnChanges.is_array() )
+            return;
+
+        // Same collapse as the main loop: a REMOVED+ADDED pair for one id must
+        // not stage the same live object as both a removal and a modification.
+        std::set<std::string> ownReAdded;
+
+        for( const nlohmann::json& change : aOwnChanges )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
+                ownReAdded.insert( change.value( "id", "" ) );
+        }
+
+        for( const nlohmann::json& change : aOwnChanges )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
+                && ownReAdded.count( change.value( "id", "" ) ) )
+            {
+                continue;
+            }
+
+            if( change.is_object() && remoteIds.count( change.value( "id", "" ) ) )
+            {
+                SCH_ITEM* removedItem = nullptr;
+                SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), screen, change, &commit,
+                                             &removedItem );
+
+                if( removedItem )
+                    removedItems.push_back( removedItem );
+            }
+        }
+    };
+
+    for( const auto& [ownSeq, changes] : m_ownRecent[ aOp.docId ] )
+    {
+        if( ownSeq > aOp.seq )
+            reassert( changes );
+    }
+
+    for( const auto& [clientOpId, unacked] : m_unacked )
+    {
+        if( unacked.docId == aOp.docId )
+            reassert( unacked.changes );
     }
 
     if( !commit.Empty() )

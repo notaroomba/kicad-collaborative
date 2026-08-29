@@ -837,6 +837,7 @@ void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     marker.authorClientId = COLLAB_SESSION::Get().ClientId();
 
     m_queue.push_back( std::move( marker ) );
+    m_ownRecent[ aSeq ] = std::move( it->second.changes );
     m_unacked.erase( it );
     m_journal.Ack( aClientOpId );
 
@@ -964,6 +965,11 @@ void PCB_COLLAB_SYNC::drainQueue()
         PENDING_OP op = std::move( m_queue.front() );
         m_queue.pop_front();
 
+        // Once lastApplied passes one of our own ops, every future remote op has
+        // a higher seq and wins legitimately; the retained copy can go.
+        while( !m_ownRecent.empty() && m_ownRecent.begin()->first <= m_lastAppliedSeq )
+            m_ownRecent.erase( m_ownRecent.begin() );
+
         if( m_resyncPending )
             continue;   // dropped; the resync tail supersedes anything queued
 
@@ -1046,6 +1052,62 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
         if( removedItem )
             removedItems.push_back( removedItem );
     }
+
+    // Last-writer-wins repair: acks and broadcasts share one in-order stream, so
+    // any of our ops still unacked here — and any acked with seq > this op's —
+    // is provably NEWER than this remote op.  Re-assert our changes for the
+    // items it touched, or a concurrent older edit would clobber ours on our
+    // side only and the boards would diverge.
+    std::set<std::string> remoteIds;
+
+    for( const nlohmann::json& change : aOp.changes )
+    {
+        if( change.is_object() )
+            remoteIds.insert( change.value( "id", "" ) );
+    }
+
+    auto reassert = [&]( const nlohmann::json& aOwnChanges )
+    {
+        if( !aOwnChanges.is_array() )
+            return;
+
+        // Same collapse as the main loop: a REMOVED+ADDED pair for one id must
+        // not stage the same live object as both a removal and a modification.
+        std::set<std::string> ownReAdded;
+
+        for( const nlohmann::json& change : aOwnChanges )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
+                ownReAdded.insert( change.value( "id", "" ) );
+        }
+
+        for( const nlohmann::json& change : aOwnChanges )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
+                && ownReAdded.count( change.value( "id", "" ) ) )
+            {
+                continue;
+            }
+
+            if( change.is_object() && remoteIds.count( change.value( "id", "" ) ) )
+            {
+                BOARD_ITEM* removedItem = nullptr;
+                PCB_COLLAB::ApplyItemChange( board, change, &commit, &removedItem, view );
+
+                if( removedItem )
+                    removedItems.push_back( removedItem );
+            }
+        }
+    };
+
+    for( const auto& [ownSeq, changes] : m_ownRecent )
+    {
+        if( ownSeq > aOp.seq )
+            reassert( changes );
+    }
+
+    for( const auto& [clientOpId, unacked] : m_unacked )
+        reassert( unacked.changes );
 
     if( !commit.Empty() )
         commit.Push( _( "Remote Edit" ), SKIP_UNDO );
