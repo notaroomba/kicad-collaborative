@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+kicad-collab-protocol = { path = "protocol" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws", "multipart", "macros"] }
 axum-extra = { version = "0.10", features = ["cookie"] }

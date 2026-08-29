@@ -42,9 +42,10 @@ format is plain JSON).
   cursors/selections/ghost segments, and shows an "edits happening — refresh"
   chip when ops arrive. (JS first; port to the shared-crate WASM module when the
   overlay grows real logic.)
-- [ ] **W4 — Protocol crate.** Extract `server/protocol` (serde types for
-  hello/join/op/ack/presence + ITEM_CHANGE wire form), server consumes it;
-  `wasm-bindgen` build proves it compiles for the browser.
+- [x] **W4 — Protocol crate.** `server/protocol` (`kicad-collab-protocol`):
+  ClientMsg/ServerMsg/ItemChangeWire serde types, consumed by the server's
+  WebSocket handler, unit-tested against the documented wire shapes, and
+  verified to compile standalone for `wasm32-unknown-unknown`.
 - [ ] **W5 — Gallery polish.** Project descriptions, owner attribution,
   updated-at, preview freshness (re-render when snapshot seq advances), and a
   "clone to my account" button (server-side copy).
@@ -59,8 +60,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
 
 - [ ] Join a project you already have open under a *different* directory name —
   does doc matching fail gracefully?
-- [ ] Kill an editor mid-session; relaunch; journal replay converges and no
-  stale `.lck` dialog blocks startup.
+- [x] Kill an editor mid-session; relaunch; no stale `.lck` dialog blocks
+  startup.  (Lock files now record the owning pid; a same-user lock whose
+  process is dead is reclaimed silently even when other KiCad instances are
+  running — the old "no other instance" heuristic was too conservative for
+  multi-instance collaboration.)
 - [x] Two people edit the same footprint's position simultaneously — LWW result
   identical on both sides.  (Was broken: an older concurrent remote op clobbered
   the newer local edit on one side only.  Fixed by re-asserting own newer

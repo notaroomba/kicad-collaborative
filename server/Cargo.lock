@@ -982,6 +982,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kicad-collab-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "kicad-collab-server"
 version = "0.1.0"
 dependencies = [
@@ -992,6 +1001,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "jsonwebtoken",
+ "kicad-collab-protocol",
  "rand 0.8.7",
  "reqwest",
  "serde",
