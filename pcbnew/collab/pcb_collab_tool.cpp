@@ -1240,6 +1240,17 @@ void PCB_COLLAB_TOOL::applyFollow()
 
 void PCB_COLLAB_TOOL::OnPresenceChanged()
 {
+    // Keep the status-bar collaborator count fresh (only when it changes).
+    {
+        static thread_local size_t lastCount = SIZE_MAX;
+        size_t count = COLLAB_SESSION::Get().Peers( m_docId ).size();
+
+        if( count != lastCount )
+        {
+            lastCount = count;
+            OnSessionStateChanged();
+        }
+    }
     applyFollow();
     rebuildOverlay();
 }
@@ -1327,7 +1338,15 @@ void PCB_COLLAB_TOOL::OnSessionStateChanged()
 
     switch( COLLAB_SESSION::Get().GetState() )
     {
-    case COLLAB_SESSION::STATE::LIVE:         msg = _( "Collaboration: live" );          break;
+    case COLLAB_SESSION::STATE::LIVE:
+    {
+        size_t peers = COLLAB_SESSION::Get().Peers( m_docId ).size();
+
+        msg = peers > 0 ? wxString::Format( _( "Collaboration: live \u00b7 %zu collaborator(s)" ),
+                                            peers )
+                        : _( "Collaboration: live" );
+        break;
+    }
     case COLLAB_SESSION::STATE::CONNECTING:   msg = _( "Collaboration: connecting..." ); break;
     case COLLAB_SESSION::STATE::DISCONNECTED: msg = _( "Collaboration: offline" );       break;
     }
