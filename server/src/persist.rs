@@ -136,6 +136,7 @@ pub struct ProjectListing {
     pub owner_id: i64,
     pub owner_login: String,
     pub role: String,
+    pub public: bool,
     pub doc_count: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -147,6 +148,7 @@ pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec
     sqlx::query_as::<_, ProjectListing>(
         "SELECT p.id, p.name, p.owner_id, u.login AS owner_login,
                 CASE WHEN p.owner_id = $1 THEN 'editor' ELSE perm.role END AS role,
+                p.public,
                 (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count,
                 p.created_at,
                 GREATEST(

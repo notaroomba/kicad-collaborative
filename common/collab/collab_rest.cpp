@@ -223,6 +223,22 @@ bool COLLAB_REST::RenameProject( const wxString& aServerUrl, const wxString& aTo
 }
 
 
+bool COLLAB_REST::SetProjectPublic( const wxString& aServerUrl, const wxString& aToken,
+                                    const wxString& aProjectId, bool aPublic )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId, aToken );
+
+    nlohmann::json body = { { "public", aPublic } };
+
+    curl.SetHeader( "Content-Type", "application/json" );
+    curl.SetPostFields( body.dump() );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
+
+    return performOk( curl );
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::SearchUsers( const wxString& aServerUrl,
                                                         const wxString& aToken,
                                                         const wxString& aQuery )

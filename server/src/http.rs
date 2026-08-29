@@ -166,7 +166,7 @@ pub async fn list_projects(
             json!({
                 "projectId": p.id, "name": p.name,
                 "ownerId": p.owner_id, "ownerLogin": p.owner_login,
-                "role": p.role, "docCount": p.doc_count,
+                "role": p.role, "public": p.public, "docCount": p.doc_count,
                 "createdAt": p.created_at.to_rfc3339(),
                 "updatedAt": p.updated_at.to_rfc3339(),
             })

@@ -94,6 +94,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     m_list->AppendTextColumn( _( "Name" ), wxDATAVIEW_CELL_INERT, 260 );
     m_list->AppendTextColumn( _( "Owner" ), wxDATAVIEW_CELL_INERT, 120 );
     m_list->AppendTextColumn( _( "Your Role" ), wxDATAVIEW_CELL_INERT, 90 );
+    m_list->AppendTextColumn( _( "Visibility" ), wxDATAVIEW_CELL_INERT, 90 );
     m_list->AppendTextColumn( _( "Documents" ), wxDATAVIEW_CELL_INERT, 90 );
     m_list->AppendTextColumn( _( "Last Edited" ), wxDATAVIEW_CELL_INERT, 140 );
 
@@ -105,6 +106,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     m_openButton = new wxButton( this, wxID_ANY, _( "Open..." ) );
     m_shareButton = new wxButton( this, wxID_ANY, _( "Share..." ) );
     m_renameButton = new wxButton( this, wxID_ANY, _( "Rename..." ) );
+    m_publicButton = new wxButton( this, wxID_ANY, _( "Make Public" ) );
     m_deleteButton = new wxButton( this, wxID_ANY, _( "Delete..." ) );
     wxButton* uploadButton = new wxButton( this, wxID_ANY, _( "Upload Current Project" ) );
     wxButton* joinButton = new wxButton( this, wxID_ANY, _( "Join from Link..." ) );
@@ -112,6 +114,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     buttonSizer->Add( m_openButton, 0, wxRIGHT, 5 );
     buttonSizer->Add( m_shareButton, 0, wxRIGHT, 5 );
     buttonSizer->Add( m_renameButton, 0, wxRIGHT, 5 );
+    buttonSizer->Add( m_publicButton, 0, wxRIGHT, 5 );
     buttonSizer->Add( m_deleteButton, 0, wxRIGHT, 15 );
     buttonSizer->AddStretchSpacer();
     buttonSizer->Add( uploadButton, 0, wxRIGHT, 5 );
@@ -128,6 +131,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     m_openButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onOpen, this );
     m_shareButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onShare, this );
     m_renameButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onRename, this );
+    m_publicButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onTogglePublic, this );
     m_deleteButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onDelete, this );
     uploadButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onUpload, this );
     joinButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onJoinLink, this );
@@ -136,6 +140,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     m_openButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
     m_shareButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
     m_renameButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
+    m_publicButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
     m_deleteButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
 
     finishDialogSettings();
@@ -201,6 +206,8 @@ void DIALOG_ONLINE_PROJECTS::refresh()
 
         row.push_back( wxVariant( owner ) );
         row.push_back( wxVariant( wxString::FromUTF8( project.value( "role", "" ) ) ) );
+        row.push_back( wxVariant( project.value( "public", false ) ? _( "public" )
+                                                                   : _( "private" ) ) );
         row.push_back( wxVariant( wxString::Format( wxS( "%lld" ),
                                                     project.value( "docCount", 0LL ) ) ) );
         row.push_back( wxVariant( prettyTimestamp( project.value( "updatedAt", "" ) ) ) );
@@ -235,11 +242,23 @@ void DIALOG_ONLINE_PROJECTS::onUpdateUI( wxUpdateUIEvent& aEvent )
     const nlohmann::json* project = selectedProject();
 
     if( aEvent.GetEventObject() == m_openButton )
+    {
         aEvent.Enable( project != nullptr );
-    else if( aEvent.GetEventObject() == m_shareButton )
+    }
+    else if( aEvent.GetEventObject() == m_publicButton )
+    {
         aEvent.Enable( ownsSelected() );
+
+        if( project )
+        {
+            aEvent.SetText( project->value( "public", false ) ? _( "Make Private" )
+                                                              : _( "Make Public" ) );
+        }
+    }
     else
+    {
         aEvent.Enable( ownsSelected() );
+    }
 }
 
 
@@ -391,6 +410,41 @@ void DIALOG_ONLINE_PROJECTS::onRename( wxCommandEvent& aEvent )
     {
         wxMessageBox( _( "Renaming the project failed." ), _( "Rename Online Project" ),
                       wxOK | wxICON_ERROR, this );
+    }
+
+    refresh();
+}
+
+
+void DIALOG_ONLINE_PROJECTS::onTogglePublic( wxCommandEvent& aEvent )
+{
+    const nlohmann::json* project = selectedProject();
+
+    if( !project )
+        return;
+
+    bool     makePublic = !project->value( "public", false );
+    wxString name = wxString::FromUTF8( project->value( "name", "" ) );
+
+    if( makePublic
+        && wxMessageBox( wxString::Format( _( "Make '%s' public?\n\nIt will appear in the "
+                                              "server's gallery and anyone signed in can view "
+                                              "it.  Members keep their existing roles." ),
+                                           name ),
+                         _( "Make Project Public" ), wxYES_NO | wxICON_QUESTION, this )
+                   != wxYES )
+    {
+        return;
+    }
+
+    wxString server = COLLAB_SESSION::ServerUrl();
+
+    if( !COLLAB_REST::SetProjectPublic( server, COLLAB_AUTH::StoredToken( server ),
+                                        wxString::FromUTF8( project->value( "projectId", "" ) ),
+                                        makePublic ) )
+    {
+        wxMessageBox( _( "Updating the project visibility failed." ),
+                      _( "Project Visibility" ), wxOK | wxICON_ERROR, this );
     }
 
     refresh();
