@@ -254,3 +254,20 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   confirmed with a warning dialog and healed everywhere by the automatic
   reconcile.  The session now publishes the project id so whichever editor
   joined second can still bind the panel.
+- [x] **Production deploy verified end-to-end.**  A desktop instance uploaded
+  StickHub to https://kicad-collab-production.up.railway.app (real project,
+  27 docs), auto-rejoined over wss, made it public with a description, and
+  answered snapshot-freshness requests by pushing client-rendered previews —
+  the production gallery serves them with zero KiCad on the server.  Also
+  set SNAPSHOT_FRESH_SECS=60 in prod.  Papercuts queued: the share-link
+  message box on Start Session blocks the IPC reply (swap for an infobar);
+  client-plotted previews come out monochrome despite SetColorSettings
+  (theme plumbing needs another look).
+- [x] **Copy Share Link** action in both editors (File menu, next to
+  Start/Join): mints an editor invite link off-thread and puts the URL on
+  the clipboard with an infobar confirmation — verified live via the real
+  action (clipboard ended holding the /j/ link).  Leave Session tooltip now
+  says explicitly that leaving only disconnects this computer.
+- [x] Gallery/project pages emit preview images unconditionally (hidden
+  client-side if missing) — they were gated on server-side KICAD_CLI, which
+  production intentionally lacks.

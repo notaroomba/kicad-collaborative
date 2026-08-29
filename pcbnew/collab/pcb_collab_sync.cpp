@@ -1360,6 +1360,10 @@ std::string PCB_COLLAB_SYNC::plotPreviewSvg( bool aFitPageToBoard )
     opts.SetSvgFitPageToBoard( aFitPageToBoard );
     opts.SetBlackAndWhite( false );
 
+    // Without explicit colors everything plots black; use the editor's own
+    // theme so previews look like the board people actually see.
+    opts.SetColorSettings( m_frame->GetColorSettings() );
+
     // The same layer set the CLI renderer used, so previews look identical
     // whichever side produced them.
     LSEQ layers = { F_Cu, B_Cu, Edge_Cuts, F_SilkS };
