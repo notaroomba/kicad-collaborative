@@ -149,6 +149,21 @@ BOOST_AUTO_TEST_CASE( SheetAddRoundTrips )
     std::string sexpr = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, sheet );
     BOOST_REQUIRE( !sexpr.empty() );
 
+    // Fixture generator for wire-level tests: dump the exact on-the-wire
+    // fragment so external harnesses replay genuine formatter output.
+    wxString dumpPath;
+
+    if( wxGetEnv( wxS( "KICAD_QA_DUMP_SHEET_SEXPR" ), &dumpPath ) && !dumpPath.IsEmpty() )
+    {
+        FILE* out = fopen( dumpPath.ToStdString( wxConvUTF8 ).c_str(), "w" );
+
+        if( out )
+        {
+            fwrite( sexpr.data(), 1, sexpr.size(), out );
+            fclose( out );
+        }
+    }
+
     nlohmann::json change = MakeChange( sheet, "ADDED" );
     change[ "sexpr" ] = sexpr;
 

@@ -314,3 +314,9 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   for a few seconds — the reported "doesn't copy" was pasting before the
   mint landed, with no feedback; viewer-role windows correctly refuse with
   an error infobar.)
+- [x] Sheet-sync live e2e (loop 20): the wire fragment for sheets is a BARE
+  `(sheet ...)` (the earlier synthetic test wrapped it in a full document —
+  that was the parse failure).  A QA-side env-gated dump
+  (`KICAD_QA_DUMP_SHEET_SEXPR`) now produces genuine formatter output for
+  wire harnesses; replaying it against the live editor materialized the
+  sheet ("creating screen" / "screen attached") with the editor healthy.
