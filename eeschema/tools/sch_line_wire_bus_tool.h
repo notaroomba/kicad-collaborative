@@ -111,6 +111,10 @@ public:
     int DrawSegments( const TOOL_EVENT& aEvent );
     int UnfoldBus( const TOOL_EVENT& aEvent );
 
+    ///< The wire/bus segments currently being drawn (live collaboration shares
+    ///< them as ghost previews); empty when no drawing operation is in progress.
+    const std::vector<SCH_LINE*>& GetUnfinishedSegments() const { return m_wires; }
+
     // SELECTION_CONDITIONs:
     static bool IsDrawingLineWireOrBus( const SELECTION& aSelection );
 

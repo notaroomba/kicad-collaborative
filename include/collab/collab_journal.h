@@ -48,8 +48,13 @@ public:
     /**
      * Point the journal at a project directory. Existing unacknowledged entries
      * are loaded and are immediately available from Pending().
+     *
+     * @param aFileName journal file inside the .collab directory; each editor in
+     *                  the process must use its own (compaction rewrites the file
+     *                  from one journal's in-memory state only).
      */
-    void Open( const wxString& aProjectPath, const wxString& aProjectName );
+    void Open( const wxString& aProjectPath, const wxString& aProjectName,
+               const wxString& aFileName = wxS( "oplog.ndjson" ) );
 
     /// Stop journalling (does not delete the file).
     void Close();

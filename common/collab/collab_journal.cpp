@@ -31,7 +31,8 @@ static const wxChar* const traceCollab = wxT( "COLLAB" );
 static constexpr size_t STALE_LIMIT = 1000;
 
 
-void COLLAB_JOURNAL::Open( const wxString& aProjectPath, const wxString& aProjectName )
+void COLLAB_JOURNAL::Open( const wxString& aProjectPath, const wxString& aProjectName,
+                           const wxString& aFileName )
 {
     Close();
 
@@ -47,7 +48,7 @@ void COLLAB_JOURNAL::Open( const wxString& aProjectPath, const wxString& aProjec
         return;
     }
 
-    wxFileName file( dir.GetPath(), wxS( "oplog.ndjson" ) );
+    wxFileName file( dir.GetPath(), aFileName );
     m_path = file.GetFullPath();
 
     load();

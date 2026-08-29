@@ -22,12 +22,15 @@
 #include "sch_collab_sync.h"
 
 #include <collab/collab_project.h>
+#include <collab/collab_rest.h>
 #include <kiid.h>
 #include <math/util.h>
 #include <sch_screen.h>
 #include <sch_sheet_path.h>
 #include <schematic.h>
+#include <sch_line.h>
 #include <tools/sch_actions.h>
+#include <tools/sch_line_wire_bus_tool.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 
@@ -42,6 +45,12 @@ static const wxChar* const traceCollab = wxT( "COLLAB" );
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
 static constexpr size_t MAX_PRESENCE_BOXES = 150;
+
+/// Cap on in-flight ghost segments per presence update (same 8 KB budget).
+static constexpr size_t MAX_GHOST_SEGS = 100;
+
+/// Cap on full item ghosts rendered per peer (painter calls are not free).
+static constexpr size_t MAX_GHOST_ITEMS = 40;
 
 
 SCH_COLLAB_TOOL::SCH_COLLAB_TOOL() :
@@ -80,6 +89,70 @@ void SCH_COLLAB_TOOL::Reset( RESET_REASON aReason )
 
     // A schematic (re)load rebuilds the view contents, dropping our overlay item;
     // the next rebuildOverlay() re-adds it.
+
+    // A cloud project copy records its server project beside the files; rejoin
+    // the live session automatically.  Deferred so the load fully completes first.
+    if( aReason == RUN || aReason == MODEL_RELOAD || aReason == SUPERMODEL_RELOAD )
+    {
+        if( !sessionActive() && m_frame
+            && m_autoJoinProject != m_frame->Prj().GetProjectPath() )
+        {
+            CallAfter(
+                    [this]()
+                    {
+                        tryAutoJoin();
+                    } );
+        }
+    }
+}
+
+
+void SCH_COLLAB_TOOL::tryAutoJoin()
+{
+    if( sessionActive() || !m_frame )
+        return;
+
+    wxString projectPath = m_frame->Prj().GetProjectPath();
+
+    if( projectPath.IsEmpty() || m_autoJoinProject == projectPath )
+        return;
+
+    m_autoJoinProject = projectPath;
+
+    wxString server;
+    wxString projectId = COLLAB_PROJECT::ReadLocalLink( projectPath,
+                                                        m_frame->Prj().GetProjectName(), server );
+
+    if( projectId.IsEmpty() || server != COLLAB_SESSION::ServerUrl() )
+        return;
+
+    wxString token = COLLAB_AUTH::StoredToken( server );
+
+    if( token.IsEmpty() )
+        return;
+
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    if( session.GetState() != COLLAB_SESSION::STATE::DISCONNECTED )
+    {
+        // Another editor in this process already connected the session; join our
+        // docs from the published doc list without reconnecting.
+        if( session.ProjectDocs().is_array() && !session.ProjectDocs().empty() )
+        {
+            nlohmann::json project = { { "docs", session.ProjectDocs() } };
+            beginSession( project, token, wxEmptyString, false );
+        }
+
+        return;
+    }
+
+    std::optional<nlohmann::json> project = COLLAB_REST::GetProject( server, token, projectId );
+
+    if( project )
+    {
+        wxLogTrace( traceCollab, wxS( "auto-joining cloud project %s" ), projectId );
+        beginSession( *project, token, wxEmptyString );
+    }
 }
 
 
@@ -172,6 +245,12 @@ void SCH_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
         return;
     }
 
+    // Remember the pairing so this copy rejoins automatically next time.
+    COLLAB_PROJECT::WriteLocalLink( m_frame->Prj().GetProjectPath(),
+                                    m_frame->Prj().GetProjectName(),
+                                    COLLAB_SESSION::ServerUrl(),
+                                    wxString::FromUTF8( project->value( "projectId", "" ) ) );
+
     beginSession( *project, aToken, aLinkToken );
 }
 
@@ -198,6 +277,12 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
         wxTheClipboard->Close();
     }
 
+    // Remember the pairing so this copy rejoins automatically next time.
+    COLLAB_PROJECT::WriteLocalLink( m_frame->Prj().GetProjectPath(),
+                                    m_frame->Prj().GetProjectName(),
+                                    COLLAB_SESSION::ServerUrl(),
+                                    wxString::FromUTF8( project->value( "projectId", "" ) ) );
+
     beginSession( *project, aToken, wxEmptyString );
 
     wxMessageBox( wxString::Format( _( "Share link copied to the clipboard:\n%s" ), url ),
@@ -206,9 +291,10 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 
 
 void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxString& aToken,
-                                    const wxString& aLinkToken )
+                                    const wxString& aLinkToken, bool aConnect )
 {
-    endSession();
+    if( aConnect )
+        endSession();
 
     // Publish the full doc list so the board editor can find and join its own doc.
     COLLAB_SESSION::Get().SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
@@ -239,7 +325,8 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
-    session.Connect( aToken, aLinkToken );
+    if( aConnect )
+        session.Connect( aToken, aLinkToken );
 
     // The sync engine must exist before the joins so it sees the join-time messages.
     m_sync = std::make_unique<SCH_COLLAB_SYNC>( m_frame, m_docIdByPath );
@@ -364,6 +451,25 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         }
     }
 
+    // In-flight wire/bus segments ghost live on peers' canvases.
+    nlohmann::json ghost = nlohmann::json::array();
+
+    if( SCH_LINE_WIRE_BUS_TOOL* wireTool = m_toolMgr->GetTool<SCH_LINE_WIRE_BUS_TOOL>() )
+    {
+        for( SCH_LINE* line : wireTool->GetUnfinishedSegments() )
+        {
+            if( !line || line->GetStartPoint() == line->GetEndPoint() )
+                continue;
+
+            if( ghost.size() >= MAX_GHOST_SEGS )
+                break;
+
+            ghost.push_back( { line->GetStartPoint().x, line->GetStartPoint().y,
+                               line->GetEndPoint().x, line->GetEndPoint().y,
+                               line->GetLineWidth() } );
+        }
+    }
+
     nlohmann::json state = {
         { "cursor", { KiROUND( cursor.x ), KiROUND( cursor.y ) } },
         { "viewport",
@@ -371,16 +477,23 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selection },
         { "boxes", boxes },
+        { "ghost", ghost },
         { "sheetFile", sheetFile.ToStdString( wxConvUTF8 ) },
         { "sheetPath", m_frame->GetCurrentSheet().PathAsString().ToStdString( wxConvUTF8 ) },
     };
 
-    if( !m_presenceDirty && docId == m_lastSentDocId && state == m_lastSentState )
+    // Re-send unchanged state as a keepalive: the server evicts peers after 30 s
+    // of silence, which would make an idle collaborator's cursor vanish.
+    bool keepalive = m_lastPresenceSend.IsValid()
+                     && wxDateTime::Now() - m_lastPresenceSend >= wxTimeSpan::Seconds( 10 );
+
+    if( !m_presenceDirty && !keepalive && docId == m_lastSentDocId && state == m_lastSentState )
         return;
 
     m_presenceDirty = false;
     m_lastSentDocId = docId;
     m_lastSentState = state;
+    m_lastPresenceSend = wxDateTime::Now();
 
     session.SendPresence( docId, state );
 }
@@ -504,6 +617,38 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                             VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
                             VECTOR2I( box[ 2 ].get<int>(), box[ 3 ].get<int>() ) );
                 }
+
+                // When we hold our own copy of a dragged item, render the real
+                // thing at the peer's live position instead of an empty box.
+                if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+                {
+                    const nlohmann::json& ids = peer.state[ "selection" ];
+                    const nlohmann::json& boxes = peer.state[ "boxes" ];
+                    SCH_SCREEN*           screen = m_frame->GetScreen();
+
+                    for( size_t ii = 0; ii < ids.size() && ii < boxes.size()
+                                        && draw.ghostItems.size() < MAX_GHOST_ITEMS; ++ii )
+                    {
+                        if( !ids[ ii ].is_string() || !boxes[ ii ].is_array()
+                            || boxes[ ii ].size() < 4 )
+                            continue;
+
+                        KIID kiid( wxString::FromUTF8( ids[ ii ].get<std::string>() ) );
+                        SCH_ITEM* item = m_frame->Schematic().ResolveItem( kiid, nullptr, true );
+
+                        if( !item || item->GetParent() != screen )
+                            continue;
+
+                        VECTOR2I offset( boxes[ ii ][ 0 ].get<int>()
+                                                 - item->GetBoundingBox().GetX(),
+                                         boxes[ ii ][ 1 ].get<int>()
+                                                 - item->GetBoundingBox().GetY() );
+
+                        // Only ghost items that are actually displaced (i.e. mid-drag).
+                        if( std::abs( offset.x ) > 1 || std::abs( offset.y ) > 1 )
+                            draw.ghostItems.push_back( { item, offset } );
+                    }
+                }
             }
             else if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
             {
@@ -519,8 +664,27 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 }
             }
 
-            if( draw.hasCursor || !draw.selectionBoxes.empty() )
+            // In-flight wire/bus segments the peer is drawing right now.
+            if( peer.state.contains( "ghost" ) && peer.state[ "ghost" ].is_array() )
+            {
+                for( const nlohmann::json& seg : peer.state[ "ghost" ] )
+                {
+                    if( !seg.is_array() || seg.size() < 5 )
+                        continue;
+
+                    draw.ghostSegs.push_back( { VECTOR2I( seg[ 0 ].get<int>(),
+                                                          seg[ 1 ].get<int>() ),
+                                                VECTOR2I( seg[ 2 ].get<int>(),
+                                                          seg[ 3 ].get<int>() ),
+                                                seg[ 4 ].get<int>() } );
+                }
+            }
+
+            if( draw.hasCursor || !draw.selectionBoxes.empty() || !draw.ghostSegs.empty()
+                || !draw.ghostItems.empty() )
+            {
                 draws.push_back( std::move( draw ) );
+            }
         }
     }
 

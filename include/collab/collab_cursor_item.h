@@ -34,15 +34,35 @@ class VIEW;
 }
 
 
+/// A live in-flight segment from a peer (a track being routed, a wire being drawn).
+struct REMOTE_GHOST_SEG
+{
+    VECTOR2I a;
+    VECTOR2I b;
+    int      width = 0;
+};
+
+
+/// A local item drawn as a ghost at the position a peer is live-dragging it to.
+struct REMOTE_GHOST_ITEM
+{
+    const EDA_ITEM* item = nullptr;
+    VECTOR2I        offset;
+};
+
+
 /// What is drawn for one remote participant: their cursor (if on this sheet), a name
-/// tag, and the bounding boxes of their current selection.
+/// tag, the bounding boxes of their current selection, their in-flight route/wire
+/// segments, and full ghosts of items they are dragging (when we have local copies).
 struct REMOTE_PEER_DRAW
 {
-    VECTOR2I           cursor;
-    bool               hasCursor = false;
-    wxString           label;
-    KIGFX::COLOR4D     color;
-    std::vector<BOX2I> selectionBoxes;
+    VECTOR2I                       cursor;
+    bool                           hasCursor = false;
+    wxString                       label;
+    KIGFX::COLOR4D                 color;
+    std::vector<BOX2I>             selectionBoxes;
+    std::vector<REMOTE_GHOST_SEG>  ghostSegs;
+    std::vector<REMOTE_GHOST_ITEM> ghostItems;
 };
 
 

@@ -168,6 +168,14 @@ void COLLAB_AUTH::onLoopbackResult( wxCommandEvent& aEvent )
 
 wxString COLLAB_AUTH::StoredToken( const wxString& aServerUrl )
 {
+    // Test/CI hook: a token supplied via the environment bypasses the keychain
+    // (and the browser sign-in), so two instances on one machine can act as
+    // different users against a local server.
+    wxString envToken;
+
+    if( wxGetEnv( wxS( "KICAD_COLLAB_TOKEN" ), &envToken ) && !envToken.IsEmpty() )
+        return envToken;
+
     SECURE_TOKEN_STORE store;
 
     if( std::optional<OAUTH_TOKEN_SET> tokens =

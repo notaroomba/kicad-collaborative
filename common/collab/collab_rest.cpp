@@ -183,3 +183,135 @@ bool COLLAB_REST::UploadSnapshot( const wxString& aServerUrl, const wxString& aT
 
     return performOk( curl );
 }
+
+
+std::optional<nlohmann::json> COLLAB_REST::ListProjects( const wxString& aServerUrl,
+                                                         const wxString& aToken )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects" ), aToken );
+
+    return performJson( curl );
+}
+
+
+bool COLLAB_REST::DeleteProject( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId, aToken );
+
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "DELETE" );
+
+    return performOk( curl );
+}
+
+
+bool COLLAB_REST::RenameProject( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aProjectId, const wxString& aName )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId, aToken );
+
+    nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
+
+    curl.SetHeader( "Content-Type", "application/json" );
+    curl.SetPostFields( body.dump() );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
+
+    return performOk( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::SearchUsers( const wxString& aServerUrl,
+                                                        const wxString& aToken,
+                                                        const wxString& aQuery )
+{
+    KICAD_CURL_EASY curl;
+
+    std::string escaped = curl.Escape( aQuery.ToStdString( wxConvUTF8 ) );
+
+    setupRequest( curl, aServerUrl + wxS( "/api/users/search?q=" ) + wxString::FromUTF8( escaped ),
+                  aToken );
+
+    // Typeahead: fail fast rather than hanging the dialog.
+    curl.SetTimeout( 10 );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::Invite( const wxString& aServerUrl,
+                                                   const wxString& aToken,
+                                                   const wxString& aProjectId,
+                                                   const wxString& aLogin,
+                                                   const wxString& aEmail,
+                                                   const wxString& aRole )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/invites" ),
+                  aToken );
+
+    nlohmann::json body = { { "role", aRole.ToStdString( wxConvUTF8 ) } };
+
+    if( !aLogin.IsEmpty() )
+        body[ "login" ] = aLogin.ToStdString( wxConvUTF8 );
+    else if( !aEmail.IsEmpty() )
+        body[ "email" ] = aEmail.ToStdString( wxConvUTF8 );
+
+    curl.SetHeader( "Content-Type", "application/json" );
+    curl.SetPostFields( body.dump() );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::ListMembers( const wxString& aServerUrl,
+                                                        const wxString& aToken,
+                                                        const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/members" ),
+                  aToken );
+
+    return performJson( curl );
+}
+
+
+bool COLLAB_REST::RemoveMember( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId, long long aUserId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl,
+                  wxString::Format( wxS( "%s/api/projects/%s/members/%lld" ), aServerUrl,
+                                    aProjectId, aUserId ),
+                  aToken );
+
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "DELETE" );
+
+    return performOk( curl );
+}
+
+
+bool COLLAB_REST::RevokeInvite( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId, long long aInviteId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl,
+                  wxString::Format( wxS( "%s/api/projects/%s/invites/%lld" ), aServerUrl,
+                                    aProjectId, aInviteId ),
+                  aToken );
+
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "DELETE" );
+
+    return performOk( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::Me( const wxString& aServerUrl, const wxString& aToken )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/me" ), aToken );
+
+    return performJson( curl );
+}

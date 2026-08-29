@@ -21,6 +21,7 @@
 
 #include <deque>
 #include <map>
+#include <set>
 #include <string>
 
 #include <collab/collab_journal.h>
@@ -157,6 +158,10 @@ private:
     void drainQueue();
     void applyOp( const PENDING_OP& aOp );
 
+    ///< Save symbols that arrived from a library we do not have into a
+    ///< project-local library, so the reference resolves here too.
+    void saveMissingLibraries( const nlohmann::json& aChanges );
+
     ///< The server doc id for the document containing aScreen, or empty when the
     ///< screen's file is not part of the shared project.
     wxString docIdForScreen( const SCH_SCREEN* aScreen ) const;
@@ -192,4 +197,7 @@ private:
     std::map<wxString, long long> m_lastAppliedSeq; ///< docId -> last applied/acked seq
     std::map<wxString, bool>      m_resyncPending;  ///< docId -> resync requested, tail awaited
     std::deque<PENDING_OP>        m_queue;          ///< inbound ops awaiting idle-time apply
+
+    ///< Library nicknames already handled by saveMissingLibraries this session.
+    std::set<wxString>            m_savedLibNicknames;
 };
