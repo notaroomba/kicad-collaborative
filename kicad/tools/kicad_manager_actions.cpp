@@ -69,6 +69,14 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::openProject( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Open Project..." ) )
         .Icon( BITMAPS::open_project ) );
 
+TOOL_ACTION KICAD_MANAGER_ACTIONS::onlineProjects( TOOL_ACTION_ARGS()
+        .Name( "kicad.Control.onlineProjects" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Online Projects..." ) )
+        .Tooltip( _( "Browse, open, create and share collaborative projects stored on the "
+                     "collaboration server" ) )
+        .Icon( BITMAPS::www ) );
+
 TOOL_ACTION KICAD_MANAGER_ACTIONS::openJobsetFile( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.openJobset" )
         .Scope( AS_GLOBAL )
