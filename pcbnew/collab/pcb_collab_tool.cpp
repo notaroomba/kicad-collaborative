@@ -19,10 +19,22 @@
 
 #include "pcb_collab_tool.h"
 
+#include "pcb_collab_sync.h"
+
 #include <collab/collab_project.h>
+#include <collab/collab_rest.h>
 #include <kiid.h>
+#include <router/pns_arc.h>
+#include <router/pns_drag_algo.h>
+#include <router/pns_itemset.h>
+#include <router/pns_line.h>
+#include <router/pns_placement_algo.h>
+#include <router/pns_router.h>
+#include <router/pns_segment.h>
+#include <router/router_tool.h>
 #include <math/util.h>
 #include <tool/actions.h>
+#include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection.h>
 #include <view/view.h>
@@ -36,6 +48,65 @@
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
 static constexpr size_t MAX_PRESENCE_BOXES = 150;
+
+/// Cap on in-flight ghost segments per presence update (same 8 KB budget).
+static constexpr size_t MAX_GHOST_SEGS = 100;
+
+/// Cap on full item ghosts rendered per peer (painter calls are not free).
+static constexpr size_t MAX_GHOST_ITEMS = 40;
+
+
+/// Flatten the router's current in-flight traces into wire-format ghost segments.
+static void collectRouterGhost( PNS::ROUTER* aRouter, nlohmann::json& aGhost )
+{
+    if( !aRouter || !aRouter->RoutingInProgress() )
+        return;
+
+    PNS::ITEM_SET traces;
+
+    if( aRouter->Placer() )
+        traces = aRouter->Placer()->Traces();
+    else if( aRouter->GetDragger() )
+        traces = aRouter->GetDragger()->Traces();
+
+    auto addChain = [&]( const SHAPE_LINE_CHAIN& aChain, int aWidth )
+    {
+        for( int ii = 0; ii < aChain.SegmentCount(); ++ii )
+        {
+            if( aGhost.size() >= MAX_GHOST_SEGS )
+                return;
+
+            const SEG seg = aChain.CSegment( ii );
+
+            if( seg.A == seg.B )
+                continue;
+
+            aGhost.push_back( { seg.A.x, seg.A.y, seg.B.x, seg.B.y, aWidth } );
+        }
+    };
+
+    for( const PNS::ITEM* item : traces.CItems() )
+    {
+        if( !item || aGhost.size() >= MAX_GHOST_SEGS )
+            break;
+
+        if( item->Kind() == PNS::ITEM::LINE_T )
+        {
+            const PNS::LINE* line = static_cast<const PNS::LINE*>( item );
+            addChain( line->CLine(), line->Width() );
+        }
+        else if( item->Kind() == PNS::ITEM::SEGMENT_T )
+        {
+            const PNS::SEGMENT* seg = static_cast<const PNS::SEGMENT*>( item );
+            addChain( seg->CLine(), seg->Width() );
+        }
+        else if( item->Kind() == PNS::ITEM::ARC_T )
+        {
+            const PNS::ARC* arc = static_cast<const PNS::ARC*>( item );
+            addChain( arc->CLine(), arc->Width() );
+        }
+    }
+}
 
 
 PCB_COLLAB_TOOL::PCB_COLLAB_TOOL() :
@@ -138,6 +209,7 @@ int PCB_COLLAB_TOOL::JoinSession( const TOOL_EVENT& aEvent )
 int PCB_COLLAB_TOOL::LeaveSession( const TOOL_EVENT& aEvent )
 {
     endSession();
+    frame<PCB_EDIT_FRAME>()->SetStatusText( wxEmptyString, 0 );
 
     return 0;
 }
@@ -185,6 +257,12 @@ void PCB_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
         return;
     }
 
+    // Remember the pairing so this copy rejoins automatically next time.
+    COLLAB_PROJECT::WriteLocalLink( frame<PCB_EDIT_FRAME>()->Prj().GetProjectPath(),
+                                    frame<PCB_EDIT_FRAME>()->Prj().GetProjectName(),
+                                    COLLAB_SESSION::ServerUrl(),
+                                    wxString::FromUTF8( project->value( "projectId", "" ) ) );
+
     beginSession( *project, aToken, aLinkToken );
 }
 
@@ -212,6 +290,12 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
         wxTheClipboard->Close();
     }
 
+    // Remember the pairing so this copy rejoins automatically next time.
+    COLLAB_PROJECT::WriteLocalLink( editFrame->Prj().GetProjectPath(),
+                                    editFrame->Prj().GetProjectName(),
+                                    COLLAB_SESSION::ServerUrl(),
+                                    wxString::FromUTF8( project->value( "projectId", "" ) ) );
+
     beginSession( *project, aToken, wxEmptyString );
 
     wxMessageBox( wxString::Format( _( "Share link copied to the clipboard:\n%s" ), url ),
@@ -222,14 +306,10 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
 void PCB_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxString& aToken,
                                     const wxString& aLinkToken )
 {
-    endSession();
-
-    COLLAB_SESSION& session = COLLAB_SESSION::Get();
-
-    // Publish the full doc list so the schematic editor can find its own docs.
-    session.SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
-
+    // Find our doc before touching any existing session: a failed join must not
+    // tear down a session eeschema owns.
     wxString file = boardFile();
+    wxString docId;
 
     if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
     {
@@ -241,28 +321,87 @@ void PCB_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
             if( wxString::FromUTF8( doc.value( "path", "" ) ) != file )
                 continue;
 
-            wxString docId = wxString::FromUTF8( doc.value( "docId", "" ) );
+            wxString candidate = wxString::FromUTF8( doc.value( "docId", "" ) );
 
-            if( docId.IsEmpty() )
-                continue;
-
-            m_docId = docId;
-            m_docPath = file;
-            break;
+            if( !candidate.IsEmpty() )
+            {
+                docId = candidate;
+                break;
+            }
         }
     }
 
-    if( m_docId.IsEmpty() )
+    if( docId.IsEmpty() )
     {
         frame<PCB_EDIT_FRAME>()->ShowInfoBarError( _( "The shared project contains no board "
                                                       "matching this one." ) );
         return;
     }
 
+    endSession();
+
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // Publish the full doc list so the schematic editor can find its own docs.
+    session.SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
+
     m_ownsSession = true;
 
     session.Connect( aToken, aLinkToken );
-    session.JoinDoc( m_docId, std::nullopt, this );
+    joinDoc( docId, file );
+    OnSessionStateChanged();
+}
+
+
+void PCB_COLLAB_TOOL::tryAutoJoin()
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+
+    if( !editFrame || boardFile().IsEmpty() )
+        return;
+
+    wxString projectPath = editFrame->Prj().GetProjectPath();
+
+    if( projectPath.IsEmpty() || m_autoJoinProject == projectPath )
+        return;
+
+    m_autoJoinProject = projectPath;
+
+    wxString server;
+    wxString projectId = COLLAB_PROJECT::ReadLocalLink( projectPath,
+                                                        editFrame->Prj().GetProjectName(),
+                                                        server );
+
+    if( projectId.IsEmpty() || server != COLLAB_SESSION::ServerUrl() )
+        return;
+
+    wxString token = COLLAB_AUTH::StoredToken( server );
+
+    if( token.IsEmpty() )
+        return;
+
+    std::optional<nlohmann::json> project =
+            COLLAB_REST::GetProject( server, token, projectId );
+
+    if( project )
+        beginSession( *project, token, wxEmptyString );
+}
+
+
+void PCB_COLLAB_TOOL::joinDoc( const wxString& aDocId, const wxString& aDocPath )
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+
+    m_docId = aDocId;
+    m_docPath = aDocPath;
+
+    // The sync engine must exist before the join so it sees the join-time messages.
+    m_sync = std::make_unique<PCB_COLLAB_SYNC>( editFrame, m_docId );
+
+    // Picks up ops left unacknowledged by a previous run (crash, or offline edits).
+    m_sync->OpenJournal( editFrame->Prj().GetProjectPath(), editFrame->Prj().GetProjectName() );
+
+    COLLAB_SESSION::Get().JoinDoc( m_docId, std::nullopt, this );
 }
 
 
@@ -277,6 +416,8 @@ void PCB_COLLAB_TOOL::endSession()
 
 void PCB_COLLAB_TOOL::leaveDoc()
 {
+    m_sync.reset();
+
     if( !m_docId.IsEmpty() )
         COLLAB_SESSION::Get().LeaveDoc( m_docId );
 
@@ -330,6 +471,12 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         if( !m_ownsSession && !m_docId.IsEmpty() )
             leaveDoc();
 
+        // A cloud project copy records its server project beside the files; rejoin
+        // the live session automatically (once per project) when nothing else in
+        // the process owns a session.
+        if( session.GetState() == COLLAB_SESSION::STATE::DISCONNECTED && !m_ownsSession )
+            tryAutoJoin();
+
         return;
     }
 
@@ -362,9 +509,7 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             if( docId.IsEmpty() )
                 continue;
 
-            m_docId = docId;
-            m_docPath = file;
-            session.JoinDoc( m_docId, std::nullopt, this );
+            joinDoc( docId, file );
             break;
         }
 
@@ -393,6 +538,12 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         }
     }
 
+    // The route (or track drag) in flight ghosts live on peers' canvases.
+    nlohmann::json ghost = nlohmann::json::array();
+
+    if( ROUTER_TOOL* routerTool = m_toolMgr->GetTool<ROUTER_TOOL>() )
+        collectRouterGhost( routerTool->Router(), ghost );
+
     nlohmann::json state = {
         { "cursor", { KiROUND( cursor.x ), KiROUND( cursor.y ) } },
         { "viewport",
@@ -400,14 +551,21 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selectionIds },
         { "boxes", boxes },
+        { "ghost", ghost },
         { "sheetFile", file.ToStdString( wxConvUTF8 ) },
     };
 
-    if( !m_presenceDirty && state == m_lastSentState )
+    // Re-send unchanged state as a keepalive: the server evicts peers after 30 s
+    // of silence, which would make an idle collaborator's cursor vanish.
+    bool keepalive = m_lastPresenceSend.IsValid()
+                     && wxDateTime::Now() - m_lastPresenceSend >= wxTimeSpan::Seconds( 10 );
+
+    if( !m_presenceDirty && !keepalive && state == m_lastSentState )
         return;
 
     m_presenceDirty = false;
     m_lastSentState = state;
+    m_lastPresenceSend = wxDateTime::Now();
 
     session.SendPresence( m_docId, state );
 }
@@ -416,6 +574,71 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 void PCB_COLLAB_TOOL::OnPresenceChanged()
 {
     rebuildOverlay();
+}
+
+
+void PCB_COLLAB_TOOL::OnRemoteOp( const nlohmann::json& aOpMsg )
+{
+    if( m_sync )
+        m_sync->OnRemoteOp( aOpMsg );
+}
+
+
+void PCB_COLLAB_TOOL::OnOpsTail( const nlohmann::json& aOpsMsg )
+{
+    if( m_sync )
+        m_sync->OnOpsTail( aOpsMsg );
+}
+
+
+void PCB_COLLAB_TOOL::OnSnapshot( const nlohmann::json& aSnapshotMsg )
+{
+    if( m_sync )
+        m_sync->OnSnapshot( aSnapshotMsg );
+}
+
+
+void PCB_COLLAB_TOOL::OnAck( const wxString& aClientOpId, long long aSeq )
+{
+    if( m_sync )
+        m_sync->OnAck( aClientOpId, aSeq );
+}
+
+
+void PCB_COLLAB_TOOL::OnSnapshotRequest()
+{
+    if( m_sync )
+        m_sync->OnSnapshotRequest();
+}
+
+
+void PCB_COLLAB_TOOL::OnReset( long long aSeq )
+{
+    if( m_sync )
+        m_sync->OnReset( aSeq );
+}
+
+
+void PCB_COLLAB_TOOL::OnSessionStateChanged()
+{
+    if( !sessionActive() )
+        return;
+
+    wxString msg;
+
+    switch( COLLAB_SESSION::Get().GetState() )
+    {
+    case COLLAB_SESSION::STATE::LIVE:         msg = _( "Collaboration: live" );          break;
+    case COLLAB_SESSION::STATE::CONNECTING:   msg = _( "Collaboration: connecting..." ); break;
+    case COLLAB_SESSION::STATE::DISCONNECTED: msg = _( "Collaboration: offline" );       break;
+    }
+
+    frame<PCB_EDIT_FRAME>()->SetStatusText( msg, 0 );
+
+    // Back online: push anything edited while disconnected. The server dedups
+    // by clientOpId, so re-sending an op it already has is a no-op.
+    if( m_sync && COLLAB_SESSION::Get().IsLive() )
+        m_sync->ReplayUnacked();
 }
 
 
@@ -465,6 +688,49 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                             VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
                             VECTOR2I( box[ 2 ].get<int>(), box[ 3 ].get<int>() ) );
                 }
+
+                // When we hold our own copy of a dragged item, render the real
+                // thing at the peer's live position instead of an empty box.
+                // Footprints paint their children as separate view items, so
+                // expand them here.
+                if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+                {
+                    const nlohmann::json& ids = peer.state[ "selection" ];
+                    const nlohmann::json& boxesJson = peer.state[ "boxes" ];
+
+                    for( size_t ii = 0; ii < ids.size() && ii < boxesJson.size()
+                                        && draw.ghostItems.size() < MAX_GHOST_ITEMS; ++ii )
+                    {
+                        if( !ids[ ii ].is_string() || !boxesJson[ ii ].is_array()
+                            || boxesJson[ ii ].size() < 4 )
+                            continue;
+
+                        KIID kiid( wxString::FromUTF8( ids[ ii ].get<std::string>() ) );
+                        BOARD_ITEM* item = board()->ResolveItem( kiid, true );
+
+                        if( !item || item->GetParent() != board() )
+                            continue;
+
+                        VECTOR2I offset( boxesJson[ ii ][ 0 ].get<int>()
+                                                 - item->GetBoundingBox().GetX(),
+                                         boxesJson[ ii ][ 1 ].get<int>()
+                                                 - item->GetBoundingBox().GetY() );
+
+                        // Only ghost items that are actually displaced (mid-drag).
+                        if( std::abs( offset.x ) <= 1 && std::abs( offset.y ) <= 1 )
+                            continue;
+
+                        draw.ghostItems.push_back( { item, offset } );
+
+                        item->RunOnChildren(
+                                [&]( BOARD_ITEM* aChild )
+                                {
+                                    if( draw.ghostItems.size() < MAX_GHOST_ITEMS )
+                                        draw.ghostItems.push_back( { aChild, offset } );
+                                },
+                                RECURSE_MODE::RECURSE );
+                    }
+                }
             }
             else if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
             {
@@ -480,8 +746,27 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                 }
             }
 
-            if( draw.hasCursor || !draw.selectionBoxes.empty() )
+            // In-flight route/drag segments the peer is pushing right now.
+            if( peer.state.contains( "ghost" ) && peer.state[ "ghost" ].is_array() )
+            {
+                for( const nlohmann::json& seg : peer.state[ "ghost" ] )
+                {
+                    if( !seg.is_array() || seg.size() < 5 )
+                        continue;
+
+                    draw.ghostSegs.push_back( { VECTOR2I( seg[ 0 ].get<int>(),
+                                                          seg[ 1 ].get<int>() ),
+                                                VECTOR2I( seg[ 2 ].get<int>(),
+                                                          seg[ 3 ].get<int>() ),
+                                                seg[ 4 ].get<int>() } );
+                }
+            }
+
+            if( draw.hasCursor || !draw.selectionBoxes.empty() || !draw.ghostSegs.empty()
+                || !draw.ghostItems.empty() )
+            {
                 draws.push_back( std::move( draw ) );
+            }
         }
     }
 

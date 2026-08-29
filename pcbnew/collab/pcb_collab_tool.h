@@ -20,13 +20,17 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 
 #include <collab/collab_auth.h>
 #include <collab/collab_cursor_item.h>
 #include <collab/collab_session.h>
 #include <tools/pcb_tool_base.h>
 
+#include <wx/datetime.h>
 #include <wx/timer.h>
+
+class PCB_COLLAB_SYNC;
 
 
 /**
@@ -64,6 +68,16 @@ public:
 
     // COLLAB_DOC_ADAPTER; all calls arrive on the UI thread.
     void OnPresenceChanged() override;
+    void OnSessionStateChanged() override;
+    void OnRemoteOp( const nlohmann::json& aOpMsg ) override;
+    void OnOpsTail( const nlohmann::json& aOpsMsg ) override;
+    void OnSnapshot( const nlohmann::json& aSnapshotMsg ) override;
+    void OnAck( const wxString& aClientOpId, long long aSeq ) override;
+    void OnSnapshotRequest() override;
+    void OnReset( long long aSeq ) override;
+
+    ///< The live-editing sync engine, or nullptr when the board doc is not joined.
+    PCB_COLLAB_SYNC* GetSync() const { return m_sync.get(); }
 
 private:
     ///< Set up handlers for various events.
@@ -89,6 +103,13 @@ private:
     ///< Leave the board doc and remove all remote cursors.
     void leaveDoc();
 
+    ///< Register for the board doc and stand up the edit-sync engine.
+    void joinDoc( const wxString& aDocId, const wxString& aDocPath );
+
+    ///< Rejoin the live session recorded beside a cloud project copy (link.json),
+    ///< silently.  No-op without a stored token or link file.
+    void tryAutoJoin();
+
     ///< The board's file name, relative to the project (forward slashes).
     wxString boardFile() const;
 
@@ -100,9 +121,13 @@ private:
     wxTimer            m_timer;
     COLLAB_CURSOR_ITEM m_cursorItem;
 
+    std::unique_ptr<PCB_COLLAB_SYNC> m_sync;  ///< live while the board doc is joined
+
     wxString       m_docId;      ///< server doc id of the joined board doc; empty when not joined
     wxString       m_docPath;    ///< project-relative board path the doc was joined for
     nlohmann::json m_lastSentState;
+    wxDateTime     m_lastPresenceSend;  ///< for the idle keepalive
     bool           m_presenceDirty;
     bool           m_ownsSession; ///< this tool connected the session, rather than eeschema
+    wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
 };

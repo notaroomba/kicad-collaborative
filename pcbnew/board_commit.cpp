@@ -23,6 +23,8 @@
 #include <pgm_base.h>
 #include <settings/settings_manager.h>
 #include <board.h>
+#include <collab/pcb_collab_sync.h>
+#include <collab/pcb_collab_tool.h>
 #include <component_classes/component_class_manager.h>
 #include <footprint.h>
 #include <lset.h>
@@ -218,6 +220,18 @@ void BOARD_COMMIT::Push( const wxString& aMessage, int aCommitFlags )
 
     if( Empty() )
         return;
+
+    // Serialize before-images while COMMIT_LINE::m_copy is still alive; the apply
+    // loop below consumes the copies (undo list or delete).
+    PCB_COLLAB_SYNC* collabSync = nullptr;
+
+    if( m_isBoardEditor )
+    {
+        if( PCB_COLLAB_TOOL* collabTool = m_toolMgr->GetTool<PCB_COLLAB_TOOL>() )
+            collabSync = collabTool->GetSync();
+    }
+
+    size_t collabPreCount = collabSync ? collabSync->CaptureCommitBegin( *this, aCommitFlags ) : 0;
 
     undoList.SetDescription( aMessage );
 
@@ -715,6 +729,11 @@ void BOARD_COMMIT::Push( const wxString& aMessage, int aCommitFlags )
             frame->SetMsgPanel( msg_list );
         }
     }
+
+    // Pick up the teardrop/connectivity entries appended mid-push so they ship in
+    // the same atomic batch as the user edit.
+    if( collabSync )
+        collabSync->CaptureCommitEnd( *this, collabPreCount, aCommitFlags );
 
     clear();
 }

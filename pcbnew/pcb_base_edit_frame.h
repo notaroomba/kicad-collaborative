@@ -157,6 +157,14 @@ public:
     void PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool aRehatchShapes = true );
 
     /**
+     * Remove every picker referencing \a aItemId from both undo and redo stacks,
+     * freeing whatever the stacks own.  Used when a collaboration session deletes an
+     * item remotely: the local stacks may still reference the object about to be
+     * freed.
+     */
+    void PurgeItemFromUndoRedo( const KIID& aItemId );
+
+    /**
      * Check if the undo and redo operations are currently blocked.
      */
     bool UndoRedoBlocked() const
