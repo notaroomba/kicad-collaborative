@@ -481,6 +481,24 @@ int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
         return 0;
     }
 
+    // Repeat clicks copy instantly; the first mint happens on the worker and
+    // can sit behind snapshot uploads for a few seconds.
+    if( !m_cachedShareLink.IsEmpty() )
+    {
+        if( wxTheClipboard->Open() )
+        {
+            wxTheClipboard->SetData( new wxTextDataObject( m_cachedShareLink ) );
+            wxTheClipboard->Close();
+        }
+
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                _( "Share link copied to the clipboard." ) );
+        return 0;
+    }
+
+    frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+            _( "Creating a share link... it lands on the clipboard in a moment." ) );
+
     std::shared_ptr<bool> alive = m_alive;
     std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
     std::string token =
@@ -519,6 +537,8 @@ int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 
                             frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
                                     _( "Share link copied to the clipboard." ) );
+
+                            m_cachedShareLink = wxString::FromUTF8( url );
                         } );
             } );
 
@@ -814,6 +834,7 @@ void PCB_COLLAB_TOOL::leaveDoc()
 
     m_comments = nlohmann::json::array();
     m_projectId.clear();
+    m_cachedShareLink.clear();
 
     if( m_historyPanel )
         m_historyPanel->SetProject( wxEmptyString );

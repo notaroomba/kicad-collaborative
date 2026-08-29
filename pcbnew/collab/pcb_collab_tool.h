@@ -85,6 +85,9 @@ public:
     ///< Copy an invite link for the current session to the clipboard.
     int CopyShareLink( const TOOL_EVENT& aEvent );
 
+    ///< The last minted share link, copied instantly on repeat clicks.
+    wxString m_cachedShareLink;
+
     ///< Open the comments dialog focused on aRootId's thread.
     void openThread( long long aRootId );
 

@@ -65,12 +65,13 @@ static const wxChar* const traceCollab = wxT( "COLLAB" );
 namespace
 {
 
-/// Types whose ADDED / whole-item-replace ops are deferred to a later milestone:
-/// a lone SCH_SHEET fragment parses without its screen (swapping would null the live
-/// screen), and a lone SCH_GROUP fragment cannot resolve its member UUIDs.
+/// SCH_GROUP fragments cannot resolve their member UUIDs and stay deferred.
+/// Sheets transfer: the fragment parses without its screen, so the applier
+/// preserves the live screen across an upsert and gives a brand-new sheet an
+/// empty screen that the doc-join reconcile then populates.
 bool typeSupportsSexprTransfer( const SCH_ITEM* aItem )
 {
-    return aItem->Type() != SCH_SHEET_T && aItem->Type() != SCH_GROUP_T;
+    return aItem->Type() != SCH_GROUP_T;
 }
 
 
@@ -247,12 +248,6 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             if( !item )
                 return true;    // already gone: delete beats concurrent modify (LWW)
 
-            if( item->Type() == SCH_SHEET_T )
-            {
-                wxLogTrace( traceCollab, wxS( "ApplyItemChange: sheet removal not supported yet" ) );
-                return false;
-            }
-
             if( aCommit )
             {
                 aCommit->Remove( item, screen );
@@ -293,7 +288,17 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                 if( aCommit )
                     aCommit->Modify( item, screen );
 
+                // A parsed sheet fragment has no screen; the live sheet's
+                // screen (and the file contents behind it) must survive.
+                SCH_SCREEN* keepScreen = nullptr;
+
+                if( item->Type() == SCH_SHEET_T )
+                    keepScreen = static_cast<SCH_SHEET*>( item )->GetScreen();
+
                 item->SwapItemData( fresh );
+
+                if( item->Type() == SCH_SHEET_T )
+                    static_cast<SCH_SHEET*>( item )->SetScreen( keepScreen );
 
                 if( item->Type() == SCH_SYMBOL_T )
                 {
@@ -318,6 +323,21 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             }
             else if( kind == "ADDED" )
             {
+                if( fresh->Type() == SCH_SHEET_T )
+                {
+                    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                        fprintf( stderr, "COLLAB sheet: creating screen\n" );
+
+                    SCH_SHEET*  sheet = static_cast<SCH_SHEET*>( fresh );
+                    SCH_SCREEN* newScreen = new SCH_SCREEN( &aSchematic );
+
+                    newScreen->SetFileName( sheet->GetFileName() );
+                    sheet->SetScreen( newScreen );
+
+                    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                        fprintf( stderr, "COLLAB sheet: screen attached\n" );
+                }
+
                 if( aCommit )
                     aCommit->Add( fresh, aScreen );
                 else
@@ -406,6 +426,8 @@ SCH_COLLAB_SYNC::SCH_COLLAB_SYNC( SCH_EDIT_FRAME* aFrame,
 
 SCH_COLLAB_SYNC::~SCH_COLLAB_SYNC()
 {
+    *m_alive = false;
+
     m_frame->Unbind( wxEVT_IDLE, &SCH_COLLAB_SYNC::onIdle, this );
 }
 
@@ -548,12 +570,6 @@ void SCH_COLLAB_SYNC::captureItem( SCH_ITEM* aItem, SCH_ITEM* aBefore, SCH_SCREE
         break;
 
     case CHT_REMOVE:
-        if( aItem->Type() == SCH_SHEET_T )
-        {
-            wxLogTrace( traceCollab, wxS( "capture: skipping unsupported sheet removal" ) );
-            return;
-        }
-
         change.kind = CHANGE_KIND::REMOVED;
         break;
 
@@ -630,6 +646,11 @@ void SCH_COLLAB_SYNC::captureItem( SCH_ITEM* aItem, SCH_ITEM* aBefore, SCH_SCREE
 void SCH_COLLAB_SYNC::flushBatch()
 {
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // New hierarchical sheets in this batch bring new files: create their
+    // server docs and upload our content before peers try to join them.
+    for( auto& [docId, changes] : m_batch )
+        ensureSheetDocs( docId, changes, true );
 
     for( auto& [docId, changes] : m_batch )
     {
@@ -1413,6 +1434,148 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     }
 
     saveMissingLibraries( aOp.changes );
+    ensureSheetDocs( aOp.docId, aOp.changes, false );
+}
+
+
+void SCH_COLLAB_SYNC::RegisterDoc( const wxString& aRelPath, const wxString& aDocId )
+{
+    m_docIdByPath[ aRelPath ] = aDocId;
+    m_pathByDocId[ aDocId ] = aRelPath;
+}
+
+
+void SCH_COLLAB_SYNC::ensureSheetDocs( const wxString& aOpDocId, const nlohmann::json& aChanges,
+                                       bool aIsAuthor )
+{
+    wxString projectId = COLLAB_SESSION::Get().ProjectId();
+
+    if( projectId.IsEmpty() )
+        return;
+
+    SCH_SCREEN* screen = screenForDocId( aOpDocId );
+
+    if( !screen )
+        return;
+
+    for( const nlohmann::json& change : aChanges )
+    {
+        if( !change.is_object() || change.value( "typeName", "" ) != "SCH_SHEET" )
+            continue;
+
+        std::string kind = change.value( "kind", "" );
+
+        if( kind != "ADDED" && kind != "MODIFIED" )
+            continue;
+
+        KIID       id( wxString::FromUTF8( change.value( "id", "" ) ) );
+        SCH_SHEET* sheet = nullptr;
+
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( item->m_Uuid == id && item->Type() == SCH_SHEET_T )
+            {
+                sheet = static_cast<SCH_SHEET*>( item );
+                break;
+            }
+        }
+
+        if( !sheet )
+            continue;
+
+        wxString file = sheet->GetFileName();
+        file.Replace( wxS( "\\" ), wxS( "/" ) );
+
+        if( file.IsEmpty() || m_docIdByPath.count( file )
+            || !m_ensuredSheetFiles.insert( file ).second )
+        {
+            continue;
+        }
+
+        // Authors upload the new sheet's content as the doc's first snapshot;
+        // receivers join with an empty screen and reconcile from it.
+        std::string content;
+
+        if( aIsAuthor )
+        {
+            for( const SCH_SHEET_PATH& path : m_frame->Schematic().Hierarchy() )
+            {
+                if( path.Last() != sheet )
+                    continue;
+
+                try
+                {
+                    STRING_FORMATTER   formatter;
+                    SCH_IO_KICAD_SEXPR plugin;
+
+                    plugin.FormatSchematicToFormatter( &formatter, path.Last(),
+                                                       &m_frame->Schematic() );
+                    content = formatter.GetString();
+                }
+                catch( const IO_ERROR& ioe )
+                {
+                    wxLogTrace( traceCollab, wxS( "new sheet serialization failed: %s" ),
+                                ioe.What() );
+                }
+
+                break;
+            }
+        }
+
+        std::shared_ptr<bool> alive = m_alive;
+        std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+        std::string token = COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() )
+                                    .ToStdString( wxConvUTF8 );
+        std::string projectIdStd = projectId.ToStdString( wxConvUTF8 );
+        std::string fileStd = file.ToStdString( wxConvUTF8 );
+
+        COLLAB_SESSION::Get().RunAsync(
+                [this, alive, server, token, projectIdStd, fileStd, content, aIsAuthor]()
+                {
+                    std::optional<nlohmann::json> created = COLLAB_REST::CreateDoc(
+                            wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                            wxString::FromUTF8( projectIdStd ),
+                            wxString::FromUTF8( fileStd ) );
+
+                    std::string docId = created ? created->value( "docId", "" ) : "";
+
+                    if( docId.empty() )
+                        return;
+
+                    if( aIsAuthor && !content.empty() )
+                    {
+                        COLLAB_REST::UploadSnapshot( wxString::FromUTF8( server ),
+                                                     wxString::FromUTF8( token ),
+                                                     wxString::FromUTF8( docId ), 0, content );
+                    }
+
+                    wxTheApp->CallAfter(
+                            [this, alive, docId, fileStd, aIsAuthor]()
+                            {
+                                if( !*alive )
+                                    return;
+
+                                wxString docIdWx = wxString::FromUTF8( docId );
+
+                                RegisterDoc( wxString::FromUTF8( fileStd ), docIdWx );
+
+                                // A receiver's fresh empty screen fills in from
+                                // the join snapshot via the reconcile.
+                                if( !aIsAuthor )
+                                    m_reconcilePending.insert( docIdWx );
+
+                                COLLAB_SESSION::Get().JoinDoc( docIdWx, std::nullopt,
+                                                               m_adapter );
+
+                                if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                                {
+                                    fprintf( stderr, "COLLAB sheet doc %s: %s (%s)\n",
+                                             aIsAuthor ? "created" : "joined",
+                                             fileStd.c_str(), docId.c_str() );
+                                }
+                            } );
+                } );
+    }
 }
 
 

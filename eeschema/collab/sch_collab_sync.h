@@ -21,6 +21,7 @@
 
 #include <deque>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -36,6 +37,7 @@ class SCH_COMMIT;
 class SCH_EDIT_FRAME;
 class SCH_ITEM;
 class SCH_SCREEN;
+class COLLAB_DOC_ADAPTER;
 class SCHEMATIC;
 
 
@@ -151,6 +153,13 @@ public:
      */
     void OpenJournal( const wxString& aProjectPath, const wxString& aProjectName );
 
+    /// The adapter (the collab tool) used when this engine joins docs it
+    /// discovers mid-session (new sheet files).
+    void SetAdapter( COLLAB_DOC_ADAPTER* aAdapter ) { m_adapter = aAdapter; }
+
+    /// Register a mid-session document in the path maps.
+    void RegisterDoc( const wxString& aRelPath, const wxString& aDocId );
+
     /// Re-send every unacknowledged op; call once the session goes live again.
     void ReplayUnacked();
     void OnSnapshotRequest();
@@ -183,6 +192,13 @@ private:
     ///< Save symbols that arrived from a library we do not have into a
     ///< project-local library, so the reference resolves here too.
     void saveMissingLibraries( const nlohmann::json& aChanges );
+
+    ///< A hierarchical sheet added mid-session brings a new file: create its
+    ///< server doc (idempotent), upload our content when we authored it, then
+    ///< register + join — receivers reconcile the empty screen from the join
+    ///< snapshot.
+    void ensureSheetDocs( const wxString& aOpDocId, const nlohmann::json& aChanges,
+                          bool aIsAuthor );
 
     ///< The server doc id for the document containing aScreen, or empty when the
     ///< screen's file is not part of the shared project.
@@ -228,6 +244,14 @@ private:
     std::set<wxString> m_reconcilePending;
 
     COLLAB_JOURNAL              m_journal;
+
+    COLLAB_DOC_ADAPTER*         m_adapter = nullptr;
+
+    ///< Sheet files already being ensured this session (dedupe).
+    std::set<wxString>          m_ensuredSheetFiles;
+
+    ///< Cleared by the destructor so async completions can tell we are gone.
+    std::shared_ptr<bool>       m_alive = std::make_shared<bool>( true );
 
     std::map<wxString, long long> m_lastAppliedSeq; ///< docId -> last applied/acked seq
     std::map<wxString, bool>      m_resyncPending;  ///< docId -> resync requested, tail awaited
