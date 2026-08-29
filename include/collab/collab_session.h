@@ -65,7 +65,7 @@ public:
     virtual void OnPeerJoined( const COLLAB_PEER& aPeer ) {}
     virtual void OnPeerLeft( const wxString& aClientId ) {}
     virtual void OnSnapshotRequest() {}
-    virtual void OnReset( long long aSeq ) {}
+    virtual void OnReset( const wxString& aDocId, long long aSeq ) {}
     virtual void OnSessionStateChanged() {}
 };
 

@@ -127,10 +127,18 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
 - [x] Checkpoint → restore while a peer is live.  Verified with three live
   editors: restore lands as a fresh snapshot at head+1, the reset reaches
   every client with no crash or disconnect, sync continues cleanly at the
-  next seq, and the editors keep working (v1 keeps their local state and
-  shows the "leave and rejoin to resynchronize" banner — a full-document
-  reconcile on reset, reusing the rejected-op rollback machinery, is the
-  natural follow-up).  Found and fixed a real corruption in passing: a
+  next seq, and the editors keep working Editors now RECONCILE
+  automatically on reset instead of asking the user to rejoin: the engine
+  pulls the restored file, diffs every top-level item against the open
+  document (net numbers normalized — identity travels by name), and applies
+  upserts/removals through the normal remote path, with an informational
+  "synchronizing…" / "synchronized" infobar pair.  Verified live with three
+  editors: a post-checkpoint move AND a newly added track were both undone
+  automatically on every instance, all three boards ended geometrically
+  identical (same sorted-track hash), and the reconcile even healed ~14
+  tracks of historic drift the old no-hot-load resyncs had left behind.
+  Schematic engine has the same reconcile (screen-level, ERC markers
+  excluded), QA-covered.  Found and fixed a real corruption in passing: a
   client freshness snapshot upload racing in at the same seq *overwrote the
   named checkpoint row* (the upsert clobbered it), so a later restore
   restored post-checkpoint content.  Client snapshot uploads are now

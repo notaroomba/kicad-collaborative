@@ -540,10 +540,10 @@ void SCH_COLLAB_TOOL::OnSnapshotRequest()
 }
 
 
-void SCH_COLLAB_TOOL::OnReset( long long aSeq )
+void SCH_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 {
     if( m_sync )
-        m_sync->OnReset( aSeq );
+        m_sync->OnReset( aDocId, aSeq );
 }
 
 
