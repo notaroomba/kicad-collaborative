@@ -385,3 +385,12 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   snapshots 30 days keeping the newest, named checkpoints never touched).
   Full battery green: 3 C++ collab QA suites, 6 server tests, 5 protocol
   tests, and a live fleet round-trip converging on all editors.
+- [x] **Stale-file resync on join (loop 27)** — the last documented sync gap.
+  Every snapshot catch-up now reconciles the whole open document against the
+  server's file (diff-based, no-op when they match) instead of assuming the
+  local copy is current; the join announces "synchronized with the server
+  (N item(s) updated)" only when it changed something.  This subsumes the
+  reset-reconcile and rejected-op rollback paths.  Verified live: carol's
+  local board file was hand-drifted (D4 moved to 120,60 on disk), and her
+  relaunched editor came up at exact server truth — the join healed the
+  divergence automatically.  Both collab QA suites green.

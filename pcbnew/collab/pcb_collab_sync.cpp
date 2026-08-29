@@ -873,20 +873,16 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     m_resyncPending = false;
     m_queue.clear();
 
-    if( m_reconcilePending && aSnapshotMsg.contains( "file" ) )
+    if( aSnapshotMsg.contains( "file" ) )
     {
-        // A doc reset: the server's file is the document now.  Reconcile the
-        // whole board; any pending targeted rollback is subsumed.
+        // Every snapshot catch-up reconciles the whole open board against the
+        // server's file: it heals a stale or drifted local copy on join, it
+        // is what a doc reset (checkpoint restore) needs, and it subsumes the
+        // targeted rejected-op rollback.  The diff-based reconcile is a no-op
+        // when the board already matches.
         m_reconcilePending = false;
         m_pendingRollback.clear();
         reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ) );
-    }
-    else if( !m_pendingRollback.empty() && aSnapshotMsg.contains( "file" ) )
-    {
-        // v1 does not hot-load the snapshot into the open board wholesale, but
-        // a rejected own op needs its optimistic application undone: restore
-        // just the touched items from the server's file.
-        rollbackFromSnapshot( aSnapshotMsg.value( "file", "" ) );
     }
 
     // Replay the ops since the snapshot through the normal queue.
@@ -1071,16 +1067,19 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
 
     if( !changes.empty() )
     {
+        size_t count = changes.size();
+
         PENDING_OP op;
         op.seq = m_lastAppliedSeq;
         op.changes = std::move( changes );
         applyOp( op );
+
+        m_frame->ShowInfoBarMsg( wxString::Format(
+                _( "Board synchronized with the server (%zu item(s) updated)." ), count ) );
     }
 
     if( m_frame->GetCanvas() )
         m_frame->GetCanvas()->Refresh();
-
-    m_frame->ShowInfoBarMsg( _( "Board synchronized with the restored version." ) );
 }
 
 
