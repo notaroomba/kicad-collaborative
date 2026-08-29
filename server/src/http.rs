@@ -18,25 +18,37 @@ const MAX_FILES: usize = 200;
 const MAX_FILE_BYTES: u64 = 30 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 
-/// File names KiCad projects legitimately contain.
+/// File names KiCad projects legitimately contain: design files, project-local
+/// libraries, 3D models and library tables.
 fn allowed_file(name: &str) -> bool {
     let base = name.rsplit('/').next().unwrap_or(name);
-    if matches!(base, "sym-lib-table" | "fp-lib-table") {
+    if matches!(base, "sym-lib-table" | "fp-lib-table" | "design-block-lib-table") {
         return true;
     }
     let ext = base.rsplit('.').next().unwrap_or("");
     matches!(
-        ext,
+        ext.to_ascii_lowercase().as_str(),
         "kicad_pro" | "kicad_sch" | "kicad_pcb" | "kicad_prl" | "kicad_sym" | "kicad_mod"
-            | "kicad_dru" | "kicad_wks"
+            | "kicad_dru" | "kicad_wks" | "step" | "stp" | "wrl" | "wrz"
     )
 }
 
+/// Auto-detected document class, from the file name.  Editors join only the types
+/// they know; everything else just rides along in the archive.
 fn doc_type_for(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("") {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    if matches!(base, "sym-lib-table" | "fp-lib-table" | "design-block-lib-table") {
+        return "lib_table";
+    }
+    match base.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
         "kicad_sch" => "kicad_sch",
         "kicad_pcb" => "kicad_pcb",
         "kicad_pro" => "kicad_pro",
+        "kicad_sym" => "symbol_lib",
+        "kicad_mod" => "footprint",
+        "kicad_wks" => "worksheet",
+        "kicad_dru" => "design_rules",
+        "step" | "stp" | "wrl" | "wrz" => "model3d",
         _ => "other",
     }
 }
@@ -140,6 +152,169 @@ pub async fn create_project(
     }
 
     Ok(Json(json!({ "projectId": project.id, "name": project.name, "docs": docs })).into_response())
+}
+
+/// Every project the caller owns or is a member of — the "online files" list.
+pub async fn list_projects(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    let projects: Vec<_> = persist::list_projects_for_user(&state.pool, user.id)
+        .await?
+        .into_iter()
+        .map(|p| {
+            json!({
+                "projectId": p.id, "name": p.name,
+                "ownerId": p.owner_id, "ownerLogin": p.owner_login,
+                "role": p.role, "docCount": p.doc_count,
+                "createdAt": p.created_at.to_rfc3339(),
+                "updatedAt": p.updated_at.to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "projects": projects })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateProjectRequest {
+    pub name: Option<String>,
+    pub public: Option<bool>,
+}
+
+pub async fn update_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    let name = req.name.as_deref().map(str::trim);
+    if name == Some("") {
+        return Err(AppError::BadRequest("name must not be blank".into()));
+    }
+    if name.is_none() && req.public.is_none() {
+        return Err(AppError::BadRequest("nothing to update".into()));
+    }
+    persist::update_project(&state.pool, id, name, req.public).await?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+/// The public gallery: no auth, opt-in projects only.
+pub async fn gallery(State(state): State<AppState>) -> AppResult<Response> {
+    let projects: Vec<_> = persist::list_public_projects(&state.pool, 100)
+        .await?
+        .into_iter()
+        .map(|(p, owner_login)| {
+            json!({ "projectId": p.id, "name": p.name, "ownerLogin": owner_login })
+        })
+        .collect();
+    Ok(Json(json!({ "projects": projects })).into_response())
+}
+
+/// Render (and cache) an SVG preview of a project's board via kicad-cli.
+/// Available to members always, and to everyone for public projects.
+pub async fn preview_svg(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<Uuid>,
+    Query(q): Query<PreviewQuery>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+
+    if !project.public {
+        let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
+        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
+    }
+
+    let Some(kicad_cli) = state.cfg.kicad_cli.clone() else {
+        return Err(AppError::BadRequest("previews not enabled on this server".into()));
+    };
+
+    let docs = persist::project_documents(&state.pool, id).await?;
+    let doc = docs
+        .iter()
+        .find(|d| d.doc_type == "kicad_pcb")
+        .ok_or_else(|| AppError::BadRequest("project has no board to preview".into()))?;
+
+    let (seq, content) =
+        persist::latest_snapshot(&state.pool, doc.id).await?.ok_or(AppError::NotFound)?;
+
+    let fit = q.fit.unwrap_or(true);
+    let cache_dir = std::path::Path::new(&state.cfg.render_cache_dir);
+    let cache_file = cache_dir.join(format!(
+        "{}-{}-{}.svg",
+        doc.id,
+        seq,
+        if fit { "fit" } else { "page" }
+    ));
+
+    if let Ok(bytes) = tokio::fs::read(&cache_file).await {
+        return Ok(([(header::CONTENT_TYPE, "image/svg+xml")], bytes).into_response());
+    }
+
+    tokio::fs::create_dir_all(cache_dir)
+        .await
+        .map_err(|e| anyhow::anyhow!("render cache dir: {e}"))?;
+
+    let work = cache_dir.join(format!("work-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&work).await.map_err(|e| anyhow::anyhow!("workdir: {e}"))?;
+    let board_file = work.join("board.kicad_pcb");
+    tokio::fs::write(&board_file, &content)
+        .await
+        .map_err(|e| anyhow::anyhow!("write board: {e}"))?;
+    let out_file = work.join("out.svg");
+
+    let mut cmd = tokio::process::Command::new(&kicad_cli);
+    cmd.arg("pcb")
+        .arg("export")
+        .arg("svg")
+        .args(["--layers", "F.Cu,B.Cu,Edge.Cuts,F.SilkS"])
+        .arg("--exclude-drawing-sheet");
+    if fit {
+        cmd.arg("--fit-page-to-board");
+    }
+    cmd.arg("-o").arg(&out_file).arg(&board_file);
+
+    let status = tokio::time::timeout(std::time::Duration::from_secs(60), cmd.status())
+        .await
+        .map_err(|_| anyhow::anyhow!("kicad-cli timed out"))?
+        .map_err(|e| anyhow::anyhow!("kicad-cli spawn: {e}"))?;
+
+    let svg = if status.success() {
+        tokio::fs::read(&out_file).await.map_err(|e| anyhow::anyhow!("read svg: {e}"))?
+    } else {
+        let _ = tokio::fs::remove_dir_all(&work).await;
+        return Err(AppError::Other(anyhow::anyhow!("kicad-cli render failed")));
+    };
+
+    let _ = tokio::fs::write(&cache_file, &svg).await;
+    let _ = tokio::fs::remove_dir_all(&work).await;
+
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml")], svg).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct PreviewQuery {
+    pub fit: Option<bool>,
+}
+
+/// Owner deletes the whole project. Live doc actors are not kicked — their
+/// next durable write fails and clients surface the error; the actors reap
+/// themselves once idle.
+pub async fn delete_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    persist::delete_project(&state.pool, id).await?;
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
 pub async fn get_project(
@@ -290,7 +465,31 @@ pub async fn list_members(
         .into_iter()
         .map(|(uid, login, role)| json!({ "userId": uid, "login": login, "role": role }))
         .collect();
-    Ok(Json(json!({ "ownerId": project.owner_id, "members": members })).into_response())
+    let pending: Vec<_> = persist::list_pending_invites(&state.pool, id)
+        .await?
+        .into_iter()
+        .map(|(perm_id, login, email, role)| {
+            json!({ "inviteId": perm_id, "login": login, "email": email, "role": role })
+        })
+        .collect();
+    Ok(Json(json!({ "ownerId": project.owner_id, "members": members, "pending": pending }))
+        .into_response())
+}
+
+pub async fn revoke_invite(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, invite_id)): Path<(Uuid, i64)>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    if persist::delete_pending_invite(&state.pool, id, invite_id).await? {
+        Ok(Json(json!({ "ok": true })).into_response())
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 pub async fn remove_member(
@@ -335,9 +534,125 @@ pub async fn invite(
     if !matches!(role.as_str(), "editor" | "viewer") {
         return Err(AppError::BadRequest("role must be editor or viewer".into()));
     }
+
+    // If the invitee already has an account, grant access immediately instead
+    // of parking a pending row they would only pick up at next sign-in.
+    let existing = match (&req.login, &req.email) {
+        (Some(login), _) => persist::find_user_by_login(&state.pool, login).await?,
+        (None, Some(email)) => persist::find_user_by_email(&state.pool, email).await?,
+        (None, None) => None,
+    };
+
+    if let Some(invitee) = existing {
+        if invitee.id == project.owner_id {
+            return Err(AppError::BadRequest("that user owns this project".into()));
+        }
+        persist::grant_role(&state.pool, id, invitee.id, &role).await?;
+        return Ok(Json(json!({
+            "ok": true, "status": "granted",
+            "userId": invitee.id, "login": invitee.login,
+        }))
+        .into_response());
+    }
+
     persist::add_invite(&state.pool, id, req.login.as_deref(), req.email.as_deref(), &role, user.id)
         .await?;
-    Ok(Json(json!({ "ok": true })).into_response())
+    Ok(Json(json!({ "ok": true, "status": "pending" })).into_response())
+}
+
+// ---------- User search (share-dialog typeahead) ----------
+
+#[derive(Deserialize)]
+pub struct UserSearchQuery {
+    pub q: String,
+}
+
+/// Prefix search over server accounts, topped up with GitHub user search when
+/// OAuth credentials are configured — so the share dialog can find people who
+/// have never signed in here, the way GitHub's collaborator picker does.
+pub async fn search_users(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Query(q): Query<UserSearchQuery>,
+) -> AppResult<Response> {
+    const MAX_RESULTS: usize = 8;
+
+    let query = q.q.trim();
+    if query.len() < 2 || query.len() > 64 {
+        return Ok(Json(json!({ "users": [] })).into_response());
+    }
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for u in persist::search_users(&state.pool, query, MAX_RESULTS as i64).await? {
+        seen.insert(u.login.to_lowercase());
+        out.push(json!({
+            "login": u.login, "name": u.name, "avatarUrl": u.avatar_url,
+            "userId": u.id, "source": "server",
+        }));
+    }
+
+    if out.len() < MAX_RESULTS {
+        if let (Some(client_id), Some(client_secret)) =
+            (&state.cfg.github_client_id, &state.cfg.github_client_secret)
+        {
+            if let Some(items) = github_user_search(query, client_id, client_secret).await {
+                for item in items {
+                    if out.len() >= MAX_RESULTS {
+                        break;
+                    }
+                    if seen.insert(item.login.to_lowercase()) {
+                        out.push(json!({
+                            "login": item.login, "name": serde_json::Value::Null,
+                            "avatarUrl": item.avatar_url, "userId": serde_json::Value::Null,
+                            "source": "github",
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({ "users": out })).into_response())
+}
+
+#[derive(Deserialize)]
+struct GithubSearchUser {
+    login: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubSearchResponse {
+    #[serde(default)]
+    items: Vec<GithubSearchUser>,
+}
+
+/// Best-effort: any failure (rate limit, timeout) just means fewer results.
+async fn github_user_search(
+    query: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Option<Vec<GithubSearchUser>> {
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let resp = http
+        .get("https://api.github.com/search/users")
+        .query(&[("q", format!("{query} in:login")), ("per_page", "10".into())])
+        // OAuth-app basic auth lifts the anonymous search rate limit.
+        .basic_auth(client_id, Some(client_secret))
+        .header(reqwest::header::USER_AGENT, "kicad-collab-server")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<GithubSearchResponse>().await.ok().map(|r| r.items)
 }
 
 // ---------- Snapshots ----------

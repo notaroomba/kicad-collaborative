@@ -52,14 +52,21 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness + DB check |
+| GET | `/gallery` · `/p/{id}` · `/p/{id}/live` | public gallery, project page, live board viewer (web) |
+| GET | `/api/gallery` | public projects (no auth) |
+| GET | `/api/projects/{id}/preview.svg` | cached kicad-cli SVG render (needs `KICAD_CLI`) |
 | GET | `/j/{token}` | share-link landing page |
 | GET | `/auth/github/login`, `/auth/github/callback` | web sign-in |
 | GET/POST | `/auth/desktop/{authorize,confirm,token}` | KiCad sign-in |
 | GET | `/api/me` | current user |
-| POST | `/api/projects` | upload a project (zip, multipart) |
-| GET | `/api/projects/{id}` · `/archive` | project info · download zip |
-| POST | `/api/projects/{id}/links` · `/invites` | share link · invite by login/email |
-| GET/DELETE | `/api/projects/{id}/members[/{userId}]` | list · revoke access |
+| GET | `/api/users/search?q=` | share-dialog typeahead: server accounts + GitHub user search |
+| GET/POST | `/api/projects` | list my projects (owned + member) · upload a project (zip, multipart) |
+| GET/PATCH/DELETE | `/api/projects/{id}` | project info · rename · delete (owner) |
+| GET | `/api/projects/{id}/archive` | download zip |
+| POST | `/api/projects/{id}/links` | share link |
+| POST | `/api/projects/{id}/invites` | invite by login/email (instant grant when the account exists, else pending) |
+| DELETE | `/api/projects/{id}/invites/{inviteId}` | revoke a pending invite |
+| GET/DELETE | `/api/projects/{id}/members[/{userId}]` | list members + pending · revoke access |
 | POST/GET | `/api/projects/{id}/checkpoints` | name · list version checkpoints |
 | POST | `/api/projects/{id}/restore` | restore a checkpoint (hard reset + resync) |
 | POST | `/api/docs/{id}/snapshots?seq=N` | upload a snapshot |
@@ -71,7 +78,8 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 
 ```bash
 DATABASE_URL=postgres://... JWT_SECRET=... PUBLIC_URL=http://localhost:8080 \
-  GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... cargo run
+  GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+  KICAD_CLI=/usr/bin/kicad-cli RENDER_CACHE_DIR=./render-cache cargo run
 ```
 
 Migrations run on boot. Without GitHub credentials the server still starts and

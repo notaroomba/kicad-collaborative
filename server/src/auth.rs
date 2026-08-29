@@ -87,6 +87,14 @@ pub fn mint_jwt(state: &AppState, user_id: i64, login: &str) -> String {
         .expect("jwt encode")
 }
 
+/// The signed-in user carried by the session cookie, if any (for web pages and
+/// cookie-authenticated endpoints).
+pub async fn user_from_jar(state: &AppState, jar: &CookieJar) -> Option<crate::persist::User> {
+    let claims = jar.get(COOKIE_NAME).and_then(|c| verify_jwt(state, c.value()))?;
+    crate::persist::get_user(&state.pool, claims.sub).await.ok().flatten()
+}
+
+
 pub fn verify_jwt(state: &AppState, token: &str) -> Option<Claims> {
     decode::<Claims>(
         token,

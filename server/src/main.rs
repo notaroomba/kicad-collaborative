@@ -22,6 +22,9 @@ pub struct Config {
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
+    /// Path to kicad-cli for SVG previews; previews are disabled when unset.
+    pub kicad_cli: Option<String>,
+    pub render_cache_dir: String,
 }
 
 #[derive(Clone)]
@@ -54,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
         }),
         github_client_id: std::env::var("GITHUB_CLIENT_ID").ok().filter(|s| !s.is_empty()),
         github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+        kicad_cli: std::env::var("KICAD_CLI").ok().filter(|s| !s.is_empty()),
+        render_cache_dir: std::env::var("RENDER_CACHE_DIR")
+            .unwrap_or_else(|_| "./render-cache".into()),
     };
     if cfg.github_client_id.is_none() {
         tracing::warn!("GITHUB_CLIENT_ID/SECRET not set — sign-in disabled until configured");
@@ -116,11 +122,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/desktop/token", post(auth::desktop_token))
         .route("/auth/desktop/confirm", post(auth::desktop_confirm))
         .route("/api/me", get(auth::me))
-        .route("/api/projects", post(http::create_project))
-        .route("/api/projects/{id}", get(http::get_project))
+        .route("/api/projects", post(http::create_project).get(http::list_projects))
+        .route(
+            "/api/projects/{id}",
+            get(http::get_project).patch(http::update_project).delete(http::delete_project),
+        )
+        .route("/api/gallery", get(http::gallery))
+        .route("/api/projects/{id}/preview.svg", get(http::preview_svg))
+        .route("/gallery", get(pages::gallery_page))
+        .route("/p/{id}", get(pages::project_page))
+        .route("/p/{id}/live", get(pages::live_page))
         .route("/api/projects/{id}/archive", get(http::download_archive))
         .route("/api/projects/{id}/links", post(http::create_link))
         .route("/api/projects/{id}/invites", post(http::invite))
+        .route("/api/projects/{id}/invites/{invite_id}", delete(http::revoke_invite))
+        .route("/api/users/search", get(http::search_users))
         .route("/api/projects/{id}/members", get(http::list_members))
         .route("/api/projects/{id}/members/{member_id}", delete(http::remove_member))
         .route("/api/links/{token}", delete(http::revoke_link))
