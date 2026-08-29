@@ -89,10 +89,20 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   the newer local edit on one side only.  Fixed by re-asserting own newer
   in-flight/recent changes after applying a remote op — valid because acks and
   broadcasts share one in-order stream, so anything unacked is provably newer.)
-- [ ] Viewer-role client: every edit path rejected cleanly, no error spam.
-  (Web client: done — a viewer's drag gets `permission_denied` and the page
-  shows a "view-only" chip and stops offering drags.  Desktop client still to
-  verify.)
+- [x] Viewer-role client: every edit path rejected cleanly, no error spam.
+  Web client: a viewer's drag gets `permission_denied` and the page shows a
+  "view-only" chip and stops offering drags.  Desktop client: `OnOpRejected`
+  now drops the op from the unacked set *and* the journal (it used to replay
+  forever), shows one throttled "view-only access" infobar per burst, and
+  requests a resync; the board engine then restores the touched items from
+  the server's snapshot through the normal remote-apply path (upsert, or
+  removal for an item the server never accepted), so the optimistic local
+  edit visibly rolls back.  Verified e2e with a third live instance on a
+  viewer token: the edit was refused, the other editors never saw it, the
+  viewer's board rolled back to the server position, and the journal ended
+  clean.  (Schematic engine: rejection cleanup + resync are in; the
+  item-level snapshot rollback is board-only so far — sch item restore from
+  a resync snapshot is the remaining piece.)
 - [x] Optional wire fields must tolerate being absent, not just null — the
   protocol crate now marks them `#[serde(default)]` and pins a minimal
   browser hello in a test (a bare `{{type,proto,token,clientId}}` hello was
@@ -101,10 +111,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   server-assigned `uid:` prefixed id, and the server now strips its own
   repeated prefix instead of growing one per reconnect (op dedup and presence
   identity depend on it).
-- [ ] Rotating JWT_SECRET (or restarting with an unset one) sends connected
-  editors `auth_failed`, which permanently disconnects them by design — but
-  the editor shows no banner explaining why.  Surface a "session signed out —
-  rejoin" notice instead of a silent disconnect.
+- [x] Rotating JWT_SECRET (or restarting with an unset one) sends connected
+  editors `auth_failed`, which permanently disconnects them by design.  The
+  session now records the disconnect reason and both editors show a
+  "sign-in expired or was revoked — rejoin from File > Online Projects"
+  infobar instead of silently sitting at "offline".
 - [x] Share dialog: invite → revoke → re-invite; verified through the API the
   dialog drives: member revoke, instant re-grant for existing accounts, the
   never-downgrade rule (re-inviting an editor as viewer keeps editor), email

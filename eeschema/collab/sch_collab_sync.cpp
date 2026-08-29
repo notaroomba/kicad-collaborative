@@ -824,6 +824,30 @@ void SCH_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
 }
 
 
+void SCH_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
+{
+    auto it = m_unacked.find( aClientOpId );
+
+    if( it == m_unacked.end() )
+        return;
+
+    wxString docId = it->second.docId;
+    m_unacked.erase( it );
+
+    // Rejected is as final as acked for replay purposes: the server will
+    // refuse it again on every reconnect forever.
+    m_journal.Ack( aClientOpId );
+
+    // The op was applied optimistically here; a resync (snapshot + tail)
+    // restores the server's version of the document.
+    if( !m_resyncPending[ docId ] )
+    {
+        m_resyncPending[ docId ] = true;
+        COLLAB_SESSION::Get().RequestResync( docId );
+    }
+}
+
+
 void SCH_COLLAB_SYNC::OpenJournal( const wxString& aProjectPath, const wxString& aProjectName )
 {
     m_journal.Open( aProjectPath, aProjectName );

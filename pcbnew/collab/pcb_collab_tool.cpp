@@ -637,6 +637,37 @@ void PCB_COLLAB_TOOL::OnReset( long long aSeq )
 }
 
 
+void PCB_COLLAB_TOOL::OnOpRejected( const wxString& aClientOpId, const wxString& aCode )
+{
+    if( m_sync )
+        m_sync->OnOpRejected( aClientOpId );
+
+    // One notice per burst: a drag can produce several rejected ops at once
+    // and each would raise its own infobar otherwise.
+    if( m_lastRejectNotice.IsValid()
+        && wxDateTime::Now() - m_lastRejectNotice < wxTimeSpan::Seconds( 10 ) )
+    {
+        return;
+    }
+
+    m_lastRejectNotice = wxDateTime::Now();
+
+    if( aCode == wxS( "permission_denied" ) )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                _( "You have view-only access to this shared project. Your change was not "
+                   "saved and the board has been refreshed." ) );
+    }
+    else
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                wxString::Format( _( "The server rejected an edit (%s). The board has been "
+                                     "refreshed." ),
+                                  aCode ) );
+    }
+}
+
+
 void PCB_COLLAB_TOOL::OnSessionStateChanged()
 {
     if( !sessionActive() )
@@ -652,6 +683,16 @@ void PCB_COLLAB_TOOL::OnSessionStateChanged()
     }
 
     frame<PCB_EDIT_FRAME>()->SetStatusText( msg, 0 );
+
+    // A dead token is the one disconnect that never comes back on its own —
+    // say so instead of silently sitting at "offline" forever.
+    if( COLLAB_SESSION::Get().GetState() == COLLAB_SESSION::STATE::DISCONNECTED
+        && COLLAB_SESSION::Get().DisconnectReason() == wxS( "auth_failed" ) )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                _( "Collaboration sign-in expired or was revoked, so the live session ended. "
+                   "Rejoin from File > Online Projects to continue." ) );
+    }
 
     // Back online: push anything edited while disconnected. The server dedups
     // by clientOpId, so re-sending an op it already has is a no-op.

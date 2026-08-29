@@ -132,6 +132,22 @@ public:
     void OnAck( const wxString& aClientOpId, long long aSeq );
 
     /**
+     * The server refused one of our ops (permission_denied for a viewer role,
+     * bad_op, ...).  Drop it from the unacked set and the journal so it is
+     * never replayed, and request a resync so the optimistic local application
+     * rolls back to the server's truth.
+     */
+    void OnOpRejected( const wxString& aClientOpId );
+
+private:
+    ///< Replace the items named by rejected ops with their state in the
+    ///< server's resync snapshot (or remove them if the server has no such
+    ///< item), undoing our optimistic local application.
+    void rollbackFromSnapshot( const std::string& aFileText );
+
+public:
+
+    /**
      * Attach the on-disk op journal for a project and re-stage anything left
      * unacknowledged by a previous run (a crash, or edits made while offline).
      */
@@ -197,6 +213,10 @@ private:
     ///< Own acked ops kept until lastAppliedSeq passes them, so a concurrent
     ///< remote op with a lower seq cannot clobber our newer edit (LWW).
     std::map<long long, nlohmann::json> m_ownRecent;
+
+    ///< Items touched by server-rejected ops, awaiting rollback from the next
+    ///< resync snapshot.
+    std::set<KIID> m_pendingRollback;
 
     COLLAB_JOURNAL              m_journal;
 
