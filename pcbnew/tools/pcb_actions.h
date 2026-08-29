@@ -690,6 +690,7 @@ public:
     static TOOL_ACTION collabComments;
     static TOOL_ACTION collabHistory;
     static TOOL_ACTION collabCopyLink;
+    static TOOL_ACTION collabFollow;
 };
 
 class PCB_EVENTS

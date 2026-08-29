@@ -897,17 +897,87 @@ int PCB_COLLAB_TOOL::onSelectionChange( const TOOL_EVENT& aEvent )
 
     // A click that selected nothing may still be a comment-pin hit: the pins
     // are overlay drawings, invisible to the selection tool.
-    if( aEvent.Matches( EVENTS::ClearedEvent ) && !m_comments.empty() )
+    if( aEvent.Matches( EVENTS::ClearedEvent ) )
     {
-        VECTOR2I  cursor = frame<PCB_EDIT_FRAME>()->GetCanvas()->GetViewControls()
-                                   ->GetCursorPosition( false );
-        long long root = pinAt( cursor );
+        VECTOR2I cursor = frame<PCB_EDIT_FRAME>()->GetCanvas()->GetViewControls()
+                                  ->GetCursorPosition( false );
 
-        if( root >= 0 )
-            openThread( root );
+        if( !m_comments.empty() )
+        {
+            long long root = pinAt( cursor );
+
+            if( root >= 0 )
+            {
+                openThread( root );
+                return 0;
+            }
+        }
+
+        // Clicking a peer's cursor toggles following their viewport (the
+        // Figma "follow" gesture).  Any manual pan/zoom breaks the follow.
+        wxString peer = peerCursorAt( cursor );
+
+        if( !peer.IsEmpty() )
+        {
+            if( m_followPeer == peer )
+            {
+                m_followPeer.clear();
+                frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( _( "Stopped following." ) );
+            }
+            else
+            {
+                m_followPeer = peer;
+                m_followApplied = BOX2D();
+
+                const auto& peers = COLLAB_SESSION::Get().Peers( m_docId );
+                auto        it = peers.find( peer );
+                wxString    name = it != peers.end()
+                                           ? ( it->second.name.IsEmpty() ? it->second.login
+                                                                         : it->second.name )
+                                           : peer;
+
+                frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( wxString::Format(
+                        _( "Following %s — pan or zoom to stop." ), name ) );
+            }
+        }
     }
 
     return 0;
+}
+
+
+wxString PCB_COLLAB_TOOL::peerCursorAt( const VECTOR2I& aPos ) const
+{
+    KIGFX::VIEW* view = getView();
+
+    if( !view || m_docId.IsEmpty() )
+        return wxEmptyString;
+
+    double radius = 28.0 / view->GetGAL()->GetWorldScale();
+
+    wxString best;
+    double   bestDist = radius;
+
+    for( const auto& [clientId, peer] : COLLAB_SESSION::Get().Peers( m_docId ) )
+    {
+        if( !peer.state.is_object() || !peer.state.contains( "cursor" )
+            || !peer.state[ "cursor" ].is_array() || peer.state[ "cursor" ].size() < 2 )
+        {
+            continue;
+        }
+
+        VECTOR2I cursor( peer.state[ "cursor" ][ 0 ].get<int>(),
+                         peer.state[ "cursor" ][ 1 ].get<int>() );
+        double   dist = ( cursor - aPos ).EuclideanNorm();
+
+        if( dist <= bestDist )
+        {
+            best = clientId;
+            bestDist = dist;
+        }
+    }
+
+    return best;
 }
 
 
@@ -1073,8 +1143,104 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 }
 
 
+int PCB_COLLAB_TOOL::FollowNextPeer( const TOOL_EVENT& aEvent )
+{
+    const auto& peers = COLLAB_SESSION::Get().Peers( m_docId );
+
+    if( peers.empty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( _( "No collaborators here to follow." ) );
+        return 0;
+    }
+
+    // Advance past the current followee; wrapping past the end stops.
+    auto it = m_followPeer.IsEmpty() ? peers.begin() : peers.find( m_followPeer );
+
+    if( !m_followPeer.IsEmpty() && it != peers.end() )
+        ++it;
+
+    if( it == peers.end() )
+    {
+        m_followPeer.clear();
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( _( "Stopped following." ) );
+        return 0;
+    }
+
+    m_followPeer = it->first;
+    m_followApplied = BOX2D();
+
+    wxString name = it->second.name.IsEmpty() ? it->second.login : it->second.name;
+    frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+            wxString::Format( _( "Following %s — pan or zoom to stop." ), name ) );
+
+    applyFollow();
+    return 0;
+}
+
+
+void PCB_COLLAB_TOOL::applyFollow()
+{
+    if( m_followPeer.IsEmpty() )
+        return;
+
+    KIGFX::VIEW* view = getView();
+
+    if( !view )
+        return;
+
+    const auto& peers = COLLAB_SESSION::Get().Peers( m_docId );
+    auto        it = peers.find( m_followPeer );
+
+    if( it == peers.end() )
+    {
+        m_followPeer.clear();
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( _( "The peer you were following left." ) );
+        return;
+    }
+
+    const nlohmann::json& state = it->second.state;
+
+    if( !state.is_object() || !state.contains( "viewport" ) || !state[ "viewport" ].is_array()
+        || state[ "viewport" ].size() < 4 )
+    {
+        return;
+    }
+
+    // A follow only holds while the user leaves the view alone: if the current
+    // viewport is not the one we last applied, they grabbed the view back.
+    BOX2D current = view->GetViewport();
+
+    if( m_followApplied.GetWidth() > 0 )
+    {
+        double tolerance = std::max( 1.0, m_followApplied.GetWidth() * 0.02 );
+
+        if( std::abs( current.GetX() - m_followApplied.GetX() ) > tolerance
+            || std::abs( current.GetY() - m_followApplied.GetY() ) > tolerance
+            || std::abs( current.GetWidth() - m_followApplied.GetWidth() ) > tolerance )
+        {
+            m_followPeer.clear();
+            frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg( _( "Stopped following." ) );
+            return;
+        }
+    }
+
+    BOX2D target( VECTOR2D( state[ "viewport" ][ 0 ].get<double>(),
+                            state[ "viewport" ][ 1 ].get<double>() ),
+                  VECTOR2D( state[ "viewport" ][ 2 ].get<double>(),
+                            state[ "viewport" ][ 3 ].get<double>() ) );
+
+    if( target.GetWidth() <= 0 || target.GetHeight() <= 0 )
+        return;
+
+    view->SetViewport( target );
+    m_followApplied = view->GetViewport();
+    frame<PCB_EDIT_FRAME>()->GetCanvas()->Refresh();
+}
+
+
 void PCB_COLLAB_TOOL::OnPresenceChanged()
 {
+    applyFollow();
     rebuildOverlay();
 }
 
@@ -1417,6 +1583,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::ShowComments,      PCB_ACTIONS::collabComments.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::CopyShareLink,     PCB_ACTIONS::collabCopyLink.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::FollowNextPeer,    PCB_ACTIONS::collabFollow.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

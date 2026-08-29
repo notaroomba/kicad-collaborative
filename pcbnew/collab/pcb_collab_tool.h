@@ -96,6 +96,25 @@ public:
     ///< The root comment whose pin covers aPos, or -1.
     long long pinAt( const VECTOR2I& aPos ) const;
 
+    ///< The clientId of the peer whose cursor is near aPos, or empty.
+    wxString peerCursorAt( const VECTOR2I& aPos ) const;
+
+    ///< Track the followed peer's viewport; break on manual pan/zoom.
+    void applyFollow();
+
+public:
+    ///< Cycle viewport-following through the connected peers (menu action).
+    int FollowNextPeer( const TOOL_EVENT& aEvent );
+
+private:
+
+    ///< Peer being viewport-followed (empty = not following).
+    wxString m_followPeer;
+
+    ///< The viewport we last applied while following, to tell an incoming
+    ///< update apart from the user grabbing the view back.
+    BOX2D m_followApplied;
+
     ///< Items currently hidden because a peer's live-drag ghost replaces them.
     std::set<KIID> m_ghostHidden;
 
@@ -107,6 +126,7 @@ public:
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
+public:
     ///< The live-editing sync engine, or nullptr when the board doc is not joined.
     PCB_COLLAB_SYNC* GetSync() const { return m_sync.get(); }
 
