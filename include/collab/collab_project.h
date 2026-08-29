@@ -91,6 +91,26 @@ KICOMMON_API void WriteLocalLink( const wxString& aProjectPath, const wxString& 
 
 /// The server project id recorded beside the local project, or empty.  aServer
 /// receives the recorded server URL.
+/**
+ * Remember where a cloud project's local copy lives, so a later open can reuse
+ * it instead of downloading again.  Stored in collab-local-copies.json in the
+ * user settings directory.
+ */
+KICOMMON_API void RecordLocalCopy( const wxString& aProjectId, const wxString& aProFile );
+
+/// Explicit-registry-directory variants, for tests.
+KICOMMON_API void RecordLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId,
+                                     const wxString& aProFile );
+KICOMMON_API wxString FindLocalCopyIn( const wxString& aRegistryDir,
+                                       const wxString& aProjectId );
+
+/**
+ * The recorded .kicad_pro path for a cloud project, or empty when none is
+ * recorded, the file is gone, or the directory's link.json no longer matches
+ * the project id (the copy was moved or repurposed).
+ */
+KICOMMON_API wxString FindLocalCopy( const wxString& aProjectId );
+
 KICOMMON_API wxString ReadLocalLink( const wxString& aProjectPath, const wxString& aProjectName,
                                      wxString& aServer );
 

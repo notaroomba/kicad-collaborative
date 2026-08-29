@@ -77,8 +77,13 @@ format is plain JSON).
 The class of paper-cuts found while testing (invisible name text, evicted idle
 cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
 
-- [ ] Join a project you already have open under a *different* directory name —
-  does doc matching fail gracefully?
+- [x] Join a project you already have open under a *different* directory name.
+  Doc matching keys on project-relative paths, so the directory (and its
+  parents) can be named anything — the standing three-instance fleet lives in
+  three differently-named directories and syncs.  A *renamed project file*
+  (different relative path) simply doesn't match any server doc: edits to
+  that screen stay local, no crash — graceful, though silent; a "this file
+  is not part of the shared project" notice would be a nice touch someday.
 - [x] Kill an editor mid-session; relaunch; no stale `.lck` dialog blocks
   startup.  (Lock files now record the owning pid; a same-user lock whose
   process is dead is reclaimed silently even when other KiCad instances are
@@ -145,6 +150,16 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   insert-only — a snapshot at a given seq, once written, is immutable —
   and the full cycle re-verified with the race present: the named row
   survived and restore produced genuine checkpoint content.
-- [ ] Online Projects: open the same cloud project twice; second open reuses the
-  local copy without re-downloading.
-- [ ] Presence keepalive across a laptop sleep/wake (reconnect + rejoin).
+- [x] Online Projects: open the same cloud project twice; second open reuses
+  the local copy without re-downloading.  A per-user registry
+  (`collab-local-copies.json` in the settings dir) remembers where each cloud
+  project's copy lives; re-opening now skips both the directory prompt and
+  the download and goes straight to the recorded `.kicad_pro`.  Reuse is
+  refused when the file is gone or the directory's `link.json` no longer
+  matches the project (moved or repurposed copy) — all covered by the new
+  `CollabProjectRegistry` QA suite (round-trip, gone/repurposed, corrupt
+  registry recovery).
+- [x] Presence keepalive across a laptop sleep/wake (reconnect + rejoin).
+  Simulated with SIGSTOP/SIGCONT on a live editor: frozen 50 s (past the 30 s
+  presence eviction) while a peer edited, the woken instance caught up on the
+  missed op within seconds, and its own next edit propagated to every peer.
