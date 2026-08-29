@@ -687,6 +687,7 @@ public:
     static TOOL_ACTION collabStartSession;
     static TOOL_ACTION collabJoinSession;
     static TOOL_ACTION collabLeaveSession;
+    static TOOL_ACTION collabComments;
 };
 
 class PCB_EVENTS

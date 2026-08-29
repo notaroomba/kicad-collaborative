@@ -337,6 +337,8 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
     for( const auto& [docId, path] : m_pathByDocId )
         session.JoinDoc( docId, std::nullopt, this );
 
+    fetchComments();
+
     // Live cursors only appear when both sides display the same file.
     if( m_docIdByPath.find( currentSheetFile() ) == m_docIdByPath.end() )
     {
@@ -611,6 +613,168 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
 }
 
 
+namespace
+{
+long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aDefault )
+{
+    auto it = aObj.find( aKey );
+
+    return it != aObj.end() && it->is_number() ? it->get<long long>() : aDefault;
+}
+} // anonymous namespace
+
+
+void SCH_COLLAB_TOOL::fetchComments()
+{
+    std::shared_ptr<bool> alive = m_alive;
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+
+    for( const auto& [path, docIdWx] : m_docIdByPath )
+    {
+        std::string docId = docIdWx.ToStdString( wxConvUTF8 );
+
+        COLLAB_SESSION::Get().RunAsync(
+                [this, alive, server, token, docId]()
+                {
+                    std::optional<nlohmann::json> listing = COLLAB_REST::ListComments(
+                            wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                            wxString::FromUTF8( docId ) );
+
+                    nlohmann::json comments = listing && listing->contains( "comments" )
+                                                      ? ( *listing )[ "comments" ]
+                                                      : nlohmann::json::array();
+
+                    wxTheApp->CallAfter(
+                            [this, alive, comments, docId]()
+                            {
+                                if( !*alive )
+                                    return;
+
+                                m_commentsByDoc[ wxString::FromUTF8( docId ) ] = comments;
+
+                                if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                                {
+                                    fprintf( stderr, "COLLAB sch comments: %zu loaded\n",
+                                             (size_t) comments.size() );
+                                }
+
+                                rebuildCommentPins();
+                            } );
+                } );
+    }
+}
+
+
+void SCH_COLLAB_TOOL::OnComment( const nlohmann::json& aMsg )
+{
+    wxString docId = wxString::FromUTF8( aMsg.value( "docId", "" ) );
+
+    const nlohmann::json& payload =
+            aMsg.contains( "comment" ) ? aMsg[ "comment" ] : nlohmann::json();
+
+    if( docId.IsEmpty() || !payload.is_object() )
+        return;
+
+    std::string    action = payload.value( "action", "" );
+    nlohmann::json entry = payload.contains( "comment" ) ? payload[ "comment" ]
+                                                         : nlohmann::json();
+
+    if( !entry.is_object() )
+        return;
+
+    nlohmann::json& comments = m_commentsByDoc[ docId ];
+
+    if( !comments.is_array() )
+        comments = nlohmann::json::array();
+
+    long long id = jsonNumber( entry, "id", -1 );
+
+    if( action == "deleted" )
+    {
+        nlohmann::json kept = nlohmann::json::array();
+
+        for( const nlohmann::json& c : comments )
+        {
+            if( jsonNumber( c, "id", -1 ) != id && jsonNumber( c, "parentId", -1 ) != id )
+                kept.push_back( c );
+        }
+
+        comments = std::move( kept );
+    }
+    else if( action == "updated" )
+    {
+        for( nlohmann::json& c : comments )
+        {
+            if( jsonNumber( c, "id", -1 ) == id )
+                c = entry;
+        }
+    }
+    else if( action == "added" )
+    {
+        bool present = false;
+
+        for( const nlohmann::json& c : comments )
+            present |= jsonNumber( c, "id", -1 ) == id;
+
+        if( !present )
+            comments.push_back( entry );
+    }
+
+    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+        fprintf( stderr, "COLLAB sch comment %s: id=%lld\n", action.c_str(), id );
+
+    rebuildCommentPins();
+}
+
+
+void SCH_COLLAB_TOOL::rebuildCommentPins()
+{
+    std::vector<COMMENT_PIN> pins;
+    wxString                 docId = currentDocId();
+
+    auto it = m_commentsByDoc.find( docId );
+
+    if( it != m_commentsByDoc.end() )
+    {
+        for( const nlohmann::json& c : it->second )
+        {
+            if( !c.is_object() || jsonNumber( c, "parentId", -1 ) >= 0 )
+                continue;
+
+            COMMENT_PIN pin;
+            pin.pos = VECTOR2I( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+            pin.resolved = c.value( "resolved", false );
+
+            long long id = jsonNumber( c, "id", -1 );
+            pin.count = 0;
+
+            for( const nlohmann::json& other : it->second )
+            {
+                if( jsonNumber( other, "id", -1 ) == id
+                    || jsonNumber( other, "parentId", -1 ) == id )
+                {
+                    pin.count++;
+                }
+            }
+
+            pins.push_back( pin );
+        }
+    }
+
+    m_cursorItem.SetCommentPins( std::move( pins ) );
+
+    if( KIGFX::VIEW* view = getView() )
+    {
+        view->Update( &m_cursorItem );
+
+        if( m_frame->GetCanvas() )
+            m_frame->GetCanvas()->Refresh();
+    }
+}
+
+
 void SCH_COLLAB_TOOL::rebuildOverlay()
 {
     KIGFX::VIEW* view = getView();
@@ -730,6 +894,7 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
     }
 
     m_cursorItem.SetPeers( std::move( draws ) );
+    rebuildCommentPins();
 
     // The sch view is rebuilt wholesale on sheet changes, silently dropping our
     // item, so re-add it every time; Remove() is a no-op when it is not in the view.

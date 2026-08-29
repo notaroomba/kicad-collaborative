@@ -218,3 +218,15 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   existing threads on join and reacted to added/updated/deleted broadcasts
   in real time.  Still ahead: click-a-pin thread UI in the editor (pins are
   render-only today) and eeschema pins.
+- [x] **In-editor comment thread UI + eeschema pins.**  pcbnew grew a
+  Comments dialog (File menu, `pcbnew.Collab.comments`): browse threads,
+  read a thread's full history, reply, resolve/reopen, and post a new
+  comment pinned at the crosshair position — all mutations off the UI
+  thread via the session worker, with the dialog reloading live on
+  `comment` broadcasts.  Verified live through the real tool action over
+  IPC: the dialog opened over the running session, and a REST-posted reply
+  landed in it via broadcast without a crash.  eeschema mirrors the pin
+  layer per sheet (comments keyed by doc id, pins drawn only for the
+  displayed sheet) — verified live: a schematic-doc comment loaded on join
+  and a resolve broadcast reached the running editor.  Pin click-to-open
+  in the canvas remains the polish item on top.
