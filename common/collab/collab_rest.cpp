@@ -324,6 +324,59 @@ bool COLLAB_REST::RevokeInvite( const wxString& aServerUrl, const wxString& aTok
 }
 
 
+std::optional<nlohmann::json> COLLAB_REST::ListComments( const wxString& aServerUrl,
+                                                          const wxString& aToken,
+                                                          const wxString& aDocId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/docs/" ) + aDocId + wxS( "/comments" ), aToken );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::CreateComment( const wxString& aServerUrl,
+                                                          const wxString& aToken,
+                                                          const wxString& aDocId,
+                                                          const wxString& aBody, long long aX,
+                                                          long long aY, long long aParentId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/docs/" ) + aDocId + wxS( "/comments" ), aToken );
+
+    nlohmann::json body = { { "body", aBody.ToStdString( wxConvUTF8 ) } };
+
+    if( aParentId >= 0 )
+        body[ "parentId" ] = aParentId;
+    else
+    {
+        body[ "x" ] = aX;
+        body[ "y" ] = aY;
+    }
+
+    curl.SetPostFields( body.dump() );
+
+    return performJson( curl );
+}
+
+
+bool COLLAB_REST::SetCommentResolved( const wxString& aServerUrl, const wxString& aToken,
+                                      long long aCommentId, bool aResolved )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl,
+                  aServerUrl + wxS( "/api/comments/" )
+                          + wxString::Format( wxS( "%lld" ), aCommentId ),
+                  aToken );
+
+    nlohmann::json body = { { "resolved", aResolved } };
+    curl.SetPostFields( body.dump() );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
+
+    return performJson( curl ).has_value();
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::Me( const wxString& aServerUrl, const wxString& aToken )
 {
     KICAD_CURL_EASY curl;

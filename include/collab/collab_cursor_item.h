@@ -54,6 +54,15 @@ struct REMOTE_GHOST_ITEM
 /// What is drawn for one remote participant: their cursor (if on this sheet), a name
 /// tag, the bounding boxes of their current selection, their in-flight route/wire
 /// segments, and full ghosts of items they are dragging (when we have local copies).
+/// One comment-thread pin: drawn as a numbered chip at the thread's anchor.
+struct COMMENT_PIN
+{
+    VECTOR2I pos;
+    int      count = 1;      ///< comments in the thread (root + replies)
+    bool     resolved = false;
+};
+
+
 struct REMOTE_PEER_DRAW
 {
     VECTOR2I                       cursor;
@@ -80,6 +89,8 @@ public:
     ~COLLAB_CURSOR_ITEM() override;
 
     void SetPeers( std::vector<REMOTE_PEER_DRAW>&& aPeers ) { m_peers = std::move( aPeers ); }
+
+    void SetCommentPins( std::vector<COMMENT_PIN>&& aPins ) { m_commentPins = std::move( aPins ); }
 
     /**
      * Parse a server-supplied peer colour.
@@ -111,4 +122,5 @@ public:
 
 private:
     std::vector<REMOTE_PEER_DRAW> m_peers;
+    std::vector<COMMENT_PIN>      m_commentPins;
 };

@@ -74,6 +74,7 @@ public:
     void OnSnapshot( const nlohmann::json& aSnapshotMsg ) override;
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
     void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
+    void OnComment( const nlohmann::json& aMsg ) override;
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -121,6 +122,19 @@ private:
     COLLAB_AUTH        m_auth;
     wxTimer            m_timer;
     COLLAB_CURSOR_ITEM m_cursorItem;
+
+    ///< All comments on this doc (roots + replies), REST shape, kept fresh
+    ///< by fetch-on-join and live `comment` broadcasts.
+    nlohmann::json m_comments = nlohmann::json::array();
+
+    ///< Guards async comment-fetch completions against tool teardown.
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>( true );
+
+    ///< Fetch the doc's comments off-thread and rebuild the overlay.
+    void fetchComments();
+
+    ///< Rebuild the overlay's comment pins from m_comments.
+    void rebuildCommentPins();
 
     std::unique_ptr<PCB_COLLAB_SYNC> m_sync;  ///< live while the board doc is joined
 

@@ -575,6 +575,11 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         if( adapter )
             adapter->OnReset( docId, aMsg.value( "seq", 0LL ) );
     }
+    else if( type == "comment" )
+    {
+        if( adapter )
+            adapter->OnComment( aMsg );
+    }
 }
 
 

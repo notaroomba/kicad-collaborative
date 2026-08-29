@@ -204,3 +204,17 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   anonymous write is refused (403); the desktop editors received the
   unknown `comment` broadcasts and stayed connected (graceful by design —
   in-editor pins are the next step).
+- [x] **Comment pins in the PCB editor.**  The desktop now participates in the
+  comments layer: comments are fetched on session join (off the UI thread via
+  the session worker) and kept live by the `comment` broadcasts; the canvas
+  overlay draws a numbered bubble at each thread's anchor, muted once
+  resolved, through the same depth-safe chip/text path as the peer name tags.
+  Two real bugs found by running it: nlohmann's `value()` with a default
+  still *throws* when the key holds `null` (roots carry `"parentId": null`)
+  and took two editors down — replaced with a null-safe accessor; and the
+  comment endpoints only accepted cookie auth, so the desktop's Bearer-token
+  writes got 403 — a `MaybeAuthUser` extractor now accepts both (anonymous
+  writes still refused).  Verified live: three editors each loaded the
+  existing threads on join and reacted to added/updated/deleted broadcasts
+  in real time.  Still ahead: click-a-pin thread UI in the editor (pins are
+  render-only today) and eeschema pins.

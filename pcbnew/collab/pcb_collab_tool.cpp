@@ -139,6 +139,8 @@ PCB_COLLAB_TOOL::PCB_COLLAB_TOOL() :
 
 PCB_COLLAB_TOOL::~PCB_COLLAB_TOOL()
 {
+    *m_alive = false;
+
     m_timer.Stop();
 
     // The session is process-wide and outlives every frame, so a registration
@@ -420,6 +422,153 @@ void PCB_COLLAB_TOOL::joinDoc( const wxString& aDocId, const wxString& aDocPath 
     m_sync->OpenJournal( editFrame->Prj().GetProjectPath(), editFrame->Prj().GetProjectName() );
 
     COLLAB_SESSION::Get().JoinDoc( m_docId, std::nullopt, this );
+
+    fetchComments();
+}
+
+
+namespace
+{
+/// nlohmann's value() with a default still throws when the key holds null
+/// (roots carry "parentId": null); this doesn't.
+long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aDefault )
+{
+    auto it = aObj.find( aKey );
+
+    return it != aObj.end() && it->is_number() ? it->get<long long>() : aDefault;
+}
+} // anonymous namespace
+
+
+void PCB_COLLAB_TOOL::fetchComments()
+{
+    std::shared_ptr<bool> alive = m_alive;
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+    std::string docId = m_docId.ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, server, token, docId]()
+            {
+                std::optional<nlohmann::json> listing = COLLAB_REST::ListComments(
+                        wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                        wxString::FromUTF8( docId ) );
+
+                nlohmann::json comments = listing && listing->contains( "comments" )
+                                                  ? ( *listing )[ "comments" ]
+                                                  : nlohmann::json::array();
+
+                wxTheApp->CallAfter(
+                        [this, alive, comments, docId]()
+                        {
+                            if( !*alive || m_docId.ToStdString( wxConvUTF8 ) != docId )
+                                return;
+
+                            m_comments = comments;
+
+                            if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                            {
+                                fprintf( stderr, "COLLAB comments: %zu loaded\n",
+                                         (size_t) m_comments.size() );
+                            }
+
+                            rebuildCommentPins();
+                        } );
+            } );
+}
+
+
+void PCB_COLLAB_TOOL::OnComment( const nlohmann::json& aMsg )
+{
+    const nlohmann::json& payload =
+            aMsg.contains( "comment" ) ? aMsg[ "comment" ] : nlohmann::json();
+
+    if( !payload.is_object() )
+        return;
+
+    std::string    action = payload.value( "action", "" );
+    nlohmann::json entry = payload.contains( "comment" ) ? payload[ "comment" ]
+                                                         : nlohmann::json();
+
+    if( !entry.is_object() )
+        return;
+
+    long long id = jsonNumber( entry, "id", -1 );
+
+    if( action == "deleted" )
+    {
+        nlohmann::json kept = nlohmann::json::array();
+
+        for( const nlohmann::json& c : m_comments )
+        {
+            if( jsonNumber( c, "id", -1 ) != id && jsonNumber( c, "parentId", -1 ) != id )
+                kept.push_back( c );
+        }
+
+        m_comments = std::move( kept );
+    }
+    else if( action == "updated" )
+    {
+        for( nlohmann::json& c : m_comments )
+        {
+            if( jsonNumber( c, "id", -1 ) == id )
+                c = entry;
+        }
+    }
+    else if( action == "added" )
+    {
+        bool present = false;
+
+        for( const nlohmann::json& c : m_comments )
+            present |= jsonNumber( c, "id", -1 ) == id;
+
+        if( !present )
+            m_comments.push_back( entry );
+    }
+
+    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+        fprintf( stderr, "COLLAB comment %s: id=%lld\n", action.c_str(), id );
+
+    rebuildCommentPins();
+}
+
+
+void PCB_COLLAB_TOOL::rebuildCommentPins()
+{
+    std::vector<COMMENT_PIN> pins;
+
+    for( const nlohmann::json& c : m_comments )
+    {
+        if( !c.is_object() || !c.value( "parentId", nlohmann::json() ).is_null() )
+            continue;
+
+        COMMENT_PIN pin;
+        pin.pos = VECTOR2I( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+        pin.resolved = c.value( "resolved", false );
+
+        long long id = jsonNumber( c, "id", -1 );
+        pin.count = 0;
+
+        for( const nlohmann::json& other : m_comments )
+        {
+            if( jsonNumber( other, "id", -1 ) == id
+                || jsonNumber( other, "parentId", -1 ) == id )
+                pin.count++;
+        }
+
+        pins.push_back( pin );
+    }
+
+    m_cursorItem.SetCommentPins( std::move( pins ) );
+
+    if( KIGFX::VIEW* view = getView() )
+    {
+        view->Update( &m_cursorItem );
+
+        if( frame<PCB_EDIT_FRAME>()->GetCanvas() )
+            frame<PCB_EDIT_FRAME>()->GetCanvas()->Refresh();
+    }
 }
 
 
@@ -444,9 +593,12 @@ void PCB_COLLAB_TOOL::leaveDoc()
     m_lastSentState = nlohmann::json();
     m_presenceDirty = false;
 
+    m_comments = nlohmann::json::array();
+
     if( KIGFX::VIEW* view = getView() )
     {
         m_cursorItem.SetPeers( {} );
+        m_cursorItem.SetCommentPins( {} );
         view->Remove( &m_cursorItem );
 
         if( frame<PCB_EDIT_FRAME>()->GetCanvas() )
