@@ -518,8 +518,142 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 }
 
 
+int SCH_COLLAB_TOOL::FollowNextPeer( const TOOL_EVENT& aEvent )
+{
+    // Peers across every joined doc: schematics follow across sheets.
+    std::map<wxString, COLLAB_PEER> all;
+
+    for( const auto& [path, docId] : m_docIdByPath )
+    {
+        for( const auto& [clientId, peer] : COLLAB_SESSION::Get().Peers( docId ) )
+            all.emplace( clientId, peer );
+    }
+
+    if( all.empty() )
+    {
+        m_frame->ShowInfoBarMsg( _( "No collaborators here to follow." ) );
+        return 0;
+    }
+
+    auto it = m_followPeer.IsEmpty() ? all.begin() : all.find( m_followPeer );
+
+    if( !m_followPeer.IsEmpty() && it != all.end() )
+        ++it;
+
+    if( it == all.end() )
+    {
+        m_followPeer.clear();
+        m_frame->ShowInfoBarMsg( _( "Stopped following." ) );
+        return 0;
+    }
+
+    m_followPeer = it->first;
+    m_followApplied = BOX2D();
+
+    wxString name = it->second.name.IsEmpty() ? it->second.login : it->second.name;
+    m_frame->ShowInfoBarMsg(
+            wxString::Format( _( "Following %s — pan or zoom to stop." ), name ) );
+
+    applyFollow();
+    return 0;
+}
+
+
+void SCH_COLLAB_TOOL::applyFollow()
+{
+    if( m_followPeer.IsEmpty() || !m_frame )
+        return;
+
+    KIGFX::VIEW* view = getView();
+
+    if( !view )
+        return;
+
+    // Find the followed peer on whichever doc they currently present on.
+    const nlohmann::json* state = nullptr;
+
+    for( const auto& [path, docId] : m_docIdByPath )
+    {
+        const auto& peers = COLLAB_SESSION::Get().Peers( docId );
+        auto        it = peers.find( m_followPeer );
+
+        if( it != peers.end() && it->second.state.is_object() )
+        {
+            state = &it->second.state;
+            break;
+        }
+    }
+
+    if( !state )
+    {
+        m_followPeer.clear();
+        m_frame->ShowInfoBarMsg( _( "The peer you were following left." ) );
+        return;
+    }
+
+    // Sheet-follow: switch to the sheet the peer is looking at.
+    wxString peerSheet = wxString::FromUTF8( state->value( "sheetFile", "" ) );
+
+    if( !peerSheet.IsEmpty() && peerSheet != currentSheetFile() )
+    {
+        for( const SCH_SHEET_PATH& path : m_frame->Schematic().Hierarchy() )
+        {
+            SCH_SCREEN* screen = path.LastScreen();
+
+            if( !screen )
+                continue;
+
+            wxFileName fn( screen->GetFileName() );
+            fn.MakeRelativeTo( m_frame->Prj().GetProjectPath() );
+
+            if( fn.GetFullPath( wxPATH_UNIX ) == peerSheet )
+            {
+                m_frame->SetCurrentSheet( path );
+                m_frame->DisplayCurrentSheet();
+                m_followApplied = BOX2D();
+                break;
+            }
+        }
+    }
+
+    if( !state->contains( "viewport" ) || !( *state )[ "viewport" ].is_array()
+        || ( *state )[ "viewport" ].size() < 4 )
+    {
+        return;
+    }
+
+    BOX2D current = view->GetViewport();
+
+    if( m_followApplied.GetWidth() > 0 )
+    {
+        double tolerance = std::max( 1.0, m_followApplied.GetWidth() * 0.02 );
+
+        if( std::abs( current.GetX() - m_followApplied.GetX() ) > tolerance
+            || std::abs( current.GetY() - m_followApplied.GetY() ) > tolerance
+            || std::abs( current.GetWidth() - m_followApplied.GetWidth() ) > tolerance )
+        {
+            m_followPeer.clear();
+            m_frame->ShowInfoBarMsg( _( "Stopped following." ) );
+            return;
+        }
+    }
+
+    const nlohmann::json& vp = ( *state )[ "viewport" ];
+    BOX2D target( VECTOR2D( vp[ 0 ].get<double>(), vp[ 1 ].get<double>() ),
+                  VECTOR2D( vp[ 2 ].get<double>(), vp[ 3 ].get<double>() ) );
+
+    if( target.GetWidth() <= 0 || target.GetHeight() <= 0 )
+        return;
+
+    view->SetViewport( target );
+    m_followApplied = view->GetViewport();
+    m_frame->GetCanvas()->Refresh();
+}
+
+
 void SCH_COLLAB_TOOL::OnPresenceChanged()
 {
+    applyFollow();
     rebuildOverlay();
 }
 
@@ -1194,6 +1328,7 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::ShowHistory,       SCH_ACTIONS::collabHistory.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::CopyShareLink,     SCH_ACTIONS::collabCopyLink.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::ShowComments,      SCH_ACTIONS::collabComments.MakeEvent() );
+    Go( &SCH_COLLAB_TOOL::FollowNextPeer,    SCH_ACTIONS::collabFollow.MakeEvent() );
 
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

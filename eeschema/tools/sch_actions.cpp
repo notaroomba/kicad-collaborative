@@ -1977,4 +1977,11 @@ TOOL_ACTION SCH_ACTIONS::collabComments( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Comments..." ) )
         .Tooltip( _( "Browse, answer and resolve the shared project's comment threads" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::collabFollow( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.follow" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Follow Next Peer" ) )
+        .Tooltip( _( "Follow a collaborator's view, switching sheets with them; pan or zoom "
+                     "to stop" ) ) );
+
 // clang-format on

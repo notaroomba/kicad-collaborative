@@ -83,6 +83,9 @@ public:
 
     ///< Open the comment-threads dialog for the displayed sheet's doc.
     int ShowComments( const TOOL_EVENT& aEvent );
+
+    ///< Cycle viewport-following through the connected peers.
+    int FollowNextPeer( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -150,6 +153,14 @@ private:
 
     ///< Items currently hidden because a peer's live-drag ghost replaces them.
     std::set<KIID> m_ghostHidden;
+
+    ///< Peer being viewport-followed (empty = not following).
+    wxString m_followPeer;
+    BOX2D    m_followApplied;
+
+    ///< Track the followed peer's view (sheet + viewport); break on manual
+    ///< pan/zoom.
+    void applyFollow();
 
     ///< The open comments dialog, if any (modeless; views the displayed doc).
     class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;

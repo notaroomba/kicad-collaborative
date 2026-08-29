@@ -342,6 +342,7 @@ public:
     static TOOL_ACTION collabHistory;
     static TOOL_ACTION collabCopyLink;
     static TOOL_ACTION collabComments;
+    static TOOL_ACTION collabFollow;
     static TOOL_ACTION collabStartSession;
     static TOOL_ACTION collabJoinSession;
     static TOOL_ACTION collabLeaveSession;

@@ -353,7 +353,7 @@ pub async fn live_page(
 <div id="stage">
   <div id="world">
     <img id="base" alt="Board" src="/api/projects/{id}/preview.svg?fit=false" draggable="false">
-    <svg id="overlay"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
+    <svg id="overlay"><g id="peersG" style="pointer-events:none"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
   </div>
   <div id="cmtPanel"></div>
 </div>
@@ -402,8 +402,44 @@ stage.addEventListener("wheel", (ev) => {{
   panX = cx - (cx - panX) * (next / zoom);
   panY = cy - (cy - panY) * (next / zoom);
   zoom = next;
+  breakFollow();
   applyView();
 }}, {{ passive: false }});
+
+let followPeer = null;   // clientId being followed
+
+let stageW = 0;   // last known laid-out width (a hidden tab reads 0)
+
+function knownStageW() {{
+  const w = stage.getBoundingClientRect().width;
+  if (w > 0) stageW = w;
+  return stageW || 1100;
+}}
+
+function applyFollowWeb(peers) {{
+  if (!followPeer) return;
+  const entry = peers[followPeer];
+  if (!entry) {{ followPeer = null; setStatus("&middot; peer left"); return; }}
+  const vp = (entry.state || {{}}).viewport;
+  if (!vp || vp.length < 4 || vp[2] <= 0) return;
+  const w = knownStageW();
+  const xMm = vp[0] / 1e6, wMm = vp[2] / 1e6, yMm = vp[1] / 1e6;
+  const nextZoom = Math.min(14, Math.max(0.6, vb[2] / wMm));
+  zoom = nextZoom;
+  panX = -((xMm - vb[0]) / vb[2]) * w * zoom;
+  panY = -((yMm - vb[1]) / vb[3]) * (w * vb[3] / vb[2]) * zoom;
+  suppressBreakout = true;
+  applyView();
+  suppressBreakout = false;
+}}
+
+let suppressBreakout = false;
+
+function breakFollow(why) {{
+  if (!followPeer || suppressBreakout) return;
+  followPeer = null;
+  setStatus("&middot; stopped following" + (why ? " (" + why + ")" : ""));
+}}
 
 let pan = null;
 stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -415,7 +451,7 @@ stage.addEventListener("pointerdown", (ev) => {{
   }}
 }});
 stage.addEventListener("pointermove", (ev) => {{
-  if (pan) {{ panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; applyView(); }}
+  if (pan) {{ panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); }}
 }});
 stage.addEventListener("pointerup", (ev) => {{
   if (pan && (ev.button === 2 || ev.button === 1)) pan = null;
@@ -475,7 +511,7 @@ function connect() {{
     const msg = JSON.parse(ev.data);
     if (msg.type === "hello_ok") {{ retries = 0; ws.send(JSON.stringify({{ type: "join_doc", docId: DOC_ID }})); }}
     if (msg.type === "doc_info") setStatus(`&middot; ${{(msg.peers || []).length}} peer(s) here`);
-    if (msg.type === "presence") drawPeers(msg.peers || {{}});
+    if (msg.type === "presence") {{ drawPeers(msg.peers || {{}}); applyFollowWeb(msg.peers || {{}}); }}
     if (msg.type === "error" && msg.code === "permission_denied") {{
       viewOnly = true;
       drag = null; selected = null;
@@ -692,7 +728,7 @@ function drawPeers(peers) {{
   const s = pxPerMm();
   const mm = (nm) => nm / 1e6;
 
-  for (const p of Object.values(peers)) {{
+  for (const [cid, p] of Object.entries(peers)) {{
     const st = p.state || {{}};
     const color = (p.user && p.user.color) || "#4477ee";
     const name = (p.user && (p.user.name || p.user.login)) || "peer";
@@ -730,7 +766,14 @@ function drawPeers(peers) {{
       label.setAttribute("font-family", "system-ui, sans-serif");
       label.setAttribute("paint-order", "stroke"); label.setAttribute("stroke", "white");
       label.setAttribute("stroke-width", 3 / s);
-      label.textContent = name;
+      label.textContent = followPeer === cid ? name + " \u2714 following" : name;
+      label.style.pointerEvents = "auto";
+      label.style.cursor = "pointer";
+      label.addEventListener("click", (ev) => {{
+        ev.stopPropagation();
+        if (followPeer === cid) {{ followPeer = null; setStatus("&middot; stopped following"); }}
+        else {{ followPeer = cid; setStatus("&middot; following " + name + " — zoom/pan to stop"); }}
+      }});
       peersG.appendChild(label);
     }}
   }}

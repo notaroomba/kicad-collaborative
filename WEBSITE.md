@@ -348,3 +348,12 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   viewport, the cycle action reached it, and alice's own outgoing presence
   showed her viewport snapped to the target region (aspect-corrected).
   eeschema parity is queued.
+- [x] **Follow-mode parity (loop 23).**  eeschema: File > Follow Next Peer
+  follows a collaborator's view INCLUDING switching to the sheet they are
+  on (hierarchy lookup by their presence sheetFile), with the same
+  pan/zoom breakout.  Web: click a peer's name label to lock onto their
+  viewport (zoom + pan computed from the presence viewport; label shows
+  "following"), manual zoom/pan breaks it.  Verified live on the web with
+  a parked peer: zoom 11.88x and pan -8800 px matched the expected values
+  exactly, and a wheel event broke the follow.  eeschema rides the
+  pcbnew-verified pattern (no headless action runner for sch).
