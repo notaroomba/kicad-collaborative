@@ -320,6 +320,17 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject )
     if( token.IsEmpty() || projectId.IsEmpty() )
         return;
 
+    // Opened before?  Reuse the recorded copy without asking for a directory
+    // or downloading anything; local edits replay from the journal on join.
+    wxString recorded = COLLAB_PROJECT::FindLocalCopy( projectId );
+
+    if( !recorded.IsEmpty() )
+    {
+        m_projectToOpen = recorded;
+        EndModal( wxID_OK );
+        return;
+    }
+
     // Default local home for cloud copies; the user can put it elsewhere.
     wxFileName base( PATHS::GetDefaultUserProjectsPath(), wxEmptyString );
     base.AppendDir( wxS( "Cloud" ) );
@@ -347,6 +358,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject )
 
         if( !proFiles.IsEmpty() )
         {
+            COLLAB_PROJECT::RecordLocalCopy( projectId, proFiles[ 0 ] );
             m_projectToOpen = proFiles[ 0 ];
             EndModal( wxID_OK );
             return;
@@ -370,6 +382,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject )
         return;
     }
 
+    COLLAB_PROJECT::RecordLocalCopy( projectId, proFile );
     m_projectToOpen = proFile;
     EndModal( wxID_OK );
 }

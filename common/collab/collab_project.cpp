@@ -18,6 +18,7 @@
  */
 
 #include <collab/collab_project.h>
+#include <paths.h>
 
 #include <collab/collab_rest.h>
 
@@ -245,6 +246,113 @@ wxString COLLAB_PROJECT::ReadLocalLink( const wxString& aProjectPath,
     {
         return wxEmptyString;
     }
+}
+
+
+static wxString localCopiesPathIn( const wxString& aRegistryDir )
+{
+    return wxFileName( aRegistryDir, wxS( "collab-local-copies.json" ) ).GetFullPath();
+}
+
+
+void COLLAB_PROJECT::RecordLocalCopy( const wxString& aProjectId, const wxString& aProFile )
+{
+    RecordLocalCopyIn( PATHS::GetUserSettingsPath(), aProjectId, aProFile );
+}
+
+
+wxString COLLAB_PROJECT::FindLocalCopy( const wxString& aProjectId )
+{
+    return FindLocalCopyIn( PATHS::GetUserSettingsPath(), aProjectId );
+}
+
+
+void COLLAB_PROJECT::RecordLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId,
+                                        const wxString& aProFile )
+{
+    nlohmann::json map = nlohmann::json::object();
+
+    if( wxFileName::FileExists( localCopiesPathIn( aRegistryDir ) ) )
+    {
+        wxFFileInputStream in( localCopiesPathIn( aRegistryDir ) );
+
+        if( in.IsOk() )
+        {
+            std::string text;
+            text.resize( in.GetLength() );
+            in.Read( text.data(), text.size() );
+
+            try
+            {
+                map = nlohmann::json::parse( text );
+            }
+            catch( ... )
+            {
+                map = nlohmann::json::object();
+            }
+        }
+    }
+
+    if( !map.is_object() )
+        map = nlohmann::json::object();
+
+    map[ aProjectId.ToStdString( wxConvUTF8 ) ] = aProFile.ToStdString( wxConvUTF8 );
+
+    wxFFileOutputStream out( localCopiesPathIn( aRegistryDir ) );
+
+    if( out.IsOk() )
+    {
+        std::string text = map.dump( 2 );
+        out.Write( text.data(), text.size() );
+    }
+}
+
+
+wxString COLLAB_PROJECT::FindLocalCopyIn( const wxString& aRegistryDir,
+                                          const wxString& aProjectId )
+{
+    if( !wxFileName::FileExists( localCopiesPathIn( aRegistryDir ) ) )
+        return wxEmptyString;
+
+    wxFFileInputStream in( localCopiesPathIn( aRegistryDir ) );
+
+    if( !in.IsOk() )
+        return wxEmptyString;
+
+    std::string text;
+    text.resize( in.GetLength() );
+    in.Read( text.data(), text.size() );
+
+    wxString proFile;
+
+    try
+    {
+        nlohmann::json map = nlohmann::json::parse( text );
+
+        if( !map.is_object() )
+            return wxEmptyString;
+
+        proFile = wxString::FromUTF8(
+                map.value( aProjectId.ToStdString( wxConvUTF8 ), std::string() ) );
+    }
+    catch( ... )
+    {
+        return wxEmptyString;
+    }
+
+    if( proFile.IsEmpty() || !wxFileName::FileExists( proFile ) )
+        return wxEmptyString;
+
+    // The directory must still be linked to this project: a moved or
+    // repurposed copy must not be silently reused.
+    wxFileName pro( proFile );
+    wxString   server;
+    wxString   linkedId = ReadLocalLink( pro.GetPath(), pro.GetName(), server );
+
+    if( linkedId != aProjectId )
+        return wxEmptyString;
+
+    return proFile;
 }
 
 
