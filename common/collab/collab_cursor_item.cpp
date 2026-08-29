@@ -109,11 +109,14 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
             }
         }
 
-        // Selection outlines: thin screen-constant rectangles in the peer colour.
-        gal->SetIsFill( false );
+        // Selection highlights: a translucent wash plus a solid outline in the
+        // peer colour, so a peer's selection reads at a glance even on a dense
+        // board (a thin outline alone disappeared into the copper).
+        gal->SetIsFill( true );
         gal->SetIsStroke( true );
-        gal->SetStrokeColor( peer.color );
-        gal->SetLineWidth( static_cast<float>( selLinePx * w ) );
+        gal->SetFillColor( peer.color.WithAlpha( 0.18 ) );
+        gal->SetStrokeColor( peer.color.WithAlpha( 0.95 ) );
+        gal->SetLineWidth( static_cast<float>( 2.0 * selLinePx * w ) );
 
         for( const BOX2I& box : peer.selectionBoxes )
             gal->DrawRectangle( box );

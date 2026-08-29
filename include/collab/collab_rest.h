@@ -120,6 +120,11 @@ KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aTok
                                 const wxString& aProjectId, long long aInviteId );
 
 /// GET /api/me -> { id, login, name, email, avatarUrl }.
+/// POST /api/docs/{id}/preview?seq=N&fit=... — a client-rendered SVG preview.
+KICOMMON_API bool UploadPreview( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aDocId, long long aSeq, bool aFit,
+                                 const std::string& aSvg );
+
 /// GET /api/projects/{id}/checkpoints -> { checkpoints: [ { name, docId, path, seq, createdAt } ] }
 KICOMMON_API std::optional<nlohmann::json> ListCheckpoints( const wxString& aServerUrl,
                                                             const wxString& aToken,

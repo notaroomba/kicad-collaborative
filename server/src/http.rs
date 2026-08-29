@@ -274,7 +274,25 @@ pub async fn preview_svg(
     }
 
     let Some(kicad_cli) = state.cfg.kicad_cli.clone() else {
-        return Err(AppError::BadRequest("previews not enabled on this server".into()));
+        // No renderer on this server: serve the latest client-pushed preview.
+        let docs = persist::project_documents(&state.pool, id).await?;
+        let doc = docs
+            .iter()
+            .find(|d| d.doc_type == "kicad_pcb")
+            .ok_or_else(|| AppError::BadRequest("project has no board".into()))?;
+
+        let Some((_seq, svg)) = persist::get_preview(&state.pool, doc.id, q.fit.unwrap_or(true)).await? else {
+            return Err(AppError::NotFound);
+        };
+
+        return Ok((
+            [
+                (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
+                (axum::http::header::CACHE_CONTROL, "public, max-age=60"),
+            ],
+            svg,
+        )
+            .into_response());
     };
 
     let docs = persist::project_documents(&state.pool, id).await?;
@@ -960,6 +978,43 @@ async fn github_user_search(
 #[derive(Deserialize)]
 pub struct SnapshotQuery {
     pub seq: i64,
+}
+
+#[derive(Deserialize)]
+pub struct PreviewUploadQuery {
+    pub seq: i64,
+    #[serde(default)]
+    pub fit: bool,
+}
+
+/// Editors push their own SVG render of the board here (they have the real
+/// plotter; the server has no KiCad).  Newest seq wins per variant.
+pub async fn upload_preview(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(doc_id): Path<Uuid>,
+    Query(q): Query<PreviewUploadQuery>,
+    body: axum::body::Bytes,
+) -> AppResult<Response> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    let role = persist::effective_role(&state.pool, user.id, doc.project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if role != "editor" {
+        return Err(AppError::Forbidden);
+    }
+    if body.len() > 8 * 1024 * 1024 {
+        return Err(AppError::BadRequest("preview too large (8 MB max)".into()));
+    }
+    let head = body.iter().take(512).copied().collect::<Vec<u8>>();
+    let head_text = String::from_utf8_lossy(&head);
+    if !head_text.trim_start().starts_with("<?xml") && !head_text.trim_start().starts_with("<svg")
+    {
+        return Err(AppError::BadRequest("body must be an SVG document".into()));
+    }
+    persist::upsert_preview(&state.pool, doc_id, q.fit, q.seq, &body).await?;
+    Ok(Json(json!({ "ok": true, "docId": doc_id, "seq": q.seq, "fit": q.fit }))
+        .into_response())
 }
 
 pub async fn upload_snapshot(

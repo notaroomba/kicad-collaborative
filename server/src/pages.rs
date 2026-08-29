@@ -559,8 +559,8 @@ function drawPeers(peers) {{
       const rect = document.createElementNS(NS, "rect");
       rect.setAttribute("x", mm(b[0])); rect.setAttribute("y", mm(b[1]));
       rect.setAttribute("width", mm(b[2])); rect.setAttribute("height", mm(b[3]));
-      rect.setAttribute("fill", "none"); rect.setAttribute("stroke", color);
-      rect.setAttribute("stroke-width", 1.5 / s);
+      rect.setAttribute("fill", color); rect.setAttribute("fill-opacity", "0.18");
+      rect.setAttribute("stroke", color); rect.setAttribute("stroke-width", 3 / s);
       peersG.appendChild(rect);
     }}
 

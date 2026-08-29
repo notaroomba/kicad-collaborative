@@ -324,6 +324,26 @@ bool COLLAB_REST::RevokeInvite( const wxString& aServerUrl, const wxString& aTok
 }
 
 
+bool COLLAB_REST::UploadPreview( const wxString& aServerUrl, const wxString& aToken,
+                                 const wxString& aDocId, long long aSeq, bool aFit,
+                                 const std::string& aSvg )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl,
+                  wxString::Format( wxS( "%s/api/docs/%s/preview?seq=%lld&fit=%s" ), aServerUrl,
+                                    aDocId, aSeq, aFit ? wxS( "true" ) : wxS( "false" ) ),
+                  aToken );
+
+    curl.SetHeader( "Content-Type", "image/svg+xml" );
+
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_POSTFIELDSIZE_LARGE,
+                      static_cast<curl_off_t>( aSvg.size() ) );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_COPYPOSTFIELDS, aSvg.data() );
+
+    return performJson( curl ).has_value();
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::ListCheckpoints( const wxString& aServerUrl,
                                                              const wxString& aToken,
                                                              const wxString& aProjectId )

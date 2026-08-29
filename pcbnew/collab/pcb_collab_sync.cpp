@@ -31,6 +31,10 @@
 #include <diff_merge/kicad_diff_types.h>
 #include <diff_merge/property_diff.h>
 #include <footprint.h>
+#include <pcb_plotter.h>
+#include <pcb_plot_params.h>
+#include <reporter.h>
+#include <wx/ffile.h>
 #include <pcb_group.h>
 #include <ki_exception.h>
 #include <netinfo.h>
@@ -1306,18 +1310,81 @@ void PCB_COLLAB_SYNC::OnSnapshotRequest()
         long long   seq = m_lastAppliedSeq;
         std::string payload = formatter.GetString();
 
+        // The board render rides along: editors have KiCad's real plotter,
+        // so the server never needs one.  Plot on the UI thread (board
+        // access), upload the self-contained bytes on the worker.
+        std::string fitSvg = plotPreviewSvg( true );
+        std::string pageSvg = plotPreviewSvg( false );
+
         COLLAB_SESSION::Get().RunAsync(
-                [server, token, docId, seq, payload]()
+                [server, token, docId, seq, payload, fitSvg, pageSvg]()
                 {
                     COLLAB_REST::UploadSnapshot( wxString::FromUTF8( server ),
                                                  wxString::FromUTF8( token ),
                                                  wxString::FromUTF8( docId ), seq, payload );
+
+                    if( !fitSvg.empty() )
+                    {
+                        COLLAB_REST::UploadPreview( wxString::FromUTF8( server ),
+                                                    wxString::FromUTF8( token ),
+                                                    wxString::FromUTF8( docId ), seq, true,
+                                                    fitSvg );
+                    }
+
+                    if( !pageSvg.empty() )
+                    {
+                        COLLAB_REST::UploadPreview( wxString::FromUTF8( server ),
+                                                    wxString::FromUTF8( token ),
+                                                    wxString::FromUTF8( docId ), seq, false,
+                                                    pageSvg );
+                    }
                 } );
     }
     catch( const IO_ERROR& ioe )
     {
         wxLogTrace( traceCollab, wxS( "snapshot serialization failed: %s" ), ioe.What() );
     }
+}
+
+
+std::string PCB_COLLAB_SYNC::plotPreviewSvg( bool aFitPageToBoard )
+{
+    BOARD* board = m_frame->GetBoard();
+
+    if( !board )
+        return std::string();
+
+    PCB_PLOT_PARAMS opts;
+    opts.SetFormat( PLOT_FORMAT::SVG );
+    opts.SetPlotFrameRef( false );
+    opts.SetSvgFitPageToBoard( aFitPageToBoard );
+    opts.SetBlackAndWhite( false );
+
+    // The same layer set the CLI renderer used, so previews look identical
+    // whichever side produced them.
+    LSEQ layers = { F_Cu, B_Cu, Edge_Cuts, F_SilkS };
+
+    wxString tmp = wxFileName::CreateTempFileName( wxS( "collab-preview" ) );
+    tmp += wxS( ".svg" );
+
+    PCB_PLOTTER plotter( board, &NULL_REPORTER::GetInstance(), opts );
+
+    std::string svg;
+
+    if( plotter.Plot( tmp, layers, LSEQ(), false, true ) )
+    {
+        wxFFile file( tmp, wxS( "rb" ) );
+
+        if( file.IsOpened() )
+        {
+            svg.resize( file.Length() );
+            file.Read( svg.data(), svg.size() );
+        }
+    }
+
+    wxRemoveFile( tmp );
+
+    return svg;
 }
 
 
