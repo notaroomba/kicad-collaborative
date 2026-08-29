@@ -1971,4 +1971,10 @@ TOOL_ACTION SCH_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Copy Share Link" ) )
         .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::collabComments( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.comments" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Comments..." ) )
+        .Tooltip( _( "Browse, answer and resolve the shared project's comment threads" ) ) );
+
 // clang-format on

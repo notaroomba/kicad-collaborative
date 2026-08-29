@@ -23,6 +23,7 @@
 
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
+#include <dialogs/dialog_collab_comments.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <math/util.h>
@@ -666,6 +667,111 @@ COLLAB_HISTORY_PANEL* SCH_COLLAB_TOOL::historyPanel()
 }
 
 
+int SCH_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
+{
+    wxString docId = currentDocId();
+
+    if( docId.IsEmpty() )
+    {
+        m_frame->ShowInfoBarMsg(
+                _( "Comments live on shared projects; start or join a session first." ) );
+        return 0;
+    }
+
+    if( m_commentsDlg && m_commentsDlgDocId == docId )
+    {
+        m_commentsDlg->Raise();
+        return 0;
+    }
+
+    if( m_commentsDlg )
+    {
+        m_commentsDlg->Destroy();
+        m_commentsDlg = nullptr;
+    }
+
+    VECTOR2I anchorPos = m_frame->GetCanvas()->GetViewControls()->GetCursorPosition();
+
+    m_commentsDlgDocId = docId;
+    m_commentsDlg = new DIALOG_COLLAB_COMMENTS(
+            m_frame, &m_commentsByDoc[ docId ], anchorPos,
+            [this, docId, anchorPos]( const wxString& aBody, long long aParentId )
+            {
+                postComment( docId, aBody, aParentId, anchorPos );
+            },
+            [this]( long long aRootId, bool aResolved )
+            {
+                resolveComment( aRootId, aResolved );
+            },
+            [this]( const VECTOR2I& aPos )
+            {
+                m_frame->FocusOnLocation( aPos );
+            } );
+
+    m_commentsDlg->Bind( wxEVT_CLOSE_WINDOW,
+                         [this]( wxCloseEvent& aClose )
+                         {
+                             m_commentsDlg = nullptr;
+                             aClose.Skip();
+                         } );
+
+    m_commentsDlg->Bind( wxEVT_BUTTON,
+                         [this]( wxCommandEvent& aCmd )
+                         {
+                             if( aCmd.GetId() == wxID_CANCEL && m_commentsDlg )
+                             {
+                                 DIALOG_COLLAB_COMMENTS* dlg = m_commentsDlg;
+                                 m_commentsDlg = nullptr;
+                                 dlg->Destroy();
+                                 return;
+                             }
+
+                             aCmd.Skip();
+                         } );
+
+    m_commentsDlg->Show();
+    return 0;
+}
+
+
+void SCH_COLLAB_TOOL::postComment( const wxString& aDocId, const wxString& aBody,
+                                   long long aParentId, const VECTOR2I& aAnchor )
+{
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+    std::string docId = aDocId.ToStdString( wxConvUTF8 );
+    std::string body = aBody.ToStdString( wxConvUTF8 );
+    long long   x = aAnchor.x;
+    long long   y = aAnchor.y;
+
+    COLLAB_SESSION::Get().RunAsync(
+            [server, token, docId, body, aParentId, x, y]()
+            {
+                COLLAB_REST::CreateComment( wxString::FromUTF8( server ),
+                                            wxString::FromUTF8( token ),
+                                            wxString::FromUTF8( docId ),
+                                            wxString::FromUTF8( body ), x, y, aParentId );
+            } );
+}
+
+
+void SCH_COLLAB_TOOL::resolveComment( long long aRootId, bool aResolved )
+{
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [server, token, aRootId, aResolved]()
+            {
+                COLLAB_REST::SetCommentResolved( wxString::FromUTF8( server ),
+                                                 wxString::FromUTF8( token ), aRootId,
+                                                 aResolved );
+            } );
+}
+
+
 int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 {
     wxString projectId = COLLAB_SESSION::Get().ProjectId();
@@ -841,6 +947,9 @@ void SCH_COLLAB_TOOL::OnComment( const nlohmann::json& aMsg )
         fprintf( stderr, "COLLAB sch comment %s: id=%lld\n", action.c_str(), id );
 
     rebuildCommentPins();
+
+    if( m_commentsDlg && m_commentsDlgDocId == docId )
+        m_commentsDlg->Reload();
 }
 
 
@@ -1029,6 +1138,7 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::LeaveSession,      SCH_ACTIONS::collabLeaveSession.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::ShowHistory,       SCH_ACTIONS::collabHistory.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::CopyShareLink,     SCH_ACTIONS::collabCopyLink.MakeEvent() );
+    Go( &SCH_COLLAB_TOOL::ShowComments,      SCH_ACTIONS::collabComments.MakeEvent() );
 
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );
