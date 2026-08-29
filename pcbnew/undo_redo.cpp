@@ -42,6 +42,8 @@ using namespace std::placeholders;
 #include <tools/pcb_control.h>
 #include <tools/board_editor_control.h>
 #include <board_commit.h>
+#include <collab/pcb_collab_sync.h>
+#include <collab/pcb_collab_tool.h>
 #include <drawing_sheet/ds_proxy_undo_item.h>
 #include <wx/msgdlg.h>
 #include <pcb_board_outline.h>
@@ -710,6 +712,61 @@ void PCB_BASE_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool
 
     if( added_items.size() > 0 || deleted_items.size() > 0 || changed_items.size() > 0 )
         GetBoard()->OnItemsCompositeUpdate( added_items, deleted_items, changed_items );
+
+    // Broadcast the restored state to a live collaboration session.  Undo/redo (and
+    // tool-abort rollback) do not go through BOARD_COMMIT::Push, so this is the only
+    // place the swapped-in state can be captured.  No-op when there is no session.
+    if( PCB_COLLAB_TOOL* collabTool = m_toolManager->GetTool<PCB_COLLAB_TOOL>() )
+    {
+        if( PCB_COLLAB_SYNC* sync = collabTool->GetSync() )
+        {
+            if( !sync->IsApplyingRemote() )
+                sync->CaptureUndoRedo( aList );
+        }
+    }
+}
+
+
+void PCB_BASE_EDIT_FRAME::PurgeItemFromUndoRedo( const KIID& aItemId )
+{
+    for( UNDO_REDO_CONTAINER* container : { &m_undoList, &m_redoList } )
+    {
+        for( auto cmdIt = container->m_CommandsList.begin();
+             cmdIt != container->m_CommandsList.end(); )
+        {
+            PICKED_ITEMS_LIST* cmd = *cmdIt;
+
+            for( int ii = (int) cmd->GetCount() - 1; ii >= 0; --ii )
+            {
+                const ITEM_PICKER& picker = cmd->GetItemWrapper( (unsigned) ii );
+                EDA_ITEM*          item = picker.GetItem();
+
+                if( !item || item->m_Uuid != aItemId )
+                    continue;
+
+                // Ownership rules follow PICKED_ITEMS_LIST::ClearListAndDeleteItems():
+                // links always belong to the undo/redo container; picked items belong
+                // to it only for DELETED entries and transient items.
+                if( EDA_ITEM* link = picker.GetLink() )
+                    delete link;
+
+                if( ( picker.GetFlags() & UR_TRANSIENT ) || picker.GetStatus() == UNDO_REDO::DELETED )
+                    delete item;
+
+                cmd->RemovePicker( (unsigned) ii );
+            }
+
+            if( cmd->GetCount() == 0 )
+            {
+                delete cmd;
+                cmdIt = container->m_CommandsList.erase( cmdIt );
+            }
+            else
+            {
+                ++cmdIt;
+            }
+        }
+    }
 }
 
 
