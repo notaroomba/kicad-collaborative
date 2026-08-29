@@ -3194,6 +3194,12 @@ TOOL_ACTION PCB_ACTIONS::collabComments( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Comments..." ) )
         .Tooltip( _( "Browse, answer and resolve the shared project's comment threads" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::collabHistory( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.history" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "History" ) )
+        .Tooltip( _( "Show the shared project's version history panel" ) ) );
+
 
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()
 {

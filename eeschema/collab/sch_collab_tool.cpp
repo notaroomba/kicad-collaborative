@@ -23,6 +23,7 @@
 
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
+#include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <math/util.h>
 #include <sch_screen.h>
@@ -298,6 +299,8 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
     // Publish the full doc list so the board editor can find and join its own doc.
     COLLAB_SESSION::Get().SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
+    COLLAB_SESSION::Get().SetProjectId(
+            wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
 
     if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
     {
@@ -338,6 +341,13 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
         session.JoinDoc( docId, std::nullopt, this );
 
     fetchComments();
+
+    // Surface the version history beside the canvas for the session.
+    if( COLLAB_HISTORY_PANEL* panel = historyPanel() )
+    {
+        m_frame->GetAuiManager().GetPane( panel ).Show();
+        m_frame->GetAuiManager().Update();
+    }
 
     // Live cursors only appear when both sides display the same file.
     if( m_docIdByPath.find( currentSheetFile() ) == m_docIdByPath.end() )
@@ -622,6 +632,52 @@ long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aD
     return it != aObj.end() && it->is_number() ? it->get<long long>() : aDefault;
 }
 } // anonymous namespace
+
+
+COLLAB_HISTORY_PANEL* SCH_COLLAB_TOOL::historyPanel()
+{
+    if( !m_frame )
+        return nullptr;
+
+    if( !m_historyPanel )
+    {
+        m_historyPanel = new COLLAB_HISTORY_PANEL( m_frame, m_frame );
+
+        m_frame->GetAuiManager().AddPane(
+                m_historyPanel, wxAuiPaneInfo()
+                                        .Name( wxS( "CollabHistory" ) )
+                                        .Caption( _( "History" ) )
+                                        .Right()
+                                        .Layer( 3 )
+                                        .Position( 2 )
+                                        .CloseButton( true )
+                                        .MinSize( 240, 180 )
+                                        .BestSize( 300, 240 )
+                                        .Hide() );
+    }
+
+    m_historyPanel->SetProject( COLLAB_SESSION::Get().ProjectId() );
+
+    return m_historyPanel;
+}
+
+
+int SCH_COLLAB_TOOL::ShowHistory( const TOOL_EVENT& aEvent )
+{
+    COLLAB_HISTORY_PANEL* panel = historyPanel();
+
+    if( !panel )
+        return 0;
+
+    wxAuiPaneInfo& pane = m_frame->GetAuiManager().GetPane( panel );
+    pane.Show( !pane.IsShown() );
+    m_frame->GetAuiManager().Update();
+
+    if( pane.IsShown() )
+        panel->RefreshHistory();
+
+    return 0;
+}
 
 
 void SCH_COLLAB_TOOL::fetchComments()
@@ -912,6 +968,7 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::StartSession,      SCH_ACTIONS::collabStartSession.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::JoinSession,       SCH_ACTIONS::collabJoinSession.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::LeaveSession,      SCH_ACTIONS::collabLeaveSession.MakeEvent() );
+    Go( &SCH_COLLAB_TOOL::ShowHistory,       SCH_ACTIONS::collabHistory.MakeEvent() );
 
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

@@ -166,6 +166,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( PCB_ACTIONS::collabStartSession );
     fileMenu->Add( PCB_ACTIONS::collabJoinSession );
     fileMenu->Add( PCB_ACTIONS::collabComments );
+    fileMenu->Add( PCB_ACTIONS::collabHistory );
     fileMenu->Add( PCB_ACTIONS::collabLeaveSession );
 
     fileMenu->AppendSeparator();

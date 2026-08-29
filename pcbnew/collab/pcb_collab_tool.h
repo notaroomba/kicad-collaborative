@@ -78,6 +78,9 @@ public:
 
     ///< Open the comment-threads dialog (modeless view over m_comments).
     int ShowComments( const TOOL_EVENT& aEvent );
+
+    ///< Toggle the version-history sidebar pane.
+    int ShowHistory( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 
@@ -141,6 +144,15 @@ private:
 
     ///< The open comments dialog, if any (modeless; owned by wx).
     class DIALOG_PCB_COMMENTS* m_commentsDlg = nullptr;
+
+    ///< The version-history sidebar pane (created lazily; owned by AUI).
+    class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
+
+    ///< The joined project's server id (empty when no session).
+    wxString m_projectId;
+
+    ///< Create the pane if needed; bind it to the current project.
+    class COLLAB_HISTORY_PANEL* historyPanel();
 
     ///< Post a comment or reply off-thread; the broadcast updates state.
     void postComment( const wxString& aBody, long long aParentId, const VECTOR2I& aAnchor );

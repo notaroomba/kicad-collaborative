@@ -339,6 +339,7 @@ public:
     static TOOL_ACTION showNetNavigator;
 
     // Collaboration
+    static TOOL_ACTION collabHistory;
     static TOOL_ACTION collabStartSession;
     static TOOL_ACTION collabJoinSession;
     static TOOL_ACTION collabLeaveSession;
