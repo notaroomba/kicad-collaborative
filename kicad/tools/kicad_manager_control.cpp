@@ -31,6 +31,7 @@
 #include <kiplatform/secrets.h>
 #include <kiplatform/ui.h>
 #include <confirm.h>
+#include <dialogs/dialog_online_projects.h>
 #include <kidialog.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
@@ -568,6 +569,21 @@ int KICAD_MANAGER_CONTROL::LoadProject( const TOOL_EVENT& aEvent )
 }
 
 
+int KICAD_MANAGER_CONTROL::ShowOnlineProjects( const TOOL_EVENT& aEvent )
+{
+    DIALOG_ONLINE_PROJECTS dlg( m_frame );
+
+    dlg.ShowModal();
+
+    wxString pro = dlg.GetProjectToOpen();
+
+    if( !pro.IsEmpty() )
+        m_frame->LoadProject( wxFileName( pro ) );
+
+    return 0;
+}
+
+
 int KICAD_MANAGER_CONTROL::ArchiveProject( const TOOL_EVENT& aEvent )
 {
     wxFileName fileName = m_frame->GetProjectFileName();
@@ -950,6 +966,7 @@ void KICAD_MANAGER_CONTROL::setTransitions()
     Go( &KICAD_MANAGER_CONTROL::CloseProject,       KICAD_MANAGER_ACTIONS::closeProject.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::SaveProjectAs,      ACTIONS::saveAs.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::LoadProject,        KICAD_MANAGER_ACTIONS::loadProject.MakeEvent() );
+    Go( &KICAD_MANAGER_CONTROL::ShowOnlineProjects, KICAD_MANAGER_ACTIONS::onlineProjects.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::ViewDroppedViewers, KICAD_MANAGER_ACTIONS::viewDroppedGerbers.MakeEvent() );
 
     Go( &KICAD_MANAGER_CONTROL::ArchiveProject,     KICAD_MANAGER_ACTIONS::archiveProject.MakeEvent() );
