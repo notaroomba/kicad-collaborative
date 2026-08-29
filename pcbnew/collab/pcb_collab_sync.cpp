@@ -804,6 +804,12 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     m_resyncPending = false;
     m_queue.clear();
 
+    // v1 does not hot-load the snapshot into the open board wholesale, but a
+    // rejected own op needs its optimistic application undone: restore just
+    // the touched items from the server's file.
+    if( !m_pendingRollback.empty() && aSnapshotMsg.contains( "file" ) )
+        rollbackFromSnapshot( aSnapshotMsg.value( "file", "" ) );
+
     // Replay the ops since the snapshot through the normal queue.
     for( const nlohmann::json& opJson : aSnapshotMsg.value( "thenOps",
                                                             nlohmann::json::array() ) )
@@ -820,6 +826,106 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     }
 
     wxWakeUpIdle();
+}
+
+
+void PCB_COLLAB_SYNC::rollbackFromSnapshot( const std::string& aFileText )
+{
+    BOARD* board = m_frame->GetBoard();
+
+    if( !board || aFileText.empty() )
+        return;
+
+    std::set<KIID> ids;
+    ids.swap( m_pendingRollback );
+
+    PCB_IO_KICAD_SEXPR     io;
+    std::unique_ptr<BOARD> server;
+
+    try
+    {
+        BOARD_ITEM* parsed = io.Parse( wxString::FromUTF8( aFileText ) );
+
+        if( !parsed )
+            return;
+
+        if( parsed->Type() != PCB_T )
+        {
+            delete parsed;
+            return;
+        }
+
+        server.reset( static_cast<BOARD*>( parsed ) );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "rollback: snapshot parse failed: %s" ), ioe.What() );
+        return;
+    }
+
+    // Synthesize one upsert (or removal) per touched item from the server's
+    // state and run it through the same applier as any remote op.
+    nlohmann::json changes = nlohmann::json::array();
+
+    for( const KIID& id : ids )
+    {
+        BOARD_ITEM* item = server->ResolveItem( id, true );
+
+        // Ops address top-level items; resolving to a child means the id maps
+        // differently on the server — leave it alone.
+        if( item && item->GetParent() && item->GetParent() != server.get() )
+            continue;
+
+        nlohmann::json change;
+        change[ "id" ] = id.AsStdString();
+
+        if( item )
+        {
+            std::string sexpr = PCB_COLLAB::FormatItemSexpr( item );
+
+            if( sexpr.empty() )
+                continue;
+
+            change[ "kind" ] = "ADDED";     // upsert: replace with server state
+            change[ "typeName" ] = item->GetClass().ToStdString( wxConvUTF8 );
+            change[ "sexpr" ] = std::move( sexpr );
+
+            if( BOARD_CONNECTED_ITEM* conn = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+                change[ "netName" ] = conn->GetNetname().ToStdString( wxConvUTF8 );
+
+            if( item->Type() == PCB_FOOTPRINT_T )
+            {
+                nlohmann::json padNets = nlohmann::json::object();
+
+                for( PAD* pad : static_cast<FOOTPRINT*>( item )->Pads() )
+                    padNets[ pad->GetNumber().ToStdString( wxConvUTF8 ) ] =
+                            pad->GetNetname().ToStdString( wxConvUTF8 );
+
+                change[ "padNets" ] = std::move( padNets );
+            }
+        }
+        else
+        {
+            // We added it, the server refused it: take it back out.
+            change[ "kind" ] = "REMOVED";
+            change[ "typeName" ] = "";
+        }
+
+        changes.push_back( std::move( change ) );
+    }
+
+    if( changes.empty() )
+        return;
+
+    PENDING_OP op;
+    op.seq = m_lastAppliedSeq;
+    op.changes = std::move( changes );
+
+    // Genuinely newer own in-flight edits re-assert over the rollback inside
+    // applyOp, which is the right precedence for an editor; a viewer has none.
+    applyOp( op );
+
+    m_frame->GetCanvas()->Refresh();
 }
 
 
@@ -842,6 +948,41 @@ void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     m_journal.Ack( aClientOpId );
 
     wxWakeUpIdle();
+}
+
+
+void PCB_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
+{
+    auto it = m_unacked.find( aClientOpId );
+
+    if( it == m_unacked.end() )
+        return;
+
+    // Remember which items the rejected op touched: the resync snapshot
+    // below carries the server's state for them.
+    if( it->second.changes.is_array() )
+    {
+        for( const nlohmann::json& change : it->second.changes )
+        {
+            if( change.is_object() )
+                m_pendingRollback.insert(
+                        KIID( wxString::FromUTF8( change.value( "id", "" ) ) ) );
+        }
+    }
+
+    m_unacked.erase( it );
+
+    // Rejected is as final as acked for replay purposes: the server will
+    // refuse it again on every reconnect forever.
+    m_journal.Ack( aClientOpId );
+
+    // The op was applied optimistically here; a resync (snapshot + tail)
+    // restores the server's version of the document.
+    if( !m_resyncPending )
+    {
+        m_resyncPending = true;
+        COLLAB_SESSION::Get().RequestResync( m_docId );
+    }
 }
 
 

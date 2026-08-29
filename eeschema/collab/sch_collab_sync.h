@@ -124,6 +124,14 @@ public:
     void OnAck( const wxString& aClientOpId, long long aSeq );
 
     /**
+     * The server refused one of our ops (permission_denied for a viewer role,
+     * bad_op, ...).  Drop it from the unacked set and the journal so it is
+     * never replayed, and request a resync so the optimistic local application
+     * rolls back to the server's truth.
+     */
+    void OnOpRejected( const wxString& aClientOpId );
+
+    /**
      * Attach the on-disk op journal for a project and re-stage anything left
      * unacknowledged by a previous run (a crash, or edits made while offline).
      */

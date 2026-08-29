@@ -104,6 +104,10 @@ public:
     STATE GetState() const { return m_state; }
     bool  IsLive() const { return m_state == STATE::LIVE; }
 
+    /// Why the last transition to DISCONNECTED happened ("auth_failed",
+    /// "unsupported_protocol", or empty for an ordinary drop/stop).
+    const wxString& DisconnectReason() const { return m_disconnectReason; }
+
     /// Our server-assigned client id (stable for this process).
     const wxString& ClientId() const { return m_clientId; }
     const wxString& SelfColor() const { return m_selfColor; }
@@ -169,6 +173,7 @@ private:
 
     std::unique_ptr<COLLAB_WS_CLIENT> m_ws;
     STATE                             m_state = STATE::DISCONNECTED;
+    wxString                          m_disconnectReason;
     nlohmann::json                    m_projectDocs;
     wxString                          m_token;
     wxString                          m_linkToken;

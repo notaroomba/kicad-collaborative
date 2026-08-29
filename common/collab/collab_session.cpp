@@ -304,6 +304,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
 
     if( type == "hello_ok" )
     {
+        m_disconnectReason.clear();
         // The server namespaces our client id by user id; adopt the echoed
         // value or we fail to recognise our own presence and every user sees a
         // ghost of their own cursor.
@@ -351,6 +352,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         // reconnecting with the same dead token would loop forever.
         if( code == "auth_failed" || code == "unsupported_protocol" )
         {
+            m_disconnectReason = wxString::FromUTF8( code );
             Disconnect();
             return;
         }

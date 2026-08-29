@@ -69,6 +69,7 @@ public:
     void OnOpsTail( const nlohmann::json& aOpsMsg ) override;
     void OnSnapshot( const nlohmann::json& aSnapshotMsg ) override;
     void OnAck( const wxString& aClientOpId, long long aSeq ) override;
+    void OnOpRejected( const wxString& aClientOpId, const wxString& aCode ) override;
     void OnSnapshotRequest() override;
     void OnReset( long long aSeq ) override;
 
@@ -126,6 +127,7 @@ private:
     wxString       m_lastSentDocId;
     wxString       m_lastSheetFile;
     wxDateTime     m_lastPresenceSend;  ///< for the idle keepalive
+    wxDateTime     m_lastRejectNotice;  ///< throttles the rejected-edit infobar
     bool           m_presenceDirty;
     wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
 };
