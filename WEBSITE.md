@@ -61,8 +61,11 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   does doc matching fail gracefully?
 - [ ] Kill an editor mid-session; relaunch; journal replay converges and no
   stale `.lck` dialog blocks startup.
-- [ ] Two people edit the same footprint's position simultaneously — LWW result
-  identical on both sides.
+- [x] Two people edit the same footprint's position simultaneously — LWW result
+  identical on both sides.  (Was broken: an older concurrent remote op clobbered
+  the newer local edit on one side only.  Fixed by re-asserting own newer
+  in-flight/recent changes after applying a remote op — valid because acks and
+  broadcasts share one in-order stream, so anything unacked is provably newer.)
 - [ ] Viewer-role client: every edit path rejected cleanly, no error spam.
 - [ ] Share dialog: invite → revoke → re-invite; pending → sign-in → granted.
 - [ ] Checkpoint → restore while a peer is live (reset banner UX).

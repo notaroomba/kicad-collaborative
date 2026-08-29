@@ -194,6 +194,10 @@ private:
     ///< while offline (or lost to a crash mid-flight) can be replayed.
     std::map<wxString, UNACKED> m_unacked;
 
+    ///< Own acked ops kept until lastAppliedSeq passes them, so a concurrent
+    ///< remote op with a lower seq cannot clobber our newer edit (LWW).
+    std::map<long long, nlohmann::json> m_ownRecent;
+
     COLLAB_JOURNAL              m_journal;
 
     long long             m_lastAppliedSeq; ///< last applied/acked seq
