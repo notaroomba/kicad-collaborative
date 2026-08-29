@@ -56,18 +56,13 @@ static constexpr size_t MAX_GHOST_SEGS = 100;
 static constexpr size_t MAX_GHOST_ITEMS = 40;
 
 
-/// Flatten the router's current in-flight traces into wire-format ghost segments.
+/// Flatten the router's current in-flight work into wire-format ghost segments:
+/// the sections already clicked into place this route (fixed but not yet
+/// committed to the board) plus the head being dragged right now.
 static void collectRouterGhost( PNS::ROUTER* aRouter, nlohmann::json& aGhost )
 {
     if( !aRouter || !aRouter->RoutingInProgress() )
         return;
-
-    PNS::ITEM_SET traces;
-
-    if( aRouter->Placer() )
-        traces = aRouter->Placer()->Traces();
-    else if( aRouter->GetDragger() )
-        traces = aRouter->GetDragger()->Traces();
 
     auto addChain = [&]( const SHAPE_LINE_CHAIN& aChain, int aWidth )
     {
@@ -85,10 +80,10 @@ static void collectRouterGhost( PNS::ROUTER* aRouter, nlohmann::json& aGhost )
         }
     };
 
-    for( const PNS::ITEM* item : traces.CItems() )
+    auto addItem = [&]( const PNS::ITEM* item )
     {
         if( !item || aGhost.size() >= MAX_GHOST_SEGS )
-            break;
+            return;
 
         if( item->Kind() == PNS::ITEM::LINE_T )
         {
@@ -105,6 +100,29 @@ static void collectRouterGhost( PNS::ROUTER* aRouter, nlohmann::json& aGhost )
             const PNS::ARC* arc = static_cast<const PNS::ARC*>( item );
             addChain( arc->CLine(), arc->Width() );
         }
+    };
+
+    std::vector<PNS::ITEM*> removed, added, heads;
+    aRouter->GetUpdatedItems( removed, added, heads );
+
+    for( const PNS::ITEM* item : added )
+        addItem( item );
+
+    for( const PNS::ITEM* item : heads )
+        addItem( item );
+
+    // Fallback for modes where the node delta is empty (e.g. some drag states).
+    if( aGhost.empty() )
+    {
+        PNS::ITEM_SET traces;
+
+        if( aRouter->Placer() )
+            traces = aRouter->Placer()->Traces();
+        else if( aRouter->GetDragger() )
+            traces = aRouter->GetDragger()->Traces();
+
+        for( const PNS::ITEM* item : traces.CItems() )
+            addItem( item );
     }
 }
 
