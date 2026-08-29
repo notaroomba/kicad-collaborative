@@ -33,6 +33,7 @@
 #include <sch_line.h>
 #include <tools/sch_actions.h>
 #include <tools/sch_line_wire_bus_tool.h>
+#include <gal/graphics_abstraction_layer.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 
@@ -44,6 +45,18 @@
 #include <wx/textdlg.h>
 
 static const wxChar* const traceCollab = wxT( "COLLAB" );
+
+namespace
+{
+long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aDefault )
+{
+    auto it = aObj.find( aKey );
+
+    return it != aObj.end() && it->is_number() ? it->get<long long>() : aDefault;
+}
+} // anonymous namespace
+
+
 
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
@@ -422,7 +435,129 @@ int SCH_COLLAB_TOOL::onSelectionChange( const TOOL_EVENT& aEvent )
 {
     m_presenceDirty = true;
 
+    // A click that selected nothing may be a comment-pin or peer-cursor hit:
+    // both live on the overlay, invisible to the selection tool.
+    if( aEvent.Matches( EVENTS::ClearedEvent ) && m_frame && m_frame->GetCanvas() )
+    {
+        VECTOR2I cursor = m_frame->GetCanvas()->GetViewControls()->GetCursorPosition( false );
+
+        long long root = pinAt( cursor );
+
+        if( root >= 0 )
+        {
+            openThread( root );
+            return 0;
+        }
+
+        wxString peer = peerCursorAt( cursor );
+
+        if( !peer.IsEmpty() )
+        {
+            if( m_followPeer == peer )
+            {
+                m_followPeer.clear();
+                m_frame->ShowInfoBarMsg( _( "Stopped following." ) );
+            }
+            else
+            {
+                m_followPeer = peer;
+                m_followApplied = BOX2D();
+                m_frame->ShowInfoBarMsg( _( "Following — pan or zoom to stop." ) );
+                applyFollow();
+            }
+        }
+    }
+
     return 0;
+}
+
+
+long long SCH_COLLAB_TOOL::pinAt( const VECTOR2I& aPos ) const
+{
+    KIGFX::VIEW* view = getView();
+    wxString     docId = currentDocId();
+
+    if( !view || docId.IsEmpty() )
+        return -1;
+
+    auto docIt = m_commentsByDoc.find( docId );
+
+    if( docIt == m_commentsByDoc.end() )
+        return -1;
+
+    double radius = 14.0 / view->GetGAL()->GetWorldScale();
+
+    long long best = -1;
+    double    bestDist = radius;
+
+    for( const nlohmann::json& c : docIt->second )
+    {
+        if( !c.is_object() || jsonNumber( c, "parentId", -1 ) >= 0 )
+            continue;
+
+        VECTOR2I pos( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+        double   dist = ( pos - aPos ).EuclideanNorm();
+
+        if( dist <= bestDist )
+        {
+            best = jsonNumber( c, "id", -1 );
+            bestDist = dist;
+        }
+    }
+
+    return best;
+}
+
+
+wxString SCH_COLLAB_TOOL::peerCursorAt( const VECTOR2I& aPos ) const
+{
+    KIGFX::VIEW* view = getView();
+    wxString     docId = currentDocId();
+
+    if( !view || docId.IsEmpty() )
+        return wxEmptyString;
+
+    double radius = 28.0 / view->GetGAL()->GetWorldScale();
+
+    wxString best;
+    double   bestDist = radius;
+
+    for( const auto& [clientId, peer] : COLLAB_SESSION::Get().Peers( docId ) )
+    {
+        if( !peer.state.is_object() || !peer.state.contains( "cursor" )
+            || !peer.state[ "cursor" ].is_array() || peer.state[ "cursor" ].size() < 2 )
+        {
+            continue;
+        }
+
+        VECTOR2I cursor( peer.state[ "cursor" ][ 0 ].get<int>(),
+                         peer.state[ "cursor" ][ 1 ].get<int>() );
+        double   dist = ( cursor - aPos ).EuclideanNorm();
+
+        if( dist <= bestDist )
+        {
+            best = clientId;
+            bestDist = dist;
+        }
+    }
+
+    return best;
+}
+
+
+void SCH_COLLAB_TOOL::openThread( long long aRootId )
+{
+    if( !m_commentsDlg )
+    {
+        TOOL_EVENT dummy;
+        ShowComments( dummy );
+    }
+
+    if( m_commentsDlg )
+    {
+        m_commentsDlg->SelectThread( aRootId );
+        m_commentsDlg->Raise();
+    }
 }
 
 
@@ -762,17 +897,6 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
     if( m_sync && COLLAB_SESSION::Get().IsLive() )
         m_sync->ReplayUnacked();
 }
-
-
-namespace
-{
-long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aDefault )
-{
-    auto it = aObj.find( aKey );
-
-    return it != aObj.end() && it->is_number() ? it->get<long long>() : aDefault;
-}
-} // anonymous namespace
 
 
 COLLAB_HISTORY_PANEL* SCH_COLLAB_TOOL::historyPanel()

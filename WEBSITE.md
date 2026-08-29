@@ -357,3 +357,14 @@ cursors, empty in-progress boxes, stale-lock dialogs, missing-library refs):
   a parked peer: zoom 11.88x and pan -8800 px matched the expected values
   exactly, and a wheel event broke the follow.  eeschema rides the
   pcbnew-verified pattern (no headless action runner for sch).
+- [x] **Presence-delta bug on the web + sch click parity (loop 24).**  The
+  server broadcasts presence as dirty-only deltas (null = departed), but the
+  live page treated each message as the full peer set — quiet peers'
+  cursors vanished on every tick from anyone else, and the new follow mode
+  dropped whenever any OTHER peer moved.  The page now keeps a cumulative
+  peer map (deltas merged, null deletes, reset on doc_info/peer_left).
+  Verified: a peer that sent one presence then went silent stayed on canvas
+  through ~20 deltas from a chatty peer — and the whole desktop fleet's
+  cursors now persist instead of flickering.  eeschema also gained pcbnew's
+  canvas clicks: comment pins open their thread, and clicking a peer's
+  cursor toggles follow.
