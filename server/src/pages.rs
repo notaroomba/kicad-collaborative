@@ -108,7 +108,6 @@ pub async fn join_page(
 /// The public gallery: opt-in projects, with previews when rendering is enabled.
 pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> {
     let projects = persist::list_public_projects(&state.pool, 100).await?;
-    let previews = state.cfg.kicad_cli.is_some();
 
     let cards: String = if projects.is_empty() {
         r#"<p class="muted">Nothing here yet. Make a project public from
@@ -119,16 +118,15 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
         projects
             .iter()
             .map(|e| {
-                let img = if previews {
-                    format!(
-                        r#"<a href="/p/{id}"><img loading="lazy" alt="Board preview of {name}"
-                             src="/api/projects/{id}/preview.svg"></a>"#,
-                        id = e.id,
-                        name = esc(&e.name)
-                    )
-                } else {
-                    String::new()
-                };
+                // Previews may be server-rendered (KICAD_CLI) or client-pushed;
+                // emit the image either way and hide it if neither exists yet.
+                let img = format!(
+                    r#"<a href="/p/{id}"><img loading="lazy" alt="Board preview of {name}"
+                         onerror="this.parentNode.style.display='none'"
+                         src="/api/projects/{id}/preview.svg"></a>"#,
+                    id = e.id,
+                    name = esc(&e.name)
+                );
                 let blurb = if e.description.is_empty() {
                     String::new()
                 } else {
@@ -199,12 +197,11 @@ pub async fn project_page(
                          esc(&d.path), esc(&d.doc_type)))
         .collect();
 
-    let preview = if state.cfg.kicad_cli.is_some()
-        && docs.iter().any(|d| d.doc_type == "kicad_pcb")
-    {
+    let preview = if docs.iter().any(|d| d.doc_type == "kicad_pcb") {
         format!(
             r#"<p><img style="width:100%;background:#f4f1e6;border-radius:8px;padding:10px;box-sizing:border-box"
-                 alt="Board preview" src="/api/projects/{id}/preview.svg"></p>
+                 alt="Board preview" onerror="this.parentNode.style.display='none'"
+                 src="/api/projects/{id}/preview.svg"></p>
 <p><a class="btn secondary" href="/p/{id}/live">Watch live</a></p>"#
         )
     } else {

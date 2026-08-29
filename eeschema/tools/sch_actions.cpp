@@ -1957,12 +1957,18 @@ TOOL_ACTION SCH_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
         .Name( "eeschema.Collab.leaveSession" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Leave Session" ) )
-        .Tooltip( _( "Disconnect from the collaboration session" ) ) );
+        .Tooltip( _( "Disconnect this computer from the live session; the shared project stays on the server for everyone else" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::collabHistory( TOOL_ACTION_ARGS()
         .Name( "eeschema.Collab.history" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "History" ) )
         .Tooltip( _( "Show the shared project's version history panel" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.copyLink" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Copy Share Link" ) )
+        .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
 // clang-format on

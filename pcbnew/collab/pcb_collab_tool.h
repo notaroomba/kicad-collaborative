@@ -81,6 +81,9 @@ public:
 
     ///< Toggle the version-history sidebar pane.
     int ShowHistory( const TOOL_EVENT& aEvent );
+
+    ///< Copy an invite link for the current session to the clipboard.
+    int CopyShareLink( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest() override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
 

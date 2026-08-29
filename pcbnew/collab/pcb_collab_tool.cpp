@@ -468,6 +468,60 @@ COLLAB_HISTORY_PANEL* PCB_COLLAB_TOOL::historyPanel()
 }
 
 
+int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
+{
+    if( m_projectId.IsEmpty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                _( "No collaboration session; start or join one first." ) );
+        return 0;
+    }
+
+    std::shared_ptr<bool> alive = m_alive;
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+    std::string projectId = m_projectId.ToStdString( wxConvUTF8 );
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, server, token, projectId]()
+            {
+                std::optional<nlohmann::json> link = COLLAB_REST::CreateShareLink(
+                        wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                        wxString::FromUTF8( projectId ), wxS( "editor" ) );
+
+                std::string url = link ? link->value( "url", "" ) : std::string();
+
+                wxTheApp->CallAfter(
+                        [this, alive, url]()
+                        {
+                            if( !*alive )
+                                return;
+
+                            if( url.empty() )
+                            {
+                                frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                                        _( "Could not create a share link (only project "
+                                           "members can invite)." ) );
+                                return;
+                            }
+
+                            if( wxTheClipboard->Open() )
+                            {
+                                wxTheClipboard->SetData(
+                                        new wxTextDataObject( wxString::FromUTF8( url ) ) );
+                                wxTheClipboard->Close();
+                            }
+
+                            frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                                    _( "Share link copied to the clipboard." ) );
+                        } );
+            } );
+
+    return 0;
+}
+
+
 int PCB_COLLAB_TOOL::ShowHistory( const TOOL_EVENT& aEvent )
 {
     COLLAB_HISTORY_PANEL* panel = historyPanel();
@@ -1166,6 +1220,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::LeaveSession,      PCB_ACTIONS::collabLeaveSession.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::ShowComments,      PCB_ACTIONS::collabComments.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::CopyShareLink,     PCB_ACTIONS::collabCopyLink.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );

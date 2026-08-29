@@ -3186,7 +3186,7 @@ TOOL_ACTION PCB_ACTIONS::collabLeaveSession( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Collab.leaveSession" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Leave Session" ) )
-        .Tooltip( _( "Disconnect from the collaboration session" ) ) );
+        .Tooltip( _( "Disconnect this computer from the live session; the shared project stays on the server for everyone else" ) ) );
 
 TOOL_ACTION PCB_ACTIONS::collabComments( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Collab.comments" )
@@ -3199,6 +3199,12 @@ TOOL_ACTION PCB_ACTIONS::collabHistory( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "History" ) )
         .Tooltip( _( "Show the shared project's version history panel" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.copyLink" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Copy Share Link" ) )
+        .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
 
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()

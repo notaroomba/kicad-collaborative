@@ -340,6 +340,7 @@ public:
 
     // Collaboration
     static TOOL_ACTION collabHistory;
+    static TOOL_ACTION collabCopyLink;
     static TOOL_ACTION collabStartSession;
     static TOOL_ACTION collabJoinSession;
     static TOOL_ACTION collabLeaveSession;
