@@ -25,7 +25,7 @@ jobs:
             libocct-data-exchange-dev libocct-visualization-dev \
             libocct-foundation-dev libocct-ocaf-dev \
             protobuf-compiler libprotobuf-dev libzstd-dev unixodbc-dev \
-            libgtk-3-dev libsecret-1-dev libnng-dev python3 \
+            libgtk-3-dev libsecret-1-dev libnng-dev libspnav-dev python3 \
             libssl-dev zlib1g-dev gettext
 
       - name: Build WebSocket-capable curl
