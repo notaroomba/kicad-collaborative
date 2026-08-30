@@ -290,6 +290,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Xcode older than 26 gates std::jthread / std::stop_token behind the
+# experimental library. Enable it for C++20.
+if( APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+    add_compile_options( -fexperimental-library )
+    add_link_options( -fexperimental-library )
+endif()
+
 # Check if the current generator is multi-config (Ninja Multi-Config, Visual Studio, Xcode)
 get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
@@ -873,9 +880,8 @@ include_directories( SYSTEM ${OCC_INCLUDE_DIR} )
 # Try to find Protobuf with modern approach first, fallback to legacy if needed
 set( _protobuf_found FALSE )
 
-# KiCad 11 relies on proto3 optional behavior available since 3.15
-# Should be set to 3.15 but not enforcing yet
-set( PROTOBUF_MIN_VERSION 3.12 )
+# KiCad 11 relies on protobuf 3.15+
+set( PROTOBUF_MIN_VERSION 3.15 )
 
 if( NOT KICAD_USE_CMAKE_FINDPROTOBUF )
     message( STATUS "Attempting to find Protobuf using CONFIG mode..." )

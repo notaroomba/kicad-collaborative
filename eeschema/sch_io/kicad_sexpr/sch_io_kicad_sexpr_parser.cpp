@@ -731,6 +731,55 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseStroke( STROKE_PARAMS& aStroke )
 }
 
 
+void SCH_IO_KICAD_SEXPR_PARSER::parseLineEnding( LINE_ENDING& aEnding )
+{
+    // Current token is T_start_shape or T_end_shape. Next token is the style.
+    T token = NextTok();
+
+    switch( token )
+    {
+    case T_arrow: aEnding.SetStyle( LINE_ENDING_STYLE::ARROW ); break;
+    case T_circle: aEnding.SetStyle( LINE_ENDING_STYLE::CIRCLE ); break;
+    case T_square: aEnding.SetStyle( LINE_ENDING_STYLE::SQUARE ); break;
+    case T_arrow_open: aEnding.SetStyle( LINE_ENDING_STYLE::ARROW_OPEN ); break;
+    case T_none: aEnding.SetStyle( LINE_ENDING_STYLE::NONE ); break;
+    default: Expecting( "arrow, circle, square, arrow_open, or none" );
+    }
+
+    // Parse optional sub-tokens
+    for( token = NextTok(); token != T_RIGHT; token = NextTok() )
+    {
+        if( token != T_LEFT )
+            Expecting( T_LEFT );
+
+        token = NextTok();
+
+        switch( token )
+        {
+        case T_length:
+            aEnding.SetLength( parseInternalUnits( "length" ) );
+            NeedRIGHT();
+            break;
+
+        case T_width:
+            aEnding.SetWidth( parseInternalUnits( "width" ) );
+            NeedRIGHT();
+            break;
+
+        case T_stroke:
+        {
+            STROKE_PARAMS stroke;
+            parseStroke( stroke );
+            aEnding.SetStroke( stroke );
+            break;
+        }
+
+        default: Expecting( "length, width, or stroke" );
+        }
+    }
+}
+
+
 void SCH_IO_KICAD_SEXPR_PARSER::parseFill( FILL_PARAMS& aFill )
 {
     wxCHECK_RET( CurTok() == T_fill, "Cannot parse " + GetTokenString( CurTok() ) + " as a fill." );
@@ -925,6 +974,9 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT( EDA_TEXT* aText, bool aConvertOve
             Expecting( "font, justify, hide or href" );
         }
     }
+
+    if( m_requiredVersion < 20260826 )
+        aText->MigrateLegacyBoldStrokeWidth();
 }
 
 
@@ -1350,10 +1402,10 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseProperty( std::unique_ptr<LIB_SYMBOL>
                            CurOffset() );
     }
 
-    // Correctly set the ID based on canonical (untranslated) field name
+    // Correctly set the ID based on the untranslated field name
     for( FIELD_T id : MANDATORY_FIELDS )
     {
-        if( name.CmpNoCase( GetCanonicalFieldName( id ) ) == 0 )
+        if( name.CmpNoCase( GetDefaultFieldName( id, UNTRANSLATED ) ) == 0 )
         {
             fieldId = id;
             break;
@@ -1476,7 +1528,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseProperty( std::unique_ptr<LIB_SYMBOL>
     else
     {
         // At this point, a user field is read.
-        existingField = aSymbol->GetField( field->GetCanonicalName() );
+        existingField = aSymbol->GetField( field->GetUntranslatedName() );
 
 #if 1   // Enable it to modify the name of the field to add if already existing
         // Disable it to skip the field having the same name as previous field
@@ -1484,7 +1536,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseProperty( std::unique_ptr<LIB_SYMBOL>
         {
             // We cannot handle 2 fields with the same name, so because the field name
             // is already in use, try to build a new name (oldname_x)
-            wxString base_name = field->GetCanonicalName();
+            wxString base_name = field->GetUntranslatedName();
 
             // Arbitrary limit 10 attempts to find a new name
             for( int ii = 1; ii < 10 && existingField; ii++ )
@@ -1619,8 +1671,23 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolArc()
             arc->SetFillColor( fill.m_Color );
             break;
 
-        default:
-            Expecting( "start, mid, end, radius, stroke, or fill" );
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            arc->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            arc->SetEndEnding( ending );
+            break;
+        }
+
+        default: Expecting( "start, mid, end, radius, stroke, fill, start_shape, or end_shape" );
         }
     }
 
@@ -1776,8 +1843,23 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolBezier()
             bezier->SetFillColor( fill.m_Color );
             break;
 
-        default:
-            Expecting( "pts, stroke, or fill" );
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            bezier->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            bezier->SetEndEnding( ending );
+            break;
+        }
+
+        default: Expecting( "pts, stroke, fill, start_shape, or end_shape" );
         }
     }
 
@@ -2180,8 +2262,33 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolPolyLine()
             poly->SetFillColor( fill.m_Color );
             break;
 
-        default:
-            Expecting( "pts, stroke, or fill" );
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            poly->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            poly->SetEndEnding( ending );
+            break;
+        }
+
+        default: Expecting( "pts, stroke, fill, start_shape, or end_shape" );
+        }
+    }
+
+    if( poly->GetFillMode() != FILL_T::NO_FILL && poly->GetPolyShape().OutlineCount() > 0 )
+    {
+        SHAPE_LINE_CHAIN& outline = poly->GetPolyShape().Outline( 0 );
+
+        if( outline.PointCount() >= 3 && outline.CLastPoint() == outline.CPoint( outline.PointCount() - 2 ) )
+        {
+            outline.SetPoint( outline.PointCount() - 1, outline.CPoint( 0 ) );
         }
     }
 
@@ -2622,9 +2729,9 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
                            CurOffset() );
     }
 
-    // Normalise legacy/cross-locale directive-label net class field names to the canonical
+    // Normalise legacy/cross-locale directive-label net class field names to the untranslated
     // "Netclass" token as early as possible so every downstream consumer (including ones that
-    // call GetName() directly instead of GetCanonicalName()) sees a consistent in-memory model.
+    // call GetName() directly instead of GetUntranslatedName()) sees a consistent in-memory model.
     // See issue #24403.
     if( dynamic_cast<SCH_LABEL_BASE*>( aParent ) && SCH_FIELD::IsNetclassLabelFieldName( name ) )
         name = wxT( "Netclass" );
@@ -2647,12 +2754,12 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
 
     FIELD_T fieldId = FIELD_T::USER;
 
-    // Correctly set the ID based on canonical (untranslated) field name
+    // Correctly set the ID based on the untranslated field name
     if( aParent->Type() == SCH_SYMBOL_T )
     {
         for( FIELD_T id : MANDATORY_FIELDS )
         {
-            if( name.CmpNoCase( GetCanonicalFieldName( id ) ) == 0 )
+            if( name.CmpNoCase( GetDefaultFieldName( id, UNTRANSLATED ) ) == 0 )
             {
                 fieldId = id;
                 break;
@@ -2665,7 +2772,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
 
         for( FIELD_T id : SHEET_MANDATORY_FIELDS )
         {
-            if( name.CmpNoCase( GetCanonicalFieldName( id ) ) == 0 )
+            if( name.CmpNoCase( GetDefaultFieldName( id, UNTRANSLATED ) ) == 0 )
             {
                 fieldId = id;
                 break;
@@ -2682,7 +2789,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
     {
         for( FIELD_T id : GLOBALLABEL_MANDATORY_FIELDS )
         {
-            if( name.CmpNoCase( GetCanonicalFieldName( id ) ) == 0 )
+            if( name.CmpNoCase( GetDefaultFieldName( id, UNTRANSLATED ) ) == 0 )
             {
                 fieldId = id;
                 break;
@@ -3133,7 +3240,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
             // is saved in the symbol instance path.
             if( aSheet == m_rootSheet )
             {
-                const_cast<KIID&>( aSheet->m_Uuid ) = screen->GetUuid();
+                aSheet->SyncUuidToScreen();
                 m_rootUuid = screen->GetUuid();
                 fileHasUuid = true;
             }
@@ -3271,6 +3378,8 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
                 line->SetEndPoint( outline.CPoint(1) );
                 line->SetStroke( poly->GetStroke() );
                 line->SetLocked( poly->IsLocked() );
+                line->SetStartEnding( poly->GetStartEnding() );
+                line->SetEndEnding( poly->GetEndEnding() );
                 const_cast<KIID&>( line->m_Uuid ) = poly->m_Uuid;
 
                 screen->Append( line );
@@ -3411,7 +3520,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
     // as the virtual root sheet UUID.
     if( ( aSheet == m_rootSheet ) && !fileHasUuid )
     {
-        const_cast<KIID&>( aSheet->m_Uuid ) = screen->GetUuid();
+        aSheet->SyncUuidToScreen();
         m_rootUuid = screen->GetUuid();
     }
 
@@ -3878,7 +3987,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
 
             // Exclude from simulation used to be managed by a Sim.Enable field set to "0" when
             // simulation was disabled.
-            if( field->GetCanonicalName() == SIM_LEGACY_ENABLE_FIELD_V7 )
+            if( field->GetUntranslatedName() == SIM_LEGACY_ENABLE_FIELD_V7 )
             {
                 symbol->SetExcludedFromSim( field->GetText() == wxS( "0" ) );
                 delete field;
@@ -3886,7 +3995,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
             }
 
             // Even longer ago, we had a "Spice_Netlist_Enabled" field
-            if( field->GetCanonicalName() == SIM_LEGACY_ENABLE_FIELD )
+            if( field->GetUntranslatedName() == SIM_LEGACY_ENABLE_FIELD )
             {
                 symbol->SetExcludedFromSim( field->GetText() == wxS( "N" ) );
                 delete field;
@@ -3899,6 +4008,25 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                 existing = symbol->GetField( field->GetId() );
             else
                 existing = symbol->GetField( field->GetName() );
+
+            if( existing && !field->IsMandatory() )
+            {
+                // If there are other fields with the same name, for whatever reason,
+                // try renameing instead of silently discarding them right away.
+                wxString base_name = field->GetName();
+
+                // Arbitrary number of attempts to find a new name (oldname_x)
+                for( int ii = 1; ii < 10 && existing; ii++ )
+                {
+                    wxString newname = base_name;
+                    newname << '_' << ii;
+
+                    existing = symbol->GetField( newname );
+
+                    if( !existing )
+                        field->SetName( newname );
+                }
+            }
 
             if( existing )
                 *existing = *field;
@@ -4610,6 +4738,22 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchPolyLine()
             fixupSchFillMode( polyline.get() );
             break;
 
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            polyline->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            polyline->SetEndEnding( ending );
+            break;
+        }
+
         case T_uuid:
             NeedSYMBOL();
             const_cast<KIID&>( polyline->m_Uuid ) = parseKIID();
@@ -4621,8 +4765,17 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchPolyLine()
             NeedRIGHT();
             break;
 
-        default:
-            Expecting( "pts, uuid, stroke, fill or locked" );
+        default: Expecting( "pts, uuid, stroke, fill, locked, start_shape, or end_shape" );
+        }
+    }
+
+    if( polyline->GetFillMode() != FILL_T::NO_FILL && polyline->GetPolyShape().OutlineCount() > 0 )
+    {
+        SHAPE_LINE_CHAIN& outline = polyline->GetPolyShape().Outline( 0 );
+
+        if( outline.PointCount() >= 3 && outline.CLastPoint() == outline.CPoint( outline.PointCount() - 2 ) )
+        {
+            outline.SetPoint( outline.PointCount() - 1, outline.CPoint( 0 ) );
         }
     }
 
@@ -4684,6 +4837,22 @@ SCH_LINE* SCH_IO_KICAD_SEXPR_PARSER::parseLine()
             line->SetStroke( stroke );
             break;
 
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            line->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            line->SetEndEnding( ending );
+            break;
+        }
+
         case T_uuid:
             NeedSYMBOL();
             const_cast<KIID&>( line->m_Uuid ) = parseKIID();
@@ -4695,8 +4864,7 @@ SCH_LINE* SCH_IO_KICAD_SEXPR_PARSER::parseLine()
             NeedRIGHT();
             break;
 
-        default:
-            Expecting( "pts, uuid, stroke or locked" );
+        default: Expecting( "pts, uuid, stroke, locked, start_shape, or end_shape" );
         }
     }
 
@@ -4753,6 +4921,22 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchArc()
             fixupSchFillMode( arc.get() );
             break;
 
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            arc->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            arc->SetEndEnding( ending );
+            break;
+        }
+
         case T_uuid:
             NeedSYMBOL();
             const_cast<KIID&>( arc->m_Uuid ) = parseKIID();
@@ -4764,8 +4948,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchArc()
             NeedRIGHT();
             break;
 
-        default:
-            Expecting( "start, mid, end, stroke, fill, uuid or locked" );
+        default: Expecting( "start, mid, end, stroke, fill, locked, start_shape, end_shape, or uuid" );
         }
     }
 
@@ -5038,6 +5221,22 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchBezier()
             fixupSchFillMode( bezier.get() );
             break;
 
+        case T_start_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            bezier->SetStartEnding( ending );
+            break;
+        }
+
+        case T_end_shape:
+        {
+            LINE_ENDING ending;
+            parseLineEnding( ending );
+            bezier->SetEndEnding( ending );
+            break;
+        }
+
         case T_uuid:
             NeedSYMBOL();
             const_cast<KIID&>( bezier->m_Uuid ) = parseKIID();
@@ -5049,8 +5248,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchBezier()
             NeedRIGHT();
             break;
 
-        default:
-            Expecting( "pts, stroke, fill, uuid or locked" );
+        default: Expecting( "pts, stroke, fill, locked, start_shape, end_shape, or uuid" );
         }
     }
 

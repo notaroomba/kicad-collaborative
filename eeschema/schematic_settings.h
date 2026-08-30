@@ -23,7 +23,6 @@
 #include <default_values.h>
 #include <settings/nested_settings.h>
 #include <settings/bom_settings.h>
-#include <template_fieldnames.h>
 #include <font/font_metrics.h>
 
 class NGSPICE_SETTINGS;
@@ -38,11 +37,31 @@ class REFDES_TRACKER;
 #define DEFAULT_CONNECTION_GRID_MILS 50
 
 
+class SYMBOL_PARITY_SETTINGS
+{
+public:
+    SYMBOL_PARITY_SETTINGS();
+
+    bool m_MissingFields;
+    bool m_ExtraFields;
+    bool m_FieldTexts;
+    bool m_FieldVisibilities;
+    bool m_FieldStyles;
+    bool m_FieldPositions;
+    bool m_PinVisibilities;
+    bool m_PinAltFunctions;
+    bool m_ExcludeFromBoardFlags;
+    bool m_DNPFlags;
+    bool m_ExcludeFromBOMFlags;
+    bool m_ExcludeFromPosFileFlags;
+};
+
+
 /**
  * These are loaded from Eeschema settings but then overwritten by the project settings.
  * All of the values are stored in IU, but the backing file stores in mils.
  */
-class SCHEMATIC_SETTINGS : public NESTED_SETTINGS
+class SCHEMATIC_SETTINGS : public NESTED_SETTINGS, public FIELDS_TABLE_BOM_SETTINGS
 {
 public:
     SCHEMATIC_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath );
@@ -60,6 +79,11 @@ public:
      * Accessor that computes the current hop-over size
      */
     double GetHopOverScale();
+
+    /**
+     * @return the set of flags to be used for Compare Symbol with Library (and ERC).
+     */
+    int SymbolCompareFlags();
 
 public:
     // Default sizes are all stored in IU here, and in mils in the JSON file
@@ -102,22 +126,12 @@ public:
     wxString  m_SchDrawingSheetFileName;
     wxString  m_PlotDirectoryName;
 
-    TEMPLATES m_TemplateFieldNames;
-
-    wxString  m_BomExportFileName;
-
-    /// List of stored BOM presets
-    BOM_PRESET                  m_BomSettings;
-    std::vector<BOM_PRESET>     m_BomPresets;
-
-    /// List of stored BOM format presets
-    BOM_FMT_PRESET              m_BomFmtSettings;
-    std::vector<BOM_FMT_PRESET> m_BomFmtPresets;
-
     KIFONT::METRICS             m_FontMetrics;
 
     /// Max deviation allowable when approximating circles and curves (in IU).
     int                         m_MaxError;
+
+    SYMBOL_PARITY_SETTINGS      m_SymbolParity;
 
     /**
      * Ngspice simulator settings.

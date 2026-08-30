@@ -21,13 +21,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <cstring>
 #include <plotters/plotter_dxf.h>
 #include <macros.h>
 #include <string_utils.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <geometry/shape_rect.h>
 #include <trigo.h>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <algorithm>
 
 /**

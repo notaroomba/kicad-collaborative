@@ -88,6 +88,7 @@
 #include <pcb_plot_params_parser.h>
 #include <trigo.h>
 #include <confirm.h>
+#include <magic_enum.hpp>
 #include <math/util.h>      // for KiROUND
 #include <progress_reporter.h>
 
@@ -1090,6 +1091,7 @@ void PCB_IO_KICAD_LEGACY::loadSETUP()
             BIU x = biuParse( line + SZ( "PadSize" ), &data );
             BIU y = biuParse( data );
 
+            bds.m_Pad_Master->SetPadstackMode( PADSTACK::MODE::NORMAL );
             bds.m_Pad_Master->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( x, y ) );
         }
         else if( TESTLINE( "PadDrill" ) )
@@ -1442,6 +1444,7 @@ void PCB_IO_KICAD_LEGACY::loadPAD( FOOTPRINT* aFootprint )
             // chances are both were ASCII, but why take chances?
 
             pad->SetNumber( padNumber );
+            pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
             pad->SetShape( PADSTACK::ALL_LAYERS, static_cast<PAD_SHAPE>( padshape ) );
             pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( size_x, size_y ) );
             pad->SetDelta( PADSTACK::ALL_LAYERS, VECTOR2I( delta_x, delta_y ) );
@@ -1474,6 +1477,7 @@ void PCB_IO_KICAD_LEGACY::loadPAD( FOOTPRINT* aFootprint )
             }
 
             pad->SetDrillShape( drShape );
+            pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
             pad->SetOffset( PADSTACK::ALL_LAYERS, VECTOR2I( offs_x, offs_y ) );
             pad->SetDrillSize( VECTOR2I( drill_x, drill_y ) );
         }
@@ -2279,6 +2283,7 @@ void PCB_IO_KICAD_LEGACY::loadTrackList( int aStructType )
                 viatype = VIATYPE::BLIND;
 
             newVia->SetViaType( viatype );
+            newVia->SetPadstackMode( PADSTACK::MODE::NORMAL );
             newVia->SetWidth( PADSTACK::ALL_LAYERS, width );
 
             newVia->SetUuidDirect( KIID( uuid ) );
@@ -2524,17 +2529,19 @@ void PCB_IO_KICAD_LEGACY::loadZONE_CONTAINER()
         else if( TESTLINE( "ZSmoothing" ) )
         {
             // e.g. "ZSmoothing 0 0"
-            int     smoothing    = intParse( line + SZ( "ZSmoothing" ), &data );
+            int     smoothingRaw = intParse( line + SZ( "ZSmoothing" ), &data );
             BIU     cornerRadius = biuParse( data );
+            std::optional<ZONE_SETTINGS::CORNER_SMOOTHING> smoothing =
+                magic_enum::enum_cast<ZONE_SETTINGS::CORNER_SMOOTHING>( smoothingRaw );
 
-            if( smoothing >= ZONE_SETTINGS::SMOOTHING_LAST || smoothing < 0 )
+            if( !smoothing.has_value() )
             {
                 m_error.Printf( _( "Bad ZSmoothing for CZONE_CONTAINER '%s'" ),
                                 zc->GetNetname().GetData() );
                 THROW_IO_ERROR( m_error );
             }
 
-            zc->SetCornerSmoothingType( smoothing );
+            zc->SetCornerSmoothingType( *smoothing );
             zc->SetCornerRadius( cornerRadius );
         }
         else if( TESTLINE( "ZKeepout" ) )

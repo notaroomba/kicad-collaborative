@@ -125,8 +125,6 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_isSymbolFromSchematic( false ),
         m_libTreeAutoHiddenForSchematicEdit( false )
 {
-    m_SyncPinEdit = false;
-
     m_symbol = nullptr;
     m_treePane = nullptr;
     m_libMgr = nullptr;
@@ -449,7 +447,7 @@ void SYMBOL_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
 
 APP_SETTINGS_BASE* SYMBOL_EDIT_FRAME::config() const
 {
-    return static_cast<APP_SETTINGS_BASE*>( GetSettings() );
+    return GetSettings();
 }
 
 
@@ -468,8 +466,8 @@ void SYMBOL_EDIT_FRAME::setupTools()
 {
     // Create the manager and dispatcher & route draw panel events to the dispatcher
     m_toolManager = new TOOL_MANAGER;
-    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(),
-                                   GetCanvas()->GetViewControls(), GetSettings(), this );
+    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(), GetCanvas()->GetViewControls(), GetSettings(),
+                                   this );
     m_actions = new SCH_ACTIONS();
     m_toolDispatcher = new TOOL_DISPATCHER( m_toolManager );
 
@@ -599,27 +597,22 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::cut,                 ENABLE( isEditableCond ) );
     mgr->SetConditions( ACTIONS::copy,                ENABLE( haveSymbolCond ) );
     mgr->SetConditions( ACTIONS::copyAsText,          ENABLE( haveSymbolCond ) );
-    mgr->SetConditions( ACTIONS::paste,               ENABLE( isEditableCond &&
-                                                              SELECTION_CONDITIONS::Idle && cond.NoActiveTool() ) );
+    mgr->SetConditions( ACTIONS::paste,               ENABLE( isEditableCond && SELECTION_CONDITIONS::Idle && cond.NoActiveTool() ) );
     mgr->SetConditions( ACTIONS::doDelete,            ENABLE( isEditableCond ) );
     mgr->SetConditions( ACTIONS::duplicate,           ENABLE( isEditableCond ) );
     mgr->SetConditions( ACTIONS::selectAll,           ENABLE( haveSymbolCond ) );
     mgr->SetConditions( ACTIONS::unselectAll,         ENABLE( haveSymbolCond ) );
 
     // These actions in symbol editor when editing alias field rotations are allowed.
-    mgr->SetConditions( SCH_ACTIONS::rotateCW,
-                        ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableInAliasCond )
-                        .HotkeyEnable( isEditableInAliasCond ) );
-    mgr->SetConditions( SCH_ACTIONS::rotateCCW,
-                        ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableInAliasCond )
-                        .HotkeyEnable( isEditableInAliasCond ) );
+    mgr->SetConditions( SCH_ACTIONS::rotateCW,        ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableInAliasCond )
+                                                          .HotkeyEnable( isEditableInAliasCond ) );
+    mgr->SetConditions( SCH_ACTIONS::rotateCCW,       ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableInAliasCond )
+                                                          .HotkeyEnable( isEditableInAliasCond ) );
 
-    mgr->SetConditions( SCH_ACTIONS::mirrorH,
-                        ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
-                        .HotkeyEnable( isEditableCond ) );
-    mgr->SetConditions( SCH_ACTIONS::mirrorV,
-                        ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
-                        .HotkeyEnable( isEditableCond ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorH,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
+                                                          .HotkeyEnable( isEditableCond ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorV,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
+                                                          .HotkeyEnable( isEditableCond ) );
 
     mgr->SetConditions( ACTIONS::zoomTool,            CHECK( cond.CurrentTool( ACTIONS::zoomTool ) ) );
     mgr->SetConditions( ACTIONS::selectionTool,       CHECK( cond.CurrentTool( ACTIONS::selectionTool ) ) );
@@ -684,7 +677,7 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     auto syncedPinsModeCond =
             [this]( const SELECTION& )
             {
-                return m_SyncPinEdit;
+                return SynchronizePins();
             };
 
     auto haveDatasheetCond =
@@ -697,7 +690,7 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::symbolProperties,     ENABLE( symbolSelectedInTreeCondition || ( canEditProperties && haveSymbolCond ) ) );
     mgr->SetConditions( SCH_ACTIONS::runERC,               ENABLE( haveSymbolCond ) );
     mgr->SetConditions( SCH_ACTIONS::pinTable,             ENABLE( isEditableCond && haveSymbolCond ) );
-    mgr->SetConditions( SCH_ACTIONS::editSymbolPinMaps, ENABLE( isEditableCond && haveSymbolCond ) );
+    mgr->SetConditions( SCH_ACTIONS::editSymbolPinMaps,    ENABLE( isEditableCond && haveSymbolCond ) );
     mgr->SetConditions( SCH_ACTIONS::updateSymbolFields,   ENABLE( canUpdateFieldsCond ) );
     mgr->SetConditions( SCH_ACTIONS::cycleBodyStyle,       ENABLE( multiBodyStyleModeCond ) );
 
@@ -712,8 +705,8 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::drawSymbolTextBox,  EDIT_TOOL( SCH_ACTIONS::drawSymbolTextBox ) );
     mgr->SetConditions( SCH_ACTIONS::drawRectangle,      EDIT_TOOL( SCH_ACTIONS::drawRectangle ) );
     mgr->SetConditions( SCH_ACTIONS::drawCircle,         EDIT_TOOL( SCH_ACTIONS::drawCircle ) );
-    mgr->SetConditions( SCH_ACTIONS::drawEllipse, EDIT_TOOL( SCH_ACTIONS::drawEllipse ) );
-    mgr->SetConditions( SCH_ACTIONS::drawEllipseArc, EDIT_TOOL( SCH_ACTIONS::drawEllipseArc ) );
+    mgr->SetConditions( SCH_ACTIONS::drawEllipse,        EDIT_TOOL( SCH_ACTIONS::drawEllipse ) );
+    mgr->SetConditions( SCH_ACTIONS::drawEllipseArc,     EDIT_TOOL( SCH_ACTIONS::drawEllipseArc ) );
     mgr->SetConditions( SCH_ACTIONS::drawArc,            EDIT_TOOL( SCH_ACTIONS::drawArc ) );
     mgr->SetConditions( SCH_ACTIONS::drawBezier,         EDIT_TOOL( SCH_ACTIONS::drawBezier ) );
     mgr->SetConditions( SCH_ACTIONS::drawSymbolLines,    EDIT_TOOL( SCH_ACTIONS::drawSymbolLines ) );
@@ -731,22 +724,20 @@ bool SYMBOL_EDIT_FRAME::CanCloseSymbolFromSchematic( bool doClose )
 {
     if( IsContentModified() )
     {
-        SCH_EDIT_FRAME* schframe = (SCH_EDIT_FRAME*) Kiway().Player( FRAME_SCH, false );
-        wxString        msg = _( "Save changes to '%s' before closing?" );
+        wxString msg = _( "Save changes to '%s' before closing?" );
 
-        switch( UnsavedChangesDialog( this, wxString::Format( msg, m_reference ), nullptr ) )
+        if( !HandleUnsavedChanges( this, wxString::Format( msg, m_reference ),
+                                   [&]() -> bool
+                                   {
+                                       SCH_EDIT_FRAME* schframe = (SCH_EDIT_FRAME*) Kiway().Player( FRAME_SCH, false );
+                                       LIB_SYMBOL*     symbol = GetCurSymbol();
+
+                                       if( schframe && symbol )  // Should be always the case
+                                           return schframe->SaveSymbolToSchematic( *symbol, m_schematicSymbolUUID );
+
+                                       return false;
+                                    } ) )
         {
-        case wxID_YES:
-            if( schframe && GetCurSymbol() )  // Should be always the case
-                schframe->SaveSymbolToSchematic( *GetCurSymbol(), m_schematicSymbolUUID );
-
-            break;
-
-        case wxID_NO:
-            break;
-
-        default:
-        case wxID_CANCEL:
             return false;
         }
     }
@@ -766,13 +757,18 @@ bool SYMBOL_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
             && aEvent.GetId() == wxEVT_QUERY_END_SESSION
             && ( IsContentModified() || hasDirtyInactiveInstanceTabs() ) )
     {
+        aEvent.Veto();
         return false;
     }
 
     if( m_isSymbolFromSchematic && !CanCloseSymbolFromSchematic( false ) )
+    {
+        aEvent.Veto();
         return false;
+    }
 
-    // Prompt for any dirty inactive instance tabs, which the active-tab checks above miss.
+    // Prompt for any dirty inactive instance (symbols from the schematic) tabs, which the active-tab
+    // checks above miss.
     if( !promptToSaveInactiveInstanceTabs() )
         return false;
 
@@ -867,14 +863,9 @@ void SYMBOL_EDIT_FRAME::ToggleProperties()
     updateSelectionFilterVisbility();
 
     if( show )
-    {
-        SetAuiPaneSize( m_auimgr, propertiesPaneInfo,
-                        m_settings->m_AuiPanels.properties_panel_width, -1 );
-    }
+        SetAuiPaneSize( m_auimgr, propertiesPaneInfo, m_settings->m_AuiPanels.properties_panel_width, -1 );
     else
-    {
         m_settings->m_AuiPanels.properties_panel_width = m_propertiesPanel->GetSize().x;
-    }
 
     m_auimgr.Update();
     Refresh();
@@ -963,7 +954,7 @@ bool SYMBOL_EDIT_FRAME::IsSymbolFromLegacyLibrary() const
     {
         SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
 
-        if( auto row = adapter->GetRow( m_symbol->GetLibNickname() ); row.has_value() )
+        if( std::optional<LIBRARY_TABLE_ROW*> row = adapter->GetRow( m_symbol->GetLibNickname() ); row.has_value() )
         {
             if( ( *row )->Type() == SCH_IO_MGR::ShowType( SCH_IO_MGR::SCH_LEGACY ) )
                 return true;
@@ -996,37 +987,26 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
 
                 if( IsSymbolFromSchematic() )
                 {
-                    msgs.push_back( wxString::Format( _( "Editing symbol %s from schematic.  Saving will "
-                                                         "update the schematic only." ),
+                    msgs.push_back( wxString::Format( _( "Editing %s from schematic.  Saving will update the "
+                                                         "schematic only." ),
                                                       m_reference ) );
 
-                    wxString         link = wxString::Format( _( "Open symbol from library %s" ),
-                                                              UnescapeString( libName ) );
-                    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( &infobar, wxID_ANY, link, wxEmptyString );
-
-                    button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+                    infobar.AddLink( wxString::Format( _( "Open symbol from library %s" ), UnescapeString( libName ) ),
                             [this]( wxHyperlinkEvent& aEvent )
                             {
                                 GetToolManager()->RunAction( SCH_ACTIONS::editLibSymbolWithLibEdit );
-                            } ) );
-
-                    infobar.AddButton( button );
+                            } );
                 }
                 else if( IsSymbolFromLegacyLibrary() )
                 {
                     msgs.push_back( _( "Symbols in legacy libraries are not editable.  Use Manage Symbol "
                                        "Libraries to migrate to current format." ) );
 
-                    wxString         link = _( "Manage symbol libraries" );
-                    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( &infobar, wxID_ANY, link, wxEmptyString );
-
-                    button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+                    infobar.AddLink( _( "Manage symbol libraries" ),
                             [this]( wxHyperlinkEvent& aEvent )
                             {
                                 InvokeSchEditSymbolLibTable( &Kiway(), this );
-                            } ) );
-
-                    infobar.AddButton( button );
+                            } );
                 }
                 else if( IsSymbolAlias() )
                 {
@@ -1040,17 +1020,12 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
                         int      unit = GetUnit();
                         int      bodyStyle = GetBodyStyle();
                         wxString rootSymbolName = rootSymbol->GetName();
-                        wxString link = wxString::Format( _( "Open %s" ), UnescapeString( rootSymbolName ) );
 
-                        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( &infobar, wxID_ANY, link, wxEmptyString );
-
-                        button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+                        infobar.AddLink( wxString::Format( _( "Open %s" ), UnescapeString( rootSymbolName ) ),
                                 [this, libName, rootSymbolName, unit, bodyStyle]( wxHyperlinkEvent& aEvent )
                                 {
                                     LoadSymbolFromLib( libName, rootSymbolName, unit, bodyStyle );
-                                } ) );
-
-                        infobar.AddButton( button );
+                                } );
                     }
                 }
 
@@ -1060,10 +1035,7 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
                 {
                     msgs.push_back( _( "Library is read-only.  Changes cannot be saved to this library." ) );
 
-                    wxString         link = wxString::Format( _( "Create an editable copy" ) );
-                    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( &infobar, wxID_ANY, link, wxEmptyString );
-
-                    button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+                    infobar.AddLink( _( "Create an editable copy" ),
                             [this, libName]( wxHyperlinkEvent& aEvent )
                             {
                                 wxString msg = wxString::Format( _( "Create an editable copy of the symbol or "
@@ -1079,19 +1051,19 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
 
                                 switch( choice )
                                 {
-                                case wxID_YES:
-                                    SaveSymbolCopyAs( true );
-                                    break;
-                                case wxID_CANCEL:
-                                    SaveLibraryAs();
-                                    break;
-                                default:
-                                    // Do nothing
-                                    break;
+                                case wxID_YES:    SaveSymbolCopyAs( true ); break;
+                                case wxID_CANCEL: SaveLibraryAs();          break;
+                                default:          return;
                                 }
-                            } ) );
 
-                    infobar.AddButton( button );
+                                // Get rid of the save-will-update-schematic-only (or any other dismissable warning)
+                                WX_INFOBAR* local_infobar = GetInfoBar();
+
+                                if( local_infobar->IsShownOnScreen() && local_infobar->HasCloseButton() )
+                                    local_infobar->Dismiss();
+
+                                GetCanvas()->ForceRefresh();
+                            } );
                 }
 
                 if( msgs.empty() )
@@ -1101,6 +1073,7 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
                 else
                 {
                     wxString msg = wxJoin( msgs, '\n', '\0' );
+                    infobar.AddCloseButton();
                     infobar.ShowMessage( msg, infobarFlags );
                 }
             } );
@@ -1130,9 +1103,6 @@ void SYMBOL_EDIT_FRAME::SetCurSymbol( LIB_SYMBOL* aSymbol, bool aUpdateZoom )
         GetLibTree()->SelectLibId( m_symbol->GetLibId() );
     else
         GetLibTree()->Unselect();
-
-    // Ensure synchronized pin edit can be enabled only symbols with interchangeable units
-    m_SyncPinEdit = aSymbol && aSymbol->IsRoot() && aSymbol->IsMultiUnit() && !aSymbol->UnitsLocked();
 
     m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
 
@@ -1233,7 +1203,7 @@ void SYMBOL_EDIT_FRAME::SetBodyStyle( int aBodyStyle )
 
 bool SYMBOL_EDIT_FRAME::SynchronizePins()
 {
-    return m_SyncPinEdit && m_symbol && m_symbol->IsMultiUnit() && !m_symbol->UnitsLocked();
+    return m_settings && m_settings->m_SyncPinEdit && m_symbol && m_symbol->IsMultiUnit() && !m_symbol->UnitsLocked();
 }
 
 
@@ -1443,8 +1413,7 @@ wxString SYMBOL_EDIT_FRAME::getTargetLib() const
 }
 
 
-void SYMBOL_EDIT_FRAME::SyncLibraries( bool aShowProgress, bool aPreloadCancelled,
-                                       const wxString& aForceRefresh )
+void SYMBOL_EDIT_FRAME::SyncLibraries( bool aShowProgress, bool aPreloadCancelled, const wxString& aForceRefresh )
 {
     wxLogTrace( wxT( "KICAD_TABS_DBG" ),
                 wxT( "SYMBOL_EDIT_FRAME::SyncLibraries enter (progress=%d, forceRefresh='%s')" ),
@@ -1455,8 +1424,7 @@ void SYMBOL_EDIT_FRAME::SyncLibraries( bool aShowProgress, bool aPreloadCancelle
     // loading libraries).  A re-entrant call would corrupt the library tree mid-rebuild.
     if( m_syncLibrariesInProgress )
     {
-        wxLogTrace( wxT( "KICAD_TABS_DBG" ),
-                    wxT( "SYMBOL_EDIT_FRAME::SyncLibraries re-entrant; skipping" ) );
+        wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "SYMBOL_EDIT_FRAME::SyncLibraries re-entrant; skipping" ) );
         return;
     }
 
@@ -1822,8 +1790,7 @@ void SYMBOL_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     const std::string& payload = mail.GetPayload();
 
-    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "SYMBOL_EDIT_FRAME::KiwayMailIn cmd=%d" ),
-                (int) mail.Command() );
+    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "SYMBOL_EDIT_FRAME::KiwayMailIn cmd=%d" ), (int) mail.Command() );
 
     switch( mail.Command() )
     {
@@ -1870,8 +1837,7 @@ void SYMBOL_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 
     case MAIL_RELOAD_LIB:
     {
-        wxLogTrace( wxT( "KICAD_TABS_DBG" ),
-                    wxT( "SYMBOL_EDIT_FRAME::KiwayMailIn MAIL_RELOAD_LIB -> SyncLibraries" ) );
+        wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "SYMBOL_EDIT_FRAME::KiwayMailIn MAIL_RELOAD_LIB -> SyncLibraries" ) );
 
         FreezeLibraryTree();
 

@@ -34,7 +34,8 @@ enum class ZONE_MODE
     ADD,             ///< Add a new zone/keepout with fresh settings
     CUTOUT,          ///< Make a cutout to an existing zone
     SIMILAR,         ///< Add a new zone with the same settings as an existing one
-    GRAPHIC_POLYGON
+    GRAPHIC_POLYGON,
+    STITCH
 };
 
 class DESIGN_BLOCK;
@@ -236,6 +237,7 @@ public:
     static TOOL_ACTION lineModeNext;         ///< Cycle through angle modes
     static TOOL_ACTION angleSnapModeChanged; ///< Notification event when angle mode changes
     static TOOL_ACTION closeOutline;
+    static TOOL_ACTION drawViaStitchArea;
 
     /// Increase width of currently drawn line
     static TOOL_ACTION incWidth;
@@ -270,6 +272,7 @@ public:
     static TOOL_ACTION routerRouteSelected;
     static TOOL_ACTION routerRouteSelectedFromEnd;
     static TOOL_ACTION routerAutorouteSelected;
+    static TOOL_ACTION routerOptimizeSelected;
     static TOOL_ACTION cancelCurrentItem;
 
     /// Activation of the Push and Shove settings dialogs
@@ -297,6 +300,12 @@ public:
     static TOOL_ACTION genRemove;
 
     static TOOL_ACTION generatorsShowManager;
+
+    /// Exclude selected stitching vias from their parent via-stitch generator.
+    static TOOL_ACTION excludeStitchVia;
+
+    /// Restore every manually-excluded via in the selected via-stitch generators.
+    static TOOL_ACTION clearStitchViaExclusions;
 
     // Point Editor
     static TOOL_ACTION pointEditorAddCorner;
@@ -435,6 +444,8 @@ public:
     static TOOL_ACTION importSpecctraSession;
     static TOOL_ACTION exportSpecctraDSN;
 
+    static TOOL_ACTION editFootprintFields;
+
     static TOOL_ACTION generateGerbers;
     static TOOL_ACTION generateDrillFiles;
     static TOOL_ACTION generatePosFile;
@@ -443,6 +454,7 @@ public:
     static TOOL_ACTION generateODBPPFile;
     static TOOL_ACTION generateD356File;
     static TOOL_ACTION generateBOM;
+    static TOOL_ACTION generateBOMLegacy;
 
     static TOOL_ACTION exportGenCAD;
     static TOOL_ACTION exportVRML;
@@ -473,6 +485,7 @@ public:
     static TOOL_ACTION editLibFpInFpEditor;
 
     static TOOL_ACTION toggleExcludeFromBOM;
+    static TOOL_ACTION toggleExcludeFromSim;
     static TOOL_ACTION toggleExcludeFromPosFiles;
 
     static TOOL_ACTION showLayersManager;
@@ -512,6 +525,7 @@ public:
     static TOOL_ACTION exportFootprint;
 
     static TOOL_ACTION compareFpLibraryWithFile;
+    static TOOL_ACTION showLibFootprintFieldsTable;
     static TOOL_ACTION footprintProperties;
     static TOOL_ACTION defaultPadProperties;
     static TOOL_ACTION padTable;

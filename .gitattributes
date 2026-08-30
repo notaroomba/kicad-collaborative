@@ -26,6 +26,8 @@ bitmaps_png/cpp_*/*.cpp     generated
 # wxFormBuilder-generated files
 **/dialog*/*_base.cpp       generated
 **/dialog*/*_base.h         generated
+**/sim/*_base.cpp           generated
+**/sim/*_base.h             generated
 
 # Lemon grammars
 common/libeval/grammar.c    generated
@@ -47,3 +49,6 @@ thirdparty/json_schema_validator/**    -format.clang-format-kicad -whitespace
 # Scripts
 *.sh    text eol=lf
 *.bat   text eol=crlf
+
+# Turn off auto-crlf, these files are needed inplace
+*.csv       -text

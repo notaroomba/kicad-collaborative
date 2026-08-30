@@ -459,4 +459,118 @@ BOOST_AUTO_TEST_CASE( ProjectChangeDuringAsyncLoad )
 }
 
 
+// A library whose file is missing must report the failure every time it is loaded. The
+// plugin keeps the cache it built for the library even when the load throws, and that
+// cache still answers to the missing path and still looks up to date, so a second load
+// reports an empty library instead of the error and the table row loses its warning icon.
+BOOST_AUTO_TEST_CASE( MissingLibraryReportsErrorOnEveryLoad )
+{
+    if( !wxGetEnv( wxT( "KICAD_CONFIG_HOME_IS_QA" ), nullptr ) )
+    {
+        BOOST_TEST_MESSAGE( "QA test is running using unknown config home; skipping" );
+        return;
+    }
+
+    LIBRARY_MANAGER manager;
+    manager.LoadGlobalTables();
+
+    LoadSchematic( GetTestProjectSchPath().GetFullPath() );
+    PROJECT& project = SettingsManager().Prj();
+    manager.LoadProjectTables( project.GetProjectDirectory() );
+
+    SYMBOL_LIBRARY_ADAPTER* adapter = RegisterSymbolAdapter( manager );
+
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT );
+    BOOST_REQUIRE( optTable.has_value() );
+
+    LIBRARY_TABLE_ROW& row = ( *optTable )->InsertRow();
+    row.SetNickname( wxS( "Missing" ) );
+    row.SetURI( wxS( "${KIPRJMOD}/does_not_exist.kicad_sym" ) );
+    row.SetType( wxS( "KiCad" ) );
+
+    std::optional<LIB_STATUS> first = adapter->LoadOne( wxS( "Missing" ) );
+    BOOST_REQUIRE( first.has_value() );
+    BOOST_REQUIRE( first->load_status == LOAD_STATUS::LOAD_ERROR );
+
+    std::optional<LIB_STATUS> second = adapter->LoadOne( wxS( "Missing" ) );
+    BOOST_REQUIRE( second.has_value() );
+    BOOST_CHECK_MESSAGE( second->load_status == LOAD_STATUS::LOAD_ERROR,
+                         "A library whose file is missing must not come back as loaded" );
+
+    adapter->CheckTableRow( row );
+    BOOST_CHECK_MESSAGE( !row.IsOk(), "A row whose library failed to load must be flagged in the table" );
+}
+
+
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24855
+// A library row marked (disabled) must never be contacted by the background loader.
+// The user complaint was a disabled HTTP library still blocking startup while its
+// unreachable backend was probed; a disabled file-based row exercises the same
+// AsyncLoad skip path deterministically without a network dependency.
+BOOST_AUTO_TEST_CASE( AsyncLoadSkipsDisabledRows )
+{
+    // Restores the env var on scope exit even if an assertion aborts the test.
+    struct SCOPED_ENV
+    {
+        SCOPED_ENV( const wxString& aName, const wxString& aValue ) :
+                m_name( aName ), m_hadPrev( wxGetEnv( aName, &m_prev ) )
+        {
+            wxSetEnv( aName, aValue );
+        }
+
+        ~SCOPED_ENV()
+        {
+            if( m_hadPrev )
+                wxSetEnv( m_name, m_prev );
+            else
+                wxUnsetEnv( m_name );
+        }
+
+        wxString m_name;
+        wxString m_prev;
+        bool     m_hadPrev;
+    };
+
+    wxFileName deviceDir( KI_TEST::GetTestDataRootDir(), wxEmptyString );
+    deviceDir.AppendDir( "libraries" );
+    deviceDir.AppendDir( "test_project" );
+    SCOPED_ENV env( wxT( "QA_ISSUE24855_DIR" ), deviceDir.GetPath() );
+
+    wxFileName fixtureDir( KI_TEST::GetTestDataRootDir(), wxEmptyString );
+    fixtureDir.AppendDir( "libraries" );
+    fixtureDir.AppendDir( "issue24855" );
+
+    LIBRARY_MANAGER manager;
+    Pgm().GetSettingsManager().LoadProject( "" );
+
+    SYMBOL_LIBRARY_ADAPTER* adapter = RegisterSymbolAdapter( manager );
+    manager.LoadProjectTables( fixtureDir.GetPath() );
+
+    std::vector<LIBRARY_TABLE_ROW*> rows = manager.Rows( LIBRARY_TABLE_TYPE::SYMBOL,
+                                                         LIBRARY_TABLE_SCOPE::PROJECT );
+    BOOST_REQUIRE_EQUAL( rows.size(), 2 );
+
+    adapter->AsyncLoad();
+    adapter->BlockUntilLoaded();
+
+    BOOST_CHECK_MESSAGE( adapter->IsLibraryLoaded( "DeviceEnabled" ),
+                         "Enabled library must be loaded by AsyncLoad" );
+
+    BOOST_CHECK_MESSAGE( !adapter->IsLibraryLoaded( "DeviceDisabled" ),
+                         "Disabled library must not be contacted by AsyncLoad" );
+
+    // The dialog validates rows through CheckTableRow. A disabled row with an unreachable URI
+    // must be left untouched rather than probed, so its stale error is cleared without a load.
+    LIBRARY_TABLE_ROW validationRow = *rows[1];
+    validationRow.SetURI( fixtureDir.GetPathWithSep() + wxT( "missing.kicad_sym" ) );
+    validationRow.SetOk( false );
+    validationRow.SetErrorDescription( wxT( "stale error" ) );
+
+    adapter->CheckTableRow( validationRow );
+
+    BOOST_CHECK_MESSAGE( validationRow.IsOk() && validationRow.ErrorDescription().IsEmpty(),
+                         "CheckTableRow must not probe a disabled row's backend" );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()

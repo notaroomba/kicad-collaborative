@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-75-g9786507b-dirty)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -10,6 +10,7 @@
 #include <wx/artprov.h>
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
+class STD_BITMAP_BUTTON;
 class WX_GRID;
 
 #include "dialog_shim.h"
@@ -22,6 +23,12 @@ class WX_GRID;
 #include <wx/sizer.h>
 #include <wx/grid.h>
 #include <wx/button.h>
+#include <wx/bitmap.h>
+#include <wx/image.h>
+#include <wx/icon.h>
+#include <wx/statbox.h>
+#include <wx/radiobut.h>
+#include <wx/bmpbuttn.h>
 #include <wx/dialog.h>
 
 ///////////////////////////////////////////////////////////////////////////
@@ -41,6 +48,14 @@ class DIALOG_FP_EDIT_PAD_TABLE_BASE : public DIALOG_SHIM
 		wxStaticText* m_staticTextDuplicatePins;
 		wxStaticText* m_duplicate_pins;
 		WX_GRID* m_grid;
+		wxButton* m_btnExportToFile;
+		wxButton* m_btnExportToClipboard;
+		wxRadioButton* m_rbReplaceExisting;
+		wxRadioButton* m_rbAppendToExisiting;
+		wxButton* m_btnImportFromFile;
+		wxButton* m_btnImportFromClipboard;
+		STD_BITMAP_BUTTON* m_buttonAdd;
+		STD_BITMAP_BUTTON* m_buttonDelete;
 		wxStdDialogButtonSizer* m_sdbSizer;
 		wxButton* m_sdbSizerOK;
 		wxButton* m_sdbSizerCancel;
@@ -50,6 +65,10 @@ class DIALOG_FP_EDIT_PAD_TABLE_BASE : public DIALOG_SHIM
 		virtual void OnCellChanged( wxGridEvent& event ) = 0;
 		virtual void OnSelectCell( wxGridEvent& event ) = 0;
 		virtual void OnSize( wxSizeEvent& event ) = 0;
+		virtual void OnExportButtonClick( wxCommandEvent& event ) = 0;
+		virtual void OnImportButtonClick( wxCommandEvent& event ) = 0;
+		virtual void OnAddRow( wxCommandEvent& event ) = 0;
+		virtual void OnDeleteRow( wxCommandEvent& event ) = 0;
 		virtual void OnCancel( wxCommandEvent& event ) = 0;
 
 

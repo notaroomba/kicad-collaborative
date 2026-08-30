@@ -43,7 +43,6 @@
 #include <trace_helpers.h>
 #include <length_delay_calculation/length_delay_calculation.h>
 #include <lockfile.h>
-#include <wx/snglinst.h>
 #include <netlist_reader/pcb_netlist.h>
 #include <pcbnew_id.h>
 #include <wildcards_and_files_ext.h>
@@ -332,6 +331,9 @@ int BOARD_EDITOR_CONTROL::New( const TOOL_EVENT& aEvent )
     if( !Kiface().IsSingle() )
         return false;
 
+    if( !m_frame->CloseFootprintFieldsTableDialog() )
+        return false;
+
     if( m_frame->IsContentModified() )
     {
         wxFileName fileName = m_frame->GetBoard()->GetFileName();
@@ -492,16 +494,6 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     std::unique_ptr<LOCKFILE> lock = std::make_unique<LOCKFILE>( fullFileName );
 
-    if( !lock->Valid() && lock->IsLockedByMe() )
-    {
-        // If we cannot acquire the lock but we appear to be the one who locked it, check to
-        // see if there is another KiCad instance running.  If not, then we can override the
-        // lock.  This could happen if KiCad crashed or was interrupted.
-
-        if( !Pgm().SingleInstance()->IsAnotherRunning() )
-            lock->OverrideLock();
-    }
-
     if( !lock->Valid() )
     {
         // If project-level lock override was already granted, silently override this file's lock
@@ -522,6 +514,9 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
             lock->OverrideLock();
         }
     }
+
+    if( !CloseFootprintFieldsTableDialog() )
+        return false;
 
     if( IsContentModified() )
     {
@@ -1039,7 +1034,6 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
         GetBoard()->SynchronizeNetsAndNetClasses( false );
     }
 
-    wxString   upperTxt;
     wxString   lowerTxt;
 
     // On Windows, ensure the target file is writeable by clearing problematic attributes like
@@ -1061,16 +1055,10 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
         return false;
     }
 
-    if( !Kiface().IsSingle() )
-    {
-        WX_STRING_REPORTER backupReporter;
+    WX_STRING_REPORTER backupReporter;
 
-        if( !GetSettingsManager()->TriggerBackupIfNeeded( backupReporter ) )
-        {
-            upperTxt = backupReporter.GetMessages();
-            SetStatusText( upperTxt, 1 );
-        }
-    }
+    if( !Kiface().IsSingle() )
+        GetSettingsManager()->TriggerBackupIfNeeded( backupReporter );
 
     GetBoard()->SetFileName( pcbFileName.GetFullPath() );
 
@@ -1091,6 +1079,12 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
 
     if( m_infoBar->IsShownOnScreen() && m_infoBar->HasCloseButton() )
         m_infoBar->Dismiss();
+
+    if( backupReporter.HasMessage() )
+    {
+        wxString backupMsg = backupReporter.GetMessages();
+        m_infoBar->ShowMessageFor( backupMsg.Trim(), 10000, wxICON_WARNING );
+    }
 
     GetScreen()->SetContentModified( false );
     UpdateTitle();

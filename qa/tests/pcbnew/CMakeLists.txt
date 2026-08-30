@@ -60,6 +60,7 @@ set( QA_PCBNEW_SRCS
     test_group_save_perf.cpp
     test_headless_pcb_context.cpp
     test_history_autosave.cpp
+    test_fields_table_presence.cpp
     test_footprint.cpp
     test_footprint_editor_tabs.cpp
     test_footprint_import_reconciler.cpp
@@ -78,6 +79,7 @@ set( QA_PCBNEW_SRCS
     test_ellipse_roundtrip.cpp
     test_custom_pad_primitive_roundtrip.cpp
     test_active_layer_update.cpp
+    test_line_ending_load_save.cpp
     test_lset.cpp
     test_meander_corner_radius.cpp
     test_odb_dimension_export.cpp
@@ -106,6 +108,7 @@ set( QA_PCBNEW_SRCS
     test_pcb_render_settings.cpp
     test_libeval_compiler.cpp
     test_reference_image_load.cpp
+    test_complex_padstack_export.cpp
     test_gencad_export.cpp
     test_idf_export.cpp
     test_d356_export.cpp
@@ -126,9 +129,11 @@ set( QA_PCBNEW_SRCS
     test_tracks_cleaner.cpp
     test_triangulation.cpp
     test_tuning_pattern_layer.cpp
+    test_via_stitch.cpp
     test_multichannel.cpp
     test_pns_tuning_path_through_pad.cpp
     test_pns_diff_pair_tuning_width.cpp
+    test_pns_via_layer_span.cpp
     test_variant.cpp
     test_text_variable_resolution.cpp
     test_zone.cpp
@@ -158,6 +163,7 @@ set( QA_PCBNEW_SRCS
     drc/test_drc_courtyard_invalid.cpp
     drc/test_drc_courtyard_overlap.cpp
     drc/test_drc_error_limit.cpp
+    drc/test_footprint_courtyard_chaining.cpp
     drc/test_footprint_courtyard_index.cpp
     drc/test_drc_regressions.cpp
     drc/test_drc_issue23469.cpp
@@ -238,6 +244,7 @@ set( QA_PCBNEW_SRCS
     pcb_io/eagle/test_eagle_lbr_import.cpp
     pcb_io/eagle/test_eagle_managed_lib_naming.cpp
     pcb_io/pads/test_pads_import.cpp
+    pcb_io/pads/test_pads_binary_import.cpp
     pcb_io/pads/test_pads_layer_mapper.cpp
     pcb_io/pads/test_pads_arc_structures.cpp
     pcb_io/pads/test_pads_part_structures.cpp

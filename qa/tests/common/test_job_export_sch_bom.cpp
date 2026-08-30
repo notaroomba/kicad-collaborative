@@ -19,7 +19,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <jobs/job_export_bom.h>
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 #include <settings/bom_settings.h>
 
 
@@ -78,6 +78,69 @@ BOOST_AUTO_TEST_CASE( EmptyVariantRoundTrip )
     loaded.FromJson( j );
 
     BOOST_CHECK( loaded.GetSelectedVariant().IsEmpty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( FilterScopeRoundTripAndDefault )
+{
+    JOB_EXPORT_BOM job;
+    job.m_filterScope = BOM_FILTER_SCOPE::ALL;
+
+    nlohmann::json j;
+    job.ToJson( j );
+
+    BOOST_REQUIRE( j.contains( "filter_scope" ) );
+    BOOST_CHECK_EQUAL( j.at( "filter_scope" ).get<std::string>(), "all" );
+
+    JOB_EXPORT_BOM loaded;
+    loaded.FromJson( j );
+    BOOST_CHECK( loaded.m_filterScope == BOM_FILTER_SCOPE::ALL );
+
+    j.erase( "filter_scope" );
+    loaded.m_filterScope = BOM_FILTER_SCOPE::VISIBLE;
+    loaded.FromJson( j );
+    BOOST_CHECK( loaded.m_filterScope == BOM_FILTER_SCOPE::REFERENCE );
+}
+
+
+BOOST_AUTO_TEST_CASE( PresetNamesAreClearedOnDeserialization )
+{
+    JOB_EXPORT_BOM job;
+    job.m_bomPresetName = wxS( "fields" );
+    job.m_bomFmtPresetName = wxS( "format" );
+    job.m_filterString = wxS( "R1" );
+    job.m_fieldDelimiter = wxS( ";" );
+
+    nlohmann::json j;
+    job.ToJson( j );
+
+    JOB_EXPORT_BOM loaded;
+    loaded.FromJson( j );
+
+    BOOST_CHECK( loaded.m_bomPresetName.IsEmpty() );
+    BOOST_CHECK( loaded.m_bomFmtPresetName.IsEmpty() );
+    BOOST_CHECK( loaded.m_filterString == wxS( "R1" ) );
+    BOOST_CHECK( loaded.m_fieldDelimiter == wxS( ";" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( BomPresetFilterScopeRoundTripAndDefault )
+{
+    BOM_PRESET preset = BOM_PRESET::DefaultEditing();
+    preset.filterScope = BOM_FILTER_SCOPE::VISIBLE;
+
+    nlohmann::json j = preset;
+
+    BOOST_REQUIRE( j.contains( "filter_scope" ) );
+    BOOST_CHECK_EQUAL( j.at( "filter_scope" ).get<std::string>(), "visible" );
+
+    BOM_PRESET loaded = j.get<BOM_PRESET>();
+    BOOST_CHECK( loaded.filterScope == BOM_FILTER_SCOPE::VISIBLE );
+
+    j.erase( "filter_scope" );
+    loaded.filterScope = BOM_FILTER_SCOPE::ALL;
+    from_json( j, loaded );
+    BOOST_CHECK( loaded.filterScope == BOM_FILTER_SCOPE::REFERENCE );
 }
 
 

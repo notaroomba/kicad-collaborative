@@ -26,6 +26,11 @@
 
 class BOARD_DESIGN_SETTINGS;
 
+namespace kiapi::board::types
+{
+    class Field;
+}
+
 class PCB_FIELD : public PCB_TEXT
 {
 public:
@@ -33,8 +38,13 @@ public:
 
     PCB_FIELD( const PCB_TEXT& aText, FIELD_T aFieldId, const wxString& aName = wxEmptyString );
 
+    PCB_FIELD( const PCB_FIELD& aField );
+
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
+
+    void Serialize( kiapi::board::types::Field& aOutput ) const;
+    bool Deserialize( const kiapi::board::types::Field& aInput );
 
     void CopyFrom( const BOARD_ITEM* aOther ) override;
 
@@ -67,6 +77,8 @@ public:
     bool IsValue() const { return m_id == FIELD_T::VALUE; }
     bool IsDatasheet() const { return m_id == FIELD_T::DATASHEET; }
     bool IsComponentClass() const { return GetName() == wxT( "Component Class" ); }
+    bool IsPrivate() const { return m_private; }
+    void SetPrivate( bool aPrivate ) { m_private = aPrivate; }
 
     bool IsMandatory() const;
 
@@ -98,10 +110,9 @@ public:
     wxString GetName( bool aUseDefaultName = true ) const;
 
     /**
-     * Get a non-language-specific name for a field which can be used for storage, variable
-     * look-up, etc.
+     * Get the untranslated field name for storage, variable look-up, etc.
      */
-    wxString GetCanonicalName() const;
+    wxString GetUntranslatedName() const;
 
     wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
 
@@ -134,6 +145,7 @@ private:
     FIELD_T  m_id;           ///< Field id, @see enum FIELD_T
     int      m_ordinal;      ///< Sort order for non-mandatory fields
     wxString m_name;
+    bool     m_private = false; ///< Not fully implemented yet, used in the fields data model
 };
 
 #endif

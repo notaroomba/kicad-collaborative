@@ -63,12 +63,13 @@ DATABASE_LIB_SETTINGS::DATABASE_LIB_SETTINGS( const std::string& aFilename ) :
             "libraries",
             [&]() -> nlohmann::json
             {
-                // TODO: implement this; libraries are read-only from KiCad at the moment
-                return {};
+                // TODO(JE) implement library config editor.  For now just round-trip
+                return m_librariesConfig;
             },
-            [&]( const nlohmann::json aObj )
+            [&]( const nlohmann::json& aObj )
             {
                 m_Tables.clear();
+                m_librariesConfig = aObj;
 
                 if( !aObj.is_array() )
                     return;
@@ -138,7 +139,7 @@ DATABASE_LIB_SETTINGS::DATABASE_LIB_SETTINGS( const std::string& aFilename ) :
 
     m_params.emplace_back( new PARAM<int>( "cache.max_size", &m_Cache.max_size, 256 ) );
 
-    m_params.emplace_back( new PARAM<int>( "cache.max_age", &m_Cache.max_age, 10 ) );
+    m_params.emplace_back( new PARAM<int>( "cache.max_age", &m_Cache.max_age, 60 ) );
 
     m_params.emplace_back( new PARAM<bool>( "globally_unique_keys", &m_GloballyUniqueKeys, false ) );
 

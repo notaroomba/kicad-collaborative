@@ -21,6 +21,7 @@
 #include <footprint.h>
 #include <pcb_table.h>
 #include <board.h>
+#include <board_design_settings.h>
 #include <geometry/shape_simple.h>
 #include <geometry/shape_segment.h>
 #include <geometry/shape_compound.h>
@@ -30,6 +31,12 @@
 #include <view/view.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
+#include <api/api_enums.h>
+#include <api/api_utils.h>
+#include <api/api_pcb_utils.h>
+#include <api/board/board_types.pb.h>
+#include <board_commit.h>
+#include <eda_group.h>
 
 
 PCB_TABLE::PCB_TABLE( BOARD_ITEM* aParent, int aLineWidth ) :
@@ -41,6 +48,12 @@ PCB_TABLE::PCB_TABLE( BOARD_ITEM* aParent, int aLineWidth ) :
         m_strokeColumns( true ),
         m_separatorsStroke( aLineWidth, LINE_STYLE::DEFAULT, COLOR4D::UNSPECIFIED ),
         m_colCount( 0 )
+{
+}
+
+
+PCB_TABLE::PCB_TABLE( BOARD_ITEM* aParent ) :
+        PCB_TABLE( aParent, pcbIUScale.mmToIU( DEFAULT_LINE_WIDTH ) )
 {
 }
 
@@ -69,6 +82,154 @@ PCB_TABLE::~PCB_TABLE()
     // We own our cells; delete them
     for( PCB_TABLECELL* cell : m_cells )
         delete cell;
+}
+
+
+void PCB_TABLE::CopyFrom( const BOARD_ITEM* aOther )
+{
+    wxCHECK( aOther && aOther->Type() == PCB_TABLE_T, /* void */ );
+
+    const PCB_TABLE* other = static_cast<const PCB_TABLE*>( aOther );
+
+    BOARD_ITEM::CopyFrom( aOther );
+
+    m_strokeExternal = other->m_strokeExternal;
+    m_StrokeHeaderSeparator = other->m_StrokeHeaderSeparator;
+    m_borderStroke = other->m_borderStroke;
+    m_strokeRows = other->m_strokeRows;
+    m_strokeColumns = other->m_strokeColumns;
+    m_separatorsStroke = other->m_separatorsStroke;
+
+    m_colCount = other->m_colCount;
+    m_colWidths = other->m_colWidths;
+    m_rowHeights = other->m_rowHeights;
+
+    ClearCells();
+
+    for( PCB_TABLECELL* cell : other->m_cells )
+        AddCell( new PCB_TABLECELL( *cell ) );
+}
+
+
+BOARD_ITEM* PCB_TABLE::Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit ) const
+{
+    BOARD_ITEM* dupe = static_cast<BOARD_ITEM*>( Clone() );
+    dupe->ResetUuid();
+
+    RunOnChildren( []( BOARD_ITEM* aChild )
+                   {
+                       aChild->ResetUuid();
+                   },
+                   RECURSE_MODE::NO_RECURSE );
+
+    if( addToParentGroup )
+    {
+        wxCHECK_MSG( aCommit, dupe, "Must supply a commit to update parent group" );
+
+        if( EDA_GROUP* group = dupe->GetParentGroup() )
+        {
+            aCommit->Modify( group->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
+            group->AddItem( dupe );
+        }
+    }
+
+    return dupe;
+}
+
+
+void PCB_TABLE::Serialize( google::protobuf::Any& aContainer ) const
+{
+    using namespace kiapi::board;
+    types::Table table;
+
+    table.mutable_id()->set_value( m_Uuid.AsStdString() );
+    table.set_layer( ToProtoEnum<PCB_LAYER_ID, types::BoardLayer>( GetLayer() ) );
+    table.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
+                                 : kiapi::common::types::LockedState::LS_UNLOCKED );
+
+    table.set_column_count( m_colCount );
+
+    for( int col = 0; col < m_colCount; ++col )
+        table.add_column_widths( GetColWidth( col ) );
+
+    for( int row = 0; row < GetRowCount(); ++row )
+        table.add_row_heights( GetRowHeight( row ) );
+
+    for( const PCB_TABLECELL* cell : m_cells )
+        cell->Serialize( *table.add_cells() );
+
+    table.set_external_border( m_strokeExternal ? types::TSM_ENABLED : types::TSM_DISABLED );
+    table.set_header_separator( m_StrokeHeaderSeparator ? types::TSM_ENABLED : types::TSM_DISABLED );
+    kiapi::common::PackStroke( *table.mutable_border_stroke(), m_borderStroke );
+
+    table.set_row_separators( m_strokeRows ? types::TSM_ENABLED : types::TSM_DISABLED );
+    table.set_column_separators( m_strokeColumns ? types::TSM_ENABLED : types::TSM_DISABLED );
+    kiapi::common::PackStroke( *table.mutable_separators_stroke(), m_separatorsStroke );
+
+    if( FOOTPRINT* parent = GetParentFootprint() )
+        table.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
+    else if( const BOARD* board = GetBoard() )
+        table.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    aContainer.PackFrom( table );
+}
+
+
+bool PCB_TABLE::Deserialize( const google::protobuf::Any& aContainer )
+{
+    using namespace kiapi::board;
+    types::Table table;
+
+    if( !aContainer.UnpackTo( &table ) )
+        return false;
+
+    if( table.column_count() < 1 )
+        return false;
+
+    SetUuidDirect( KIID( table.id().value() ) );
+    SetLayer( FromProtoEnum<PCB_LAYER_ID, types::BoardLayer>( table.layer() ) );
+    SetLocked( table.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+
+    ClearCells();
+    m_colWidths.clear();
+    m_rowHeights.clear();
+
+    SetColCount( table.column_count() );
+
+    for( int i = 0; i < table.column_widths_size() && i < table.column_count(); ++i )
+        SetColWidth( i, table.column_widths( i ) );
+
+    for( const types::TableCell& protoCell : table.cells() )
+    {
+        PCB_TABLECELL* cell = new PCB_TABLECELL( this );
+
+        if( !cell->Deserialize( protoCell ) )
+        {
+            delete cell;
+            continue;
+        }
+
+        AddCell( cell );
+    }
+
+    int rowCount = m_colCount > 0 ? static_cast<int>( m_cells.size() ) / m_colCount : 0;
+
+    for( int i = 0; i < table.row_heights_size() && i < rowCount; ++i )
+        SetRowHeight( i, table.row_heights( i ) );
+
+    m_strokeExternal = table.external_border() == types::TSM_ENABLED;
+    m_StrokeHeaderSeparator = table.header_separator() == types::TSM_ENABLED;
+
+    if( table.has_border_stroke() )
+        kiapi::common::UnpackStroke( m_borderStroke, table.border_stroke() );
+
+    m_strokeRows = table.row_separators() == types::TSM_ENABLED;
+    m_strokeColumns = table.column_separators() == types::TSM_ENABLED;
+
+    if( table.has_separators_stroke() )
+        kiapi::common::UnpackStroke( m_separatorsStroke, table.separators_stroke() );
+
+    return true;
 }
 
 
@@ -335,45 +496,25 @@ void PCB_TABLE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
         for( PCB_TABLECELL* cell : m_cells )
             cell->Flip( aCentre, aFlipDirection );
 
+        // Flipping a cell also turns its text 180 degrees, so in the frame the table reads in
+        // it always comes out mirrored left to right.
         std::vector<PCB_TABLECELL*> oldCells = m_cells;
+        int                         rowOffset = 0;
 
-        if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+        for( int row = 0; row < GetRowCount(); ++row )
         {
-            int rowOffset = 0;
-
-            for( int row = 0; row < GetRowCount(); ++row )
-            {
-                for( int col = 0; col < GetColCount(); ++col )
-                    m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col];
-
-                rowOffset += GetColCount();
-            }
-
-            std::map<int, int> newColWidths;
-
             for( int col = 0; col < GetColCount(); ++col )
-                newColWidths[col] = m_colWidths[GetColCount() - 1 - col];
+                m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col];
 
-            m_colWidths = std::move( newColWidths );
+            rowOffset += GetColCount();
         }
-        else // TOP_BOTTOM
-        {
-            for( int row = 0; row < GetRowCount(); ++row )
-            {
-                for( int col = 0; col < GetColCount(); ++col )
-                {
-                    int oldRow = GetRowCount() - 1 - row;
-                    m_cells[row * GetColCount() + col] = oldCells[oldRow * GetColCount() + col];
-                }
-            }
 
-            std::map<int, int> newRowHeights;
+        std::map<int, int> newColWidths;
 
-            for( int row = 0; row < GetRowCount(); ++row )
-                newRowHeights[row] = m_rowHeights[GetRowCount() - 1 - row];
+        for( int col = 0; col < GetColCount(); ++col )
+            newColWidths[col] = m_colWidths[GetColCount() - 1 - col];
 
-            m_rowHeights = std::move( newRowHeights );
-        }
+        m_colWidths = std::move( newColWidths );
 
         SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
         return;
@@ -404,82 +545,34 @@ void PCB_TABLE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     for( PCB_TABLECELL* cell : m_cells )
         cell->Flip( tableOrigin, aFlipDirection );
 
+    // Flipping a cell turns its text 180 degrees and the grid is laid out in the frame the
+    // cells read in, so that turn reverses the rows already. Only the columns are left.
     std::vector<PCB_TABLECELL*> oldCells = m_cells;
+    int                         rowOffset = 0;
 
-    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+    for( int row = 0; row < GetRowCount(); ++row )
     {
-        int rowOffset = 0;
-
-        for( int row = 0; row < GetRowCount(); ++row )
-        {
-            for( int col = 0; col < GetColCount(); ++col )
-                m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col];
-
-            rowOffset += GetColCount();
-        }
-
-        std::map<int, int> newColWidths;
-
         for( int col = 0; col < GetColCount(); ++col )
-            newColWidths[col] = m_colWidths[GetColCount() - 1 - col];
+            m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col];
 
-        m_colWidths = std::move( newColWidths );
+        rowOffset += GetColCount();
     }
-    else // TOP_BOTTOM
-    {
-        for( int row = 0; row < GetRowCount(); ++row )
-        {
-            for( int col = 0; col < GetColCount(); ++col )
-            {
-                int oldRow = GetRowCount() - 1 - row;
-                m_cells[row * GetColCount() + col] = oldCells[oldRow * GetColCount() + col];
-            }
-        }
 
-        std::map<int, int> newRowHeights;
+    std::map<int, int> newColWidths;
 
-        for( int row = 0; row < GetRowCount(); ++row )
-            newRowHeights[row] = m_rowHeights[GetRowCount() - 1 - row];
+    for( int col = 0; col < GetColCount(); ++col )
+        newColWidths[col] = m_colWidths[GetColCount() - 1 - col];
 
-        m_rowHeights = std::move( newRowHeights );
-    }
+    m_colWidths = std::move( newColWidths );
 
     SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
     Normalize();
 
     if( originalAngle != ANGLE_0 )
-        Rotate( GetPosition(), originalAngle );
+        Rotate( GetPosition(), -originalAngle );
 
     BOX2I newBBox = GetBoundingBox();
     Move( targetPos - newBBox.GetPosition() );
-
-    int localWidth = 0;
-    for( int col = 0; col < GetColCount(); ++col )
-        localWidth += m_colWidths[col];
-
-    int localHeight = 0;
-    for( int row = 0; row < GetRowCount(); ++row )
-        localHeight += m_rowHeights[row];
-
-    bool isNowOnFrontSide = IsFrontLayer( GetLayer() );
-
-    VECTOR2I translation( 0, 0 );
-
-    if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
-    {
-        translation.y = -localHeight;
-    }
-    else // LEFT_RIGHT
-    {
-        if( isNowOnFrontSide )
-            translation.x = localWidth;
-        else
-            translation.x = -localWidth;
-    }
-
-    RotatePoint( translation, originalAngle );
-
-    Move( translation );
 }
 
 
@@ -521,10 +614,10 @@ void PCB_TABLE::RunOnChildren( const std::function<void( BOARD_ITEM* )>& aFuncti
 
 const BOX2I PCB_TABLE::GetBoundingBox() const
 {
-    // Note: a table with no cells is not allowed
-    BOX2I bbox = m_cells[0]->GetBoundingBox();
+    BOX2I bbox;
 
-    bbox.Merge( m_cells[m_cells.size() - 1]->GetBoundingBox() );
+    for( PCB_TABLECELL* cell : m_cells )
+        bbox.Merge( cell->GetBoundingBox() );
 
     return bbox;
 }

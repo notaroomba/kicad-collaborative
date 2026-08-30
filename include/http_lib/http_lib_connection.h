@@ -22,7 +22,9 @@
 
 #include <any>
 #include <boost/algorithm/string.hpp>
+#include <functional>
 #include <json_common.h>
+#include <mutex>
 
 #include "http_lib/http_lib_settings.h"
 #include <kicad_curl/kicad_curl_easy.h>
@@ -45,9 +47,23 @@ bool setPartExtendedData( const nlohmann::json& aPartJson, HTTP_LIB_PART& aPart 
 class HTTP_LIB_CONNECTION
 {
 public:
-    static const long DEFAULT_TIMEOUT = 10;
+    /**
+     * Allows replacing CURL fetches with a mock for testing
+     *
+     * @param aUrl the URL to retrieve
+     * @param aStatusCode receives the HTTP status (0 when no response was received)
+     * @param aBody receives the response body
+     * @param aError receives a failure reason when the request could not be completed
+     * @return true when a response was obtained (regardless of status code); false when the
+     *         request could not be completed at the transport level
+     */
+    using RETRIEVER = std::function<bool( const std::string& aUrl, int& aStatusCode,
+                                          std::string& aBody, std::string& aError )>;
 
     HTTP_LIB_CONNECTION( const HTTP_LIB_SOURCE& aSource, bool aTestConnectionNow );
+
+    HTTP_LIB_CONNECTION( const HTTP_LIB_SOURCE& aSource, bool aTestConnectionNow, RETRIEVER aRetriever );
+
     virtual ~HTTP_LIB_CONNECTION() = default;
 
     bool IsValidEndpoint() const { return m_endpointValid; }
@@ -70,41 +86,77 @@ public:
      */
     bool SelectAll( const HTTP_LIB_CATEGORY& aCategory, std::vector<HTTP_LIB_PART>& aParts );
 
-    std::string GetLastError() const { return m_lastError; }
+    std::string GetLastError() const
+    {
+        std::lock_guard lock( m_queryMutex );
+        return m_lastError;
+    }
 
-    std::vector<HTTP_LIB_CATEGORY> getCategories() const { return m_categories; }
+    std::vector<HTTP_LIB_CATEGORY> getCategories() const
+    {
+        std::lock_guard lock( m_queryMutex );
+        return m_categories;
+    }
 
     std::string getCategoryDescription( const std::string& aCategoryName ) const
     {
+        std::lock_guard lock( m_queryMutex );
+
         if( m_categoryDescriptions.contains( aCategoryName ) )
-           return m_categoryDescriptions.at( aCategoryName );
-        else
-           return "";
+            return m_categoryDescriptions.at( aCategoryName );
+
+        return "";
     }
 
-    auto& GetCachedParts() { return m_cache; }
+    bool HasCachedParts() const
+    {
+        std::lock_guard lock( m_queryMutex );
+        return !m_cache.empty();
+    }
+
+    /**
+     * Resolve a cached part name to its part ID and category ID.
+     *
+     * @param aPartName the name to look up
+     * @param aPartId receives the part ID on a hit
+     * @param aCategoryId receives the category ID on a hit
+     * @return true if the name was found; false otherwise
+     */
+    bool GetCachedPartRelation( const std::string& aPartName, std::string& aPartId, std::string& aCategoryId ) const
+    {
+        std::lock_guard lock( m_queryMutex );
+
+        auto it = m_cache.find( aPartName );
+
+        if( it == m_cache.end() )
+            return false;
+
+        aPartId = std::get<0>( it->second );
+        aCategoryId = std::get<1>( it->second );
+        return true;
+    }
+
+    void ClearPartCache()
+    {
+        std::lock_guard lock( m_queryMutex );
+        m_cachedParts.clear();
+        m_cache.clear();
+    }
 
 private:
-    // This is clunky but at the moment the only way to free the pointer after use without
-    // KiCad crashing.  At this point we can't use smart pointers as there is a problem with
-    // the order of how things are deleted/freed
-    std::unique_ptr<KICAD_CURL_EASY> createCurlEasyObject()
-    {
-        std::unique_ptr<KICAD_CURL_EASY> aCurl( new KICAD_CURL_EASY() );
-
-        // prepare curl
-        aCurl->SetHeader( "Accept", "application/json" );
-        aCurl->SetHeader( "Authorization", "Token " + m_source.token );
-        aCurl->SetFollowRedirects( true );
-
-        return aCurl;
-    }
-
     bool validateHttpLibraryEndpoints();
 
     bool syncCategories();
 
-    bool checkServerResponse( std::unique_ptr<KICAD_CURL_EASY>& aCurl );
+    /**
+     * Fetch @p aUrl through the transport.
+     *
+     * @return false (with m_lastError populated) when the transport could not complete the
+     *         request; true otherwise, even when @p aStatusCode is not 200.
+     */
+    bool retrieve( const std::string& aUrl, int& aStatusCode, std::string& aBody );
+
+    bool checkServerResponse( int aStatusCode );
 
     /**
      * HTTP response status codes indicate whether a specific HTTP request has been
@@ -122,7 +174,10 @@ private:
     wxString httpErrorCodeDescription( uint16_t aHttpCode );
 
 private:
+    mutable std::mutex m_queryMutex;
+
     HTTP_LIB_SOURCE m_source;
+    RETRIEVER       m_retriever;
     bool            m_endpointValid = false;
     std::string     m_lastError;
 

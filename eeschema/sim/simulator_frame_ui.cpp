@@ -25,6 +25,7 @@
 #include <type_traits>
 
 #include <wx/event.h>
+#include <wx/settings.h>
 #include <fmt/format.h>
 #include <wx/wfstream.h>
 #include <wx/stdstream.h>
@@ -39,6 +40,9 @@
 #include <wildcards_and_files_ext.h>
 #include <widgets/tuner_slider.h>
 #include <widgets/grid_color_swatch_helpers.h>
+#include <widgets/grid_combobox.h>
+#include <widgets/std_bitmap_button.h>
+#include <bitmaps.h>
 #include <widgets/wx_grid.h>
 #include <grid_tricks.h>
 #include <eda_pattern_match.h>
@@ -58,7 +62,7 @@
 
 SIM_TRACE_TYPE operator|( SIM_TRACE_TYPE aFirst, SIM_TRACE_TYPE aSecond )
 {
-    int res = static_cast<int>( aFirst ) | static_cast<int>( aSecond);
+    int res = static_cast<int>( aFirst ) | static_cast<int>( aSecond );
 
     return static_cast<SIM_TRACE_TYPE>( res );
 }
@@ -68,6 +72,7 @@ enum SIGNALS_GRID_COLUMNS
 {
     COL_SIGNAL_NAME = 0,
     COL_SIGNAL_SHOW,
+    COL_Y_SCALE,
     COL_SIGNAL_COLOR,
     COL_CURSOR_1,
     COL_CURSOR_2
@@ -135,7 +140,8 @@ public:
             m_parent( aParent ),
             m_menuRow( 0 ),
             m_menuCol( 0 )
-    {}
+    {
+    }
 
 protected:
     void showPopupMenu( wxMenu& menu, wxGridEvent& aEvent ) override;
@@ -165,8 +171,8 @@ void SIGNALS_GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
 
         m_grid->SetGridCursor( m_menuRow, m_menuCol );
 
-        if( panel->GetSimType() == ST_TRAN || panel->GetSimType() == ST_AC
-            || panel->GetSimType() == ST_DC || panel->GetSimType() == ST_SP )
+        if( panel->GetSimType() == ST_TRAN || panel->GetSimType() == ST_AC || panel->GetSimType() == ST_DC
+            || panel->GetSimType() == ST_SP )
         {
             menu.Append( MYID_MEASURE_MIN, _( "Measure Min" ) );
             menu.Append( MYID_MEASURE_MAX, _( "Measure Max" ) );
@@ -370,7 +376,8 @@ public:
             m_parent( aParent ),
             m_menuRow( 0 ),
             m_menuCol( 0 )
-    {}
+    {
+    }
 
 protected:
     void showPopupMenu( wxMenu& menu, wxGridEvent& aEvent ) override;
@@ -443,7 +450,8 @@ public:
             m_parent( aParent ),
             m_menuRow( 0 ),
             m_menuCol( 0 )
-    {}
+    {
+    }
 
 protected:
     void showPopupMenu( wxMenu& menu, wxGridEvent& aEvent ) override;
@@ -574,6 +582,14 @@ SIMULATOR_FRAME_UI::SIMULATOR_FRAME_UI( SIMULATOR_FRAME* aSimulatorFrame, SCH_ED
 
     m_filter->SetHint( _( "Filter" ) );
 
+    Bind( EVT_SIM_VIEWS_CHANGED,
+          [&]( wxCommandEvent& aEvent )
+          {
+              rebuildSignalsGrid( m_filter->GetValue() );
+              updatePlotCursors();
+              OnModify();
+          } );
+
     m_signalsGrid->wxGrid::SetLabelFont( KIUI::GetStatusFont( this ) );
     m_cursorsGrid->wxGrid::SetLabelFont( KIUI::GetStatusFont( this ) );
     m_measurementsGrid->wxGrid::SetLabelFont( KIUI::GetStatusFont( this ) );
@@ -688,7 +704,7 @@ void SIMULATOR_FRAME_UI::CreateNewCursor()
 
     wxString cursor_name = wxString( _( "Cursor " ) ) << m_customCursorsCnt;
 
-    m_signalsGrid->InsertCols( m_signalsGrid->GetNumberCols() , 1, true );
+    m_signalsGrid->InsertCols( m_signalsGrid->GetNumberCols(), 1, true );
     m_signalsGrid->SetColLabelValue( m_signalsGrid->GetNumberCols() - 1, cursor_name );
 
     wxGridCellAttr* attr = new wxGridCellAttr;
@@ -720,7 +736,6 @@ void SIMULATOR_FRAME_UI::DeleteCursor()
                 onSignalsGridCellChanged( aDummy );
                 break;
             }
-
         }
 
         m_signalsGrid->DeleteCols( col - 1, 1, false );
@@ -743,7 +758,7 @@ void SIMULATOR_FRAME_UI::ShowChangedLanguage()
             simTab->OnLanguageChanged();
 
             wxString pageTitle( simulator()->TypeToName( simTab->GetSimType(), true ) );
-            pageTitle.Prepend( wxString::Format( _( "Analysis %u - " ), ii+1 /* 1-based */ ) );
+            pageTitle.Prepend( wxString::Format( _( "Analysis %u - " ), ii + 1 /* 1-based */ ) );
 
             m_plotNotebook->SetPageText( ii, pageTitle );
         }
@@ -753,6 +768,7 @@ void SIMULATOR_FRAME_UI::ShowChangedLanguage()
 
     m_signalsGrid->SetColLabelValue( COL_SIGNAL_NAME, _( "Signal" ) );
     m_signalsGrid->SetColLabelValue( COL_SIGNAL_SHOW, _( "Plot" ) );
+    m_signalsGrid->SetColLabelValue( COL_Y_SCALE, _( "Y Scale" ) );
     m_signalsGrid->SetColLabelValue( COL_SIGNAL_COLOR, _( "Color" ) );
     m_signalsGrid->SetColLabelValue( COL_CURSOR_1, _( "Cursor 1" ) );
     m_signalsGrid->SetColLabelValue( COL_CURSOR_2, _( "Cursor 2" ) );
@@ -828,11 +844,11 @@ void SIMULATOR_FRAME_UI::InitWorkbook()
 
         if( !filename.FileExists() )
         {
-            m_simulatorFrame->GetInfoBar()->ShowMessageFor(
-                    wxString::Format( _( "Workbook file '%s' not found. "
-                                         "Loading simulation settings from schematic." ),
-                                      filename.GetFullPath() ),
-                    8000, wxICON_WARNING );
+            WX_INFOBAR* infobar = m_simulatorFrame->GetInfoBar();
+            wxString    msg = wxString::Format( _( "Workbook file '%s' not found. Loading simulation settings from "
+                                                    "schematic." ),
+                                                filename.GetFullPath() );
+            infobar->ShowMessageFor( msg, 8000, wxICON_WARNING );
 
             simulator()->Settings()->SetWorkbookFilename( wxEmptyString );
             loadFromSchematic = true;
@@ -904,7 +920,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
 
     m_signalsGrid->ClearRows();
 
-    SIM_PLOT_TAB*  plotPanel = dynamic_cast<SIM_PLOT_TAB*>( GetCurrentSimTab() );
+    SIM_PLOT_TAB* plotPanel = dynamic_cast<SIM_PLOT_TAB*>( GetCurrentSimTab() );
 
     if( !plotPanel )
         return;
@@ -917,7 +933,8 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
         wxStringTokenizer tokenizer( plotPanel->GetSimCommand(), " \t\r\n", wxTOKEN_STRTOK );
 
         while( tokenizer.HasMoreTokens() && tokenizer.GetNextToken().Lower() != wxT( "fft" ) )
-        {};
+        {
+        };
 
         while( tokenizer.HasMoreTokens() )
             signals.emplace_back( tokenizer.GetNextToken() );
@@ -930,7 +947,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
         for( const wxString& signal : m_signals )
             signals.push_back( signal );
 
-        for( const auto& [ id, signal ] : m_userDefinedSignals )
+        for( const auto& [id, signal] : m_userDefinedSignals )
         {
             if( simType == ST_AC )
             {
@@ -961,8 +978,8 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
     if( aFilter.IsEmpty() )
         aFilter = wxS( "*" );
 
-    EDA_COMBINED_MATCHER  matcher( aFilter.Upper(), CTX_SIGNAL );
-    int                   row = 0;
+    EDA_COMBINED_MATCHER matcher( aFilter.Upper(), CTX_SIGNAL );
+    int                  row = 0;
 
     for( const wxString& signal : signals )
     {
@@ -972,17 +989,32 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
             wxString vectorName = vectorNameFromSignalName( plotPanel, signal, &traceType );
             TRACE*   trace = plotPanel->GetTrace( vectorName, traceType );
 
+            // A trace can exist but not be plotted on any view (e.g. after its view was removed);
+            // such an orphan is shown the same as a never-plotted signal.
+            bool plotted = trace && trace->GetView();
+
             m_signalsGrid->AppendRows( 1 );
             m_signalsGrid->SetCellValue( row, COL_SIGNAL_NAME, signal );
 
             wxGridCellAttr* attr = new wxGridCellAttr;
-            attr->SetRenderer( new wxGridCellBoolRenderer() );
-            attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
+            attr->SetEditor( new GRID_CELL_COMBOBOX( getViewChoices( plotPanel ) ) );
+            attr->SetRenderer( new GRID_CELL_COMBOBOX_RENDERER() );
             attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
-            m_signalsGrid->SetAttr( row, COL_SIGNAL_SHOW, attr );
 
-            if( !trace )
+            if( !plotted )
+                attr->SetTextColour( *wxLIGHT_GREY );
+
+            m_signalsGrid->SetAttr( row, COL_SIGNAL_SHOW, attr );
+            m_signalsGrid->SetCellValue( row, COL_SIGNAL_SHOW, getViewLabel( plotPanel, trace ? trace->GetView()
+                                                                                              : nullptr ) );
+
+            if( !plotted )
             {
+                attr = new wxGridCellAttr;
+                attr->SetReadOnly();
+                m_signalsGrid->SetAttr( row, COL_Y_SCALE, attr );
+                m_signalsGrid->SetCellValue( row, COL_Y_SCALE, wxEmptyString );
+
                 attr = new wxGridCellAttr;
                 attr->SetReadOnly();
                 m_signalsGrid->SetAttr( row, COL_SIGNAL_COLOR, attr );
@@ -1008,7 +1040,12 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
             }
             else
             {
-                m_signalsGrid->SetCellValue( row, COL_SIGNAL_SHOW, wxS( "1" ) );
+                attr = new wxGridCellAttr;
+                attr->SetEditor( new GRID_CELL_COMBOBOX( getYScaleChoices( plotPanel, trace->GetView() ) ) );
+                attr->SetRenderer( new GRID_CELL_COMBOBOX_RENDERER() );
+                attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
+                m_signalsGrid->SetAttr( row, COL_Y_SCALE, attr );
+                m_signalsGrid->SetCellValue( row, COL_Y_SCALE, getYScaleLabel( plotPanel, trace ) );
 
                 attr = new wxGridCellAttr;
                 attr->SetRenderer( new GRID_CELL_COLOR_RENDERER( this ) );
@@ -1020,14 +1057,14 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
 
                 attr = new wxGridCellAttr;
                 attr->SetRenderer( new wxGridCellBoolRenderer() );
-                attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
+                attr->SetReadOnly(); // not really; we delegate interactivity to GRID_TRICKS
                 attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
                 m_signalsGrid->SetAttr( row, COL_CURSOR_1, attr );
                 m_signalsGrid->SetCellValue( row, COL_CURSOR_1, trace->GetCursor( 1 ) ? "1" : "0" );
 
                 attr = new wxGridCellAttr;
                 attr->SetRenderer( new wxGridCellBoolRenderer() );
-                attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
+                attr->SetReadOnly(); // not really; we delegate interactivity to GRID_TRICKS
                 attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
                 m_signalsGrid->SetAttr( row, COL_CURSOR_2, attr );
                 m_signalsGrid->SetCellValue( row, COL_CURSOR_2, trace->GetCursor( 2 ) ? "1" : "0" );
@@ -1048,6 +1085,95 @@ void SIMULATOR_FRAME_UI::rebuildSignalsGrid( wxString aFilter )
             row++;
         }
     }
+
+    autoSizeGridColumn( m_signalsGrid, COL_SIGNAL_NAME, 207 );
+    autoSizeGridColumn( m_signalsGrid, COL_SIGNAL_SHOW, 32, 22 );
+    autoSizeGridColumn( m_signalsGrid, COL_Y_SCALE, 40, 22 );
+    autoSizeGridColumn( m_signalsGrid, COL_SIGNAL_COLOR, 38 );
+
+    for( int col = COL_CURSOR_1; col < m_signalsGrid->GetNumberCols(); ++col )
+        autoSizeGridColumn( m_signalsGrid, col, 55 );
+}
+
+
+void SIMULATOR_FRAME_UI::autoSizeGridColumn( WX_GRID* aGrid, int aCol, int aMinWidth, int aExtraPadding )
+{
+    wxGridUpdateLocker deferRepaintsTillLeavingScope( aGrid );
+
+    aGrid->AutoSizeColumn( aCol );
+    aGrid->AutoSizeColLabelSize( aCol ); // Also grow (never shrink) to fit the header label
+
+    if( aExtraPadding > 0 )
+        aGrid->SetColSize( aCol, aGrid->GetColSize( aCol ) + aExtraPadding );
+
+    if( aGrid->GetColSize( aCol ) < aMinWidth )
+        aGrid->SetColSize( aCol, aMinWidth );
+}
+
+
+#define UNPLOTTED _( "none" )
+
+wxArrayString SIMULATOR_FRAME_UI::getViewChoices( SIM_PLOT_TAB* aPlotTab ) const
+{
+    wxArrayString choices;
+    choices.Add( UNPLOTTED );
+
+    if( aPlotTab )
+    {
+        for( int ii = 0; ii < aPlotTab->GetViewCount(); ++ii )
+            choices.Add( wxString::Format( _( "View %d" ), ii + 1 ) );
+    }
+
+    return choices;
+}
+
+
+wxString SIMULATOR_FRAME_UI::getViewLabel( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aView ) const
+{
+    if( !aView || !aPlotTab )
+        return UNPLOTTED;
+
+    int index = aPlotTab->GetViewIndex( aView );
+
+    return index >= 0 ? wxString::Format( _( "View %d" ), index + 1 ) : UNPLOTTED;
+}
+
+
+std::vector<SIM_VIEW*> SIMULATOR_FRAME_UI::getYScaleTargetViews( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aOwnView ) const
+{
+    std::vector<SIM_VIEW*> views;
+
+    if( aPlotTab )
+    {
+        for( SIM_VIEW* view : aPlotTab->GetViews() )
+        {
+            if( view != aOwnView )
+                views.push_back( view );
+        }
+    }
+
+    return views;
+}
+
+
+wxArrayString SIMULATOR_FRAME_UI::getYScaleChoices( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aOwnView ) const
+{
+    wxArrayString choices;
+    choices.Add( _( "Default" ) );
+
+    for( SIM_VIEW* view : getYScaleTargetViews( aPlotTab, aOwnView ) )
+        choices.Add( getViewLabel( aPlotTab, view ) );
+
+    return choices;
+}
+
+
+wxString SIMULATOR_FRAME_UI::getYScaleLabel( SIM_PLOT_TAB* aPlotTab, TRACE* aTrace ) const
+{
+    if( !aTrace || aTrace->IsYScaleDefault() )
+        return _( "Default" );
+
+    return getViewLabel( aPlotTab, aTrace->GetYScaleView() );
 }
 
 
@@ -1062,7 +1188,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsList()
     if( simType == ST_UNKNOWN )
         simType = ST_TRAN;
 
-    unconnected.Replace( '(', '_' );    // Convert to SPICE markup
+    unconnected.Replace( '(', '_' ); // Convert to SPICE markup
 
     SIM_PLOT_TAB* curPlotTab = dynamic_cast<SIM_PLOT_TAB*>( GetCurrentSimTab() );
     bool          smithMode = curPlotTab && curPlotTab->GetSimType() == ST_SP && curPlotTab->IsSmithMode();
@@ -1094,7 +1220,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsList()
             };
 
     if( ( options & NETLIST_EXPORTER_SPICE::OPTION_SAVE_ALL_VOLTAGES )
-            && ( simType == ST_TRAN || simType == ST_DC || simType == ST_AC || simType == ST_FFT) )
+        && ( simType == ST_TRAN || simType == ST_DC || simType == ST_AC || simType == ST_FFT ) )
     {
         for( const wxString& net : circuitModel()->GetNets() )
         {
@@ -1111,7 +1237,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsList()
     }
 
     if( ( options & NETLIST_EXPORTER_SPICE::OPTION_SAVE_ALL_CURRENTS )
-            && ( simType == ST_TRAN || simType == ST_DC || simType == ST_AC ) )
+        && ( simType == ST_TRAN || simType == ST_DC || simType == ST_AC ) )
     {
         for( const SPICE_ITEM& item : circuitModel()->GetItems() )
         {
@@ -1122,7 +1248,7 @@ void SIMULATOR_FRAME_UI::rebuildSignalsList()
     }
 
     if( ( options & NETLIST_EXPORTER_SPICE::OPTION_SAVE_ALL_DISSIPATIONS )
-            && ( simType == ST_TRAN || simType == ST_DC ) )
+        && ( simType == ST_TRAN || simType == ST_DC ) )
     {
         for( const SPICE_ITEM& item : circuitModel()->GetItems() )
         {
@@ -1279,9 +1405,9 @@ wxString SIMULATOR_FRAME_UI::vectorNameFromSignalName( SIM_PLOT_TAB* aPlotTab, c
     };
 
     std::map<wxString, int> suffixes;
-    suffixes[ _( " (amplitude)" ) ] = SPT_SP_AMP;
-    suffixes[ _( " (gain)" ) ] = SPT_AC_GAIN;
-    suffixes[ _( " (phase)" ) ] = SPT_AC_PHASE;
+    suffixes[_( " (amplitude)" )] = SPT_SP_AMP;
+    suffixes[_( " (gain)" )] = SPT_AC_GAIN;
+    suffixes[_( " (phase)" )] = SPT_AC_PHASE;
 
     if( aTraceType )
     {
@@ -1307,7 +1433,7 @@ wxString SIMULATOR_FRAME_UI::vectorNameFromSignalName( SIM_PLOT_TAB* aPlotTab, c
 
     wxString name = aSignalName;
 
-    for( const auto& [ candidate, type ] : suffixes )
+    for( const auto& [candidate, type] : suffixes )
     {
         if( name.EndsWith( candidate ) )
         {
@@ -1355,26 +1481,66 @@ void SIMULATOR_FRAME_UI::onSignalsGridCellChanged( wxGridEvent& aEvent )
     if( !plotTab )
         return;
 
-    int           row = aEvent.GetRow();
-    int           col = aEvent.GetCol();
-    wxString      text = m_signalsGrid->GetCellValue( row, col );
-    wxString      signalName = m_signalsGrid->GetCellValue( row, COL_SIGNAL_NAME );
-    int           traceType = SPT_UNKNOWN;
-    wxString      vectorName = vectorNameFromSignalName( plotTab, signalName, &traceType );
+    int      row = aEvent.GetRow();
+    int      col = aEvent.GetCol();
+    wxString text = m_signalsGrid->GetCellValue( row, col );
+    wxString signalName = m_signalsGrid->GetCellValue( row, COL_SIGNAL_NAME );
+    int      traceType = SPT_UNKNOWN;
+    wxString vectorName = vectorNameFromSignalName( plotTab, signalName, &traceType );
 
     if( col == COL_SIGNAL_SHOW )
     {
-        if( text == wxS( "1" ) )
-            updateTrace( vectorName, traceType, plotTab );
-        else
-            plotTab->DeleteTrace( vectorName, traceType );
+        wxArrayString choices = getViewChoices( plotTab );
+        int           choiceIndex = choices.Index( text );
 
-        plotTab->GetPlotWin()->UpdateAll();
+        if( choiceIndex <= 0 )
+        {
+            plotTab->DeleteTrace( vectorName, traceType );
+        }
+        else if( SIM_VIEW* targetView = plotTab->GetView( choiceIndex - 1 ) )
+        {
+            TRACE* existing = plotTab->GetTrace( vectorName, traceType );
+
+            if( existing && existing->GetView() != targetView )
+                plotTab->DeleteTrace( existing );
+
+            updateTrace( vectorName, traceType, plotTab, nullptr, false, targetView );
+        }
+
+        for( SIM_VIEW* view : plotTab->GetViews() )
+            view->UpdateAll();
 
         // Update enabled/visible states of other controls
         updateSignalsGrid();
         updatePlotCursors();
         OnModify();
+    }
+    else if( col == COL_Y_SCALE )
+    {
+        TRACE* trace = plotTab->GetTrace( vectorName, traceType );
+
+        if( trace )
+        {
+            std::vector<SIM_VIEW*> targetViews = getYScaleTargetViews( plotTab, trace->GetView() );
+            wxArrayString          choices = getYScaleChoices( plotTab, trace->GetView() );
+            int                    choiceIndex = choices.Index( text );
+
+            if( choiceIndex == 0 )
+            {
+                trace->SetYScaleView( trace->GetView() );
+            }
+            else if( choiceIndex > 0 && choiceIndex - 1 < (int) targetViews.size() )
+            {
+                trace->SetYScaleView( targetViews[choiceIndex - 1] );
+            }
+
+            plotTab->ResetScales( false );
+
+            for( SIM_VIEW* view : plotTab->GetViews() )
+                view->UpdateAll();
+
+            OnModify();
+        }
     }
     else if( col == COL_SIGNAL_COLOR )
     {
@@ -1392,11 +1558,11 @@ void SIMULATOR_FRAME_UI::onSignalsGridCellChanged( wxGridEvent& aEvent )
     else if( col == COL_CURSOR_1 || col == COL_CURSOR_2
              || ( std::size( m_cursorFormatsDyn ) > std::size( m_cursorFormats ) && col > COL_CURSOR_2 ) )
     {
-        int    id = col == COL_CURSOR_1 ? 1 : 2;
+        int id = col == COL_CURSOR_1 ? 1 : 2;
 
         if( col > COL_CURSOR_2 ) // TODO: clean up logic
         {
-            id = col - 2; // enum SIGNALS_GRID_COLUMNS offset for Cursor n
+            id = col - 3; // enum SIGNALS_GRID_COLUMNS offset for Cursor n (COL_CURSOR_1 - 1)
         }
 
         TRACE* activeTrace = nullptr;
@@ -1657,30 +1823,30 @@ void SIMULATOR_FRAME_UI::UpdateMeasurement( int aRow )
         {
             switch( plotTab->GetSimType() )
             {
-                case ST_TRAN:
-                    if ( signalType.StartsWith( 'P' ) )
-                        units = wxS( "J" );
-                    else
-                        units += wxS( ".s" );
+            case ST_TRAN:
+                if ( signalType.StartsWith( 'P' ) )
+                    units = wxS( "J" );
+                else
+                    units += wxS( ".s" );
 
-                    break;
+                break;
 
-                case ST_AC:
-                case ST_SP:
-                case ST_DISTO:
-                case ST_NOISE:
-                case ST_FFT:
-                case ST_SENS:       // If there is a vector, it is frequency
-                    units += wxS( "·Hz" );
-                    break;
+            case ST_AC:
+            case ST_SP:
+            case ST_DISTO:
+            case ST_NOISE:
+            case ST_FFT:
+            case ST_SENS:       // If there is a vector, it is frequency
+                units += wxS( "·Hz" );
+                break;
 
-                case ST_DC:         // Could be a lot of things : V, A, deg C, ohm, ...
-                case ST_OP:         // There is no vector for integration
-                case ST_PZ:         // There is no vector for integration
-                case ST_TF:         // There is no vector for integration
-                default:
-                    units += wxS( "·?" );
-                    break;
+            case ST_DC:         // Could be a lot of things : V, A, deg C, ohm, ...
+            case ST_OP:         // There is no vector for integration
+            case ST_PZ:         // There is no vector for integration
+            case ST_TF:         // There is no vector for integration
+            default:
+                units += wxS( "·?" );
+                break;
             }
         }
 
@@ -1745,8 +1911,8 @@ void SIMULATOR_FRAME_UI::AddTuner( const SCH_SHEET_PATH& aSheetPath, SCH_SYMBOL*
 }
 
 
-void SIMULATOR_FRAME_UI::UpdateTunerValue( const SCH_SHEET_PATH& aSheetPath, const KIID& aSymbol,
-                                           const wxString& aRef, const wxString& aValue )
+void SIMULATOR_FRAME_UI::UpdateTunerValue( const SCH_SHEET_PATH& aSheetPath, const KIID& aSymbol, const wxString& aRef,
+                                           const wxString& aValue )
 {
     SCHEMATIC&  schematic = m_schematicFrame->Schematic();
     wxString    variant = schematic.GetCurrentVariant();
@@ -1756,7 +1922,7 @@ void SIMULATOR_FRAME_UI::UpdateTunerValue( const SCH_SHEET_PATH& aSheetPath, con
     if( !symbol )
     {
         DisplayErrorMessage( this, _( "Could not apply tuned value(s):" ) + wxS( " " )
-                                   + wxString::Format( _( "%s not found" ), aRef ) );
+                                           + wxString::Format( _( "%s not found" ), aRef ) );
         return;
     }
 
@@ -1781,7 +1947,7 @@ void SIMULATOR_FRAME_UI::UpdateTunerValue( const SCH_SHEET_PATH& aSheetPath, con
     if( !tunerParam )
     {
         DisplayErrorMessage( this, _( "Could not apply tuned value(s):" ) + wxS( " " )
-                                   + wxString::Format( _( "%s is not tunable" ), aRef ) );
+                                           + wxString::Format( _( "%s is not tunable" ), aRef ) );
         return;
     }
 
@@ -1816,7 +1982,7 @@ void SIMULATOR_FRAME_UI::AddMeasurement( const wxString& aCmd )
     // -1 because the last one is for user input
     for( int i = 0; i < m_measurementsGrid->GetNumberRows(); i++ )
     {
-        if ( m_measurementsGrid->GetCellValue( i, COL_MEASUREMENT ) == aCmd )
+        if( m_measurementsGrid->GetCellValue( i, COL_MEASUREMENT ) == aCmd )
             return; // Don't create duplicates
     }
 
@@ -1917,7 +2083,8 @@ void SIMULATOR_FRAME_UI::AddTrace( const wxString& aName, SIM_TRACE_TYPE aType )
             updateTrace( aName, aType, plotTab );
         }
 
-        plotTab->GetPlotWin()->UpdateAll();
+        for( SIM_VIEW* view : plotTab->GetViews() )
+            view->UpdateAll();
     }
 
     updateSignalsGrid();
@@ -1934,7 +2101,7 @@ void SIMULATOR_FRAME_UI::SetUserDefinedSignals( const std::map<int, wxString>& a
         if( !plotTab )
             continue;
 
-        for( const auto& [ id, existingSignal ] : m_userDefinedSignals )
+        for( const auto& [id, existingSignal] : m_userDefinedSignals )
         {
             int      traceType = SPT_UNKNOWN;
             wxString vectorName = vectorNameFromSignalName( plotTab, existingSignal, &traceType );
@@ -2035,11 +2202,17 @@ double SIMULATOR_FRAME_UI::getSmithPortImpedance( const wxString& aVectorName )
 
 
 void SIMULATOR_FRAME_UI::updateTrace( const wxString& aVectorName, int aTraceType, SIM_PLOT_TAB* aPlotTab,
-                                      std::vector<double>* aDataX, bool aClearData )
+                                      std::vector<double>* aDataX, bool aClearData, SIM_VIEW* aView )
 {
-    if( !m_simulatorFrame->SimFinished() && !simulator()->IsRunning())
+    if( !aView )
     {
-        aPlotTab->GetOrAddTrace( aVectorName, aTraceType );
+        TRACE* existing = aPlotTab->GetTrace( aVectorName, aTraceType );
+        aView = existing && existing->GetView() ? existing->GetView() : aPlotTab->GetDefaultView();
+    }
+
+    if( !m_simulatorFrame->SimFinished() && !simulator()->IsRunning() )
+    {
+        aPlotTab->GetOrAddTrace( aVectorName, aTraceType, aView );
         return;
     }
 
@@ -2199,7 +2372,7 @@ void SIMULATOR_FRAME_UI::updateTrace( const wxString& aVectorName, int aTraceTyp
                             combinedFreq.insert( combinedFreq.end(), frequencies.begin(), frequencies.end() );
                     }
 
-                    if( TRACE* trace = aPlotTab->GetOrAddTrace( aVectorName, aTraceType ) )
+                    if( TRACE* trace = aPlotTab->GetOrAddTrace( aVectorName, aTraceType, aView ) )
                     {
                         if( SMITH_TRACE* smith = dynamic_cast<SMITH_TRACE*>( trace ) )
                         {
@@ -2212,36 +2385,37 @@ void SIMULATOR_FRAME_UI::updateTrace( const wxString& aVectorName, int aTraceTyp
 
                         if( combinedY.size() >= combinedX.size() && sweepSizeMulti > 0 )
                         {
-                            int sweepCountCombined = combinedX.empty() ? 0 : static_cast<int>( combinedY.size() / sweepSizeMulti );
+                            int sweepCountCombined =
+                                    combinedX.empty() ? 0 : static_cast<int>( combinedY.size() / sweepSizeMulti );
 
                             if( sweepCountCombined > 0 )
                             {
                                 // Generate labels for each run based on tuner values
                                 std::vector<wxString> labels;
                                 labels.reserve( sweepCountCombined );
-                                
-                                for( int i = 0; i < sweepCountCombined && i < (int)m_multiRunState.steps.size(); ++i )
+
+                                for( int i = 0; i < sweepCountCombined && i < (int) m_multiRunState.steps.size(); ++i )
                                 {
                                     const MULTI_RUN_STEP& step = m_multiRunState.steps[i];
-                                    wxString label;
-                                    
+                                    wxString              label;
+
                                     for( auto it = step.overrides.begin(); it != step.overrides.end(); ++it )
                                     {
                                         if( it != step.overrides.begin() )
                                             label += wxS( ", " );
-                                        
+
                                         const TUNER_SLIDER* tuner = it->first;
-                                        double value = it->second;
-                                        
+                                        double              value = it->second;
+
                                         SPICE_VALUE spiceVal( value );
                                         label += tuner->GetSymbolRef() + wxS( "=" ) + spiceVal.ToSpiceString();
                                     }
-                                    
+
                                     labels.push_back( label );
                                 }
-                                
-                                aPlotTab->SetTraceData( trace, combinedX, combinedY, sweepCountCombined, 
-                                                       sweepSizeMulti, true, labels );
+
+                                aPlotTab->SetTraceData( trace, combinedX, combinedY, sweepCountCombined, sweepSizeMulti,
+                                                        true, labels );
                             }
                         }
                     }
@@ -2252,7 +2426,7 @@ void SIMULATOR_FRAME_UI::updateTrace( const wxString& aVectorName, int aTraceTyp
         }
     }
 
-    if( TRACE* trace = aPlotTab->GetOrAddTrace( aVectorName, aTraceType ) )
+    if( TRACE* trace = aPlotTab->GetOrAddTrace( aVectorName, aTraceType, aView ) )
     {
         if( data_y.size() >= size )
         {
@@ -2271,11 +2445,12 @@ void SIMULATOR_FRAME_UI::updateTrace( const wxString& aVectorName, int aTraceTyp
 
 // TODO make sure where to instantiate and how to style correct
 // Better ask someone..
-template void SIMULATOR_FRAME_UI::signalsGridCursorUpdate<SIGNALS_GRID_COLUMNS, int, int>(
-        SIGNALS_GRID_COLUMNS, int, int );
+template
+void SIMULATOR_FRAME_UI::signalsGridCursorUpdate<SIGNALS_GRID_COLUMNS, int, int>( SIGNALS_GRID_COLUMNS, int, int );
 
 template <typename T, typename U, typename R>
-void SIMULATOR_FRAME_UI::signalsGridCursorUpdate( T t, U u, R r ) // t=cursor type/signals' grid col, u=cursor number/cursor "id", r=table's row
+void SIMULATOR_FRAME_UI::signalsGridCursorUpdate(
+        T t, U u, R r ) // t=cursor type/signals' grid col, u=cursor number/cursor "id", r=table's row
 {
     SIM_PLOT_TAB* plotTab = dynamic_cast<SIM_PLOT_TAB*>( GetCurrentSimTab() );
     wxString      signalName = m_signalsGrid->GetCellValue( r, COL_SIGNAL_NAME );
@@ -2284,7 +2459,13 @@ void SIMULATOR_FRAME_UI::signalsGridCursorUpdate( T t, U u, R r ) // t=cursor ty
 
     wxGridCellAttrPtr attr = m_signalsGrid->GetOrCreateCellAttrPtr( r, static_cast<int>( t ) );
 
-    if( TRACE* trace = plotTab ? plotTab->GetTrace( vectorName, traceType ) : nullptr )
+    TRACE* trace = plotTab ? plotTab->GetTrace( vectorName, traceType ) : nullptr;
+
+    // A trace with no view is an orphan (its view was removed); treat it as not plotted so it
+    // shows the same disabled styling as a never-plotted signal.
+    bool plotted = trace && trace->GetView();
+
+    if( plotted )
     {
         attr->SetReadOnly(); // not really; we delegate interactivity to GRID_TRICKS
 
@@ -2293,11 +2474,30 @@ void SIMULATOR_FRAME_UI::signalsGridCursorUpdate( T t, U u, R r ) // t=cursor ty
             attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
         }
 
-        if constexpr ( std::is_enum<T>::value )
+        if constexpr( std::is_enum<T>::value )
         {
             if( t == SIGNALS_GRID_COLUMNS::COL_SIGNAL_SHOW )
             {
-                m_signalsGrid->SetCellValue( r, static_cast<int>( t ), wxS( "1" ) );
+                if( !attr->HasEditor() )
+                    attr->SetEditor( new GRID_CELL_COMBOBOX( getViewChoices( plotTab ) ) );
+
+                if( !attr->HasRenderer() )
+                    attr->SetRenderer( new GRID_CELL_COMBOBOX_RENDERER() );
+
+                attr->SetReadOnly( false );
+                attr->SetTextColour( wxSystemSettings::GetColour( wxSYS_COLOUR_WINDOWTEXT ) );
+                m_signalsGrid->SetCellValue( r, static_cast<int>( t ), getViewLabel( plotTab, trace->GetView() ) );
+            }
+            else if( t == SIGNALS_GRID_COLUMNS::COL_Y_SCALE )
+            {
+                if( !attr->HasEditor() )
+                    attr->SetEditor( new GRID_CELL_COMBOBOX( getYScaleChoices( plotTab, trace->GetView() ) ) );
+
+                if( !attr->HasRenderer() )
+                    attr->SetRenderer( new GRID_CELL_COMBOBOX_RENDERER() );
+
+                attr->SetReadOnly( false );
+                m_signalsGrid->SetCellValue( r, static_cast<int>( t ), getYScaleLabel( plotTab, trace ) );
             }
             else if( t == SIGNALS_GRID_COLUMNS::COL_SIGNAL_COLOR )
             {
@@ -2329,13 +2529,22 @@ void SIMULATOR_FRAME_UI::signalsGridCursorUpdate( T t, U u, R r ) // t=cursor ty
     }
     else
     {
-        if constexpr ( std::is_enum<T>::value )
+        if constexpr( std::is_enum<T>::value )
         {
             if( t == SIGNALS_GRID_COLUMNS::COL_SIGNAL_SHOW )
             {
-                m_signalsGrid->SetCellValue( r, static_cast<int>( t ), wxEmptyString );
+                if( !attr->HasEditor() )
+                    attr->SetEditor( new GRID_CELL_COMBOBOX( getViewChoices( plotTab ) ) );
+
+                if( !attr->HasRenderer() )
+                    attr->SetRenderer( new GRID_CELL_COMBOBOX_RENDERER() );
+
+                attr->SetReadOnly( false );
+                attr->SetTextColour( *wxLIGHT_GREY );
+                m_signalsGrid->SetCellValue( r, static_cast<int>( t ), getViewLabel( plotTab, nullptr ) );
             }
-            else if( t == SIGNALS_GRID_COLUMNS::COL_SIGNAL_COLOR
+            else if( t == SIGNALS_GRID_COLUMNS::COL_Y_SCALE
+                     || t == SIGNALS_GRID_COLUMNS::COL_SIGNAL_COLOR
                      || t == SIGNALS_GRID_COLUMNS::COL_CURSOR_1
                      || t == SIGNALS_GRID_COLUMNS::COL_CURSOR_2
                      || t > SIGNALS_GRID_COLUMNS::COL_CURSOR_2 )
@@ -2355,6 +2564,7 @@ void SIMULATOR_FRAME_UI::updateSignalsGrid()
     for( int row = 0; row < m_signalsGrid->GetNumberRows(); ++row )
     {
         signalsGridCursorUpdate( COL_SIGNAL_SHOW, 0, row );
+        signalsGridCursorUpdate( COL_Y_SCALE, 0, row );
         signalsGridCursorUpdate( COL_SIGNAL_COLOR, 0, row );
         signalsGridCursorUpdate( COL_CURSOR_1, 1, row );
         signalsGridCursorUpdate( COL_CURSOR_2, 2, row );
@@ -2363,7 +2573,7 @@ void SIMULATOR_FRAME_UI::updateSignalsGrid()
         {
             for( int i = 3; i < m_customCursorsCnt; i++ )
             {
-                int tm = i + 2;
+                int tm = i + 3;
                 signalsGridCursorUpdate( static_cast<SIGNALS_GRID_COLUMNS>( tm ), i, row );
             }
         }
@@ -2473,7 +2683,7 @@ void SIMULATOR_FRAME_UI::applyUserDefinedSignals()
                 return quotedNetnames;
             };
 
-    for( const auto& [ id, signal ] : m_userDefinedSignals )
+    for( const auto& [id, signal] : m_userDefinedSignals )
     {
         constexpr const char* cmd = "let user{} = {}";
 
@@ -2583,7 +2793,7 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
 
         std::map<SIM_PLOT_TAB*, nlohmann::json> traceInfo;
 
-        for( const nlohmann::json& tab_js : js[ "tabs" ] )
+        for( const nlohmann::json& tab_js : js["tabs"] )
         {
             wxString simCommand;
             int      simOptions = NETLIST_EXPORTER_SPICE::OPTION_ADJUST_PASSIVE_VALS
@@ -2615,8 +2825,13 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
 
             if( plotTab )
             {
+                int viewCount = tab_js.contains( "viewCount" ) ? (int) tab_js["viewCount"] : 1;
+
+                for( int ii = 1; ii < viewCount; ++ii )
+                    plotTab->AddView();
+
                 if( tab_js.contains( "traces" ) )
-                    traceInfo[plotTab] = tab_js[ "traces" ];
+                    traceInfo[plotTab] = tab_js["traces"];
 
                 if( tab_js.contains( "measurements" ) && tab_js["measurements"].is_array() )
                 {
@@ -2730,7 +2945,7 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
 
         if( js.contains( "user_defined_signals" ) )
         {
-            for( const nlohmann::json& signal_js : js[ "user_defined_signals" ] )
+            for( const nlohmann::json& signal_js : js["user_defined_signals"] )
                 m_userDefinedSignals[ii++] = wxString( signal_js.get<wxString>() );
         }
 
@@ -2752,8 +2967,8 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
             CreateNewCursor();
 
         auto addCursor =
-                [=,this]( SIM_PLOT_TAB* aPlotTab, TRACE* aTrace, const wxString& aSignalName,
-                        int aCursorId, const nlohmann::json& aCursor_js )
+                [=, this]( SIM_PLOT_TAB* aPlotTab, TRACE* aTrace, const wxString& aSignalName,
+                           int aCursorId, const nlohmann::json& aCursor_js )
                 {
                     if( aCursorId >= 1 )
                     {
@@ -2788,7 +3003,7 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
                         m_cursorFormatsDyn[formatSlot][1].FromString( yFormat );
                 };
 
-        for( const auto& [ plotTab, traces_js ] : traceInfo )
+        for( const auto& [plotTab, traces_js] : traceInfo )
         {
             for( const nlohmann::json& trace_js : traces_js )
             {
@@ -2799,12 +3014,24 @@ bool SIMULATOR_FRAME_UI::loadJsonWorkbook( const wxString& aPath )
                     continue;
 
                 wxString vectorName = vectorNameFromSignalName( plotTab, signalName, nullptr );
-                TRACE*   trace = plotTab->GetOrAddTrace( vectorName, traceType );
+
+                int       viewIndex = trace_js.contains( "view" ) ? (int) trace_js["view"] : 0;
+                SIM_VIEW* view = plotTab->GetView( viewIndex );
+
+                if( !view )
+                    view = plotTab->GetDefaultView();
+
+                TRACE* trace = plotTab->GetOrAddTrace( vectorName, traceType, view );
 
                 if( trace )
                 {
+                    int yScaleIndex = trace_js.contains( "yScaleView" ) ? (int) trace_js["yScaleView"] : viewIndex;
+
+                    if( SIM_VIEW* yScaleView = plotTab->GetView( yScaleIndex ) )
+                        trace->SetYScaleView( yScaleView );
+
                     if( trace_js.contains( "cursorD" ) )
-                        addCursor( plotTab, trace, signalName, -1, trace_js[ "cursorD" ] );
+                        addCursor( plotTab, trace, signalName, -1, trace_js["cursorD"] );
 
                     std::vector<const char*> aVec;
                     aVec.clear();
@@ -2890,9 +3117,8 @@ void SIMULATOR_FRAME_UI::SaveCursorToWorkbook( nlohmann::json& aTraceJs, TRACE* 
 
     if( cursorIdAfterD < 3 && ( aTrace->GetCursor( 1 ) || aTrace->GetCursor( 2 ) ) )
     {
-        aTraceJs["cursorD"] =
-                nlohmann::json( { { "x_format", m_cursorFormatsDyn[2][0].ToString() },
-                                  { "y_format", m_cursorFormatsDyn[2][1].ToString() } } );
+        aTraceJs["cursorD"] = nlohmann::json( { { "x_format", m_cursorFormatsDyn[2][0].ToString() },
+                                                { "y_format", m_cursorFormatsDyn[2][1].ToString() } } );
     }
 }
 
@@ -2943,9 +3169,8 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
         if( !( options & NETLIST_EXPORTER_SPICE::OPTION_SAVE_ALL_EVENTS ) )
             commands_js.push_back( ".kicad esavenone" );
 
-        nlohmann::json tab_js = nlohmann::json(
-                                    { { "analysis", SPICE_SIMULATOR::TypeToName( simType, true ) },
-                                      { "commands", commands_js } } );
+        nlohmann::json tab_js = nlohmann::json( { { "analysis", SPICE_SIMULATOR::TypeToName( simType, true ) },
+                                                  { "commands", commands_js } } );
 
         if( SIM_PLOT_TAB* plotTab = dynamic_cast<SIM_PLOT_TAB*>( simTab ) )
         {
@@ -2964,7 +3189,7 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
 
                         vectorName = aVectorName.Left( aVectorName.Length() - suffix.Length() );
 
-                        for( const auto& [ id, signal ] : m_userDefinedSignals )
+                        for( const auto& [id, signal] : m_userDefinedSignals )
                         {
                             if( vectorName == vectorNameFromSignalId( id ) )
                                 return signal + suffix;
@@ -2975,19 +3200,20 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
 
             for( const auto& [name, trace] : plotTab->GetTraces() )
             {
-                nlohmann::json trace_js = nlohmann::json(
-                            { { "trace_type", (int) trace->GetType() },
-                              { "signal",     findSignalName( trace->GetDisplayName() ) },
-                              { "color",      COLOR4D( trace->GetTraceColour() ).ToCSSString() } } );
+                nlohmann::json trace_js =
+                        nlohmann::json( { { "trace_type", (int) trace->GetType() },
+                                          { "signal", findSignalName( trace->GetDisplayName() ) },
+                                          { "color", COLOR4D( trace->GetTraceColour() ).ToCSSString() },
+                                          { "view", plotTab->GetViewIndex( trace->GetView() ) },
+                                          { "yScaleView", plotTab->GetViewIndex( trace->GetYScaleView() ) } } );
 
                 for( int ii = 1; ii <= m_customCursorsCnt; ii++ )
                     SaveCursorToWorkbook( trace_js, trace, ii );
 
                 if( trace->GetCursor( 1 ) || trace->GetCursor( 2 ) )
                 {
-                    trace_js["cursorD"] = nlohmann::json(
-                                            { { "x_format", m_cursorFormatsDyn[2][0].ToString() },
-                                              { "y_format", m_cursorFormatsDyn[2][1].ToString() } } );
+                    trace_js["cursorD"] = nlohmann::json( { { "x_format", m_cursorFormatsDyn[2][0].ToString() },
+                                                            { "y_format", m_cursorFormatsDyn[2][1].ToString() } } );
                 }
 
                 traces_js.push_back( trace_js );
@@ -2995,7 +3221,7 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
 
             nlohmann::json measurements_js = nlohmann::json::array();
 
-            for( const auto& [ measurement, format ] : plotTab->Measurements() )
+            for( const auto& [measurement, format] : plotTab->Measurements() )
             {
                 measurements_js.push_back( nlohmann::json( { { "expr",   measurement },
                                                              { "format", format } } ) );
@@ -3046,6 +3272,8 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
                     tab_js["smithStashedCursors"] = stashedCursors_js;
             }
 
+            tab_js["viewCount"] = plotTab->GetViewCount();
+
             double min, max;
 
             // json serializes a non-finite double as null, which would poison the load
@@ -3066,16 +3294,16 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
 
             if( plotTab->IsLegendShown() )
             {
-                tab_js[ "legend" ] = nlohmann::json( { { "x", plotTab->GetLegendPosition().x },
-                                                       { "y", plotTab->GetLegendPosition().y } } );
+                tab_js["legend"] = nlohmann::json( { { "x", plotTab->GetLegendPosition().x },
+                                                     { "y", plotTab->GetLegendPosition().y } } );
             }
 
             mpWindow* plotWin = plotTab->GetPlotWin();
 
-            tab_js[ "margins" ] = nlohmann::json( { { "left",   plotWin->GetMarginLeft() },
-                                                    { "right",  plotWin->GetMarginRight() },
-                                                    { "top",    plotWin->GetMarginTop() },
-                                                    { "bottom", plotWin->GetMarginBottom() } } );
+            tab_js["margins"] = nlohmann::json( { { "left",   plotWin->GetMarginLeft() },
+                                                  { "right",  plotWin->GetMarginRight() },
+                                                  { "top",    plotWin->GetMarginTop() },
+                                                  { "bottom", plotWin->GetMarginBottom() } } );
         }
 
         tabs_js.push_back( tab_js );
@@ -3083,7 +3311,7 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
 
     nlohmann::json userDefinedSignals_js = nlohmann::json::array();
 
-    for( const auto& [ id, signal ] : m_userDefinedSignals )
+    for( const auto& [id, signal] : m_userDefinedSignals )
         userDefinedSignals_js.push_back( signal );
 
     // clang-format off
@@ -3099,7 +3327,7 @@ bool SIMULATOR_FRAME_UI::SaveWorkbook( const wxString& aPath )
     if( m_plotNotebook->GetPageCount() > 0 )
     {
         SIM_TAB* simTab = dynamic_cast<SIM_TAB*>( m_plotNotebook->GetPage( 0 ) );
-        js[ "last_sch_text_sim_command" ] = simTab->GetLastSchTextSimCommand();
+        js["last_sch_text_sim_command"] = simTab->GetLastSchTextSimCommand();
     }
 
     std::stringstream buffer;
@@ -3151,16 +3379,15 @@ wxString SIMULATOR_FRAME_UI::getNoiseSource() const
 
     if( GetCurrentSimTab() )
     {
-        circuitModel()->ParseNoiseCommand( GetCurrentSimTab()->GetSimCommand(), &output, &ref,
-                                           &source, &scale, &pts, &fStart, &fStop, &saveAll );
+        circuitModel()->ParseNoiseCommand( GetCurrentSimTab()->GetSimCommand(), &output, &ref, &source, &scale, &pts,
+                                           &fStart, &fStop, &saveAll );
     }
 
     return source;
 }
 
 
-void SIMULATOR_FRAME_UI::TogglePanel( wxPanel* aPanel, wxSplitterWindow* aSplitterWindow,
-                                      int& aSashPosition )
+void SIMULATOR_FRAME_UI::TogglePanel( wxPanel* aPanel, wxSplitterWindow* aSplitterWindow, int& aSashPosition )
 {
     bool isShown = aPanel->IsShown();
 
@@ -3237,9 +3464,10 @@ void SIMULATOR_FRAME_UI::ToggleSmithChart()
     // keyed by vector name since user-defined traces are renamed to their display text
     struct SHOWN_VECTOR
     {
-        wxString vectorName;
-        wxString displayName;
-        int      baseType;
+        wxString  vectorName;
+        wxString  displayName;
+        int       baseType;
+        SIM_VIEW* view; // the view it was plotted on, so the rebuild stays where it was
     };
 
     std::vector<SHOWN_VECTOR> shownVectors;
@@ -3269,7 +3497,7 @@ void SIMULATOR_FRAME_UI::ToggleSmithChart()
             seen |= sv.vectorName == vectorName;
 
         if( !seen )
-            shownVectors.push_back( { vectorName, trace->GetName(), baseType } );
+            shownVectors.push_back( { vectorName, trace->GetName(), baseType, trace->GetView() } );
 
         for( const auto& [cursorId, cursor] : trace->GetCursors() )
         {
@@ -3318,7 +3546,10 @@ void SIMULATOR_FRAME_UI::ToggleSmithChart()
                 seen |= sv.vectorName == stashed.vectorName;
 
             if( !seen )
-                shownVectors.push_back( { stashed.vectorName, stashed.displayName, stashed.baseType } );
+            {
+                shownVectors.push_back( { stashed.vectorName, stashed.displayName, stashed.baseType,
+                                          plotTab->GetDefaultView() } );
+            }
         }
     }
 
@@ -3348,7 +3579,7 @@ void SIMULATOR_FRAME_UI::ToggleSmithChart()
 
         for( int subType : subTypes )
         {
-            updateTrace( sv.vectorName, sv.baseType | subType, plotTab );
+            updateTrace( sv.vectorName, sv.baseType | subType, plotTab, nullptr, false, sv.view );
 
             if( TRACE* trace = plotTab->GetTrace( sv.vectorName, sv.baseType | subType ) )
                 trace->SetName( sv.displayName );
@@ -3442,7 +3673,8 @@ void SIMULATOR_FRAME_UI::ToggleSmithChart()
         stashedCursors.clear();
     }
 
-    plotTab->GetPlotWin()->UpdateAll();
+    for( SIM_VIEW* view : plotTab->GetViews() )
+        view->UpdateAll();
 
     rebuildSignalsList();
     rebuildSignalsGrid( m_filter->GetValue() );
@@ -3543,7 +3775,7 @@ void SIMULATOR_FRAME_UI::rebuildMeasurementsGrid()
 
     if( SIM_PLOT_TAB* plotTab = dynamic_cast<SIM_PLOT_TAB*>( GetCurrentSimTab() ) )
     {
-        for( const auto& [ measurement, format ] : plotTab->Measurements() )
+        for( const auto& [measurement, format] : plotTab->Measurements() )
         {
             int row = m_measurementsGrid->GetNumberRows();
             m_measurementsGrid->AppendRows();
@@ -3551,12 +3783,15 @@ void SIMULATOR_FRAME_UI::rebuildMeasurementsGrid()
             m_measurementsGrid->SetCellValue( row, COL_MEASUREMENT_FORMAT, format );
         }
 
-        if( plotTab->GetSimType() == ST_TRAN || plotTab->GetSimType() == ST_AC
-            || plotTab->GetSimType() == ST_DC || plotTab->GetSimType() == ST_SP )
+        if( plotTab->GetSimType() == ST_TRAN || plotTab->GetSimType() == ST_AC || plotTab->GetSimType() == ST_DC
+            || plotTab->GetSimType() == ST_SP )
         {
-            m_measurementsGrid->AppendRows();   // Empty row at end
+            m_measurementsGrid->AppendRows(); // Empty row at end
         }
     }
+
+    autoSizeGridColumn( m_measurementsGrid, COL_MEASUREMENT, 297 );
+    autoSizeGridColumn( m_measurementsGrid, COL_MEASUREMENT_VALUE, 90 );
 }
 
 
@@ -3780,7 +4015,7 @@ void SIMULATOR_FRAME_UI::updatePlotCursors()
                 if( ( !m_simulatorFrame->SimFinished() && aCol == 1 ) || std::isnan( aValue ) )
                     return wxS( "--" );
                 else
-                    return SPICE_VALUE( aValue ).ToString( m_cursorFormatsDyn[ aCursorId ][ aCol ] );
+                    return SPICE_VALUE( aValue ).ToString( m_cursorFormatsDyn[aCursorId][aCol] );
             };
 
     for( const auto& [name, trace] : plotTab->GetTraces() )
@@ -3875,7 +4110,7 @@ void SIMULATOR_FRAME_UI::updatePlotCursors()
             {
                 if( CURSOR* cursor = trace->GetCursor( i ) )
                 {
-                    CURSOR* curs = cursor;
+                    CURSOR*  curs = cursor;
                     wxString cursName = getNameY( trace );
                     wxString cursUnits = getUnitsY( trace );
 
@@ -3906,6 +4141,11 @@ void SIMULATOR_FRAME_UI::updatePlotCursors()
             }
         }
     }
+
+    autoSizeGridColumn( m_cursorsGrid, COL_CURSOR_NAME, 45 );
+    autoSizeGridColumn( m_cursorsGrid, COL_CURSOR_SIGNAL, 162 );
+    autoSizeGridColumn( m_cursorsGrid, COL_CURSOR_X, 90 );
+    autoSizeGridColumn( m_cursorsGrid, COL_CURSOR_Y, 90 );
 }
 
 
@@ -3965,7 +4205,7 @@ std::vector<wxString> SIMULATOR_FRAME_UI::Signals() const
     for( const wxString& signal : m_signals )
         signals.emplace_back( signal );
 
-    for( const auto& [ id, signal ] : m_userDefinedSignals )
+    for( const auto& [id, signal] : m_userDefinedSignals )
         signals.emplace_back( signal );
 
     sortSignals( signals );
@@ -4040,7 +4280,7 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
             for( const std::string& vec : simulator()->AllVectors() )
             {
                 std::vector<double> val_list = simulator()->GetRealVector( vec, 1 );
-                wxString            value = SPICE_VALUE( val_list[ 0 ] ).ToSpiceString();
+                wxString            value = SPICE_VALUE( val_list[0] ).ToSpiceString();
 
                 msg.Printf( wxS( "%s: %sV\n" ), vec, value );
 
@@ -4053,8 +4293,7 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
         }
 
         SIM_PLOT_TAB* plotTab = dynamic_cast<SIM_PLOT_TAB*>( simTab );
-        wxCHECK_RET( plotTab, wxString::Format( wxT( "No SIM_PLOT_TAB for: %s" ),
-                                                magic_enum::enum_name( simType ) ) );
+        wxCHECK_RET( plotTab, wxString::Format( wxT( "No SIM_PLOT_TAB for: %s" ), magic_enum::enum_name( simType ) ) );
 
         struct TRACE_INFO
         {
@@ -4065,8 +4304,8 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
 
         std::map<TRACE*, TRACE_INFO> traceMap;
 
-        for( const auto& [ name, trace ] : plotTab->GetTraces() )
-            traceMap[ trace ] = { wxEmptyString, SPT_UNKNOWN, false };
+        for( const auto& [name, trace] : plotTab->GetTraces() )
+            traceMap[trace] = { wxEmptyString, SPT_UNKNOWN, false };
 
         // NB: m_signals are already broken out into gain/phase, but m_userDefinedSignals are
         // as the user typed them
@@ -4077,10 +4316,10 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
             wxString vectorName = vectorNameFromSignalName( plotTab, signal, &traceType );
 
             if( TRACE* trace = plotTab->GetTrace( vectorName, traceType ) )
-                traceMap[ trace ] = { vectorName, traceType, false };
+                traceMap[trace] = { vectorName, traceType, false };
         }
 
-        for( const auto& [ id, signal ] : m_userDefinedSignals )
+        for( const auto& [id, signal] : m_userDefinedSignals )
         {
             int      traceType = SPT_UNKNOWN;
             wxString vectorName = vectorNameFromSignalName( plotTab, signal, &traceType );
@@ -4092,7 +4331,7 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
                 for( int subType : { baseType | SPT_AC_GAIN, baseType | SPT_AC_PHASE } )
                 {
                     if( TRACE* trace = plotTab->GetTrace( vectorName, subType ) )
-                        traceMap[ trace ] = { vectorName, subType, !aFinal };
+                        traceMap[trace] = { vectorName, subType, !aFinal };
                 }
             }
             else if( simType == ST_SP )
@@ -4108,19 +4347,19 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
             else
             {
                 if( TRACE* trace = plotTab->GetTrace( vectorName, traceType ) )
-                    traceMap[ trace ] = { vectorName, traceType, !aFinal };
+                    traceMap[trace] = { vectorName, traceType, !aFinal };
             }
         }
 
         // Two passes so that DC-sweep sub-traces get deleted and re-created:
 
-        for( const auto& [ trace, traceInfo ] : traceMap )
+        for( const auto& [trace, traceInfo] : traceMap )
         {
             if( traceInfo.Vector.IsEmpty() )
                 plotTab->DeleteTrace( trace );
         }
 
-        for( const auto& [ trace, info ] : traceMap )
+        for( const auto& [trace, info] : traceMap )
         {
             std::vector<double> data_x;
 
@@ -4128,7 +4367,8 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
                 updateTrace( info.Vector, info.TraceType, plotTab, &data_x, info.ClearData );
         }
 
-        plotTab->GetPlotWin()->UpdateAll();
+        for( SIM_VIEW* view : plotTab->GetViews() )
+            view->UpdateAll();
 
         if( aFinal )
         {
@@ -4138,7 +4378,8 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
             plotTab->ResetScales( true );
         }
 
-        plotTab->GetPlotWin()->Fit();
+        for( SIM_VIEW* view : plotTab->GetViews() )
+            view->Fit();
 
         updatePlotCursors();
     }
@@ -4154,9 +4395,9 @@ void SIMULATOR_FRAME_UI::OnSimRefresh( bool aFinal )
             if( val_list.empty() )
                 continue;
 
-            wxString            value = SPICE_VALUE( val_list[ 0 ] ).ToSpiceString();
-            wxString            signal;
-            SIM_TRACE_TYPE      type = circuitModel()->VectorToSignal( vec, signal );
+            wxString       value = SPICE_VALUE( val_list[0] ).ToSpiceString();
+            wxString       signal;
+            SIM_TRACE_TYPE type = circuitModel()->VectorToSignal( vec, signal );
 
             const size_t tab = 25; //characters
             size_t       padding = ( signal.length() < tab ) ? ( tab - signal.length() ) : 1;
@@ -4310,8 +4551,8 @@ void SIMULATOR_FRAME_UI::prepareMultiRunState()
 }
 
 
-std::vector<SIMULATOR_FRAME_UI::MULTI_RUN_STEP> SIMULATOR_FRAME_UI::calculateMultiRunSteps(
-        const std::vector<TUNER_SLIDER*>& aTuners ) const
+std::vector<SIMULATOR_FRAME_UI::MULTI_RUN_STEP>
+SIMULATOR_FRAME_UI::calculateMultiRunSteps( const std::vector<TUNER_SLIDER*>& aTuners ) const
 {
     std::vector<MULTI_RUN_STEP> steps;
 
@@ -4389,14 +4630,13 @@ std::string SIMULATOR_FRAME_UI::multiRunTraceKey( const wxString& aVectorName, i
 }
 
 
-void SIMULATOR_FRAME_UI::recordMultiRunData( const wxString& aVectorName, int aTraceType,
-                                             const std::vector<double>& aX,
+void SIMULATOR_FRAME_UI::recordMultiRunData( const wxString& aVectorName, int aTraceType, const std::vector<double>& aX,
                                              const std::vector<double>& aY )
 {
     if( aX.empty() || aY.empty() )
         return;
 
-    std::string key = multiRunTraceKey( aVectorName, aTraceType );
+    std::string      key = multiRunTraceKey( aVectorName, aTraceType );
     MULTI_RUN_TRACE& trace = m_multiRunState.traces[key];
 
     trace.traceType = aTraceType;

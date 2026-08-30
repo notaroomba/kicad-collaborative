@@ -162,6 +162,7 @@ set( KICOMMON_SRCS
     jobs/job_export_pcb_pdf.cpp
     jobs/job_export_pcb_png.cpp
     jobs/job_export_pcb_stats.cpp
+    jobs/job_export_pcb_stackup.cpp
     jobs/job_export_pcb_plot.cpp
     jobs/job_export_pcb_pos.cpp
     jobs/job_export_pcb_ps.cpp
@@ -229,6 +230,8 @@ set( KICOMMON_SRCS
     project/project_local_settings.cpp
     project/tuning_profiles.cpp
 
+    template_fieldnames.cpp
+
     text_eval/text_eval_wrapper.cpp
     text_eval/text_eval_parser.cpp
     text_eval/text_eval_vcs.cpp
@@ -237,8 +240,9 @@ set( KICOMMON_SRCS
     tool/ui/toolbar_configuration.cpp
     tool/ui/toolbar_context_menu_registry.cpp
 
+    dialogs/eda_list_dialog.cpp
+    dialogs/eda_list_dialog_base.cpp
     dialogs/dialog_fields_table_base.cpp
-    dialogs/dialog_fields_table.cpp
     dialogs/dialog_rc_job.cpp
     dialogs/dialog_rc_job_base.cpp
     dialogs/dialog_restore_local_history.cpp
@@ -263,6 +267,7 @@ set( KICOMMON_SRCS
     widgets/std_bitmap_button.cpp
     widgets/ui_common.cpp
     widgets/up_down_tree.cpp
+    widgets/wx_collapsible_pane.cpp
     widgets/wx_grid.cpp
     widgets/wx_data_view_hyperlink_renderer.cpp
     widgets/wx_html_report_panel.cpp
@@ -307,6 +312,7 @@ set( KICOMMON_SRCS
     json_schema_validator.cpp
     kidialog.cpp
     kiid.cpp
+    ki_error.cpp
     kiway.cpp
     kiway_mail.cpp
     kiway_holder.cpp
@@ -360,11 +366,14 @@ set( KICOMMON_SRCS
     io/io_base.cpp
     io/io_utils.cpp
 
+    api/api_client.cpp
+    api/api_enums.cpp
     api/api_handler.cpp
     api/api_plugin.cpp
     api/api_plugin_manager.cpp
     api/api_server.cpp
     api/api_utils.cpp
+    api/cross_probe_client.cpp
     api/python_manager.cpp
     api/serializable.cpp
 
@@ -552,6 +561,8 @@ set( COMMON_DLG_SRCS
     dialogs/dialog_design_block_properties_base.cpp
     dialogs/dialog_display_html_text_base.cpp
     dialogs/dialog_edit_library_tables.cpp
+    dialogs/dialog_fields_table.cpp
+    dialogs/fields_table_data_model.cpp
     dialogs/dialog_grid_settings.cpp
     dialogs/dialog_grid_settings_base.cpp
     dialogs/dialog_group_properties.cpp
@@ -573,8 +584,6 @@ set( COMMON_DLG_SRCS
     dialogs/dialog_text_entry.cpp
     dialogs/dialog_unit_entry.cpp
     dialogs/dialog_unit_entry_base.cpp
-    dialogs/eda_list_dialog.cpp
-    dialogs/eda_list_dialog_base.cpp
     dialogs/eda_reorderable_list_dialog.cpp
     dialogs/eda_reorderable_list_dialog_base.cpp
     dialogs/eda_view_switcher.cpp
@@ -644,6 +653,7 @@ set( COMMON_WIDGET_SRCS
     widgets/filter_combobox.cpp
     widgets/font_choice.cpp
     widgets/footprint_choice.cpp
+    widgets/line_ending_bitmap.cpp
     widgets/footprint_diff_widget.cpp
     widgets/footprint_preview_widget.cpp
     widgets/widget_diff_canvas.cpp
@@ -678,7 +688,6 @@ set( COMMON_WIDGET_SRCS
     widgets/wx_aui_art_providers.cpp
     widgets/wx_aui_utils.cpp
     widgets/wx_busy_indicator.cpp
-    widgets/wx_collapsible_pane.cpp
     widgets/wx_combobox.cpp
     widgets/wx_dataviewctrl.cpp
     widgets/wx_ellipsized_static_text.cpp
@@ -814,12 +823,12 @@ set( COMMON_SRCS
     board_printout.cpp
     clipboard.cpp
     collab/collab_cursor_item.cpp
+    column_formatter.cpp
     commit.cpp
     draw_panel_gal.cpp
     gal_display_options_common.cpp
     gr_text.cpp
     eda_base_frame.cpp
-    eda_dde.cpp
     eda_draw_frame.cpp
     eda_group.cpp
     eda_item.cpp
@@ -854,8 +863,9 @@ set( COMMON_SRCS
     reference_image.cpp
     render_settings.cpp
     status_popup.cpp
+    line_ending.cpp
     stroke_params.cpp
-    template_fieldnames.cpp
+    table_io.cpp
     textentry_tricks.cpp
     undo_redo_container.cpp
     validators.cpp
@@ -921,7 +931,7 @@ set( COMMON_SRCS
     http_lib/http_lib_connection.cpp
     http_lib/http_lib_settings.cpp
 
-    api/api_enums.cpp
+    api/api_text_attributes.cpp
     )
 
 # This needs to be in the common library until draw_panel_gal is moved to kicommon
@@ -1010,6 +1020,8 @@ target_include_directories( common
 # text markup support
 add_dependencies( common pegtl )
 
+target_compile_definitions( nanodbc PUBLIC NANODBC_THROW_NO_SOURCE_LOCATION )
+
 target_include_directories( common PUBLIC
     $<TARGET_PROPERTY:pegtl,INTERFACE_INCLUDE_DIRECTORIES>
     $<TARGET_PROPERTY:magic_enum,INTERFACE_INCLUDE_DIRECTORIES>
@@ -1078,6 +1090,7 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/from_to_cache.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/convert_shape_list_to_polygon.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_engine.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_exclusion.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_cache_generator.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_item.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/drc/drc_rule.cpp
@@ -1163,6 +1176,7 @@ target_link_libraries( pcbcommon PUBLIC
     delaunator
     kimath
     kiplatform
+    markdown_lib
     nanoflann
     zint
 )

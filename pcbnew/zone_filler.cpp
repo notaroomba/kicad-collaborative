@@ -39,6 +39,7 @@
 #include <zone.h>
 #include <footprint.h>
 #include <pad.h>
+#include <pcb_shape.h>
 #include <pcb_target.h>
 #include <pcb_track.h>
 #include <pcb_text.h>
@@ -408,8 +409,8 @@ bool ZONE_FILLER::zoneKnockoutMayInteract( const ZONE* aZone, const ZONE* aKnock
     {
         for( const ZONE* zone : { aZone, aKnockout } )
         {
-            if( zone->GetCornerSmoothingType() == ZONE_SETTINGS::SMOOTHING_CHAMFER
-                    || zone->GetCornerSmoothingType() == ZONE_SETTINGS::SMOOTHING_FILLET )
+            if( zone->GetCornerSmoothingType() == ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER
+                    || zone->GetCornerSmoothingType() == ZONE_SETTINGS::CORNER_SMOOTHING::FILLET )
             {
                 reach += (int) zone->GetCornerRadius();
             }
@@ -447,6 +448,7 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
     // below).
     m_refillResultCache.clear();
     m_preHatchSolidFillCache.clear();
+    m_sameNetApronCache.clear();
 
     // The fill evaluates thermal-relief and clearance rules through the board's DRC engine on
     // worker threads.  Interactive callers always supply an initialized engine, but headless
@@ -1786,9 +1788,16 @@ void ZONE_FILLER::addKnockout( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, int aGap,
         break;
     }
 
+    case PCB_SHAPE_T:
+    {
+        PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( aItem );
+
+        shape->TransformWithLineEndingsToPolygon( aHoles, aGap, m_maxError, ERROR_OUTSIDE, aIgnoreLineWidth );
+        break;
+    }
+
     case PCB_TEXTBOX_T:
     case PCB_TABLE_T:
-    case PCB_SHAPE_T:
     case PCB_TARGET_T:
         aItem->TransformShapeToPolygon( aHoles, aLayer, aGap, m_maxError, ERROR_OUTSIDE, aIgnoreLineWidth );
         break;
@@ -2532,7 +2541,8 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
                             && aKnockout->GetDoNotAllowZoneFills() && !aZone->IsTeardropArea() )
                     {
                         // Keepouts use outline with no clearance
-                        aKnockout->TransformSmoothedOutlineToPolygon( aHoles, 0, m_maxError, ERROR_OUTSIDE, nullptr );
+                        aKnockout->TransformSmoothedOutlineToPolygon( aHoles, aLayer, 0, m_maxError, ERROR_OUTSIDE,
+                                                                      nullptr );
                     }
                 }
                 else if( aKnockout->HigherPriority( aZone ) && !aKnockout->SameNet( aZone )
@@ -2718,7 +2728,22 @@ void ZONE_FILLER::connect_nearby_polys( SHAPE_POLY_SET& aPolys, double aDistance
 }
 
 
-void ZONE_FILLER::postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& aFillPolys )
+// Subtracting a neighbouring zone's fill along an edge the two share sheds sub-micron contours
+// that survive Fracture() and are then counted as islands
+static void dropSubResolutionOutlines( SHAPE_POLY_SET& aPolys, int aMaxError )
+{
+    const double noiseArea = (double) aMaxError * aMaxError;
+
+    for( int ii = aPolys.OutlineCount() - 1; ii >= 0; ii-- )
+    {
+        if( aPolys.Outline( ii ).Area() < noiseArea )
+            aPolys.DeletePolygon( ii );
+    }
+}
+
+
+void ZONE_FILLER::postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& aFillPolys,
+                                             const SHAPE_POLY_SET& aSameNetApron )
 {
     int half_min_width = aZone->GetMinThickness() / 2;
     int epsilon = pcbIUScale.mmToIU( 0.001 );
@@ -2726,7 +2751,11 @@ void ZONE_FILLER::postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& 
     if( half_min_width - epsilon <= epsilon )
         return;
 
+    // Captured before the apron goes in so the closing intersection strips the apron back off
     SHAPE_POLY_SET preDeflate = aFillPolys.CloneDropTriangulation();
+
+    if( aSameNetApron.OutlineCount() > 0 )
+        aFillPolys.BooleanAdd( aSameNetApron );
 
     aFillPolys.Deflate( half_min_width - epsilon, CORNER_STRATEGY::CHAMFER_ALL_CORNERS,
                         m_maxError );
@@ -2870,8 +2899,8 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
                     if( !isZoneFillKeepout( candidate, aLayer, zone_boundingbox ) )
                         return;
 
-                    candidate->TransformSmoothedOutlineToPolygon( clearanceHoles, 0, m_maxError,
-                                                                  ERROR_OUTSIDE, nullptr );
+                    candidate->TransformSmoothedOutlineToPolygon( clearanceHoles, aLayer, 0, m_maxError, ERROR_OUTSIDE,
+                                                                  nullptr );
                     addedKeepoutHoles = true;
                 };
 
@@ -3124,19 +3153,28 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
     // Cache the pre-knockout fill for iterative refill optimization (issue 21746).
     // The cache stores the fill BEFORE zone-to-zone knockouts so the iterative refill can
     // reclaim space when higher-priority zones have islands removed.
-    bool knockoutsApplied = false;
+    bool           knockoutsApplied = false;
+    SHAPE_POLY_SET sameNetApron;
 
     if( iterativeRefill )
     {
+        // The band the aMaxExtents trim just took away but an abutting same-net zone still
+        // pours into (issue 23790)
+        sameNetApron = aSmoothedOutline.CloneDropTriangulation();
+        sameNetApron.BooleanSubtract( aMaxExtents );
+        sameNetApron.BooleanSubtract( clearanceHoles );
+
         {
             std::lock_guard<std::mutex> lock( m_cacheMutex );
             m_preKnockoutFillCache[{ aZone, aLayer }] = aFillPolys;
+            m_sameNetApronCache[{ aZone, aLayer }] = sameNetApron;
         }
 
         // Reuse the zone clearances already computed for spoke endpoint testing
         if( zoneClearances.OutlineCount() > 0 )
         {
             aFillPolys.BooleanSubtract( zoneClearances );
+            sameNetApron.BooleanSubtract( zoneClearances );
             knockoutsApplied = true;
         }
     }
@@ -3144,14 +3182,14 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
     /* -------------------------------------------------------------------------------------
      * Re-prune minimum-width violations introduced by different-net zone knockouts.
      *
-     * This must run BEFORE subtracting same-net higher-priority zones.  At this point the
-     * fill still extends into overlapping same-net zone areas, which provides a natural
-     * buffer that prevents the deflate/inflate cycle from creating divots at same-net
-     * zone boundaries (the same role aSmoothedOutline plays in the initial min-width pass).
+     * This must run BEFORE subtracting same-net higher-priority zones.  The fill no longer
+     * reaches into overlapping same-net zone areas once trimmed to aMaxExtents, so sameNetApron
+     * stands in for that overlap and keeps the deflate/inflate cycle from carving divots at
+     * same-net zone boundaries (the same role aSmoothedOutline plays in the initial pass).
      */
 
     if( knockoutsApplied )
-        postKnockoutMinWidthPrune( aZone, aFillPolys );
+        postKnockoutMinWidthPrune( aZone, aFillPolys, sameNetApron );
 
     DUMP_POLYS_TO_COPPER_LAYER( aFillPolys, In18_Cu, wxT( "after-post-knockout-min-width" ) );
 
@@ -3161,6 +3199,8 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
 
     subtractHigherPriorityZones( aZone, aLayer, aFillPolys );
     DUMP_POLYS_TO_COPPER_LAYER( aFillPolys, In19_Cu, wxT( "minus-higher-priority-zones" ) );
+
+    dropSubResolutionOutlines( aFillPolys, m_maxError );
 
     aFillPolys.Fracture();
     return true;
@@ -4406,16 +4446,31 @@ bool ZONE_FILLER::refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_P
     // pre-knockout fill.  They were subtracted before the initial deflate/inflate min-width
     // cycle so the cached fill already reflects keepout boundaries (issue 23515).
 
-    // Subtract different-net knockouts first, then re-prune min-width
-    // violations BEFORE subtracting same-net knockouts.  The fill still extends into
-    // overlapping same-net zone areas at this point, which provides a natural buffer
-    // that prevents the deflate/inflate cycle from creating divots at same-net
-    // zone boundaries.
+    // Subtract different-net knockouts first, then re-prune min-width violations BEFORE
+    // subtracting same-net knockouts.  The cached fill was already trimmed to the zone outline,
+    // so the prune needs the cached apron to stand in for the overlap with abutting same-net
+    // zones and keep the deflate/inflate cycle from carving divots at their shared boundaries.
     if( diffNetKnockouts.OutlineCount() > 0 )
         aFillPolys.BooleanSubtract( diffNetKnockouts );
 
     if( knockoutsApplied )
-        postKnockoutMinWidthPrune( aZone, aFillPolys );
+    {
+        SHAPE_POLY_SET sameNetApron;
+
+        {
+            std::lock_guard<std::mutex> lock( m_cacheMutex );
+            auto                        ait = m_sameNetApronCache.find( cacheKey );
+
+            if( ait != m_sameNetApronCache.end() )
+                sameNetApron = ait->second;
+        }
+
+        // The apron may only buffer where copper can still go, so it takes the same knockouts
+        if( sameNetApron.OutlineCount() > 0 && diffNetKnockouts.OutlineCount() > 0 )
+            sameNetApron.BooleanSubtract( diffNetKnockouts );
+
+        postKnockoutMinWidthPrune( aZone, aFillPolys, sameNetApron );
+    }
 
     if( sameNetKnockouts.OutlineCount() > 0 )
         aFillPolys.BooleanSubtract( sameNetKnockouts );
@@ -4447,6 +4502,8 @@ bool ZONE_FILLER::refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_P
             aFillPolys.BooleanAdd( border );
         }
     }
+
+    dropSubResolutionOutlines( aFillPolys, m_maxError );
 
     aFillPolys.Fracture();
 

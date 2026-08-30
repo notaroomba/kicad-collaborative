@@ -49,38 +49,37 @@ PCB_FIELD::PCB_FIELD( const PCB_TEXT& aText, FIELD_T aFieldId, const wxString& a
         m_ordinal( static_cast<int>( aFieldId ) ),
         m_name( aName )
 {
-    // Copy the text properties from the PCB_TEXT
-    SetText( aText.GetText() );
-    SetVisible( aText.IsVisible() );
-    SetLayer( aText.GetLayer() );
-    SetPosition( aText.GetPosition() );
-    SetAttributes( aText.GetAttributes() );
+    PCB_TEXT::operator=( aText );
+}
+
+
+PCB_FIELD::PCB_FIELD( const PCB_FIELD& aField ):
+        PCB_TEXT( aField.GetParent(), PCB_FIELD_T )
+{
+    *this = aField;
+}
+
+
+void PCB_FIELD::Serialize( kiapi::board::types::Field& field ) const
+{
+    PCB_TEXT::Serialize( *field.mutable_text() );
+
+    field.set_name( GetUntranslatedName().ToStdString() );
+    field.mutable_id()->set_id( (int) GetId() );
+    field.set_visible( IsVisible() );
 }
 
 
 void PCB_FIELD::Serialize( google::protobuf::Any &aContainer ) const
 {
     kiapi::board::types::Field field;
-
-    google::protobuf::Any anyText;
-    PCB_TEXT::Serialize( anyText );
-    anyText.UnpackTo( field.mutable_text() );
-
-    field.set_name( GetCanonicalName().ToStdString() );
-    field.mutable_id()->set_id( (int) GetId() );
-    field.set_visible( IsVisible() );
-
+    Serialize( field );
     aContainer.PackFrom( field );
 }
 
 
-bool PCB_FIELD::Deserialize( const google::protobuf::Any &aContainer )
+bool PCB_FIELD::Deserialize( const kiapi::board::types::Field& field )
 {
-    kiapi::board::types::Field field;
-
-    if( !aContainer.UnpackTo( &field ) )
-        return false;
-
     if( field.has_id() )
         setId( (FIELD_T) field.id().id() );
 
@@ -90,9 +89,7 @@ bool PCB_FIELD::Deserialize( const google::protobuf::Any &aContainer )
 
     if( field.has_text() )
     {
-        google::protobuf::Any anyText;
-        anyText.PackFrom( field.text() );
-        PCB_TEXT::Deserialize( anyText );
+        PCB_TEXT::Deserialize( field.text() );
     }
 
     SetVisible( field.visible() );
@@ -104,18 +101,29 @@ bool PCB_FIELD::Deserialize( const google::protobuf::Any &aContainer )
 }
 
 
+bool PCB_FIELD::Deserialize( const google::protobuf::Any &aContainer )
+{
+    kiapi::board::types::Field field;
+
+    if( !aContainer.UnpackTo( &field ) )
+        return false;
+
+    return Deserialize( field );
+}
+
+
 wxString PCB_FIELD::GetName( bool aUseDefaultName ) const
 {
     if( IsMandatory() )
-        return GetCanonicalFieldName( m_id );
+        return GetDefaultFieldName( m_id, UNTRANSLATED );
     else if( m_name.IsEmpty() && aUseDefaultName )
-        return GetUserFieldName( m_ordinal, !DO_TRANSLATE );
+        return GetUserFieldName( m_ordinal, UNTRANSLATED );
     else
         return m_name;
 }
 
 
-wxString PCB_FIELD::GetCanonicalName() const
+wxString PCB_FIELD::GetUntranslatedName() const
 {
     return GetName( true );
 }
@@ -152,28 +160,29 @@ wxString PCB_FIELD::GetShownText( bool aAllowExtraText, int aDepth ) const
 
     text = UnescapeString( text );
 
-    std::function<bool( wxString* )> resolver = [&]( wxString* token ) -> bool
-    {
-        if( token->IsSameAs( wxT( "LAYER" ) ) )
-        {
-            *token = GetLayerName();
-            return true;
-        }
+    std::function<bool( wxString* )> resolver =
+            [&]( wxString* token ) -> bool
+            {
+                if( token->IsSameAs( wxT( "LAYER" ) ) )
+                {
+                    *token = GetLayerName();
+                    return true;
+                }
 
-        if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        if( board && board->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                if( board && board->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        return false;
-    };
+                return false;
+            };
 
     if( text.Contains( wxT( "${" ) ) || text.Contains( wxT( "@{" ) ) )
+    {
         text = ResolveTextVars( text, &resolver, aDepth );
-
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+        FinalizeTextVarExpansion( text, aAllowExtraText );
+    }
 
     return text;
 }
@@ -197,7 +206,7 @@ bool PCB_FIELD::HasHypertext() const
 wxString PCB_FIELD::GetTextTypeDescription() const
 {
     if( IsMandatory() )
-        return GetCanonicalFieldName( m_id );
+        return GetDefaultFieldName( m_id, UNTRANSLATED );
     else
         return _( "User Field" );
 }
@@ -355,7 +364,7 @@ static struct PCB_FIELD_DESC
         propMgr.InheritsAfter( TYPE_HASH( PCB_FIELD ), TYPE_HASH( EDA_TEXT ) );
 
         propMgr.AddProperty( new PROPERTY<PCB_FIELD, wxString>( _HKI( "Name" ),
-                     NO_SETTER( PCB_FIELD, wxString ), &PCB_FIELD::GetCanonicalName ) )
+                     NO_SETTER( PCB_FIELD, wxString ), &PCB_FIELD::GetUntranslatedName ) )
                 .SetIsHiddenFromLibraryEditors()
                 .SetIsHiddenFromPropertiesManager();
 

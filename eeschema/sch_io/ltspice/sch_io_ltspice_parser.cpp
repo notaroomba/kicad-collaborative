@@ -43,6 +43,7 @@
 #include <sim/spice_value.h>
 #include <fmt/format.h>
 #include <cmath>
+#include <set>
 
 
 // Split PWL argument strings on whitespace while keeping quoted spans intact.
@@ -77,6 +78,78 @@ static std::vector<wxString> tokenizeQuoted( const wxString& aText )
         tokens.push_back( token );
 
     return tokens;
+}
+
+
+// LTspice .tran -> ngspice .tran. Tstep 0 or omitted -> (Tstop-Tstart)/10000.
+// Time values are rewritten; trailing modifiers (uic, steady, ...) are kept as-is.
+static wxString convertLtSpiceTextToNgspice( const wxString& aText )
+{
+    wxArrayString outLines;
+
+    for( wxString line : wxSplit( aText, '\n', '\0' ) )
+    {
+        wxArrayString tok = wxSplit( line, ' ', '\0' );
+
+        if( !tok.IsEmpty() && tok[0].IsSameAs( wxS( ".tran" ), false ) )
+        {
+            wxArrayString args;      // <Tstep> <Tstop> [Tstart [dTmax]] [modifiers]
+            wxArrayString modifiers; // uic / LTspice-only flags, preserved
+
+            const std::set<wxString> c_modifiers = { "UIC", "STEADY", "NODISCARD", "STARTUP", "STEP" };
+
+            for( size_t i = 1; i < tok.size(); ++i )
+            {
+                if( tok[i].IsEmpty() )
+                    continue;
+
+                wxString u = tok[i].Upper();
+
+                if( modifiers.IsEmpty() && !c_modifiers.contains( u ) )
+                    args.Add( tok[i] );
+                else
+                    modifiers.Add( tok[i] );
+            }
+
+            if( !args.IsEmpty() )
+            {
+                // LTspice syntax:
+                // .TRAN <Tstep> <Tstop> [Tstart [dTmax]] [modifiers]
+                // .TRAN <Tstop> [modifiers]
+
+                // ngspice syntax:
+                // .tran tstep tstop <tstart <tmax>> <uic>
+                const bool hasTstep = args.size() >= 2;
+
+                wxString tstepStr = hasTstep ? args[0] : wxString();
+                wxString tstopStr = hasTstep ? args[1] : args[0];
+                wxString tstartStr = ( args.size() > 2 ) ? args[2] : wxString();
+                wxString dtmaxStr = ( args.size() > 3 ) ? args[3] : wxString();
+
+                double tstep = SPICE_VALUE( tstepStr ).ToDouble();
+                double tstop = SPICE_VALUE( tstopStr ).ToDouble();
+                double tstart = SPICE_VALUE( tstartStr ).ToDouble();
+
+                if( tstep == 0.0 )
+                    tstepStr = SPICE_VALUE( ( tstop - tstart ) / 10000.0 ).ToSpiceString();
+
+                line = wxS( ".tran " ) + tstepStr + wxS( " " ) + tstopStr;
+
+                if( !tstartStr.IsEmpty() )
+                    line << wxS( " " ) << tstartStr;
+
+                if( !dtmaxStr.IsEmpty() )
+                    line << wxS( " " ) << dtmaxStr;
+
+                for( const wxString& mod : modifiers )
+                    line << wxS( " " ) << mod;
+            }
+        }
+
+        outLines.Add( line );
+    }
+
+    return wxJoin( outLines, '\n', '\0' );
 }
 
 
@@ -211,7 +284,7 @@ void SCH_IO_LTSPICE_PARSER::Parse( SCH_SHEET_PATH* aSheet,
         outDir.AppendDir( wxS( "ltspice_cmp" ) );
         outDir.Mkdir( wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL );
 
-        for( const wxString& name :
+        for( const wxString name :
              { wxS( "standard.dio" ), wxS( "standard.bjt" ), wxS( "standard.jft" ), wxS( "standard.mos" ) } )
         {
             includeText << wxS( ".include ltspice_cmp/" ) << name << wxS( "\n" );
@@ -697,8 +770,8 @@ void SCH_IO_LTSPICE_PARSER::CreateKicadSCH_ITEMs( SCH_SHEET_PATH* aSheet,
 
         for( const LTSPICE_SCHEMATIC::TEXT& lt_text : lt_asc.Texts )
         {
-            screen->Append( CreateSCH_TEXT( lt_text.Offset, lt_text.Value, lt_text.FontSize,
-                                            lt_text.Justification ) );
+            screen->Append( CreateSCH_TEXT( lt_text.Offset, convertLtSpiceTextToNgspice( lt_text.Value ),
+                                            lt_text.FontSize, lt_text.Justification ) );
         }
 
         for( const LTSPICE_SCHEMATIC::DATAFLAG& lt_flag : lt_asc.DataFlags )
@@ -1239,10 +1312,14 @@ void SCH_IO_LTSPICE_PARSER::CreateFields( LTSPICE_SCHEMATIC::LT_SYMBOL& aLTSymbo
 
         wxString simParams;
         wxString pwlArgs;
+        wxString upperValue = value.Upper();
 
-        if( value.Upper().StartsWith( wxS( "PWL " ), &pwlArgs ) && value.Upper().Contains( wxS( "FILE=" ) ) )
+        if( upperValue.StartsWith( wxS( "PWL " ) ) && upperValue.Contains( wxS( "FILE=" ) ) )
         {
             // TODO: support REPEAT statements
+
+            // Take the arguments from the original text so the data file path keeps its case
+            pwlArgs = value.Mid( 4 );
 
             if( !value2.IsEmpty() )
                 pwlArgs << wxS( " " ) << value2;
@@ -1546,6 +1623,14 @@ void SCH_IO_LTSPICE_PARSER::CreatePin( LTSPICE_SCHEMATIC::LT_SYMBOL& aLTSymbol, 
     }
 
     aPin->SetNumber( wxString::Format( wxS( "%d" ), aIndex + 1 ) );
+
+    // Prefer LTspice SpiceOrder for pin numbers
+    wxString spiceOrder = lt_pin.PinAttribute[ wxS( "SpiceOrder" ) ];
+    long     spiceOrderNum = 0;
+
+    if( spiceOrder.ToLong( &spiceOrderNum ) && spiceOrderNum > 0 )
+        aPin->SetNumber( wxString::Format( wxS( "%ld" ), spiceOrderNum ) );
+
     aPin->SetType( ELECTRICAL_PINTYPE::PT_PASSIVE );
     aPin->SetPosition( ToKicadCoords( lt_pin.PinLocation ) );
     aPin->SetLength( 5 );

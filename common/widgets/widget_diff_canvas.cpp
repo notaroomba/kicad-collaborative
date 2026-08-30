@@ -47,20 +47,25 @@ struct WIDGET_DIFF_CANVAS::HIGHLIGHT_BOX_ITEM
 };
 
 
-WIDGET_DIFF_CANVAS::WIDGET_DIFF_CANVAS( wxWindow* aParent, wxWindowID aId ) :
-        WIDGET_DIFF_CANVAS( aParent, aId, std::make_unique<KIGFX::GAL_DISPLAY_OPTIONS>() )
+WIDGET_DIFF_CANVAS::WIDGET_DIFF_CANVAS( wxWindow* aParent, GAL_TYPE aBackend, wxWindowID aId ) :
+        WIDGET_DIFF_CANVAS( aParent, aBackend, aId, std::make_unique<KIGFX::GAL_DISPLAY_OPTIONS>() )
 {
 }
 
 
-WIDGET_DIFF_CANVAS::WIDGET_DIFF_CANVAS( wxWindow* aParent, wxWindowID aId,
+WIDGET_DIFF_CANVAS::WIDGET_DIFF_CANVAS( wxWindow* aParent, GAL_TYPE aBackend, wxWindowID aId,
                                         std::unique_ptr<KIGFX::GAL_DISPLAY_OPTIONS> aGalOptions ) :
-        EDA_DRAW_PANEL_GAL( aParent, aId, wxDefaultPosition, wxDefaultSize, *aGalOptions, GAL_FALLBACK ),
+        EDA_DRAW_PANEL_GAL( aParent, aId, wxDefaultPosition, wxDefaultSize, *aGalOptions, aBackend ),
         m_layerVisible( LSET::AllLayersMask() ),
         m_galOptions( std::move( aGalOptions ) )
 {
     m_view = new KIGFX::VIEW();
     m_view->SetGAL( m_gal );
+
+    auto target = m_backend == GAL_TYPE_OPENGL ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
+
+    for( int i = 0; i < KIGFX::VIEW::VIEW_MAX_LAYERS; i++ )
+        m_view->SetLayerTarget( i, target );
 
     // Until a module installs a native context painter, the canvas renders only
     // VIEW_OVERLAY commands, which bypass the painter. Reuse the drawing-sheet

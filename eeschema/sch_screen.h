@@ -63,6 +63,7 @@ class SCH_EDIT_FRAME;
 class SCH_SHEET_LIST;
 class SCH_IO_KICAD_SEXPR_PARSER;
 class SCH_IO_KICAD_SEXPR;
+class SCHEMATIC;
 class TEST_SCH_SCREEN_FIXTURE;
 
 enum SCH_LINE_TEST_T
@@ -77,7 +78,7 @@ struct PICKED_SYMBOL
 {
     LIB_ID LibId;
     int    Unit;
-    int    Convert;
+    int    BodyStyle;
 
     bool   KeepSymbol;
     bool   PlaceAllUnits;
@@ -86,7 +87,7 @@ struct PICKED_SYMBOL
 
     PICKED_SYMBOL() :
             Unit( 1 ),
-            Convert( 1 ),
+            BodyStyle( 1 ),
             KeepSymbol( false ),
             PlaceAllUnits( false )
     {
@@ -504,6 +505,8 @@ public:
      */
     void AddLibSymbol( LIB_SYMBOL* aLibSymbol );
 
+    void AddLibSymbol( const wxString& aKey, std::unique_ptr<LIB_SYMBOL> aLibSymbol );
+
     /**
      * After loading a file from disk, the library symbols do not yet contain the full
      * data for their embedded files, only a reference.  This iterates over all lib symbols
@@ -641,6 +644,7 @@ private:
     friend SCH_IO_KICAD_SEXPR;   // Only to save the loaded instance information to schematic file.
     friend SCH_IO_ALTIUM;
     friend SCH_IO_PADS;
+    friend SCHEMATIC;          // Only to adopt staged content, see SCHEMATIC::AdoptContent().
     friend TEST_SCH_SCREEN_FIXTURE;
 
     bool doIsJunction( const VECTOR2I& aPosition, bool aBreakCrossings,

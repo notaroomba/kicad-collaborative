@@ -24,6 +24,7 @@
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <project_template.h>
+#include <settings/settings_manager.h>
 
 #include <wx/dir.h>
 #include <wx/filename.h>
@@ -290,6 +291,35 @@ BOOST_AUTO_TEST_CASE( EnsureDefaultTemplateSeedsBaseDir )
 }
 
 
+BOOST_AUTO_TEST_CASE( ProjectCreatedFromDefaultTemplateLoads )
+{
+    wxString   baseDir = wxString::FromUTF8( ( m_tempDir / "default_load" ).string() );
+    wxFileName seeded = EnsureDefaultProjectTemplate( baseDir );
+
+    BOOST_REQUIRE( seeded.IsOk() );
+
+    fs::path destPath = m_tempDir / "fromdefault";
+    fs::create_directories( destPath );
+
+    PROJECT_TEMPLATE tmpl( seeded.GetPath() );
+
+    wxFileName newProjectPath;
+    newProjectPath.SetPath( wxString::FromUTF8( destPath.string() ) );
+    newProjectPath.SetName( wxS( "fromdefault" ) );
+    newProjectPath.SetExt( wxS( "kicad_pro" ) );
+
+    wxString errorMsg;
+
+    BOOST_REQUIRE_MESSAGE( tmpl.CreateProject( newProjectPath, &errorMsg ),
+                           "CreateProject should succeed: " + errorMsg.ToStdString() );
+
+    SETTINGS_MANAGER mgr;
+
+    BOOST_CHECK_MESSAGE( mgr.LoadProject( newProjectPath.GetFullPath() ),
+                         "A project made from the default template must load" );
+}
+
+
 // An empty base directory must not create anything and must report failure.
 BOOST_AUTO_TEST_CASE( EnsureDefaultTemplateRejectsEmptyBaseDir )
 {
@@ -323,6 +353,55 @@ BOOST_AUTO_TEST_CASE( EnsureDefaultTemplateIsIdempotent )
     buffer << in.rdbuf();
 
     BOOST_CHECK_EQUAL( buffer.str(), std::string( "{\"custom\":true}" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReadOnlyTemplateProducesWritableProject )
+{
+    CreateTemplateStructure( "rotemplate", { "rotemplate-lib" },
+                             { "rotemplate.kicad_pro", "rotemplate.kicad_sch", "rotemplate-lib/component.kicad_sym" } );
+
+    fs::path templatePath = m_tempDir / "rotemplate";
+    fs::path destPath = m_tempDir / "rwproject";
+    fs::create_directories( destPath );
+
+    const std::vector<fs::path> templateFiles = { templatePath / "rotemplate.kicad_pro",
+                                                  templatePath / "rotemplate.kicad_sch",
+                                                  templatePath / "rotemplate-lib" / "component.kicad_sym" };
+
+    for( const fs::path& file : templateFiles )
+    {
+        fs::permissions( file, fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write,
+                         fs::perm_options::remove );
+    }
+
+    PROJECT_TEMPLATE tmpl( wxString::FromUTF8( templatePath.string() ) );
+
+    wxFileName newProjectPath;
+    newProjectPath.SetPath( wxString::FromUTF8( destPath.string() ) );
+    newProjectPath.SetName( wxS( "rwproject" ) );
+    newProjectPath.SetExt( wxS( "kicad_pro" ) );
+
+    wxString errorMsg;
+    bool     created = tmpl.CreateProject( newProjectPath, &errorMsg );
+
+    // Restore write permission before asserting, so that a failed assertion still leaves the
+    // fixture able to remove the temporary directory.
+    for( const fs::path& file : templateFiles )
+        fs::permissions( file, fs::perms::owner_write, fs::perm_options::add );
+
+    BOOST_REQUIRE_MESSAGE( created, "CreateProject failed: " + errorMsg.ToStdString() );
+
+    const std::vector<fs::path> projectFiles = { destPath / "rwproject.kicad_pro", destPath / "rwproject.kicad_sch",
+                                                 destPath / "rwproject-lib" / "component.kicad_sym" };
+
+    for( const fs::path& file : projectFiles )
+    {
+        wxFileName fn( wxString::FromUTF8( file.string() ) );
+
+        BOOST_REQUIRE_MESSAGE( fn.FileExists(), file.string() + " was not created" );
+        BOOST_CHECK_MESSAGE( fn.IsFileWritable(), file.string() + " is read only" );
+    }
 }
 
 

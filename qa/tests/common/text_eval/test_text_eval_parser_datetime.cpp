@@ -3,7 +3,7 @@
  *
  * Copyright The KiCad Developers, see AUTHORS.TXT for contributors.
  *
- * This program is free softwar        { "@{datestring('2023年12月25日')}", "19716", false },  // Christmas 2023       { "@{datestring('2023年12月25日')}", "19716", false },  // Christmas 2023       { "@{datestring('2023年12월25일')}", "19716", false },  // Christmas 2023; you can redistribute it and/or
+ * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
@@ -24,6 +24,7 @@
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <text_eval/text_eval_wrapper.h>
+#include <fmt/ranges.h>
 
 #include <chrono>
 #include <regex>
@@ -451,12 +452,18 @@ BOOST_AUTO_TEST_CASE( DatePerformance )
     // Test that date operations are reasonably fast
     auto start = std::chrono::high_resolution_clock::now();
 
+    std::set<int> errors;
+
     // Perform many date operations
     for( int i = 0; i < 1000; ++i )
     {
         auto result = evaluator.Evaluate( "@{dateformat(" + std::to_string(i) + ")}" );
-        BOOST_CHECK( !evaluator.HasErrors() );
+
+        if( evaluator.HasErrors() )
+            errors.insert( i );
     }
+
+    BOOST_REQUIRE_MESSAGE( errors.empty(), fmt::format( "Evaluation of operations had errors: {}", fmt::join( errors, ", " ) ) );
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( end - start );

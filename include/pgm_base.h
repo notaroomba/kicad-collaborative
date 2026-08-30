@@ -43,10 +43,9 @@ class wxApp;
 class wxMenu;
 class wxWindow;
 class wxSplashScreen;
-class wxSingleInstanceChecker;
 
 class KISTATUSBAR;
-struct LOAD_MESSAGE;
+class KI_ERROR;
 struct BACKGROUND_JOB;
 class BACKGROUND_JOBS_MONITOR;
 class NOTIFICATIONS_MANAGER;
@@ -308,7 +307,7 @@ public:
 
     // The PGM_* classes can have difficulties at termination if they
     // are not destroyed soon enough.  Relying on a static destructor can be
-    // too late for contained objects like wxSingleInstanceChecker.
+    // too late for the objects they contain.
     void Destroy();
 
     /**
@@ -351,14 +350,6 @@ public:
     void HideSplash();
 
     /**
-     * Allow access to the wxSingleInstanceChecker to test for other running KiCads.
-     */
-    std::unique_ptr<wxSingleInstanceChecker>& SingleInstance()
-    {
-        return m_pgm_checker;
-    }
-
-    /**
      * Starts a background job to preload the global and project design block libraries.
      * Design block handling code is not associated with a particular KIFACE so this is
      * handled here unlike symbol/footprint loading which are taken care of by the KIFACEs.
@@ -380,7 +371,7 @@ public:
      * Add library load messages to all registered status bars.
      * Thread-safe - can be called from background threads.
      */
-    void AddLibraryLoadMessages( const std::vector<LOAD_MESSAGE>& aMessages );
+    void AddLibraryLoadMessages( const std::vector<KI_ERROR>& aMessages );
 
     /**
      * Clear library load messages from all registered status bars.
@@ -415,9 +406,6 @@ protected:
     std::unique_ptr<LIBRARY_MANAGER> m_library_manager;
     std::unique_ptr<BACKGROUND_JOBS_MONITOR> m_background_jobs_monitor;
     std::unique_ptr<NOTIFICATIONS_MANAGER> m_notifications_manager;
-
-    /// Check if there is another copy of Kicad running at the same time.
-    std::unique_ptr<wxSingleInstanceChecker> m_pgm_checker;
 
     std::unique_ptr<API_PLUGIN_MANAGER> m_plugin_manager;
     std::unique_ptr<KICAD_API_SERVER> m_api_server;

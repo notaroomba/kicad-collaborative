@@ -225,6 +225,8 @@ public:
 
     DISPLAY_OPTIONS    m_Display;
 
+    FIELDS_TABLE_SETTINGS m_FieldEditorPanel;
+
     MAGNETIC_SETTINGS  m_MagneticItems;
     SNAP_INFERENCE_SETTINGS m_SnapInference;
     TRACK_DRAG_ACTION  m_TrackDragAction;

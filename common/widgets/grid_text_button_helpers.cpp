@@ -24,6 +24,9 @@
 #include <wx/dirdlg.h>
 #include <wx/textctrl.h>
 
+#include <set>
+#include <string>
+
 #include <bitmaps.h>
 #include <embedded_files.h>
 #include <kiplatform/ui.h>
@@ -43,6 +46,52 @@
 
 //-------- Renderer ---------------------------------------------------------------------
 // None required; just render as normal text.
+
+
+GRID_CELL_URL_EDITOR_CONTEXT MakeGridCellUrlEditorContext( const std::vector<EMBEDDED_FILES*>& aEmbedTargets,
+                                                           const std::vector<EMBEDDED_FILES*>& aAdditionalLookupFiles )
+{
+    GRID_CELL_URL_EDITOR_CONTEXT context;
+    std::set<EMBEDDED_FILES*>    filesSeen;
+
+    for( EMBEDDED_FILES* files : aEmbedTargets )
+    {
+        if( !files || !filesSeen.insert( files ).second )
+            continue;
+
+        context.m_embedTargets.push_back( files );
+        context.m_filesStack.push_back( files );
+    }
+
+    for( EMBEDDED_FILES* files : aAdditionalLookupFiles )
+    {
+        if( files && filesSeen.insert( files ).second )
+            context.m_filesStack.push_back( files );
+    }
+
+    return context;
+}
+
+
+bool SelectFootprintFromChooser( DIALOG_SHIM* aDialog, wxString& aFootprint,
+                                 const wxString& aSymbolNetlist )
+{
+    KIWAY_PLAYER* frame = aDialog->Kiway().Player( FRAME_FOOTPRINT_CHOOSER, true, aDialog );
+
+    if( !frame )
+        return false;
+
+    if( !aSymbolNetlist.IsEmpty() )
+    {
+        std::string      payload = aSymbolNetlist.ToStdString();
+        KIWAY_MAIL_EVENT event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST, payload );
+        frame->KiwayMailIn( event );
+    }
+
+    bool selected = frame->ShowModal( &aFootprint, aDialog );
+    frame->Destroy();
+    return selected;
+}
 
 
 
@@ -112,12 +161,12 @@ class TEXT_BUTTON_FP_CHOOSER : public wxComboCtrl
 {
 public:
     TEXT_BUTTON_FP_CHOOSER( wxWindow* aParent, DIALOG_SHIM* aParentDlg,
-                            const wxString& aSymbolNetlist, const wxString& aPreselect ) :
+                            const std::function<wxString( int )>& aSymbolNetlistProvider, int& aRow ) :
             wxComboCtrl( aParent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 0, 0 ),
                          wxTE_PROCESS_ENTER | wxBORDER_NONE ),
             m_dlg( aParentDlg ),
-            m_preselect( aPreselect ),
-            m_symbolNetlist( aSymbolNetlist.ToStdString() )
+            m_symbolNetlistProvider( aSymbolNetlistProvider ),
+            m_row( aRow )
     {
         m_buttonFpChooserLock = false;
         SetButtonBitmaps( KiBitmapBundle( BITMAPS::small_library ) );
@@ -146,30 +195,19 @@ protected:
         // pick a footprint using the footprint picker.
         wxString fpid = GetValue();
 
-        if( fpid.IsEmpty() )
-            fpid = m_preselect;
+        wxString symbolNetlist;
 
-        if( KIWAY_PLAYER* frame = m_dlg->Kiway().Player( FRAME_FOOTPRINT_CHOOSER, true, m_dlg ) )
-        {
-            if( !m_symbolNetlist.empty() )
-            {
-                KIWAY_MAIL_EVENT event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST,
-                                     m_symbolNetlist );
-                frame->KiwayMailIn( event );
-            }
+        if( m_symbolNetlistProvider )
+            symbolNetlist = m_symbolNetlistProvider( m_row );
 
-            if( frame->ShowModal( &fpid, m_dlg ) )
-                SetValue( fpid );
-
-            frame->Destroy();
-        }
+        if( SelectFootprintFromChooser( m_dlg, fpid, symbolNetlist ) )
+            SetValue( fpid );
 
         m_buttonFpChooserLock = false;
     }
 
 protected:
     DIALOG_SHIM* m_dlg;
-    wxString     m_preselect;
 
     // Lock flag to lock the button to show the FP chooser
     // true when the button is busy, waiting all footprints loaded to
@@ -181,14 +219,15 @@ protected:
      *   pinNumber pinName <tab> pinNumber pinName...
      *   fpFilter fpFilter...
      */
-    std::string  m_symbolNetlist;
+    std::function<wxString( int )> m_symbolNetlistProvider;
+    int&                           m_row;
 };
 
 
 void GRID_CELL_FPID_EDITOR::Create( wxWindow* aParent, wxWindowID aId,
                                     wxEvtHandler* aEventHandler )
 {
-    m_control = new TEXT_BUTTON_FP_CHOOSER( aParent, m_dlg, m_symbolNetlist, m_preselect );
+    m_control = new TEXT_BUTTON_FP_CHOOSER( aParent, m_dlg, m_symbolNetlistProvider, m_row );
     WX_GRID::CellEditorSetMargins( Combo() );
 
 #if wxUSE_VALIDATORS
@@ -207,12 +246,13 @@ class TEXT_BUTTON_URL : public wxComboCtrl
 {
 public:
     TEXT_BUTTON_URL( wxWindow* aParent, DIALOG_SHIM* aParentDlg, SEARCH_STACK* aSearchStack,
-                     std::vector<EMBEDDED_FILES*> aFilesStack ) :
+                     const std::function<GRID_CELL_URL_EDITOR_CONTEXT( int )>& aContextProvider, int& aRow ) :
             wxComboCtrl( aParent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( 0, 0 ),
                          wxTE_PROCESS_ENTER | wxBORDER_NONE ),
             m_dlg( aParentDlg ),
             m_searchStack( aSearchStack ),
-            m_filesStack( aFilesStack )
+            m_contextProvider( aContextProvider ),
+            m_row( aRow )
     {
         UpdateButtonBitmaps();
 
@@ -223,12 +263,7 @@ public:
         Bind( wxEVT_TEXT, &TEXT_BUTTON_URL::OnTextChange, this );
     }
 
-    ~TEXT_BUTTON_URL()
-    {
-        Unbind( wxEVT_TEXT, &TEXT_BUTTON_URL::OnTextChange, this );
-
-        m_filesStack.clear();   // we don't own pointers
-    }
+    ~TEXT_BUTTON_URL() { Unbind( wxEVT_TEXT, &TEXT_BUTTON_URL::OnTextChange, this ); }
 
     // We don't own any of our raw pointers, so compiler's copy c'tor an operator= are OK.
 
@@ -242,6 +277,11 @@ protected:
     {
         m_dlg->PrepareForModalSubDialog();
 
+        GRID_CELL_URL_EDITOR_CONTEXT context;
+
+        if( m_contextProvider )
+            context = m_contextProvider( m_row );
+
         wxString filename = GetValue();
 
         if( filename.IsEmpty() || filename == wxT( "~" ) )
@@ -251,7 +291,8 @@ protected:
             wxFileDialog openFileDialog( this, _( "Open file" ), "", "", _( "All Files" ) + wxT( " (*.*)|*.*" ),
                                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
-            openFileDialog.SetCustomizeHook( customize );
+            if( !context.m_embedTargets.empty() )
+                openFileDialog.SetCustomizeHook( customize );
 
             KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
@@ -260,10 +301,24 @@ protected:
                 filename = openFileDialog.GetPath();
                 wxFileName fn( filename );
 
-                if( customize.GetEmbed() )
+                if( customize.GetEmbed() && !context.m_embedTargets.empty() )
                 {
-                    EMBEDDED_FILES::EMBEDDED_FILE* result = m_filesStack[0]->AddFile( fn, false );
-                    SetValue( result->GetLink() );
+                    wxString link;
+
+                    for( EMBEDDED_FILES* files : context.m_embedTargets )
+                    {
+                        if( !files )
+                            continue;
+
+                        if( EMBEDDED_FILES::EMBEDDED_FILE* result = files->AddFile( fn, false ) )
+                        {
+                            if( link.IsEmpty() )
+                                link = result->GetLink();
+                        }
+                    }
+
+                    if( !link.IsEmpty() )
+                        SetValue( link );
                 }
                 else
                 {
@@ -273,7 +328,7 @@ protected:
         }
         else
         {
-            GetAssociatedDocument( m_dlg, GetValue(), &m_dlg->Prj(), m_searchStack, m_filesStack );
+            GetAssociatedDocument( m_dlg, GetValue(), &m_dlg->Prj(), m_searchStack, context.m_filesStack );
         }
 
         m_dlg->CleanupAfterModalSubDialog();
@@ -294,15 +349,17 @@ protected:
     }
 
 protected:
-    DIALOG_SHIM*                 m_dlg;
-    SEARCH_STACK*                m_searchStack;     // No ownership of pointer
-    std::vector<EMBEDDED_FILES*> m_filesStack;      // No ownership of pointers
+    DIALOG_SHIM*  m_dlg;
+    SEARCH_STACK* m_searchStack; // No ownership of pointer
+
+    std::function<GRID_CELL_URL_EDITOR_CONTEXT( int )> m_contextProvider;
+    int&                                               m_row;
 };
 
 
 void GRID_CELL_URL_EDITOR::Create( wxWindow* aParent, wxWindowID aId, wxEvtHandler* aEventHandler )
 {
-    m_control = new TEXT_BUTTON_URL( aParent, m_dlg, m_searchStack, m_filesStack );
+    m_control = new TEXT_BUTTON_URL( aParent, m_dlg, m_searchStack, m_contextProvider, m_row );
     WX_GRID::CellEditorSetMargins( Combo() );
 
 #if wxUSE_VALIDATORS

@@ -232,6 +232,24 @@ bool PCB_GRIDITEM::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 }
 
 
+EDA_ANGLE PCB_GRIDITEM::GetOrientationAt( const VECTOR2I& aPos ) const
+{
+    if( m_type != PCB_GRIDITEM_TYPE::POLAR )
+        return m_orientation;
+
+    // Polar: local-X is the radial spoke from this grid's centre through aPos.  The
+    // grid's own rotation maps spokes onto spokes, so the world radial does not
+    // depend on m_orientation.
+    VECTOR2I local = aPos - m_pos;
+
+    if( local.x == 0 && local.y == 0 )
+        return m_orientation;
+
+    // std::atan2 is math-CCW (y-up); EDA_ANGLE is screen-CCW (y-down) — negate.
+    return EDA_ANGLE( -std::atan2( (double) local.y, (double) local.x ), RADIANS_T );
+}
+
+
 SHAPE_LINE_CHAIN PCB_GRIDITEM::buildOutlineWorld() const
 {
     SHAPE_LINE_CHAIN outline;
@@ -444,6 +462,28 @@ PCB_GRIDITEM* FindActiveGridAt( const BOARD& aBoard, const VECTOR2I& aPos, PCB_G
 }
 
 
+EDA_ANGLE GridFrameAngleAt( const BOARD& aBoard, const VECTOR2I& aPos, PCB_GRIDITEM_ROLE aRole )
+{
+    if( PCB_GRIDITEM* grid = FindActiveGridAt( aBoard, aPos, aRole ) )
+        return grid->GetOrientationAt( aPos );
+
+    return ANGLE_0;
+}
+
+
+EDA_ANGLE GridFrameRotationDelta( const EDA_ANGLE& aFrom, const EDA_ANGLE& aTo, const EDA_ANGLE& aRotationStep )
+{
+    if( aTo == aFrom )
+        return ANGLE_0;
+
+    // Cartesian grids repeat every quarter turn, so never rotate by more than that.
+    EDA_ANGLE period = std::min( aRotationStep, ANGLE_90 );
+    EDA_ANGLE raw = aTo - aFrom;
+
+    return raw - raw.Snapped( period );
+}
+
+
 ENUM_TO_WXANY( PCB_GRIDITEM_TYPE );
 
 
@@ -470,84 +510,78 @@ static struct PCB_GRIDITEM_DESC
                                           return false;
                                       } );
 
-        const auto isCartesian = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( PCB_GRIDITEM* g = dynamic_cast<PCB_GRIDITEM*>( aItem ) )
-                return g->GetGridItemType() == PCB_GRIDITEM_TYPE::CARTESIAN;
+        const auto isCartesian =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( PCB_GRIDITEM* g = dynamic_cast<PCB_GRIDITEM*>( aItem ) )
+                        return g->GetGridItemType() == PCB_GRIDITEM_TYPE::CARTESIAN;
 
-            return false;
-        };
+                    return false;
+                };
 
-        const auto isPolar = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( PCB_GRIDITEM* g = dynamic_cast<PCB_GRIDITEM*>( aItem ) )
-                return g->GetGridItemType() == PCB_GRIDITEM_TYPE::POLAR;
+        const auto isPolar =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( PCB_GRIDITEM* g = dynamic_cast<PCB_GRIDITEM*>( aItem ) )
+                        return g->GetGridItemType() == PCB_GRIDITEM_TYPE::POLAR;
 
-            return false;
-        };
+                    return false;
+                };
 
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_GRIDITEM, PCB_GRIDITEM_TYPE>(
-                _HKI( "Grid Type" ), &PCB_GRIDITEM::SetGridItemType, &PCB_GRIDITEM::GetGridItemType ) );
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_GRIDITEM, PCB_GRIDITEM_TYPE>( _HKI( "Grid Type" ),
+                    &PCB_GRIDITEM::SetGridItemType, &PCB_GRIDITEM::GetGridItemType ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, double>(
-                _HKI( "Orientation" ), &PCB_GRIDITEM::SetOrientationDegrees, &PCB_GRIDITEM::GetOrientationDegrees,
-                PROPERTY_DISPLAY::PT_DEGREE ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, double>( _HKI( "Orientation" ),
+                    &PCB_GRIDITEM::SetOrientationDegrees, &PCB_GRIDITEM::GetOrientationDegrees,
+                    PROPERTY_DISPLAY::PT_DEGREE ) );
 
-        auto extentX = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Extent X" ), &PCB_GRIDITEM::SetExtentX,
-                                                        &PCB_GRIDITEM::GetExtentX, PROPERTY_DISPLAY::PT_SIZE );
-        extentX->SetAvailableFunc( isCartesian );
-        propMgr.AddProperty( extentX );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Extent X" ),
+                    &PCB_GRIDITEM::SetExtentX, &PCB_GRIDITEM::GetExtentX, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isCartesian );
 
-        auto extentY = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Extent Y" ), &PCB_GRIDITEM::SetExtentY,
-                                                        &PCB_GRIDITEM::GetExtentY, PROPERTY_DISPLAY::PT_SIZE );
-        extentY->SetAvailableFunc( isCartesian );
-        propMgr.AddProperty( extentY );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Extent Y" ),
+                    &PCB_GRIDITEM::SetExtentY, &PCB_GRIDITEM::GetExtentY, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isCartesian );
 
-        auto spacingX = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Spacing X" ), &PCB_GRIDITEM::SetSpacingX,
-                                                         &PCB_GRIDITEM::GetSpacingX, PROPERTY_DISPLAY::PT_SIZE );
-        spacingX->SetAvailableFunc( isCartesian );
-        propMgr.AddProperty( spacingX );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Spacing X" ),
+                    &PCB_GRIDITEM::SetSpacingX, &PCB_GRIDITEM::GetSpacingX, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isCartesian );
 
-        auto spacingY = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Spacing Y" ), &PCB_GRIDITEM::SetSpacingY,
-                                                         &PCB_GRIDITEM::GetSpacingY, PROPERTY_DISPLAY::PT_SIZE );
-        spacingY->SetAvailableFunc( isCartesian );
-        propMgr.AddProperty( spacingY );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Spacing Y" ),
+                    &PCB_GRIDITEM::SetSpacingY, &PCB_GRIDITEM::GetSpacingY, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isCartesian );
 
-        auto radiusMax = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Radius Extent" ), &PCB_GRIDITEM::SetRadiusExtent,
-                                                          &PCB_GRIDITEM::GetRadiusExtent, PROPERTY_DISPLAY::PT_SIZE );
-        radiusMax->SetAvailableFunc( isPolar );
-        propMgr.AddProperty( radiusMax );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Radius Extent" ),
+                    &PCB_GRIDITEM::SetRadiusExtent, &PCB_GRIDITEM::GetRadiusExtent, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isPolar );
 
-        auto radiusStep = new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Radius Spacing" ), &PCB_GRIDITEM::SetRadiusSpacing,
-                                                           &PCB_GRIDITEM::GetRadiusSpacing, PROPERTY_DISPLAY::PT_SIZE );
-        radiusStep->SetAvailableFunc( isPolar );
-        propMgr.AddProperty( radiusStep );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, int>( _HKI( "Radius Spacing" ),
+                    &PCB_GRIDITEM::SetRadiusSpacing, &PCB_GRIDITEM::GetRadiusSpacing, PROPERTY_DISPLAY::PT_SIZE ) )
+                .SetAvailableFunc( isPolar );
 
-        auto phiMax =
-                new PROPERTY<PCB_GRIDITEM, double>( _HKI( "Phi Extent" ), &PCB_GRIDITEM::SetPhiExtentDegrees,
-                                                    &PCB_GRIDITEM::GetPhiExtentDegrees, PROPERTY_DISPLAY::PT_DEGREE );
-        phiMax->SetAvailableFunc( isPolar );
-        propMgr.AddProperty( phiMax );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, double>( _HKI( "Phi Extent" ),
+                    &PCB_GRIDITEM::SetPhiExtentDegrees, &PCB_GRIDITEM::GetPhiExtentDegrees,
+                    PROPERTY_DISPLAY::PT_DEGREE ) )
+                .SetAvailableFunc( isPolar );
 
-        auto phiStep =
-                new PROPERTY<PCB_GRIDITEM, double>( _HKI( "Phi Spacing" ), &PCB_GRIDITEM::SetPhiSpacingDegrees,
-                                                    &PCB_GRIDITEM::GetPhiSpacingDegrees, PROPERTY_DISPLAY::PT_DEGREE );
-        phiStep->SetAvailableFunc( isPolar );
-        propMgr.AddProperty( phiStep );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, double>( _HKI( "Phi Spacing" ),
+                    &PCB_GRIDITEM::SetPhiSpacingDegrees, &PCB_GRIDITEM::GetPhiSpacingDegrees,
+                    PROPERTY_DISPLAY::PT_DEGREE ) )
+                .SetAvailableFunc( isPolar );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, unsigned>(
-                _HKI( "Priority" ), &PCB_GRIDITEM::SetAssignedPriority, &PCB_GRIDITEM::GetAssignedPriority ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, unsigned>( _HKI( "Priority" ),
+                    &PCB_GRIDITEM::SetAssignedPriority, &PCB_GRIDITEM::GetAssignedPriority ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, unsigned>(
-                _HKI( "Tick Interval" ), &PCB_GRIDITEM::SetTickInterval, &PCB_GRIDITEM::GetTickInterval ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, unsigned>( _HKI( "Tick Interval" ),
+                    &PCB_GRIDITEM::SetTickInterval, &PCB_GRIDITEM::GetTickInterval ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>(
-                _HKI( "Affects Cursor Snap" ), &PCB_GRIDITEM::SetAffectsCursor, &PCB_GRIDITEM::GetAffectsCursor ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>( _HKI( "Affects Cursor Snap" ),
+                    &PCB_GRIDITEM::SetAffectsCursor, &PCB_GRIDITEM::GetAffectsCursor ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>(
-                _HKI( "Affects Routing" ), &PCB_GRIDITEM::SetAffectsRouting, &PCB_GRIDITEM::GetAffectsRouting ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>( _HKI( "Affects Routing" ),
+                    &PCB_GRIDITEM::SetAffectsRouting, &PCB_GRIDITEM::GetAffectsRouting ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>(
-                _HKI( "Affects Placement" ), &PCB_GRIDITEM::SetAffectsPlacement, &PCB_GRIDITEM::GetAffectsPlacement ) );
+        propMgr.AddProperty( new PROPERTY<PCB_GRIDITEM, bool>( _HKI( "Affects Placement" ),
+                    &PCB_GRIDITEM::SetAffectsPlacement, &PCB_GRIDITEM::GetAffectsPlacement ) );
     }
 } _PCB_GRIDITEM_DESC;

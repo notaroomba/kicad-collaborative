@@ -28,6 +28,7 @@
 #include <wx/textfile.h>
 #include <unordered_map>
 
+#include <kiplatform/io.h>
 #include <wildcards_and_files_ext.h>
 #include <wx_filename.h>
 #include "project_template.h"
@@ -353,20 +354,27 @@ bool PROJECT_TEMPLATE::CreateProject( wxFileName& aNewProjectPath, wxString* aEr
 
         destFile.SetPath( destpath );
 
-        if( srcFile.FileExists() && !wxCopyFile( srcFile.GetFullPath(), destFile.GetFullPath() ) )
+        if( srcFile.FileExists() )
         {
-            if( aErrorMsg )
+            if( !wxCopyFile( srcFile.GetFullPath(), destFile.GetFullPath() ) )
             {
-                if( !aErrorMsg->empty() )
-                    *aErrorMsg += "\n";
+                if( aErrorMsg )
+                {
+                    if( !aErrorMsg->empty() )
+                        *aErrorMsg += "\n";
 
-                wxString msg;
+                    wxString msg;
 
-                msg.Printf( _( "Cannot copy file '%s'." ), destFile.GetFullPath() );
-                *aErrorMsg += msg;
+                    msg.Printf( _( "Cannot copy file '%s'." ), destFile.GetFullPath() );
+                    *aErrorMsg += msg;
+                }
+
+                result = false;
             }
-
-            result = false;
+            else
+            {
+                KIPLATFORM::IO::MakeWriteable( destFile.GetFullPath() );
+            }
         }
     }
 
@@ -481,7 +489,7 @@ wxFileName EnsureDefaultProjectTemplate( const wxString& aBaseDir )
         if( !proj.IsOpened() )
             return wxFileName();
 
-        proj.Write( wxT( "{}" ) );
+        proj.Write( wxT( "{\n  \"meta\": {\n    \"version\": 1\n  }\n}\n" ) );
         proj.Close();
     }
 

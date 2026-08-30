@@ -205,7 +205,8 @@ int GERBVIEW_INSPECTION_TOOL::MeasureTool( const TOOL_EVENT& aEvent )
     EDA_UNITS                  units = m_frame->GetUserUnits();
     KIGFX::PREVIEW::RULER_ITEM ruler( twoPtMgr, gerbIUScale, units, false, false );
 
-    m_frame->PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( m_frame, originalEvent );
 
     auto setCursor =
             [&]()
@@ -214,7 +215,7 @@ int GERBVIEW_INSPECTION_TOOL::MeasureTool( const TOOL_EVENT& aEvent )
             };
 
     auto cleanup =
-            [&] ()
+            [&]()
             {
                 getView()->SetVisible( &ruler, false );
                 controls.SetAutoPan( false );
@@ -239,14 +240,9 @@ int GERBVIEW_INSPECTION_TOOL::MeasureTool( const TOOL_EVENT& aEvent )
         if( evt->IsCancelInteractive() )
         {
             if( originSet )
-            {
                 cleanup();
-            }
             else
-            {
-                m_frame->PopTool( aEvent );
                 break;
-            }
         }
         else if( evt->IsActivate() )
         {
@@ -255,14 +251,11 @@ int GERBVIEW_INSPECTION_TOOL::MeasureTool( const TOOL_EVENT& aEvent )
 
             if( evt->IsMoveTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool runs
+                m_frame->PushTool( originalEvent );
             }
-            else
-            {
-                m_frame->PopTool( aEvent );
-                break;
-            }
+
+            break;
         }
         else if( !originSet && ( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) ) )
         {

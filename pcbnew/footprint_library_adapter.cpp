@@ -42,6 +42,8 @@ LEAK_AT_EXIT<std::map<wxString, std::vector<std::unique_ptr<FOOTPRINT>>>> FOOTPR
 
 std::shared_mutex FOOTPRINT_LIBRARY_ADAPTER::PreloadedFootprintsMutex;
 
+LEAK_AT_EXIT<std::map<wxString, long long>> FOOTPRINT_LIBRARY_ADAPTER::PreloadedTimestamps;
+
 
 FOOTPRINT_LIBRARY_ADAPTER::FOOTPRINT_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager ) :
         LIBRARY_MANAGER_ADAPTER( aManager )
@@ -68,6 +70,8 @@ void FOOTPRINT_LIBRARY_ADAPTER::enumerateLibrary( LIB_DATA* aLib, const wxString
     PCB_IO* plugin = pcbplugin( aLib );
     wxString nickname = aLib->row->Nickname();
 
+    long long timestamp = plugin->GetLibraryTimestamp( aUri );
+
     // Hold across the enumerate-then-borrow sequence: GetEnumeratedFootprint returns borrowed
     // FP_CACHE pointers, so no other thread may rebuild the cache until we finish cloning.
     std::lock_guard pluginGuard( pluginMutex( nickname ) );
@@ -92,8 +96,10 @@ void FOOTPRINT_LIBRARY_ADAPTER::enumerateLibrary( LIB_DATA* aLib, const wxString
             if( !cached )
                 continue;
 
-            FOOTPRINT* footprint = static_cast<FOOTPRINT*>( cached->Duplicate( IGNORE_PARENT_GROUP ) );
+            // Preserve disk UUIDs in the cache that serves keep-UUID loads
+            FOOTPRINT* footprint = static_cast<FOOTPRINT*>( cached->Clone() );
             footprint->SetParent( nullptr );
+            footprint->SetParentGroup( nullptr );
 
             // For non-caching plugins, delete the allocated footprint now that we've cloned it
             if( !pluginCaches )
@@ -111,13 +117,10 @@ void FOOTPRINT_LIBRARY_ADAPTER::enumerateLibrary( LIB_DATA* aLib, const wxString
         }
     }
 
-    // GetLibraryTimestamp() reads the filesystem, so do it before taking the lock.
-    long long timestamp = plugin->GetLibraryTimestamp( aUri );
-
     {
         std::unique_lock lock( PreloadedFootprintsMutex );
         PreloadedFootprints.Get()[nickname] = std::move( footprints );
-        m_preloadedTimestamps[nickname] = timestamp;
+        PreloadedTimestamps.Get()[nickname] = timestamp;
     }
 
     // Clear the plugin's FP_CACHE now that we've copied footprints to PreloadedFootprints.
@@ -143,7 +146,7 @@ std::optional<LIB_STATUS> FOOTPRINT_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib )
     catch( IO_ERROR& e )
     {
         aLib->status.load_status = LOAD_STATUS::LOAD_ERROR;
-        aLib->status.error = LIBRARY_ERROR( { e.What() } );
+        aLib->status.error = LIBRARY_ERROR( e.Problem(), e.Where() );
         wxLogTrace( traceLibraries, "FP: %s: plugin threw exception: %s", aLib->row->Nickname(), e.What() );
     }
 
@@ -265,15 +268,32 @@ void FOOTPRINT_LIBRARY_ADAPTER::RefreshLibraryIfChanged( const wxString& aNickna
 
     {
         std::shared_lock lock( PreloadedFootprintsMutex );
-        auto tsIt = m_preloadedTimestamps.find( aNickname );
+        auto             tsIt = PreloadedTimestamps.Get().find( aNickname );
 
-        if( tsIt != m_preloadedTimestamps.end() && tsIt->second == currentTimestamp )
+        if( tsIt != PreloadedTimestamps.Get().end() && tsIt->second == currentTimestamp )
             return;
 
         wxLogTrace( traceLibraries, "FP: %s changed on disk, re-enumerating", aNickname );
     }
 
     enumerateLibrary( lib, uri );
+}
+
+
+void FOOTPRINT_LIBRARY_ADAPTER::RefreshChangedLibraries()
+{
+    for( const wxString& nickname : GetLibraryNames() )
+    {
+        // An unreadable library must not stop the others, nor escape into the caller.
+        try
+        {
+            RefreshLibraryIfChanged( nickname );
+        }
+        catch( const IO_ERROR& e )
+        {
+            wxLogTrace( traceLibraries, "FP: %s: refresh failed: %s", nickname, e.What() );
+        }
+    }
 }
 
 
@@ -437,8 +457,10 @@ FOOTPRINT_LIBRARY_ADAPTER::SAVE_T FOOTPRINT_LIBRARY_ADAPTER::SaveFootprint( cons
                                       footprints.end() );
                 }
 
-                FOOTPRINT* clone = static_cast<FOOTPRINT*>( aFootprint->Duplicate( IGNORE_PARENT_GROUP ) );
+                // Must match what FootprintSave() just wrote, UUIDs included
+                FOOTPRINT* clone = static_cast<FOOTPRINT*>( aFootprint->Clone() );
                 clone->SetParent( nullptr );
+                clone->SetParentGroup( nullptr );
 
                 LIB_ID id = clone->GetFPID();
                 id.SetLibNickname( aNickname );

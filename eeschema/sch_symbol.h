@@ -398,6 +398,15 @@ public:
      */
     bool AddSheetPathReferenceEntryIfMissing( const KIID_PATH& aSheetPath );
 
+    /**
+     * Set the owning project of the instance stored for \a aSheetPath.
+     *
+     * @param aSheetPath is the full sheet path of the instance to reassign.
+     * @param aProjectName is the name of the project that now owns the instance.
+     * @return false if no instance is stored for aSheetPath.
+     */
+    bool SetInstanceProjectName( const KIID_PATH& aSheetPath, const wxString& aProjectName );
+
 
     const BOX2I GetBoundingBox() const override;
 
@@ -424,7 +433,7 @@ public:
     /**
      * Return a field in this symbol.
      *
-     * @param aFieldName is the canonical name of the field.
+     * @param aFieldName is the untranslated name of the field.
      *
      * @return Both non-const and const versions return nullptr if the field is not found.
      */
@@ -455,7 +464,7 @@ public:
     SCH_FIELD* AddField( const SCH_FIELD& aField );
 
     /**
-     * Remove a user field from the symbol.
+     * Remove a user field from the symbol. This will remove it from all variants.
      *
      * @param aFieldName is the user fieldName to remove.
      */

@@ -22,12 +22,14 @@ set( KIAPI_PROTO_SRCS
     common/envelope.proto
 
     common/types/base_types.proto
+    common/types/embedded_files.proto
     common/types/enums.proto
     common/types/jobs.proto
     common/types/project_settings.proto
     common/types/wizards.proto
 
     common/commands/base_commands.proto
+    common/commands/cross_probe_commands.proto
     common/commands/editor_commands.proto
     common/commands/project_commands.proto
 
@@ -35,10 +37,12 @@ set( KIAPI_PROTO_SRCS
     board/board_commands.proto
     board/board_jobs.proto
     board/board_types.proto
+    board/board_rules.proto
 
     schematic/schematic_types.proto
     schematic/schematic_commands.proto
     schematic/schematic_jobs.proto
+    schematic/schematic_rules.proto
     )
 
 # Generated C++ code must be in the build dir; it is dependent on the version of protoc installed
@@ -75,10 +79,13 @@ target_compile_definitions( kiapi PRIVATE KIAPI_IMPORTEXPORT=APIEXPORT )
 target_compile_definitions( kiapi INTERFACE KIAPI_IMPORTEXPORT=APIIMPORT )
 
 # https://groups.google.com/g/protobuf/c/PDR1bqRazts
+# Force-define KIAPI_IMPORTEXPORT helpers in every TU that includes generated protobuf
+# headers. Use -imacros (not -include) on Clang/GCC: CMake injects the PCH as -include,
+# and Clang ignores the PCH unless that -include is first on the command line.
 if(MSVC)
     target_compile_options( kiapi PUBLIC /FI${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
 else()
-    target_compile_options( kiapi PUBLIC -include ${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
+    target_compile_options( kiapi PUBLIC -imacros ${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
 endif()
 
 if( APPLE )

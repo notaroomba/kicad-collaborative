@@ -63,24 +63,28 @@ wxString interpretText( const wxString& aText )
     for( wxString::size_type i = 0; i < aText.size(); i++ )
     {
         // Interpret escaped characters
-        if( aText[ i ] == '\\' )
+        if( aText[i] == '\\' )
         {
-            if( i + 1 != aText.size() )
-                text.Append( aText[ i + 1 ] );
+            if( i+1 < aText.size() )
+                text.Append( aText[i+1] );
 
             i++;
             continue;
         }
 
-        // Escape ~ for KiCAD
+        // Escape ~ for KiCAD when it would otherwise be interpreted as markup
         if( aText[i] == '~' )
         {
-            text.Append( '~' );
-            text.Append( '~' );
-            continue;
+            if(   ( i+1 < aText.size() && aText[i+1] == '{' )   // overbar opening sequence
+               || ( aText == "~" ) )                            // legacy empty string token
+            {
+                text.Append( '~' );
+                text.Append( '~' );
+                continue;
+            }
         }
 
-        if( aText[ i ] == '!' )
+        if( aText[i] == '!' )
         {
             if( sectionOpen )
             {
@@ -91,14 +95,14 @@ wxString interpretText( const wxString& aText )
 
             static wxString escapeChars( wxT( " )]}'\"" ) );
 
-            if( i + 1 != aText.size() && escapeChars.Find( aText[i + 1] ) == wxNOT_FOUND )
+            if( i+1 < aText.size() && escapeChars.Find( aText[i+1] ) == wxNOT_FOUND )
             {
                 sectionOpen = true;
                 text.Append( '~' );
             }
             else
             {
-                text.Append( aText[ i ] );
+                text.Append( aText[i] );
             }
 
             continue;
@@ -110,7 +114,7 @@ wxString interpretText( const wxString& aText )
             sectionOpen = false;
         }
 
-        text.Append( aText[ i ] );
+        text.Append( aText[i] );
     }
 
     return text;
@@ -139,6 +143,7 @@ bool substituteVariable( wxString* aText )
         else if( token == wxT( ">DRAWING_NAME" ) )     *aText = wxT( "${PROJECTNAME}" );
         else if( token == wxT( ">LAST_DATE_TIME" ) )   *aText = wxT( "${CURRENT_DATE}" );
         else if( token == wxT( ">PLOT_DATE_TIME" ) )   *aText = wxT( "${CURRENT_DATE}" );
+        else if( token == wxT( ">DATE" ) )             *aText = wxT( "${ISSUE_DATE}" );
         else *aText = wxString::Format( wxS( "${%s}" ), aText->Mid( 1 ).Trim() );
 
         return true;
@@ -153,8 +158,7 @@ wxString convertDescription( wxString aDescr )
     aDescr.Replace( wxS( "\n" ), wxS( " " ) );
     aDescr.Replace( wxS( "\r" ), wxEmptyString );
 
-    wxRegEx( wxS( "<a\\s+(?:[^>]*?\\s+)?href=\"([^\"]*)\"[^>]*>" ) )
-            .ReplaceAll( &aDescr, wxS( "\\1 " ) );
+    wxRegEx( wxS( "<a\\s+(?:[^>]*?\\s+)?href=\"([^\"]*)\"[^>]*>" ) ).ReplaceAll( &aDescr, wxS( "\\1 " ) );
 
     aDescr.Replace( wxS( "<p>" ), wxS( "\n\n" ) );
     aDescr.Replace( wxS( "</p>" ), wxS( "\n\n" ) );
@@ -206,18 +210,9 @@ size_t GetNodeCount( const wxXmlNode* aNode )
 
     timer.Stop();
 
-    wxLogTrace( traceEagleIo, wxS( "XML node '%s' count = %zu took %0.4f ms." ),
-                aNode->GetName(), cnt, timer.msecs() );
+    wxLogTrace( traceEagleIo, wxS( "XML node '%s' count = %zu took %0.4f ms." ), aNode->GetName(), cnt, timer.msecs() );
 
     return cnt;
-}
-template<> template<>
-OPTIONAL_XML_ATTRIBUTE<wxString>::OPTIONAL_XML_ATTRIBUTE( wxString aData )
-{
-    m_isAvailable = !aData.IsEmpty();
-
-    if( m_isAvailable )
-        Set( aData );
 }
 
 
@@ -236,8 +231,7 @@ ECOORD::ECOORD( const wxString& aValue, enum ECOORD::EAGLE_UNIT aUnit )
 
     // %n is used to find out how many digits contains the fraction part, e.g. 0.001 contains 3
     // digits.
-    int ret = sscanf( aValue.c_str(), "%d.%n%llu%n", &integer, &pre_fraction, &fraction,
-                      &post_fraction );
+    int ret = sscanf( aValue.c_str(), "%d.%n%llu%n", &integer, &pre_fraction, &fraction, &post_fraction );
 
     if( ret == 0 )
         throw XML_PARSER_ERROR( "Invalid coordinate" );
@@ -274,10 +268,10 @@ long long int ECOORD::ConvertToNm( int aValue, enum EAGLE_UNIT aUnit )
     switch( aUnit )
     {
         default:
-        case EU_NM:    ret = aValue; break;
-        case EU_MM:    ret = (long long) aValue * 1000000; break;
-        case EU_INCH:  ret = (long long) aValue * 25400000; break;
-        case EU_MIL:   ret = (long long) aValue * 25400; break;
+        case EU_NM:    ret = aValue;                         break;
+        case EU_MM:    ret = (long long) aValue * 1000000;   break;
+        case EU_INCH:  ret = (long long) aValue * 25400000;  break;
+        case EU_MIL:   ret = (long long) aValue * 25400;     break;
     }
 
     if( ( ret > 0 ) != ( aValue > 0 ) )
@@ -368,8 +362,7 @@ double Convert<double>( const wxString& aValue )
     if( aValue.ToCDouble( &value ) )
         return value;
     else
-        throw XML_PARSER_ERROR( "Conversion to double failed. Original value: '" +
-                                aValue.ToStdString() + "'." );
+        throw XML_PARSER_ERROR( "Conversion to double failed. Original value: '" + aValue.ToStdString() + "'." );
 }
 
 
@@ -387,9 +380,10 @@ template <>
 bool Convert<bool>( const wxString& aValue )
 {
     if( aValue != "yes" && aValue != "no" )
-        throw XML_PARSER_ERROR( "Conversion to bool failed. Original value, '" +
-                                aValue.ToStdString() +
+    {
+        throw XML_PARSER_ERROR( "Conversion to bool failed. Original value, '" + aValue.ToStdString() +
                                 "', is neither 'yes' nor 'no'." );
+    }
 
     return aValue == "yes";
 }
@@ -461,11 +455,14 @@ T parseRequiredAttribute( wxXmlNode* aNode, const wxString& aAttribute )
     wxString value;
 
     if( aNode->GetAttribute( aAttribute, &value ) )
+    {
         return Convert<T>( value );
+    }
     else
+    {
         throw XML_PARSER_ERROR( "The required attribute " + aAttribute + " is missing at "
-                                "line " + wxString::Format( "%d", aNode->GetLineNumber() ) +
-                                "." );
+                                "line " + wxString::Format( "%d", aNode->GetLineNumber() ) + "." );
+    }
 }
 
 
@@ -474,13 +471,17 @@ T parseRequiredAttribute( wxXmlNode* aNode, const wxString& aAttribute )
  *
  * @param  aNode      is the node whose attribute will be parsed.
  * @param  aAttribute is the attribute that will be parsed.
- * @return OPTIONAL_XML_ATTRIBUTE<T> - an optional XML attribute, parsed as the specified type if
- *                                     found.
+ * @return std::optional<T> - an optional XML attribute, parsed as the specified type if found.
  */
 template<typename T>
-OPTIONAL_XML_ATTRIBUTE<T> parseOptionalAttribute( wxXmlNode* aNode, const wxString& aAttribute )
+std::optional<T> parseOptionalAttribute( wxXmlNode* aNode, const wxString& aAttribute )
 {
-    return OPTIONAL_XML_ATTRIBUTE<T>( aNode->GetAttribute( aAttribute ) );
+    wxString value = aNode->GetAttribute( aAttribute );
+
+    if( value.IsEmpty() )
+        return std::optional<T>();
+
+    return Convert<T>( value );
 }
 
 
@@ -608,23 +609,29 @@ EWIRE::EWIRE( wxXmlNode* aWire, IO_BASE* aIo ) :
     layer = parseRequiredAttribute<int>( aWire, "layer" );
     curve = parseOptionalAttribute<double>( aWire, "curve" );
 
-    opt_wxString s = parseOptionalAttribute<wxString>( aWire, "style" );
+    std::optional<wxString> s = parseOptionalAttribute<wxString>( aWire, "style" );
 
-    if( s == "continuous" )
-        style = EWIRE::CONTINUOUS;
-    else if( s == "longdash" )
-        style = EWIRE::LONGDASH;
-    else if( s == "shortdash" )
-        style = EWIRE::SHORTDASH;
-    else if( s == "dashdot" )
-        style = EWIRE::DASHDOT;
+    if( s.has_value() )
+    {
+        if( s.value() == "continuous" )
+            style = EWIRE::CONTINUOUS;
+        else if( s.value() == "longdash" )
+            style = EWIRE::LONGDASH;
+        else if( s.value() == "shortdash" )
+            style = EWIRE::SHORTDASH;
+        else if( s.value() == "dashdot" )
+            style = EWIRE::DASHDOT;
+    }
 
     s = parseOptionalAttribute<wxString>( aWire, "cap" );
 
-    if( s == "round" )
-        cap = EWIRE::ROUND;
-    else if( s == "flat" )
-        cap = EWIRE::FLAT;
+    if( s.has_value() )
+    {
+        if( s.value() == "round" )
+            cap = EWIRE::ROUND;
+        else if( s.value() == "flat" )
+            cap = EWIRE::FLAT;
+    }
 
     AdvanceProgressPhase();
 }
@@ -723,7 +730,7 @@ ELABEL::ELABEL( wxXmlNode* aLabel, IO_BASE* aIo ) :
     font  = parseOptionalAttribute<wxString>( aLabel, "font" );
     ratio = parseOptionalAttribute<int>( aLabel, "ratio" );
     rot   = parseOptionalAttribute<EROT>( aLabel, "rot" );
-    xref  = parseOptionalAttribute<wxString>( aLabel, "xref" );
+    xref  = parseOptionalAttribute<bool>( aLabel, "xref" );
     align  = parseOptionalAttribute<wxString>( aLabel, "align" );
 
     AdvanceProgressPhase();
@@ -878,21 +885,27 @@ EATTR::EATTR( wxXmlNode* aTree, IO_BASE* aIo ) :
     ratio = parseOptionalAttribute<double>( aTree, "ratio" );
     rot   = parseOptionalAttribute<EROT>( aTree, "rot" );
 
-    opt_wxString stemp = parseOptionalAttribute<wxString>( aTree, "display" );
+    std::optional<wxString> stemp = parseOptionalAttribute<wxString>( aTree, "display" );
 
-    // (off | value | name | both)
-    if( stemp == "off" )
-        display = EATTR::Off;
-    else if( stemp == "name" )
-        display = EATTR::NAME;
-    else if( stemp == "both" )
-        display = EATTR::BOTH;
-    else // "value" is the default
-        display = EATTR::VALUE;
+    display = EATTR::VALUE;  // "value" is the default
+
+    if( stemp.has_value() )
+    {
+        // (off | value | name | both)
+        if( stemp.value_or( wxEmptyString ) == "off" )
+            display = EATTR::Off;
+        else if( stemp.value_or( wxEmptyString ) == "name" )
+            display = EATTR::NAME;
+        else if( stemp.value_or( wxEmptyString ) == "both" )
+            display = EATTR::BOTH;
+    }
 
     stemp = parseOptionalAttribute<wxString>( aTree, "align" );
 
-    align = stemp ? parseAlignment( *stemp ) : DEFAULT_ALIGNMENT;
+    align = DEFAULT_ALIGNMENT;
+
+    if( stemp.has_value() )
+        align = parseAlignment( stemp.value() );;
 
     AdvanceProgressPhase();
 }
@@ -984,14 +997,14 @@ EDIMENSION::EDIMENSION( wxXmlNode* aDimension, IO_BASE* aIo ) :
      *           >
      */
 
-    x1       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x1" ) );
-    y1       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y1" ) );
-    x2       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x2" ) );
-    y2       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y2" ) );
-    x3       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x3" ) );
-    y3       = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y3" ) );
-    textsize = parseOptionalAttribute<ECOORD>( aDimension, wxT( "textsize" ) );
-    layer    = parseRequiredAttribute<int>( aDimension, wxT( "layer" ) );
+    x1            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x1" ) );
+    y1            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y1" ) );
+    x2            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x2" ) );
+    y2            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y2" ) );
+    x3            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "x3" ) );
+    y3            = parseRequiredAttribute<ECOORD>( aDimension, wxT( "y3" ) );
+    textsize      = parseOptionalAttribute<ECOORD>( aDimension, wxT( "textsize" ) );
+    layer         = parseRequiredAttribute<int>( aDimension, wxT( "layer" ) );
     dimensionType = parseOptionalAttribute<wxString>( aDimension, wxT( "dtype" ) );
 
     AdvanceProgressPhase();
@@ -1025,21 +1038,24 @@ ETEXT::ETEXT( wxXmlNode* aText, IO_BASE* aIo ) :
     ratio = parseOptionalAttribute<double>( aText, "ratio" );
     rot   = parseOptionalAttribute<EROT>( aText, "rot" );
 
-    opt_wxString stemp = parseOptionalAttribute<wxString>( aText, "align" );
+    std::optional<wxString> stemp = parseOptionalAttribute<wxString>( aText, "align" );
 
-    align = stemp ? parseAlignment( *stemp ) : DEFAULT_ALIGNMENT;
+    align = DEFAULT_ALIGNMENT;
+
+    if( stemp.has_value() )
+        align = parseAlignment( stemp.value() );
 
     AdvanceProgressPhase();
 }
 
 
-VECTOR2I ConvertEagleTextSize( const opt_wxString& font, const ECOORD& size )
+VECTOR2I ConvertEagleTextSize( const std::optional<wxString>& font, const ECOORD& size )
 {
     VECTOR2I textsize;
 
-    if( font )
+    if( font.has_value() )
     {
-        const wxString& fontName = font.CGet();
+        const wxString& fontName = font.value();
 
         if( fontName == "vector" )
         {
@@ -1147,21 +1163,26 @@ EPAD::EPAD( wxXmlNode* aPad, IO_BASE* aIo ) :
     // Optional attributes
     diameter = parseOptionalAttribute<ECOORD>( aPad, "diameter" );
 
-    opt_wxString s = parseOptionalAttribute<wxString>( aPad, "shape" );
+    std::optional<wxString> s = parseOptionalAttribute<wxString>( aPad, "shape" );
+
+    shape = EPAD::ROUND;
 
     // (square | round | octagon | long | offset)
-    if( s == "square" )
-        shape = EPAD::SQUARE;
-    else if( s == "round" )
-        shape = EPAD::ROUND;
-    else if( s == "octagon" )
-        shape = EPAD::OCTAGON;
-    else if( s == "long" )
-        shape = EPAD::LONG;
-    else if( s == "offset" )
-        shape = EPAD::OFFSET;
+    if( s.has_value() )
+    {
+        if( s == "square" )
+            shape = EPAD::SQUARE;
+        else if( s == "round" )
+            shape = EPAD::ROUND;
+        else if( s == "octagon" )
+            shape = EPAD::OCTAGON;
+        else if( s == "long" )
+            shape = EPAD::LONG;
+        else if( s == "offset" )
+            shape = EPAD::OFFSET;
+    }
 
-    first    = parseOptionalAttribute<bool>( aPad, "first" );
+    first = parseOptionalAttribute<bool>( aPad, "first" );
 
     AdvanceProgressPhase();
 }
@@ -1276,21 +1297,24 @@ EPOLYGON::EPOLYGON( wxXmlNode* aPolygon, IO_BASE* aIo ) :
      *           <!-- rank:    1..6 in <signal> context, 0 or 7 in <package> context -->
      */
 
-    width        = parseRequiredAttribute<ECOORD>( aPolygon, "width" );
-    layer        = parseRequiredAttribute<int>( aPolygon, "layer" );
+    width = parseRequiredAttribute<ECOORD>( aPolygon, "width" );
+    layer = parseRequiredAttribute<int>( aPolygon, "layer" );
 
-    spacing      = parseOptionalAttribute<ECOORD>( aPolygon, "spacing" );
-    isolate      = parseOptionalAttribute<ECOORD>( aPolygon, "isolate" );
-    opt_wxString s = parseOptionalAttribute<wxString>( aPolygon, "pour" );
+    spacing = parseOptionalAttribute<ECOORD>( aPolygon, "spacing" );
+    isolate = parseOptionalAttribute<ECOORD>( aPolygon, "isolate" );
+    std::optional<wxString> s = parseOptionalAttribute<wxString>( aPolygon, "pour" );
 
     // default pour to solid fill
     pour = EPOLYGON::ESOLID;
 
-    // (solid | hatch | cutout)
-    if( s == "hatch" )
-        pour = EPOLYGON::EHATCH;
-    else if( s == "cutout" )
-        pour = EPOLYGON::ECUTOUT;
+    if( s.has_value() )
+    {
+        // (solid | hatch | cutout)
+        if( s.value() == "hatch" )
+            pour = EPOLYGON::EHATCH;
+        else if( s.value() == "cutout" )
+            pour = EPOLYGON::ECUTOUT;
+    }
 
     orphans  = parseOptionalAttribute<bool>( aPolygon, "orphans" );
     thermals = parseOptionalAttribute<bool>( aPolygon, "thermals" );
@@ -1639,21 +1663,24 @@ EGATE::EGATE( wxXmlNode* aGate, IO_BASE* aIo ) :
     x   = parseRequiredAttribute<ECOORD>( aGate, "x" );
     y   = parseRequiredAttribute<ECOORD>( aGate, "y" );
 
-    opt_wxString stemp = parseOptionalAttribute<wxString>( aGate, "addlevel" );
+    std::optional<wxString> stemp = parseOptionalAttribute<wxString>( aGate, "addlevel" );
 
-    // (off | value | name | both)
-    if( stemp == "must" )
-        addlevel = EGATE::MUST;
-    else if( stemp == "can" )
-        addlevel = EGATE::CAN;
-    else if( stemp == "next" )
-        addlevel = EGATE::NEXT;
-    else if( stemp == "request" )
-        addlevel = EGATE::REQUEST;
-    else if( stemp == "always" )
-        addlevel = EGATE::ALWAYS;
-    else
-        addlevel = EGATE::NEXT;
+    addlevel = EGATE::NEXT;
+
+    if( stemp.has_value() )
+    {
+        // (off | value | name | both)
+        if( stemp.value_or( wxEmptyString ) == "must" )
+            addlevel = EGATE::MUST;
+        else if( stemp.value_or( wxEmptyString ) == "can" )
+            addlevel = EGATE::CAN;
+        else if( stemp.value_or( wxEmptyString ) == "next" )
+            addlevel = EGATE::NEXT;
+        else if( stemp.value_or( wxEmptyString ) == "request" )
+            addlevel = EGATE::REQUEST;
+        else if( stemp.value_or( wxEmptyString ) == "always" )
+            addlevel = EGATE::ALWAYS;
+    }
 
     swaplevel = parseOptionalAttribute<int>( aGate, "swaplevel" );
 
@@ -1728,13 +1755,13 @@ EDEVICE::EDEVICE( wxXmlNode* aDevice, IO_BASE* aIo ) :
      *           package       %String;       #IMPLIED
      */
     name = parseRequiredAttribute<wxString>( aDevice, "name" );
-    opt_wxString pack = parseOptionalAttribute<wxString>( aDevice, "package" );
+    std::optional<wxString> pack = parseOptionalAttribute<wxString>( aDevice, "package" );
 
-    if( pack )
+    if( pack.has_value() )
     {
-        std::string p( pack->c_str() );
+        std::string p( pack.value().c_str() );
         ReplaceIllegalFileNameChars( p, '_' );
-        package.Set( wxString::FromUTF8( p.c_str() ) );
+        package = wxString::FromUTF8( p.c_str() );
     }
 
     for( wxXmlNode* child = aDevice->GetChildren(); child; child = child->GetNext() )
@@ -1802,8 +1829,7 @@ EDEVICE_SET::EDEVICE_SET( wxXmlNode* aDeviceSet, IO_BASE* aIo ) :
     prefix = parseOptionalAttribute<wxString>( aDeviceSet, "prefix" );
     uservalue = parseOptionalAttribute<bool>( aDeviceSet, "uservalue" );
     library_version = parseOptionalAttribute<int>( aDeviceSet, "library_version" );
-    library_locally_modified =
-        parseOptionalAttribute<bool>( aDeviceSet, "library_locally_modified" );
+    library_locally_modified = parseOptionalAttribute<bool>( aDeviceSet, "library_locally_modified" );
 
     for( wxXmlNode* child = aDeviceSet->GetChildren(); child; child = child->GetNext() )
     {
@@ -2390,8 +2416,7 @@ EPACKAGE3D::EPACKAGE3D( wxXmlNode* aPackage3d, IO_BASE* aIo ) :
     urn = parseRequiredAttribute<wxString>( aPackage3d, "urn" );
     type = parseRequiredAttribute<wxString>( aPackage3d, "type" );
     library_version = parseOptionalAttribute<int>( aPackage3d, "library_version" );
-    library_locally_modified = parseOptionalAttribute<bool>( aPackage3d,
-                                                             "library_locally_modified" );
+    library_locally_modified = parseOptionalAttribute<bool>( aPackage3d, "library_locally_modified" );
 
     for( wxXmlNode* child = aPackage3d->GetChildren(); child; child = child->GetNext() )
     {
@@ -2403,8 +2428,7 @@ EPACKAGE3D::EPACKAGE3D( wxXmlNode* aPackage3d, IO_BASE* aIo ) :
         {
             for( wxXmlNode* instance = child->GetChildren(); instance;
                  instance = instance->GetNext() )
-                packageinstances.emplace_back( std::make_unique<EPACKAGEINSTANCE>( instance,
-                                                                                   aIo ) );
+                packageinstances.emplace_back( std::make_unique<EPACKAGEINSTANCE>( instance, aIo ) );
 
             AdvanceProgressPhase();
         }
@@ -2579,14 +2603,14 @@ wxString ELIBRARY::GetName() const
     wxString libName = name;
 
     // Use the name when no library urn exists.
-    if( !urn )
+    if( !urn.has_value() )
         return libName;
 
     // Suffix the library name with the urn library identifier.  Eagle schematics can have
     // mulitple libraries with the same name.  The urn library identifier is used to prevent
     // library name clashes.
-    if( urn->IsValid() )
-        libName += wxS( "_" ) + urn->assetId;
+    if( urn.value().IsValid() )
+        libName += wxS( "_" ) + urn.value().assetId;
 
     return libName;
 }

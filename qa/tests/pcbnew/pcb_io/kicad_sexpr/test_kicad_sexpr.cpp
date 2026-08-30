@@ -47,6 +47,10 @@
 #include <zone.h>
 
 
+#define CHECK_ENUM_CLASS_EQUAL( L, R )                                                      \
+    BOOST_CHECK_EQUAL( static_cast<int>( L ), static_cast<int>( R ) )
+
+
 struct KICAD_SEXPR_FIXTURE
 {
     KICAD_SEXPR_FIXTURE() {}
@@ -539,6 +543,7 @@ BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
     fp->SetFPID( LIB_ID( wxT( "scratch" ), wxT( "test_fp_save_netinfo" ) ) );
 
     PAD* pad = new PAD( fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
     pad->SetSize( PADSTACK::ALL_LAYERS,
                   VECTOR2I( pcbIUScale.mmToIU( 1 ), pcbIUScale.mmToIU( 1 ) ) );
@@ -574,6 +579,10 @@ BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
     std::stringstream ss;
     ss << in.rdbuf();
     BOOST_REQUIRE( !in.bad() );
+
+    // Windows refuses to unlink a file that still has an open handle, so release it before the
+    // remove_all() below.
+    in.close();
 
     const std::string contents = ss.str();
     BOOST_REQUIRE( !contents.empty() );
@@ -866,7 +875,7 @@ BOOST_AUTO_TEST_CASE( Issue24955_AppendDoesNotInheritSessionZoneDefaults )
     ZONE_SETTINGS settings = board->GetDesignSettings().GetDefaultZoneSettings();
     settings.SetPadConnection( ZONE_CONNECTION::FULL );
     settings.m_FillMode = ZONE_FILL_MODE::HATCH_PATTERN;
-    settings.SetCornerSmoothingType( ZONE_SETTINGS::SMOOTHING_FILLET );
+    settings.SetCornerSmoothingType( ZONE_SETTINGS::CORNER_SMOOTHING::FILLET );
     settings.SetCornerRadius( pcbIUScale.mmToIU( 1 ) );
     settings.m_HatchSmoothingLevel = 2;
     settings.m_Locked = true;
@@ -880,7 +889,7 @@ BOOST_AUTO_TEST_CASE( Issue24955_AppendDoesNotInheritSessionZoneDefaults )
     ZONE* omitted = board->Zones()[0];
     BOOST_CHECK( omitted->GetPadConnection() == ZONE_CONNECTION::THERMAL );
     BOOST_CHECK( omitted->GetFillMode() == ZONE_FILL_MODE::POLYGONS );
-    BOOST_CHECK_EQUAL( omitted->GetCornerSmoothingType(), ZONE_SETTINGS::SMOOTHING_NONE );
+    CHECK_ENUM_CLASS_EQUAL( omitted->GetCornerSmoothingType(), ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING );
     BOOST_CHECK_EQUAL( omitted->GetCornerRadius(), 0 );
     BOOST_CHECK_EQUAL( omitted->GetHatchSmoothingLevel(), 0 );
     BOOST_CHECK( !omitted->IsLocked() );
@@ -888,7 +897,7 @@ BOOST_AUTO_TEST_CASE( Issue24955_AppendDoesNotInheritSessionZoneDefaults )
     // Explicit tokens still win
     ZONE* explicitZone = board->Zones()[1];
     BOOST_CHECK( explicitZone->GetPadConnection() == ZONE_CONNECTION::FULL );
-    BOOST_CHECK_EQUAL( explicitZone->GetCornerSmoothingType(), ZONE_SETTINGS::SMOOTHING_FILLET );
+    CHECK_ENUM_CLASS_EQUAL( explicitZone->GetCornerSmoothingType(), ZONE_SETTINGS::CORNER_SMOOTHING::FILLET );
     BOOST_CHECK_EQUAL( explicitZone->GetCornerRadius(), pcbIUScale.mmToIU( 1 ) );
     BOOST_CHECK( explicitZone->IsLocked() );
 }
@@ -1002,6 +1011,24 @@ BOOST_AUTO_TEST_CASE( Issue24911_CancelledAppendLeavesBoardUntouched )
 
     BOOST_CHECK_EQUAL( dest->Tracks().size(), tracksBefore );
     BOOST_CHECK_EQUAL( dest->GetNetInfo().GetNetCount(), netsBefore );
+}
+
+
+// Enumerating a footprint library that is not on disk must fail every time. The failed
+// load leaves a cache bound to the missing path carrying a zero timestamp, which is also
+// what a missing directory reports, so the cache looks current and the next enumerate
+// answers with an empty library instead of the error.
+BOOST_AUTO_TEST_CASE( MissingLibraryThrowsOnEveryEnumerate )
+{
+    std::filesystem::path libPath = std::filesystem::temp_directory_path() / "kicad_qa_no_such_library.pretty";
+
+    BOOST_REQUIRE( !std::filesystem::exists( libPath ) );
+
+    wxArrayString names;
+
+    BOOST_CHECK_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ), IO_ERROR );
+
+    BOOST_CHECK_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ), IO_ERROR );
 }
 
 

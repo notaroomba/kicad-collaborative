@@ -622,6 +622,7 @@ int SCH_EDITOR_CONTROL::Plot( const TOOL_EVENT& aEvent )
 
 int SCH_EDITOR_CONTROL::CrossProbeToPcb( const TOOL_EVENT& aEvent )
 {
+    m_frame->Schematic().OnSchSelectionChanged();
     doCrossProbeSchToPcb( aEvent, false );
     return 0;
 }
@@ -678,7 +679,7 @@ int SCH_EDITOR_CONTROL::ExportSymbolsToLibrary( const TOOL_EVENT& aEvent )
 
         if( libSymbols.count( id ) )
         {
-            wxASSERT_MSG( libSymbols[id]->Compare( *libSymbol, SCH_ITEM::COMPARE_FLAGS::ERC ) == 0,
+            wxASSERT_MSG( libSymbols[id]->Compare( *libSymbol, ~SCH_ITEM::COMPARE_FLAGS::UUID ) == 0,
                           "Two symbols have the same LIB_ID but are different!" );
         }
         else
@@ -2455,16 +2456,7 @@ void SCH_EDITOR_CONTROL::prunePastedSymbolInstances()
     {
         wxCHECK2( symbol, continue );
 
-        std::vector<KIID_PATH> instancePathsToRemove;
-
-        for( const SCH_SYMBOL_INSTANCE& instance : symbol->GetInstances() )
-        {
-            if( instance.m_ProjectName != m_frame->Prj().GetProjectName() || instance.m_Path.empty() )
-                instancePathsToRemove.emplace_back( instance.m_Path );
-        }
-
-        for( const KIID_PATH& path : instancePathsToRemove )
-            symbol->RemoveInstance( path );
+        PrunePastedSymbolInstances( symbol, m_frame->Schematic() );
     }
 }
 
@@ -3157,8 +3149,10 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
                         }
                     };
 
+            std::vector<SCH_ITEM*> anchorCandidates = FlattenGroups( selection.Items() );
+
             // Prefer connection points (which should remain on grid)
-            for( EDA_ITEM* item : selection.Items() )
+            for( EDA_ITEM* item : anchorCandidates )
             {
                 SCH_ITEM* sch_item = dynamic_cast<SCH_ITEM*>( item );
                 SCH_PIN*  pin = dynamic_cast<SCH_PIN*>( item );
@@ -3182,10 +3176,13 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
             // Only process other points if we didn't find any connection points
             if( closest_dist == INT_MAX )
             {
-                for( EDA_ITEM* item : selection.Items() )
+                for( EDA_ITEM* item : anchorCandidates )
                 {
                     switch( item->Type() )
                     {
+                    // A group's position is its bounding box centre, which is off grid
+                    case SCH_GROUP_T: break;
+
                     case SCH_LINE_T:
                         processPt( static_cast<SCH_LINE*>( item )->GetStartPoint() );
                         processPt( static_cast<SCH_LINE*>( item )->GetEndPoint() );
@@ -3862,12 +3859,7 @@ int SCH_EDITOR_CONTROL::PlaceLinkedDesignBlock( const TOOL_EVENT& aEvent )
                                                                                 true, true ) );
 
     if( !designBlock )
-    {
-        wxString msg;
-        msg.Printf( _( "Could not find design block %s." ), group->GetDesignBlockLibId().GetUniStringLibId() );
-        m_frame->GetInfoBar()->ShowMessageFor( msg, 5000, wxICON_WARNING );
         return 1;
-    }
 
     if( designBlock->GetSchematicFile().IsEmpty() )
     {
@@ -3909,12 +3901,7 @@ int SCH_EDITOR_CONTROL::SaveToLinkedDesignBlock( const TOOL_EVENT& aEvent )
                                                                                 true, true ) );
 
     if( !designBlock )
-    {
-        wxString msg;
-        msg.Printf( _( "Could not find design block %s." ), group->GetDesignBlockLibId().GetUniStringLibId() );
-        m_frame->GetInfoBar()->ShowMessageFor( msg, 5000, wxICON_WARNING );
         return 1;
-    }
 
     editFrame->GetDesignBlockPane()->SelectLibId( group->GetDesignBlockLibId() );
 

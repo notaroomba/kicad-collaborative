@@ -83,9 +83,7 @@ void SCH_TEXT::Serialize( google::protobuf::Any& aContainer ) const
     text.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
     text.set_exclude_from_sim( GetExcludedFromSim() );
 
-    google::protobuf::Any any;
-    EDA_TEXT::Serialize( any, schIUScale );
-    any.UnpackTo( text.mutable_text() );
+    EDA_TEXT::Serialize( *text.mutable_text(), schIUScale );
 
     PackVector2( *text.mutable_text()->mutable_position(), GetPosition(), schIUScale );
 
@@ -106,10 +104,7 @@ bool SCH_TEXT::Deserialize( const google::protobuf::Any& aContainer )
     SetLocked( text.locked() == types::LockedState::LS_LOCKED );
     SetExcludedFromSim( text.exclude_from_sim() );
 
-    google::protobuf::Any any;
-    any.PackFrom( text.text() );
-
-    if( !EDA_TEXT::Deserialize( any, schIUScale ) )
+    if( !EDA_TEXT::Deserialize( text.text(), schIUScale ) )
         return false;
 
     SetPosition( UnpackVector2( text.text().position(), schIUScale ) );
@@ -397,11 +392,10 @@ wxString SCH_TEXT::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraTe
     wxString text = EDA_TEXT::GetShownText( aAllowExtraText, depth );
 
     if( HasTextVars() )
+    {
         text = ResolveTextVars( text, &textResolver, depth );
-
-    // Convert escape markers back to literals for final display
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+        FinalizeTextVarExpansion( text, aAllowExtraText );
+    }
 
     return text;
 }
@@ -818,9 +812,9 @@ static struct SCH_TEXT_DESC
         propMgr.Mask( TYPE_HASH( SCH_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Height" ) );
         propMgr.Mask( TYPE_HASH( SCH_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Thickness" ) );
 
-        propMgr.AddProperty( new PROPERTY<SCH_TEXT, int>( _HKI( "Text Size" ), &SCH_TEXT::SetSchTextSize,
-                                                          &SCH_TEXT::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
-                             _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<SCH_TEXT, int>( _HKI( "Text Size" ),
+                    &SCH_TEXT::SetSchTextSize, &SCH_TEXT::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
+                    _HKI( "Text Properties" ) );
 
         // Orientation is exposed differently in schematic; mask the base for now
         propMgr.Mask( TYPE_HASH( SCH_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Orientation" ) );

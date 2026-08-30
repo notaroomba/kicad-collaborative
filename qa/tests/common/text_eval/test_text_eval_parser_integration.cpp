@@ -27,6 +27,7 @@
 // Code under test
 #include <text_eval/text_eval_wrapper.h>
 
+#include <fmt/ranges.h>
 #include <chrono>
 #include <regex>
 
@@ -408,16 +409,21 @@ BOOST_AUTO_TEST_CASE( RealWorldPerformance )
 
     auto start = std::chrono::high_resolution_clock::now();
 
+    std::set<std::string> errors;
+
     // Process expressions many times (simulating real usage)
     for( int iteration = 0; iteration < 100; ++iteration )
     {
         for( const auto& expr : expressions )
         {
             auto result = evaluator.Evaluate( wxString::FromUTF8( expr ) );
-            BOOST_CHECK( !evaluator.HasErrors() );
-            BOOST_CHECK( !result.empty() );
+
+            if( evaluator.HasErrors() || result.empty() )
+                errors.insert( expr );
         }
     }
+
+    BOOST_REQUIRE_MESSAGE( errors.empty(), fmt::format( "Evaluation of expressions had errors: {}", fmt::join( errors, ", " ) ) );
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( end - start );

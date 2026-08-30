@@ -27,6 +27,7 @@
 #include <eda_draw_frame.h>
 #include <gr_basic.h>
 #include <geometry/geometry_utils.h>
+#include <geometry/shape_arc.h>
 #include <geometry/shape_ellipse.h>
 #include <geometry/shape_line_chain.h>
 #include <schematic.h>
@@ -57,13 +58,11 @@ void SCH_SHAPE::Serialize( google::protobuf::Any& aContainer ) const
     using namespace kiapi::common;
 
     kiapi::schematic::types::SchematicGraphicShape msg;
-    google::protobuf::Any any;
 
     msg.mutable_id()->set_value( m_Uuid.AsStdString() );
     msg.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
-    EDA_SHAPE::Serialize( any, schIUScale );
-    any.UnpackTo( msg.mutable_shape() );
+    EDA_SHAPE::Serialize( *msg.mutable_shape(), schIUScale );
 
     aContainer.PackFrom( msg );
 }
@@ -81,9 +80,7 @@ bool SCH_SHAPE::Deserialize( const google::protobuf::Any& aContainer )
     const_cast<KIID&>( m_Uuid ) = KIID( msg.id().value() );
     SetLocked( msg.locked() == types::LockedState::LS_LOCKED );
 
-    google::protobuf::Any any;
-    any.PackFrom( msg.shape() );
-    return EDA_SHAPE::Deserialize( any, schIUScale );
+    return EDA_SHAPE::Deserialize( msg.shape(), schIUScale );
 }
 
 
@@ -109,6 +106,21 @@ void SCH_SHAPE::SetFilled( bool aFilled )
         m_fill = FILL_T::FILLED_SHAPE;
     else
         m_fill = FILL_T::FILLED_WITH_COLOR;
+}
+
+
+void SCH_SHAPE::UpdateHatching() const
+{
+    if( !IsMoving() )
+    {
+        EDA_SHAPE::UpdateHatching();
+        return;
+    }
+
+    SCH_SHAPE* movingShape = const_cast<SCH_SHAPE*>( this );
+    movingShape->ClearFlags( IS_MOVING );
+    EDA_SHAPE::UpdateHatching();
+    movingShape->SetFlags( IS_MOVING );
 }
 
 
@@ -365,12 +377,57 @@ void SCH_SHAPE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     VECTOR2I end = renderSettings->TransformCoordinate( m_end ) + aOffset;
     VECTOR2I mid, center;
 
+    auto transformBezierPoint = [&]( const VECTOR2D& aPoint )
+    {
+        return renderSettings->TransformCoordinate( VECTOR2I( aPoint ) ) + aOffset;
+    };
+
+    std::vector<VECTOR2I> lineEndingPlotPoints = ptList;
+
     switch( GetShape() )
     {
     case SHAPE_T::ARC:
+    {
         mid = renderSettings->TransformCoordinate( GetArcMid() ) + aOffset;
-        aPlotter->Arc( start, mid, end, fill, pen_size );
+
+        // Save original endpoints before shortening.
+        VECTOR2I origArcStart = start;
+        VECTOR2I origArcEnd = end;
+
+        if( GetStartEnding().GetStyle() != LINE_ENDING_STYLE::NONE
+            || GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE )
+        {
+            SHAPE_ARC arc( start, mid, end, 0 );
+            VECTOR2I  c = arc.GetCenter();
+            EDA_ANGLE startAngle = arc.GetStartAngle();
+            EDA_ANGLE arcAngle = arc.GetCentralAngle();
+
+            // Determine arc direction from start/mid/end.
+            EDA_ANGLE origStart = startAngle;
+            if( ShortenArcForEndings( startAngle, arcAngle, arc.GetRadius(), pen_size ) )
+            {
+                RotatePoint( start, c, origStart - startAngle );
+
+                VECTOR2I newEnd = start;
+                RotatePoint( newEnd, c, -arcAngle );
+
+                VECTOR2I newMid = start;
+                RotatePoint( newMid, c, -arcAngle / 2 );
+
+                aPlotter->Arc( start, newMid, newEnd, fill, pen_size );
+            }
+        }
+        else
+        {
+            aPlotter->Arc( start, mid, end, fill, pen_size );
+        }
+
+        // Restore original endpoints for ending placement.
+        start = origArcStart;
+        end = origArcEnd;
+
         break;
+    }
 
     case SHAPE_T::CIRCLE:
         center = renderSettings->TransformCoordinate( getCenter() ) + aOffset;
@@ -382,9 +439,38 @@ void SCH_SHAPE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
         break;
 
     case SHAPE_T::POLY:
-    case SHAPE_T::BEZIER:
+    {
+        if( !ShortenBodyPolyPoints( ptList, IsClosed(), 0, pen_size ) )
+            break;
+
         aPlotter->PlotPoly( ptList, fill, pen_size, nullptr );
         break;
+    }
+
+    case SHAPE_T::BEZIER:
+    {
+        std::optional<BEZIER<double>> curve = ShortenedBezierCurve( pen_size );
+
+        if( curve && aPlotter->GetPlotterType() == PLOT_FORMAT::SVG )
+        {
+            aPlotter->BezierCurve( transformBezierPoint( curve->Start ), transformBezierPoint( curve->C1 ),
+                                   transformBezierPoint( curve->C2 ), transformBezierPoint( curve->End ), GetMaxError(),
+                                   pen_size );
+        }
+        else if( curve )
+        {
+            std::vector<VECTOR2D> pts = ShortenedBezierPolyline( pen_size );
+            std::vector<VECTOR2I> plotPts;
+
+            plotPts.reserve( pts.size() );
+
+            for( const VECTOR2D& pt : pts )
+                plotPts.push_back( transformBezierPoint( pt ) );
+
+            aPlotter->PlotPoly( plotPts, fill, pen_size, nullptr );
+        }
+        break;
+    }
 
     case SHAPE_T::ELLIPSE:
         if( !ptList.empty() )
@@ -400,6 +486,72 @@ void SCH_SHAPE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     }
 
     aPlotter->SetDash( pen_size, LINE_STYLE::SOLID );
+
+    // Plot line endings for open shapes.
+    if( !IsClosed()
+        && ( GetStartEnding().GetStyle() != LINE_ENDING_STYLE::NONE
+             || GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE ) )
+    {
+        VECTOR2I startPt, endPt;
+
+        if( !GetLineEndingEndpoints( startPt, endPt ) )
+            return;
+
+        startPt = renderSettings->TransformCoordinate( startPt ) + aOffset;
+        endPt = renderSettings->TransformCoordinate( endPt ) + aOffset;
+
+        EDA_SHAPE endingShape( *this );
+
+        switch( GetShape() )
+        {
+        case SHAPE_T::ARC:
+        {
+            endingShape.SetArcGeometry( startPt, mid, endPt );
+            break;
+        }
+
+        case SHAPE_T::POLY:
+            if( lineEndingPlotPoints.size() >= 2 )
+            {
+                SHAPE_POLY_SET plotPoly;
+                plotPoly.NewOutline();
+
+                for( const VECTOR2I& pt : lineEndingPlotPoints )
+                    plotPoly.Append( pt );
+
+                if( GetPolyShape().OutlineCount() > 0 )
+                    plotPoly.Outline( 0 ).SetClosed( GetPolyShape().COutline( 0 ).IsClosed() );
+
+                endingShape.SetPolyShape( plotPoly );
+            }
+
+            break;
+
+        case SHAPE_T::BEZIER:
+        {
+            endingShape.SetStart( startPt );
+            endingShape.SetBezierC1( transformBezierPoint( GetBezierC1() ) );
+            endingShape.SetBezierC2( transformBezierPoint( GetBezierC2() ) );
+            endingShape.SetEnd( endPt );
+            endingShape.RebuildBezierToSegmentsPointsList( getMaxError() );
+            break;
+        }
+
+        case SHAPE_T::SEGMENT:
+            endingShape.SetStart( startPt );
+            endingShape.SetEnd( endPt );
+            break;
+
+        default: break;
+        }
+
+        EDA_ANGLE startTangent;
+        EDA_ANGLE endTangent;
+
+        endingShape.GetEndingTangents( startTangent, endTangent, pen_size );
+        GetStartEnding().Plot( aPlotter, startPt, startTangent, pen_size );
+        GetEndEnding().Plot( aPlotter, endPt, endTangent, pen_size );
+    }
 }
 
 
@@ -571,14 +723,9 @@ double SCH_SHAPE::Similarity( const SCH_ITEM& aOther ) const
 
 int SCH_SHAPE::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
 {
-    int cmpFlags = aCompareFlags;
-
     // The object UUIDs must be compared after the shape coordinates because shapes do not
     // have immutable UUIDs.
-    if( !( cmpFlags & ( SCH_ITEM::COMPARE_FLAGS::EQUALITY | SCH_ITEM::COMPARE_FLAGS::ERC ) ) )
-        cmpFlags |= SCH_ITEM::COMPARE_FLAGS::EQUALITY;
-
-    int retv = SCH_ITEM::compare( aOther, cmpFlags );
+    int retv = SCH_ITEM::compare( aOther, aCompareFlags & ~COMPARE_FLAGS::UUID );
 
     if( retv )
         return retv;
@@ -588,17 +735,14 @@ int SCH_SHAPE::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
     if( retv )
         return retv;
 
-    if( ( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::EQUALITY )
-        || ( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::ERC ) )
+    if( aCompareFlags & COMPARE_FLAGS::UUID )
     {
-        return 0;
+        if( m_Uuid < aOther.m_Uuid )
+            return -1;
+
+        if( m_Uuid > aOther.m_Uuid )
+            return 1;
     }
-
-    if( m_Uuid < aOther.m_Uuid )
-        return -1;
-
-    if( m_Uuid > aOther.m_Uuid )
-        return 1;
 
     return 0;
 }
@@ -612,10 +756,13 @@ static struct SCH_SHAPE_DESC
 
         if( fillEnum.Choices().GetCount() == 0 )
         {
-            fillEnum.Map( FILL_T::NO_FILL,                  _HKI( "None" ) )
-                    .Map( FILL_T::FILLED_SHAPE,             _HKI( "Body outline color" ) )
+            fillEnum.Map( FILL_T::NO_FILL, _HKI( "None" ) )
+                    .Map( FILL_T::FILLED_SHAPE, _HKI( "Body outline color" ) )
                     .Map( FILL_T::FILLED_WITH_BG_BODYCOLOR, _HKI( "Body background color" ) )
-                    .Map( FILL_T::FILLED_WITH_COLOR,        _HKI( "Fill color" ) );
+                    .Map( FILL_T::FILLED_WITH_COLOR, _HKI( "Fill color" ) )
+                    .Map( FILL_T::HATCH, _HKI( "Hatch" ) )
+                    .Map( FILL_T::REVERSE_HATCH, _HKI( "Reverse hatch" ) )
+                    .Map( FILL_T::CROSS_HATCH, _HKI( "Cross hatch" ) );
         }
 
         PROPERTY_MANAGER& propMgr = PROPERTY_MANAGER::Instance();
@@ -627,27 +774,32 @@ static struct SCH_SHAPE_DESC
 
         // Polygons and ellipses have meaningful Position properties (first vertex / center).
         // On other shapes, Position duplicates the Start properties.
-        auto isPolygonOrEllipse = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( aItem ) )
-            {
-                const SHAPE_T t = shape->GetShape();
-                return t == SHAPE_T::POLY || t == SHAPE_T::ELLIPSE || t == SHAPE_T::ELLIPSE_ARC;
-            }
-            return false;
-        };
+        auto isPolygonOrEllipse =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( aItem ) )
+                    {
+                        const SHAPE_T t = shape->GetShape();
+                        return t == SHAPE_T::POLY || t == SHAPE_T::ELLIPSE || t == SHAPE_T::ELLIPSE_ARC;
+                    }
+                    return false;
+                };
 
         // Hide Start/End for shapes that don't use them directly
         // (polygon uses first vertex via Position; circle uses Center; ellipse uses Center + radii).
-        auto isNotPolygonOrCircleOrEllipse = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( aItem ) )
-            {
-                const SHAPE_T t = shape->GetShape();
-                return t != SHAPE_T::POLY && t != SHAPE_T::CIRCLE && t != SHAPE_T::ELLIPSE && t != SHAPE_T::ELLIPSE_ARC;
-            }
-            return true;
-        };
+        auto isNotPolygonOrCircleOrEllipse =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( aItem ) )
+                    {
+                        const SHAPE_T t = shape->GetShape();
+                        return t != SHAPE_T::POLY
+                                && t != SHAPE_T::CIRCLE
+                                && t != SHAPE_T::ELLIPSE 
+                                && t != SHAPE_T::ELLIPSE_ARC;
+                    }
+                    return true;
+                };
 
         auto isSymbolItem =
                 []( INSPECTABLE* aItem ) -> bool
@@ -683,16 +835,16 @@ static struct SCH_SHAPE_DESC
 
         const wxString shapeProps = _HKI( "Shape Properties" );
 
-        propMgr.AddProperty( new PROPERTY<SCH_SHAPE, int>( _HKI( "Position X" ), &SCH_SHAPE::SetPositionX,
-                                                           &SCH_SHAPE::GetPositionX, PROPERTY_DISPLAY::PT_COORD,
-                                                           ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             shapeProps )
+        propMgr.AddProperty( new PROPERTY<SCH_SHAPE, int>( _HKI( "Position X" ),
+                    &SCH_SHAPE::SetPositionX, &SCH_SHAPE::GetPositionX, PROPERTY_DISPLAY::PT_COORD,
+                    ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    shapeProps )
                 .SetAvailableFunc( isPolygonOrEllipse );
 
-        propMgr.AddProperty( new PROPERTY<SCH_SHAPE, int>( _HKI( "Position Y" ), &SCH_SHAPE::SetPositionY,
-                                                           &SCH_SHAPE::GetPositionY, PROPERTY_DISPLAY::PT_COORD,
-                                                           ORIGIN_TRANSFORMS::ABS_Y_COORD ),
-                             shapeProps )
+        propMgr.AddProperty( new PROPERTY<SCH_SHAPE, int>( _HKI( "Position Y" ),
+                    &SCH_SHAPE::SetPositionY, &SCH_SHAPE::GetPositionY, PROPERTY_DISPLAY::PT_COORD,
+                    ORIGIN_TRANSFORMS::ABS_Y_COORD ),
+                    shapeProps )
                 .SetAvailableFunc( isPolygonOrEllipse );
 
         propMgr.OverrideAvailability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ), _HKI( "Start X" ),
@@ -704,18 +856,18 @@ static struct SCH_SHAPE_DESC
         propMgr.OverrideAvailability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ), _HKI( "End Y" ),
                                       isNotPolygonOrCircleOrEllipse );
 
-        propMgr.OverrideAvailability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ),
-                                      _HKI( "Filled" ), isSchematicItem );
+        propMgr.OverrideAvailability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ), _HKI( "Filled" ),
+                                      isSchematicItem );
 
-        propMgr.OverrideWriteability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ),
-                                      _HKI( "Fill Color" ), isFillColorEditable );
+        propMgr.OverrideWriteability( TYPE_HASH( SCH_SHAPE ), TYPE_HASH( EDA_SHAPE ), _HKI( "Fill Color" ),
+                                      isFillColorEditable );
 
         void ( SCH_SHAPE::*fillModeSetter )( FILL_T ) = &SCH_SHAPE::SetFillMode;
         FILL_T ( SCH_SHAPE::*fillModeGetter )() const = &SCH_SHAPE::GetFillMode;
 
         propMgr.AddProperty( new PROPERTY_ENUM<SCH_SHAPE, FILL_T>( _HKI( "Fill Mode" ),
-                        fillModeSetter, fillModeGetter ),
-                        _HKI( "Shape Properties" ) )
+                    fillModeSetter, fillModeGetter ),
+                    _HKI( "Shape Properties" ) )
                 .SetAvailableFunc( isSymbolItem );
     }
 } _SCH_SHAPE_DESC;

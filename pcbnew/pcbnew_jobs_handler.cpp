@@ -46,6 +46,7 @@
 #include <drawing_sheet/ds_proxy_view_item.h>
 #include <footprint.h>
 #include <footprint_import_reconciler.h>
+#include <jobs/job_export_bom.h>
 #include <jobs/job_fp_export_svg.h>
 #include <jobs/job_fp_upgrade.h>
 #include <jobs/job_export_pcb_ipc2581.h>
@@ -62,6 +63,7 @@
 #include <jobs/job_export_pcb_pos.h>
 #include <jobs/job_export_pcb_ps.h>
 #include <jobs/job_export_pcb_stats.h>
+#include <jobs/job_export_pcb_stackup.h>
 #include <jobs/job_export_pcb_svg.h>
 #include <jobs/job_export_pcb_3d.h>
 #include <jobs/job_pcb_render.h>
@@ -118,12 +120,21 @@
 #include <dialogs/dialog_export_2581.h>
 #include <dialogs/dialog_export_odbpp.h>
 #include <dialogs/dialog_export_step.h>
+#include <dialogs/dialog_footprint_fields_table.h>
 #include <dialogs/dialog_plot.h>
 #include <dialogs/dialog_drc_job_config.h>
 #include <dialogs/dialog_render_job.h>
 #include <dialogs/dialog_gencad_export_options.h>
 #include <dialogs/dialog_board_stats_job.h>
+#include <dialogs/dialog_board_stackup_job.h>
+#include <board_stackup_manager/board_stackup.h>
+#include <board_stackup_manager/board_stackup_reporter.h>
+#include <api/api_pcb_utils.h>
+#include <api/board/board.pb.h>
+#include <google/protobuf/util/json_util.h>
+#include <fstream>
 #include <paths.h>
+#include <streamwrapper.h>
 #include <tools/zone_filler_tool.h>
 
 #include <locale_io.h>
@@ -142,6 +153,22 @@ PCBNEW_JOBS_HANDLER::PCBNEW_JOBS_HANDLER( KIWAY* aKiway ) :
         m_cliBoard( nullptr ),
         m_toolManager( nullptr )
 {
+    Register( "bom", std::bind( &PCBNEW_JOBS_HANDLER::JobExportBom, this, std::placeholders::_1 ),
+              [aKiway]( JOB* job, wxWindow* aParent ) -> bool
+              {
+                  JOB_EXPORT_BOM* bomJob = dynamic_cast<JOB_EXPORT_BOM*>( job );
+
+                  PCB_EDIT_FRAME* editFrame = static_cast<PCB_EDIT_FRAME*>( aKiway->Player( FRAME_PCB_EDITOR, false ) );
+
+                  wxCHECK( bomJob && editFrame, false );
+
+                  DIALOG_FOOTPRINT_FIELDS_TABLE dlg( editFrame, bomJob );
+
+                  if( dlg.WasAborted() )
+                      return false;
+
+                  return dlg.ShowModal() == wxID_OK;
+              } );
     Register( "3d", std::bind( &PCBNEW_JOBS_HANDLER::JobExportStep, this, std::placeholders::_1 ),
               [aKiway]( JOB* job, wxWindow* aParent ) -> bool
               {
@@ -272,6 +299,28 @@ PCBNEW_JOBS_HANDLER::PCBNEW_JOBS_HANDLER( KIWAY* aKiway ) :
                   wxWindow* parent = aParent ? aParent : static_cast<wxWindow*>( editFrame );
 
                   DIALOG_BOARD_STATS_JOB dlg( parent, statsJob );
+
+                  return dlg.ShowModal() == wxID_OK;
+              } );
+    Register( "stackup", std::bind( &PCBNEW_JOBS_HANDLER::JobExportStackup, this, std::placeholders::_1 ),
+              [aKiway]( JOB* job, wxWindow* aParent ) -> bool
+              {
+                  JOB_EXPORT_PCB_STACKUP* stackupJob = dynamic_cast<JOB_EXPORT_PCB_STACKUP*>( job );
+
+                  PCB_EDIT_FRAME* editFrame =
+                          dynamic_cast<PCB_EDIT_FRAME*>( aKiway->Player( FRAME_PCB_EDITOR, false ) );
+
+                  wxCHECK( stackupJob && editFrame, false );
+
+                  if( stackupJob->m_filename.IsEmpty() && editFrame->GetBoard() )
+                  {
+                      wxFileName boardName = editFrame->GetBoard()->GetFileName();
+                      stackupJob->m_filename = boardName.GetFullPath();
+                  }
+
+                  wxWindow* parent = aParent ? aParent : static_cast<wxWindow*>( editFrame );
+
+                  DIALOG_BOARD_STACKUP_JOB dlg( parent, stackupJob );
 
                   return dlg.ShowModal() == wxID_OK;
               } );
@@ -605,6 +654,352 @@ LSEQ PCBNEW_JOBS_HANDLER::convertLayerArg( wxString& aLayerString, BOARD* aBoard
 }
 
 
+int PCBNEW_JOBS_HANDLER::JobExportBom( JOB* aJob )
+{
+    JOB_EXPORT_BOM* aBomJob = dynamic_cast<JOB_EXPORT_BOM*>( aJob );
+
+    wxCHECK( aBomJob, CLI::EXIT_CODES::ERR_UNKNOWN );
+
+    BOARD* board = getBoard( aBomJob->m_filename );
+
+    if( !board )
+        return CLI::EXIT_CODES::ERR_INVALID_INPUT_FILE;
+
+    aJob->SetTitleBlock( board->GetTitleBlock() );
+    board->GetProject()->ApplyTextVars( aJob->GetVarOverrides() );
+
+    wxString currentVariant = aBomJob->GetSelectedVariant();
+
+    if( !currentVariant.IsEmpty() && currentVariant != wxS( "all" ) )
+        board->SetCurrentVariant( currentVariant );
+
+    FOOTPRINT_REFERENCE_LIST referenceList;
+
+    // Annotation warning check (and gather footprints for data model)
+    bool hasWarned = false;
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        referenceList.push_back( FOOTPRINT_REF( *fp ) );
+
+        if( !fp->IsAnnotated() && !hasWarned )
+        {
+            m_reporter->Report( _( "Warning: board has unannotated footprints, please use the PCB "
+                                   "editor to annotate them\n" ),
+                                RPT_SEVERITY_WARNING );
+            hasWarned = true;
+        }
+    }
+
+    // Build our data model
+    FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL dataModel( referenceList );
+    dataModel.SetCurrentVariant( currentVariant );
+
+    // Mandatory fields first
+    for( FIELD_T fieldId : MANDATORY_FIELDS )
+        dataModel.AddColumn( GetDefaultFieldName( fieldId, UNTRANSLATED ),
+                             GetDefaultFieldName( fieldId, TRANSLATED ), false );
+
+    // Generated/virtual fields (e.g. ${QUANTITY}, ${ITEM_NUMBER}) present only in the fields table
+    dataModel.AddColumn( FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE,
+                         GetGeneratedFieldDisplayName( FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE ),
+                         false );
+    dataModel.AddColumn( FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE,
+                         GetGeneratedFieldDisplayName( FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE ),
+                         false );
+
+    // Attribute fields (boolean flags on footprints)
+    dataModel.AddColumn( wxS( "${DNP}" ), GetGeneratedFieldDisplayName( wxS( "${DNP}" ) ), false );
+    dataModel.AddColumn( wxS( "${EXCLUDE_FROM_BOM}" ), GetGeneratedFieldDisplayName( wxS( "${EXCLUDE_FROM_BOM}" ) ),
+                         false );
+    dataModel.AddColumn( wxS( "${EXCLUDE_FROM_BOARD}" ), GetGeneratedFieldDisplayName( wxS( "${EXCLUDE_FROM_BOARD}" ) ),
+                         false );
+    dataModel.AddColumn( wxS( "${EXCLUDE_FROM_SIM}" ), GetGeneratedFieldDisplayName( wxS( "${EXCLUDE_FROM_SIM}" ) ),
+                         false );
+
+    // User field names in footprints second
+    std::set<wxString> userFieldNames;
+
+    for( size_t i = 0; i < referenceList.size(); ++i )
+    {
+        FOOTPRINT& footprint = referenceList[i].GetFootprint();
+
+        for( PCB_FIELD* field : footprint.GetFields() )
+        {
+            if( !field->IsMandatory() && !field->IsPrivate() )
+                userFieldNames.insert( field->GetName() );
+        }
+    }
+
+    for( const wxString& fieldName : userFieldNames )
+        dataModel.AddColumn( fieldName, GetGeneratedFieldDisplayName( fieldName ), true );
+
+    // Add any templateFieldNames which aren't already present in the userFieldNames
+    // TODO: template field names not implemented in board editor
+
+    BOM_PRESET preset;
+
+    // Load a preset if one is specified
+    if( !aBomJob->m_bomPresetName.IsEmpty() )
+    {
+        // Find the preset
+        const BOM_PRESET* boardPreset = nullptr;
+
+        for( const BOM_PRESET& p : BOM_PRESET::BuiltInPresets() )
+        {
+            if( p.name == aBomJob->m_bomPresetName )
+            {
+                boardPreset = &p;
+                break;
+            }
+        }
+
+        for( const BOM_PRESET& p : board->GetDesignSettings().m_BomPresets )
+        {
+            if( p.name == aBomJob->m_bomPresetName )
+            {
+                boardPreset = &p;
+                break;
+            }
+        }
+
+        if( !boardPreset )
+        {
+            m_reporter->Report(
+                    wxString::Format( _( "BOM preset '%s' not found" ) + wxS( "\n" ), aBomJob->m_bomPresetName ),
+                    RPT_SEVERITY_ERROR );
+
+            return CLI::EXIT_CODES::ERR_UNKNOWN;
+        }
+
+        preset = *boardPreset;
+    }
+    else
+    {
+        // Normalize field names so that bare generated-field tokens (e.g. "QUANTITY") are
+        // accepted alongside the canonical "${QUANTITY}" form. Shell expansion of ${VAR}
+        // inside double quotes silently produces an empty string, so this also guards against
+        // that common CLI pitfall.
+        auto normalizeFieldName = [&dataModel]( const wxString& aName ) -> wxString
+        {
+            if( aName.IsEmpty() )
+                return wxEmptyString;
+
+            if( IsGeneratedField( aName ) )
+                return aName;
+
+            wxString wrapped = wxS( "${" ) + aName + wxS( "}" );
+
+            if( IsGeneratedField( wrapped ) && dataModel.GetFieldNameCol( wrapped ) != -1 )
+                return wrapped;
+
+            return aName;
+        };
+
+        size_t i = 0;
+
+        for( const wxString& rawFieldName : aBomJob->m_fieldsOrdered )
+        {
+            wxString fieldName = normalizeFieldName( rawFieldName );
+
+            if( fieldName.IsEmpty() )
+            {
+                i++;
+                continue;
+            }
+
+            // Handle wildcard. We allow the wildcard anywhere in the list, but it needs to respect
+            // fields that come before and after the wildcard.
+            if( fieldName == wxS( "*" ) )
+            {
+                for( const BOM_FIELD& modelField : dataModel.GetFieldsOrdered() )
+                {
+                    struct BOM_FIELD field;
+
+                    field.name = modelField.name;
+                    field.show = true;
+                    field.groupBy = false;
+                    field.label = field.name;
+
+                    bool fieldAlreadyPresent = false;
+
+                    for( BOM_FIELD& presetField : preset.fieldsOrdered )
+                    {
+                        if( presetField.name == field.name )
+                        {
+                            fieldAlreadyPresent = true;
+                            break;
+                        }
+                    }
+
+                    bool fieldLaterInList = false;
+
+                    for( const wxString& fieldInList : aBomJob->m_fieldsOrdered )
+                    {
+                        if( normalizeFieldName( fieldInList ) == field.name )
+                        {
+                            fieldLaterInList = true;
+                            break;
+                        }
+                    }
+
+                    if( !fieldAlreadyPresent && !fieldLaterInList )
+                        preset.fieldsOrdered.emplace_back( field );
+                }
+
+                continue;
+            }
+
+            struct BOM_FIELD field;
+
+            field.name = fieldName;
+            field.show = !fieldName.StartsWith( wxT( "__" ), &field.name );
+
+            field.groupBy = alg::contains( aBomJob->m_fieldsGroupBy, field.name )
+                            || alg::contains( aBomJob->m_fieldsGroupBy, rawFieldName );
+
+            if( ( aBomJob->m_fieldsLabels.size() > i ) && !aBomJob->m_fieldsLabels[i].IsEmpty() )
+                field.label = aBomJob->m_fieldsLabels[i];
+            else if( IsGeneratedField( field.name ) )
+                field.label = GetGeneratedFieldDisplayName( field.name );
+            else
+                field.label = field.name;
+
+            preset.fieldsOrdered.emplace_back( field );
+            i++;
+        }
+
+        preset.sortAsc = aBomJob->m_sortAsc;
+        preset.sortField = normalizeFieldName( aBomJob->m_sortField );
+        preset.filterString = aBomJob->m_filterString;
+        preset.filterScope = aBomJob->m_filterScope;
+        preset.groupSymbols = aBomJob->m_groupSymbols;
+        preset.excludeDNP = aBomJob->m_excludeDNP;
+    }
+
+    BOM_FMT_PRESET fmt;
+
+    // Load a format preset if one is specified
+    if( !aBomJob->m_bomFmtPresetName.IsEmpty() )
+    {
+        std::optional<BOM_FMT_PRESET> boardFmtPreset;
+
+        for( const BOM_FMT_PRESET& p : BOM_FMT_PRESET::BuiltInPresets() )
+        {
+            if( p.name == aBomJob->m_bomFmtPresetName )
+            {
+                boardFmtPreset = p;
+                break;
+            }
+        }
+
+        for( const BOM_FMT_PRESET& p : board->GetDesignSettings().m_BomFmtPresets )
+        {
+            if( p.name == aBomJob->m_bomFmtPresetName )
+            {
+                boardFmtPreset = p;
+                break;
+            }
+        }
+
+        if( !boardFmtPreset )
+        {
+            m_reporter->Report( wxString::Format( _( "BOM format preset '%s' not found" ) + wxS( "\n" ),
+                                                  aBomJob->m_bomFmtPresetName ),
+                                RPT_SEVERITY_ERROR );
+
+            return CLI::EXIT_CODES::ERR_UNKNOWN;
+        }
+
+        fmt = *boardFmtPreset;
+    }
+    else
+    {
+        fmt.fieldDelimiter = aBomJob->m_fieldDelimiter;
+        fmt.stringDelimiter = aBomJob->m_stringDelimiter;
+        fmt.refDelimiter = aBomJob->m_refDelimiter;
+        fmt.refRangeDelimiter = aBomJob->m_refRangeDelimiter;
+        fmt.keepTabs = aBomJob->m_keepTabs;
+        fmt.keepLineBreaks = aBomJob->m_keepLineBreaks;
+        fmt.includeByteOrderMark = aBomJob->m_includeByteOrderMark;
+    }
+
+    if( aBomJob->GetConfiguredOutputPath().IsEmpty() )
+    {
+        wxFileName fn = board->GetFileName();
+        fn.SetName( fn.GetName() );
+        fn.SetExt( FILEEXT::CsvFileExtension );
+
+        aBomJob->SetConfiguredOutputPath( fn.GetFullName() );
+    }
+
+    wxString configuredPath = aBomJob->GetConfiguredOutputPath();
+    bool     hasVariantPlaceholder = configuredPath.Contains( wxS( "${VARIANT}" ) );
+
+    // Determine which variants to process
+    std::vector<wxString> variantsToProcess;
+
+    if( aBomJob->m_variantNames.size() > 1 && hasVariantPlaceholder )
+    {
+        variantsToProcess = aBomJob->m_variantNames;
+    }
+    else
+    {
+        variantsToProcess.push_back( currentVariant );
+    }
+
+    for( const wxString& variantName : variantsToProcess )
+    {
+        std::vector<wxString> singleVariant = { variantName };
+        dataModel.SetVariantNames( singleVariant );
+        dataModel.SetCurrentVariant( variantName );
+        dataModel.UpdateReferences( dataModel.GetReferenceList() );
+        dataModel.ApplyBomPreset( preset );
+
+        wxString outPath;
+
+        if( hasVariantPlaceholder )
+        {
+            wxString variantPath = configuredPath;
+            variantPath.Replace( wxS( "${VARIANT}" ), variantName );
+            aBomJob->SetConfiguredOutputPath( variantPath );
+            outPath = aBomJob->GetFullOutputPath( board->GetProject() );
+            aBomJob->SetConfiguredOutputPath( configuredPath );
+        }
+        else
+        {
+            outPath = aBomJob->GetFullOutputPath( board->GetProject() );
+        }
+
+        if( !PATHS::EnsurePathExists( outPath, true ) )
+        {
+            m_reporter->Report( _( "Failed to create output directory\n" ), RPT_SEVERITY_ERROR );
+            return CLI::EXIT_CODES::ERR_INVALID_OUTPUT_CONFLICT;
+        }
+
+        wxFile f;
+
+        if( !f.Open( outPath, wxFile::write ) )
+        {
+            m_reporter->Report( wxString::Format( _( "Unable to open destination '%s'" ), outPath ),
+                                RPT_SEVERITY_ERROR );
+
+            return CLI::EXIT_CODES::ERR_INVALID_INPUT_FILE;
+        }
+
+        bool res = f.Write( dataModel.Export( fmt ) );
+
+        if( !res )
+            return CLI::EXIT_CODES::ERR_UNKNOWN;
+
+        aJob->AddOutput( outPath );
+
+        m_reporter->Report( wxString::Format( _( "Wrote bill of materials to '%s'." ), outPath ), RPT_SEVERITY_ACTION );
+    }
+
+    return CLI::EXIT_CODES::OK;
+}
+
+
 int PCBNEW_JOBS_HANDLER::JobExportStep( JOB* aJob )
 {
     JOB_EXPORT_PCB_3D* aStepJob = dynamic_cast<JOB_EXPORT_PCB_3D*>( aJob );
@@ -919,7 +1314,10 @@ int PCBNEW_JOBS_HANDLER::JobExportRender( JOB* aJob )
     RENDER_3D_RAYTRACE_RAM raytrace( boardAdapter, camera );
     raytrace.SetCurWindowSize( windowSize );
 
-    for( bool first = true; raytrace.Redraw( false, m_reporter, m_reporter ); first = false )
+    std::shared_ptr<REPORTER> reporter( m_reporter, []( REPORTER* ) {} );
+    raytrace.SetReporters( reporter, reporter );
+
+    for( bool first = true; raytrace.Redraw( false ); first = false )
     {
         if( first )
         {
@@ -1749,6 +2147,114 @@ int PCBNEW_JOBS_HANDLER::JobExportStats( JOB* aJob )
     m_reporter->Report( wxString::Format( _( "Wrote board statistics to '%s'.\n" ), outPath ), RPT_SEVERITY_ACTION );
 
     statsJob->AddOutput( outPath );
+
+    return CLI::EXIT_CODES::OK;
+}
+
+
+int PCBNEW_JOBS_HANDLER::JobExportStackup( JOB* aJob )
+{
+    JOB_EXPORT_PCB_STACKUP* stackupJob = dynamic_cast<JOB_EXPORT_PCB_STACKUP*>( aJob );
+
+    if( stackupJob == nullptr )
+        return CLI::EXIT_CODES::ERR_UNKNOWN;
+
+    BOARD* brd = getBoard( stackupJob->m_filename );
+
+    if( !brd )
+        return CLI::EXIT_CODES::ERR_INVALID_INPUT_FILE;
+
+    wxFileName boardFile = brd->GetFileName();
+
+    if( boardFile.GetName().IsEmpty() )
+        boardFile = wxFileName( stackupJob->m_filename );
+
+    wxString output;
+
+    switch( stackupJob->m_format )
+    {
+    case JOB_EXPORT_PCB_STACKUP::OUTPUT_FORMAT::JSON:
+    {
+        kiapi::board::BoardStackup stackupMsg;
+        kiapi::board::PackBoardStackup( *brd, stackupMsg );
+
+        google::protobuf::util::JsonPrintOptions jsonOptions;
+        jsonOptions.add_whitespace = true;
+
+        std::string json;
+
+        if( !google::protobuf::util::MessageToJsonString( stackupMsg, &json, jsonOptions ).ok() )
+        {
+            m_reporter->Report( _( "Failed to serialize board stackup\n" ), RPT_SEVERITY_ERROR );
+            return CLI::EXIT_CODES::ERR_UNKNOWN;
+        }
+
+        output = wxString::FromUTF8( json );
+        break;
+    }
+
+    case JOB_EXPORT_PCB_STACKUP::OUTPUT_FORMAT::CSV:
+    {
+        BOARD_DESIGN_SETTINGS& bds = brd->GetDesignSettings();
+        BOARD_STACKUP          stackup = bds.GetStackupDescriptor();
+        stackup.SynchronizeWithBoard( &bds );
+
+        for( BOARD_STACKUP_ITEM* item : stackup.GetList() )
+        {
+            if( item->GetBrdLayerId() != UNDEFINED_LAYER )
+                item->SetLayerName( brd->GetLayerName( item->GetBrdLayerId() ) );
+        }
+
+        EDA_UNITS unitsForReport =
+                stackupJob->m_units == JOB_EXPORT_PCB_STACKUP::UNITS::MM ? EDA_UNITS::MM : EDA_UNITS::INCH;
+
+        STACKUP_CSV_OPTIONS options;
+        options.includeColor = stackupJob->m_includeColor;
+        options.includeMaterial = stackupJob->m_includeMaterial;
+        options.includeThickness = stackupJob->m_includeThickness;
+        options.includeEpsilonR = stackupJob->m_includeEpsilonR;
+        options.includeLossTangent = stackupJob->m_includeLossTangent;
+        options.includeFinish = stackupJob->m_includeFinish;
+        options.includeBoardOptions = stackupJob->m_includeBoardOptions;
+
+        output = BuildStackupCsv( stackup, unitsForReport, options );
+        break;
+    }
+    }
+
+    if( stackupJob->GetConfiguredOutputPath().IsEmpty() && stackupJob->GetWorkingOutputPath().IsEmpty() )
+        stackupJob->SetDefaultOutputPath( boardFile.GetFullPath() );
+
+    wxString outPath = resolveJobOutputPath( aJob, brd );
+
+    if( !PATHS::EnsurePathExists( outPath, true ) )
+    {
+        m_reporter->Report( _( "Failed to create output directory\n" ), RPT_SEVERITY_ERROR );
+        return CLI::EXIT_CODES::ERR_INVALID_OUTPUT_CONFLICT;
+    }
+
+    OPEN_OSTREAM( outFile, TO_UTF8( outPath ) );
+
+    if( !outFile )
+    {
+        m_reporter->Report( wxString::Format( _( "Failed to create file '%s'.\n" ), outPath ), RPT_SEVERITY_ERROR );
+        return CLI::EXIT_CODES::ERR_INVALID_OUTPUT_CONFLICT;
+    }
+
+    outFile << TO_UTF8( output );
+
+    const bool writeOk = static_cast<bool>( outFile );
+    CLOSE_STREAM( outFile );
+
+    if( !writeOk )
+    {
+        m_reporter->Report( wxString::Format( _( "Error writing file '%s'.\n" ), outPath ), RPT_SEVERITY_ERROR );
+        return CLI::EXIT_CODES::ERR_INVALID_OUTPUT_CONFLICT;
+    }
+
+    m_reporter->Report( wxString::Format( _( "Wrote board stackup to '%s'.\n" ), outPath ), RPT_SEVERITY_ACTION );
+
+    stackupJob->AddOutput( outPath );
 
     return CLI::EXIT_CODES::OK;
 }
@@ -2945,7 +3451,15 @@ int PCBNEW_JOBS_HANDLER::JobImport( JOB* aJob )
     {
     case JOB_PCB_IMPORT::FORMAT::AUTO: fileType = PCB_IO_MGR::FindPluginTypeFromBoardPath( job->m_inputFile ); break;
 
-    case JOB_PCB_IMPORT::FORMAT::PADS_ASCII: fileType = PCB_IO_MGR::PADS; break;
+    // "pads" names the vendor format, not the dialect: PADS writes both an ASCII export and a
+    // binary PowerPCB database, and both use the .pcb extension. Resolve the dialect by content
+    // so an explicit --format pads on a binary file imports it instead of handing it to the ASCII
+    // reader, which parses nothing and silently yields an empty board.
+    case JOB_PCB_IMPORT::FORMAT::PADS_ASCII:
+        fileType = PCB_IO_MGR::FindPluginTypeFromBoardPath( job->m_inputFile ) == PCB_IO_MGR::PADS_BINARY
+                           ? PCB_IO_MGR::PADS_BINARY
+                           : PCB_IO_MGR::PADS;
+        break;
 
     case JOB_PCB_IMPORT::FORMAT::ALTIUM: fileType = PCB_IO_MGR::ALTIUM_DESIGNER; break;
 

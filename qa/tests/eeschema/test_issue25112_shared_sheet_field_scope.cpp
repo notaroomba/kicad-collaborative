@@ -22,9 +22,10 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <memory>
+#include <set>
 
 #include <eeschema_helpers.h>
-#include <fields_data_model.h>
+#include <symbol_fields_data_model.h>
 #include <locale_io.h>
 #include <sch_commit.h>
 #include <sch_field.h>
@@ -61,17 +62,23 @@ struct ISSUE25112_FIXTURE
      * ApplyData follows the model's reference list, so scoping to that first path guarantees a
      * stale entry follows the edited one.
      */
-    std::unique_ptr<FIELDS_EDITOR_GRID_DATA_MODEL> MakeScopedModel( const wxString& aVariantName,
-                                                                    const wxString& aFieldName )
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> MakeScopedModel( const wxString& aVariantName,
+                                                                           const wxString& aFieldName,
+                                                                           bool aAddedByUser = false )
     {
-        auto model = std::make_unique<FIELDS_EDITOR_GRID_DATA_MODEL>( m_refs, nullptr );
+        auto model = std::make_unique<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL>( m_refs );
 
         model->SetCurrentVariant( aVariantName );
-        model->AddColumn( GetCanonicalFieldName( FIELD_T::REFERENCE ), wxS( "Reference" ), false );
-        model->AddColumn( aFieldName, aFieldName, false );
+        model->AddColumn( GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED ), wxS( "Reference" ), false );
+        model->AddColumn( aFieldName, aFieldName, aAddedByUser );
+
+        int referenceCol = model->GetFieldNameCol( GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED ) );
+        BOOST_REQUIRE( referenceCol >= 0 );
+        model->SetShowColumn( referenceCol, true );
 
         m_col = model->GetFieldNameCol( aFieldName );
         BOOST_REQUIRE( m_col >= 0 );
+        model->SetShowColumn( m_col, true );
 
         const SCH_REFERENCE_LIST& modelRefs = model->GetReferenceList();
         bool                      found = false;
@@ -94,7 +101,7 @@ struct ISSUE25112_FIXTURE
         BOOST_REQUIRE( found );
 
         model->SetPath( m_scopePath );
-        model->SetScope( FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE::SCOPE_SHEET );
+        model->SetScope( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE::SCOPE_SHEET );
         model->RebuildRows();
 
         m_row = -1;
@@ -120,7 +127,7 @@ struct ISSUE25112_FIXTURE
         return model;
     }
 
-    void Apply( FIELDS_EDITOR_GRID_DATA_MODEL& aModel, const wxString& aVariantName )
+    void Apply( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL& aModel, const wxString& aVariantName )
     {
         TOOL_MANAGER toolMgr;
         SCH_COMMIT   commit( &toolMgr );
@@ -142,8 +149,8 @@ struct ISSUE25112_FIXTURE
 
 BOOST_FIXTURE_TEST_CASE( SheetScopedFieldEditSurvivesApply, ISSUE25112_FIXTURE )
 {
-    std::unique_ptr<FIELDS_EDITOR_GRID_DATA_MODEL> model =
-            MakeScopedModel( wxEmptyString, GetCanonicalFieldName( FIELD_T::FOOTPRINT ) );
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxEmptyString, GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) );
 
     const wxString newFootprint = wxS( "Resistor_SMD:R_0603_1608Metric" );
 
@@ -154,14 +161,106 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedFieldEditSurvivesApply, ISSUE25112_FIXTURE )
 }
 
 
+BOOST_FIXTURE_TEST_CASE( SheetScopedFieldClearCanBeReverted, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "MPN" );
+    const wxString fieldValue = wxS( "ABC123" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model = MakeScopedModel( wxEmptyString, fieldName );
+
+    SCH_FIELD field( m_symbol, FIELD_T::USER, fieldName );
+    field.SetText( fieldValue );
+    m_symbol->AddField( field );
+    model->UpdateReferences( m_refs );
+
+    BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
+
+    model->ClearCell( m_row, m_col );
+    BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
+
+    model->RevertRow( m_row );
+    BOOST_CHECK( !model->IsCellClear( m_row, m_col ) );
+    BOOST_CHECK( !model->IsEdited() );
+
+    Apply( *model, wxEmptyString );
+
+    const SCH_FIELD* appliedField = m_symbol->GetField( fieldName );
+    BOOST_REQUIRE( appliedField );
+    BOOST_CHECK_EQUAL( appliedField->GetText(), fieldValue );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( GroupedEditStateChecksEveryItem, ISSUE25112_FIXTURE )
+{
+    const wxString        fieldName = wxS( "GroupedState" );
+    const wxString        fieldValue = wxS( "Original" );
+    std::set<SCH_SYMBOL*> symbols;
+
+    for( const SCH_REFERENCE& ref : m_refs )
+    {
+        SCH_SYMBOL* symbol = ref.GetSymbol();
+
+        if( !symbols.insert( symbol ).second )
+            continue;
+
+        SCH_FIELD field( symbol, FIELD_T::USER, fieldName );
+        field.SetText( fieldValue );
+        symbol->AddField( field );
+    }
+
+    SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL model( m_refs );
+    model.AddColumn( GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED ), wxS( "Reference" ), false );
+    model.AddColumn( fieldName, fieldName, false );
+
+    int referenceCol = model.GetFieldNameCol( GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED ) );
+    int fieldCol = model.GetFieldNameCol( fieldName );
+    BOOST_REQUIRE( referenceCol >= 0 );
+    BOOST_REQUIRE( fieldCol >= 0 );
+
+    model.SetShowColumn( referenceCol, true );
+    model.SetShowColumn( fieldCol, true );
+    model.SetGroupingEnabled( true );
+    model.SetGroupColumn( fieldCol, true );
+    model.RebuildRows();
+
+    int         groupedRow = -1;
+    SCH_SYMBOL* symbolToModify = nullptr;
+
+    for( int row = 0; row < model.GetNumberRows() && groupedRow < 0; ++row )
+    {
+        const std::vector<SCH_REFERENCE> refs = model.GetRowReferences( row );
+
+        for( size_t ii = 1; ii < refs.size(); ++ii )
+        {
+            if( refs[ii].GetSymbol() != refs[0].GetSymbol() )
+            {
+                groupedRow = row;
+                symbolToModify = refs[ii].GetSymbol();
+                break;
+            }
+        }
+    }
+
+    BOOST_REQUIRE( groupedRow >= 0 );
+    BOOST_REQUIRE( symbolToModify );
+    BOOST_REQUIRE( !model.IsRowEdited( groupedRow ) );
+
+    symbolToModify->GetField( fieldName )->SetText( wxS( "Modified" ) );
+
+    BOOST_CHECK( !model.IsCellEdited( groupedRow, referenceCol ) );
+    BOOST_CHECK( model.IsCellEdited( groupedRow, fieldCol ) );
+    BOOST_CHECK( model.IsRowEdited( groupedRow ) );
+}
+
+
 // Variant field values are stored per symbol instance, so an edit made against one sheet path
 // must not be stamped onto the paths that share the symbol.
 BOOST_FIXTURE_TEST_CASE( SheetScopedVariantEditStaysOnItsPath, ISSUE25112_FIXTURE )
 {
     const wxString variant = wxS( "Assembly" );
 
-    std::unique_ptr<FIELDS_EDITOR_GRID_DATA_MODEL> model =
-            MakeScopedModel( variant, GetCanonicalFieldName( FIELD_T::FOOTPRINT ) );
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( variant, GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) );
 
     const wxString baseFootprint = m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText();
     const wxString newFootprint = wxS( "Resistor_SMD:R_0603_1608Metric" );
@@ -183,7 +282,7 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedBoardExclusionSurvivesApply, ISSUE25112_FIXT
 {
     const wxString variant = wxS( "Assembly" );
 
-    std::unique_ptr<FIELDS_EDITOR_GRID_DATA_MODEL> model =
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
             MakeScopedModel( variant, wxS( "${EXCLUDE_FROM_BOARD}" ) );
 
     BOOST_REQUIRE( !m_symbol->GetExcludedFromBoard() );
@@ -192,4 +291,104 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedBoardExclusionSurvivesApply, ISSUE25112_FIXT
     Apply( *model, variant );
 
     BOOST_CHECK( m_symbol->GetExcludedFromBoard() );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( UntouchedMissingPresetFieldRemainsAbsent, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "UninstantiatedPresetField" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxEmptyString, fieldName );
+
+    BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
+
+    Apply( *model, wxEmptyString );
+
+    BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( ExplicitEmptyValueCreatesField, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "ExplicitlyEmptyField" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxEmptyString, fieldName );
+
+    BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
+
+    model->SetValue( m_row, m_col, wxEmptyString );
+
+    BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
+    BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
+
+    Apply( *model, wxEmptyString );
+
+    const SCH_FIELD* field = m_symbol->GetField( fieldName );
+    BOOST_REQUIRE( field );
+    BOOST_CHECK( field->GetText().IsEmpty() );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( ExistingEmptyFieldCanBeCleared, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "ExistingEmptyField" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxEmptyString, fieldName );
+
+    m_symbol->AddField( SCH_FIELD( m_symbol, FIELD_T::USER, fieldName ) );
+    model->UpdateReferences( m_refs );
+
+    BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
+    BOOST_REQUIRE( !model->IsCellEdited( m_row, m_col ) );
+
+    model->ClearCell( m_row, m_col );
+
+    BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
+    BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
+
+    Apply( *model, wxEmptyString );
+
+    BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( UserAddedColumnCreatesEmptyField, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "UserAddedEmptyField" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxEmptyString, fieldName, true );
+
+    BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
+    BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
+
+    Apply( *model, wxEmptyString );
+
+    const SCH_FIELD* field = m_symbol->GetField( fieldName );
+    BOOST_REQUIRE( field );
+    BOOST_CHECK( field->GetText().IsEmpty() );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( RevertingVariantFieldCreationRestoresAbsence, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = wxS( "RevertedVariantField" );
+
+    std::unique_ptr<SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL> model =
+            MakeScopedModel( wxS( "Assembly" ), fieldName );
+
+    model->SetValue( m_row, m_col, wxEmptyString );
+    BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
+
+    model->RevertRow( m_row );
+
+    BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
+    BOOST_REQUIRE( !model->IsEdited() );
+
+    Apply( *model, wxS( "Assembly" ) );
+
+    BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
 }

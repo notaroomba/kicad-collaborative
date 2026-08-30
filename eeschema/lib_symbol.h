@@ -361,9 +361,13 @@ public:
 
     /**
      * Check whether symbol units are interchangeable.
+     *
+     * The units belong to the drawings, so a derived symbol resolves this through its root
+     * symbol.
+     *
      * @return False when interchangeable, true otherwise.
      */
-    bool UnitsLocked() const { return m_unitsLocked; }
+    bool UnitsLocked() const;
 
     /**
      * Overwrite all the existing fields in this symbol with fields supplied in \a aFieldsList.
@@ -737,6 +741,13 @@ public:
     std::vector<SCH_PIN*> GetPinsByNumber( const wxString& aNumber, int aUnit = 0, int aBodyStyle = 0 );
 
     /**
+     * Return true if \a aNumber names a pin of this symbol, in any unit or body style.
+     *
+     * @param aNumber - Pin number to look for.
+     */
+    bool HasPinNumber( const wxString& aNumber ) const;
+
+    /**
      * Return true if this symbol's pins do not match another symbol's pins. This is used to
      * detect whether the project cache is out of sync with the system libs.
      *
@@ -864,24 +875,21 @@ public:
      * @return true if the symbol has multiple units per symbol.
      * When true, the reference has a sub reference to identify symbol.
      */
-    bool IsMultiUnit() const override { return m_unitCount > 1; }
+    bool IsMultiUnit() const override { return GetUnitCount() > 1; }
 
     static wxString LetterSubReference( int aUnit, wxChar aInitialLetter );
 
     bool IsMultiBodyStyle() const override { return GetBodyStyleCount() > 1; }
 
-    int GetBodyStyleCount() const override
-    {
-        if( m_demorgan )
-            return 2;
-        else
-            return std::max( 1, (int) m_bodyStyleNames.size() );
-    }
+    /**
+     * The body styles are a property of the drawings, which a derived symbol inherits from its
+     * root symbol rather than owning, so these resolve through the inheritance chain.
+     */
+    int GetBodyStyleCount() const override;
+    bool HasDeMorganBodyStyles() const override;
+    const std::vector<wxString>& GetBodyStyleNames() const;
 
-    bool HasDeMorganBodyStyles() const override { return m_demorgan; }
     void SetHasDeMorganBodyStyles( bool aFlag ) { m_demorgan = aFlag; }
-
-    const std::vector<wxString>& GetBodyStyleNames() const { return m_bodyStyleNames; }
     void SetBodyStyleNames( const std::vector<wxString>& aBodyStyleNames ) { m_bodyStyleNames = aBodyStyleNames; }
 
     /**
@@ -913,7 +921,8 @@ public:
      *         1 if this symbol is greater than \a aRhs
      *         0 if this symbol is the same as \a aRhs
      */
-    int Compare( const LIB_SYMBOL& aRhs, int aCompareFlags = 0, REPORTER* aReporter = nullptr ) const;
+    int Compare( const LIB_SYMBOL& aRhs, int aCompareFlags = ~COMPARE_FLAGS::UNIT,
+                 REPORTER* aReporter = nullptr ) const;
 
     const LIB_SYMBOL& operator=( const LIB_SYMBOL& aSymbol );
 
@@ -928,6 +937,10 @@ public:
 
     /**
      * Return a list of SCH_ITEM objects separated by unit and convert number.
+     *
+     * Every unit and body style of the symbol is reported, whether or not it owns any draw
+     * items.  Items that belong to no numbered unit or body style (0 meaning "common to all")
+     * get a record of their own.
      *
      * @note This does not include SCH_FIELD objects since they are not associated with
      *       unit and/or convert numbers.
@@ -963,16 +976,26 @@ public:
     void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
 #endif
 
-private:
-    // We create a different set parent function for this class, so we hide the inherited one.
-    using EDA_ITEM::SetParent;
-
+protected:
     /**
      * The library symbol specific sort order is as follows:
      *
-     *   - The result of #SCH_ITEM::compare()
+     *   - Symbol name
+     *   - Symbol lib_id
+     *   - Symbol parent (if inherited)
+     *   - Power flag
+     *   - Unit count
+     *   - Drawings
+     *   - Pins
+     *   - Fields
+     *   - Attributes
      */
-    int compare( const SCH_ITEM& aOther, int aCompareFlags = SCH_ITEM::COMPARE_FLAGS::EQUALITY ) const override;
+    int compare( const SCH_ITEM& aOther,
+                 int aCompareFlags = ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::UNIT ) ) const override;
+
+private:
+    // We create a different set parent function for this class, so we hide the inherited one.
+    using EDA_ITEM::SetParent;
 
     void deleteAllFields();
 

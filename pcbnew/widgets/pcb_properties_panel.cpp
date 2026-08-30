@@ -52,6 +52,7 @@
 #include <pcb_track.h>
 #include <pcb_generator.h>
 #include <generators/pcb_tuning_pattern.h>
+#include <generators/pcb_via_stitch.h>
 #include <pad.h>
 #include <footprint.h>
 #include <pcb_field.h>
@@ -618,8 +619,37 @@ void PCB_PROPERTIES_PANEL::AfterCommit()
 }
 
 
-void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
+SELECTION PCB_PROPERTIES_PANEL::filterOutReadOnlyGenChildren( const SELECTION& aSelection )
 {
+    SELECTION filtered;
+    filtered.SetIsHover( aSelection.IsHover() );
+
+    for( EDA_ITEM* item : aSelection )
+    {
+        if( item->IsBOARD_ITEM() )
+        {
+            EDA_GROUP* parent = static_cast<BOARD_ITEM*>( item )->GetParentGroup();
+
+            if( parent && parent->AsEdaItem()->Type() == PCB_GENERATOR_T
+                && static_cast<PCB_GENERATOR*>( parent->AsEdaItem() )->ChildrenAreReadOnly() )
+            {
+                continue;
+            }
+        }
+
+        filtered.Add( item );
+    }
+
+    return filtered;
+}
+
+
+void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aRawSelection )
+{
+    // Strip read-only generator children (like stitch vias)
+    SELECTION        editableSelection = filterOutReadOnlyGenChildren( aRawSelection );
+    const SELECTION& aSelection = editableSelection;
+
     m_currentFieldNames.clear();
 
     for( EDA_ITEM* item : aSelection )
@@ -633,7 +663,7 @@ void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
         {
             wxCHECK2( field, continue );
 
-            m_currentFieldNames.insert( field->GetCanonicalName() );
+            m_currentFieldNames.insert( field->GetUntranslatedName() );
         }
     }
 
@@ -698,9 +728,9 @@ wxPGProperty* PCB_PROPERTIES_PANEL::createPGProperty( const PROPERTY_BASE* aProp
 
     wxPGProperty* prop = PGPropertyFactory( aProperty, m_frame );
 
-    if( aProperty->Name() == GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
+    if( aProperty->Name() == GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) )
         prop->SetEditor( PG_FPID_EDITOR::BuildEditorName( m_frame ) );
-    else if( aProperty->Name() == GetCanonicalFieldName( FIELD_T::DATASHEET ) )
+    else if( aProperty->Name() == GetDefaultFieldName( FIELD_T::DATASHEET, UNTRANSLATED ) )
         prop->SetEditor( PG_URL_EDITOR::BuildEditorName( m_frame ) );
     // OwnerHash is the class that registered the property.  Routed PCB_ARC items inherit
     // PCB_TRACK::Width, so this catches track arcs without changing unrelated "Width" properties.
@@ -841,7 +871,18 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
         return;
 
     SELECTION fallbackSelection;
-    const SELECTION& selection = getSelection( fallbackSelection );
+    SELECTION rawSelection = getSelection( fallbackSelection );
+
+    // Strip read-only generator children, last ditch sanity check
+    SELECTION filtered = filterOutReadOnlyGenChildren( rawSelection );
+
+    if( filtered.Empty() )
+    {
+        aEvent.Veto();
+        return;
+    }
+
+    const SELECTION& selection = filtered;
 
     wxCHECK( getPropertyFromEvent( aEvent ), /* void */ );
 
@@ -938,6 +979,7 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
             {
                 if( propName == _HKI( "Do not Populate" )
                     || propName == _HKI( "Exclude From Bill of Materials" )
+                    || propName == _HKI( "Exclude From Simulation" )
                     || propName == _HKI( "Exclude From Position Files" ) )
                 {
                     FOOTPRINT_VARIANT* variant = footprint->GetVariant( variantName );
@@ -953,6 +995,8 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
                             variant->SetDNP( boolValue );
                         else if( propName == _HKI( "Exclude From Bill of Materials" ) )
                             variant->SetExcludedFromBOM( boolValue );
+                        else if( propName == _HKI( "Exclude From Simulation" ) )
+                            variant->SetExcludedFromSim( boolValue );
                         else if( propName == _HKI( "Exclude From Position Files" ) )
                             variant->SetExcludedFromPosFiles( boolValue );
 
@@ -1131,6 +1175,12 @@ void PCB_PROPERTIES_PANEL::updateLists( const BOARD* aBoard )
 
     auto tuningNet = m_propMgr.GetProperty( TYPE_HASH( PCB_TUNING_PATTERN ), _HKI( "Net" ) );
     tuningNet->SetChoices( nets );
+
+    auto stitchNet = m_propMgr.GetProperty( TYPE_HASH( PCB_VIA_STITCH ), _HKI( "Net" ) );
+    stitchNet->SetChoices( nets );
+
+    auto stitchGuardedNet = m_propMgr.GetProperty( TYPE_HASH( PCB_VIA_STITCH ), _HKI( "Guarded Net" ) );
+    stitchGuardedNet->SetChoices( nets );
 }
 
 
@@ -1154,6 +1204,11 @@ bool PCB_PROPERTIES_PANEL::getItemValue( EDA_ITEM* aItem, PROPERTY_BASE* aProper
         else if( propName == _HKI( "Exclude From Bill of Materials" ) )
         {
             aValue = wxVariant( footprint->GetExcludedFromBOMForVariant( variantName ) );
+            return true;
+        }
+        else if( propName == _HKI( "Exclude From Simulation" ) )
+        {
+            aValue = wxVariant( footprint->GetExcludedFromSimForVariant( variantName ) );
             return true;
         }
         else if( propName == _HKI( "Exclude From Position Files" ) )

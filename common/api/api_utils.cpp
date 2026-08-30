@@ -20,10 +20,13 @@
 
 #include <magic_enum.hpp>
 #include <api/api_utils.h>
+#include <api/api_enums.h>
 #include <api/schematic/schematic_types.pb.h>
+#include <line_ending.h>
 #include <geometry/shape_poly_set.h>
 #include <kiid.h>
 #include <project.h>
+#include <stroke_params.h>
 #include <wx/log.h>
 
 const wxChar* const traceApi = wxT( "KICAD_API" );
@@ -60,14 +63,18 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.board.types.Via", PCB_VIA_T },
         { "type.googleapis.com/kiapi.board.types.BoardText", PCB_TEXT_T },
         { "type.googleapis.com/kiapi.board.types.BoardTextBox", PCB_TEXTBOX_T },
+        { "type.googleapis.com/kiapi.board.types.Table", PCB_TABLE_T },
+        { "type.googleapis.com/kiapi.board.types.TableCell", PCB_TABLECELL_T },
         { "type.googleapis.com/kiapi.board.types.BoardGraphicShape", PCB_SHAPE_T },
         { "type.googleapis.com/kiapi.board.types.Barcode", PCB_BARCODE_T },
         { "type.googleapis.com/kiapi.board.types.Pad", PCB_PAD_T },
         { "type.googleapis.com/kiapi.board.types.Zone", PCB_ZONE_T },
         { "type.googleapis.com/kiapi.board.types.Dimension", PCB_DIMENSION_T },
         { "type.googleapis.com/kiapi.board.types.ReferenceImage", PCB_REFERENCE_IMAGE_T },
+        { "type.googleapis.com/kiapi.board.types.ReferencePoint", PCB_POINT_T },
         { "type.googleapis.com/kiapi.board.types.GridItem", PCB_GRIDITEM_T },
         { "type.googleapis.com/kiapi.board.types.Group", PCB_GROUP_T },
+        { "type.googleapis.com/kiapi.board.types.Constraint", PCB_CONSTRAINT_T },
         { "type.googleapis.com/kiapi.board.types.Field", PCB_FIELD_T },
         { "type.googleapis.com/kiapi.board.types.FootprintInstance", PCB_FOOTPRINT_T },
         { "type.googleapis.com/kiapi.schematic.types.Junction", SCH_JUNCTION_T },
@@ -78,7 +85,9 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.schematic.types.SchematicImage", SCH_BITMAP_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicTextBox", SCH_TEXTBOX_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicText", SCH_TEXT_T },
-        { "type.googleapis.com/kiapi.schematic.types.Table", SCH_TABLE_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicField", SCH_FIELD_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicTableCell", SCH_TABLECELL_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicTable", SCH_TABLE_T },
         { "type.googleapis.com/kiapi.schematic.types.LocalLabel", SCH_LABEL_T },
         { "type.googleapis.com/kiapi.schematic.types.GlobalLabel", SCH_GLOBAL_LABEL_T },
         { "type.googleapis.com/kiapi.schematic.types.HierarchicalLabel", SCH_HIER_LABEL_T },
@@ -87,6 +96,7 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.schematic.types.SheetSymbol", SCH_SHEET_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicSymbolInstance", SCH_SYMBOL_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicPin", SCH_PIN_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicRuleArea", SCH_RULE_AREA_T },
     };
 
     auto it = s_types.find( aMessage.type_url() );
@@ -295,10 +305,90 @@ KICOMMON_API KIID_PATH UnpackSheetPath( const types::SheetPath& aInput )
     return output;
 }
 
+
+KICOMMON_API void PackStroke( types::StrokeAttributes& aOutput, const STROKE_PARAMS& aInput,
+                              const EDA_IU_SCALE& aScale )
+{
+    PackDistance( *aOutput.mutable_width(), aInput.GetWidth(), aScale );
+    aOutput.set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( aInput.GetLineStyle() ) );
+
+    if( aInput.GetColor() != KIGFX::COLOR4D::UNSPECIFIED )
+        PackColor( *aOutput.mutable_color(), aInput.GetColor() );
+}
+
+
+KICOMMON_API void UnpackStroke( STROKE_PARAMS& aOutput, const types::StrokeAttributes& aInput,
+                                const EDA_IU_SCALE& aScale )
+{
+    aOutput.SetWidth( UnpackDistance( aInput.width(), aScale ) );
+    aOutput.SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( aInput.style() ) );
+
+    if( aInput.has_color() )
+        aOutput.SetColor( UnpackColor( aInput.color() ) );
+    else
+        aOutput.SetColor( KIGFX::COLOR4D::UNSPECIFIED );
+}
+
+
+KICOMMON_API void PackLineEnding( types::LineEnding& aOutput, const LINE_ENDING& aInput, const EDA_IU_SCALE& aScale )
+{
+    aOutput.set_style( ToProtoEnum<LINE_ENDING_STYLE, types::LineEndingStyle>( aInput.GetStyle() ) );
+
+    if( aInput.GetLength() > 0 )
+        PackDistance( *aOutput.mutable_length(), aInput.GetLength(), aScale );
+
+    if( aInput.GetWidth() > 0 )
+        PackDistance( *aOutput.mutable_width(), aInput.GetWidth(), aScale );
+
+    if( aInput.GetStrokeWidth() > 0 )
+        PackStroke( *aOutput.mutable_stroke(), aInput.GetStroke(), aScale );
+}
+
+
+KICOMMON_API LINE_ENDING UnpackLineEnding( const types::LineEnding& aInput, const EDA_IU_SCALE& aScale )
+{
+    LINE_ENDING ending;
+
+    ending.SetStyle( FromProtoEnum<LINE_ENDING_STYLE, types::LineEndingStyle>( aInput.style() ) );
+
+    if( aInput.has_length() )
+        ending.SetLength( UnpackDistance( aInput.length(), aScale ) );
+
+    if( aInput.has_width() )
+        ending.SetWidth( UnpackDistance( aInput.width(), aScale ) );
+
+    if( aInput.has_stroke() )
+    {
+        STROKE_PARAMS stroke;
+        UnpackStroke( stroke, aInput.stroke(), aScale );
+        ending.SetStroke( stroke );
+    }
+
+    return ending;
+}
+
+
 KICOMMON_API void PackProject( types::ProjectSpecifier& aOutput, const PROJECT& aInput )
 {
     aOutput.set_name( aInput.GetProjectName().ToUTF8() );
     aOutput.set_path( aInput.GetProjectPath().ToUTF8() );
+}
+
+
+const KICOMMON_API std::string KiwayClientName = "org.kicad.internal.kiway";
+const KICOMMON_API std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
+
+
+KICOMMON_API bool PackKiwayApiMessage( const google::protobuf::Message& aMessage, std::string& aBytes )
+{
+    ApiRequest request;
+    request.mutable_header()->set_client_name( KiwayClientName );
+
+    if( !request.mutable_message()->PackFrom( aMessage ) )
+        return false;
+
+    aBytes = request.SerializeAsString();
+    return true;
 }
 
 } // namespace kiapi::common

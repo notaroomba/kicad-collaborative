@@ -28,67 +28,67 @@
 using namespace TFIELD_T;
 
 // N.B. Do not change these values without transitioning the file format
-#define REFERENCE_CANONICAL "Reference"
-#define VALUE_CANONICAL "Value"
-#define FOOTPRINT_CANONICAL "Footprint"
-#define DATASHEET_CANONICAL "Datasheet"
-#define DESCRIPTION_CANONICAL "Description"
-#define SHEET_NAME_CANONICAL "Sheetname"
-#define SHEET_FILE_CANONICAL "Sheetfile"
-#define INTERSHEET_REFS_CANONICAL "Intersheetrefs"
-#define USER_FIELD_CANONICAL "Field%d"
+#define REFERENCE_UNTRANSLATED "Reference"
+#define VALUE_UNTRANSLATED "Value"
+#define FOOTPRINT_UNTRANSLATED "Footprint"
+#define DATASHEET_UNTRANSLATED "Datasheet"
+#define DESCRIPTION_UNTRANSLATED "Description"
+#define SHEET_NAME_UNTRANSLATED "Sheetname"
+#define SHEET_FILE_UNTRANSLATED "Sheetfile"
+#define INTERSHEET_REFS_UNTRANSLATED "Intersheetrefs"
+#define USER_FIELD_UNTRANSLATED_FORMAT "Field%d"
 
-static wxString s_CanonicalReference( REFERENCE_CANONICAL );
-static wxString s_CanonicalValue( VALUE_CANONICAL );
-static wxString s_CanonicalFootprint( FOOTPRINT_CANONICAL );
-static wxString s_CanonicalDatasheet( DATASHEET_CANONICAL );
-static wxString s_CanonicalDescription( DESCRIPTION_CANONICAL );
-static wxString s_CanonicalSheetName( SHEET_NAME_CANONICAL );
-static wxString s_CanonicalSheetFile( SHEET_FILE_CANONICAL );
-static wxString s_CanonicalIntersheetRefs( INTERSHEET_REFS_CANONICAL );
+static wxString s_UntranslatedReference( REFERENCE_UNTRANSLATED );
+static wxString s_UntranslatedValue( VALUE_UNTRANSLATED );
+static wxString s_UntranslatedFootprint( FOOTPRINT_UNTRANSLATED );
+static wxString s_UntranslatedDatasheet( DATASHEET_UNTRANSLATED );
+static wxString s_UntranslatedDescription( DESCRIPTION_UNTRANSLATED );
+static wxString s_UntranslatedSheetName( SHEET_NAME_UNTRANSLATED );
+static wxString s_UntranslatedSheetFile( SHEET_FILE_UNTRANSLATED );
+static wxString s_UntranslatedIntersheetRefs( INTERSHEET_REFS_UNTRANSLATED );
 
 
-wxString GetDefaultFieldName( FIELD_T aFieldId, bool aTranslateForHI )
+wxString GetDefaultFieldName( FIELD_T aFieldId, TRANSLATION aTranslation )
 {
-    if( !aTranslateForHI )
+    if( aTranslation == UNTRANSLATED )
     {
         switch( aFieldId )
         {
-        case FIELD_T::REFERENCE:       return s_CanonicalReference;   // The symbol reference, R1, C1, etc.
-        case FIELD_T::VALUE:           return s_CanonicalValue;       // The symbol value
-        case FIELD_T::FOOTPRINT:       return s_CanonicalFootprint;   // The footprint for use with Pcbnew
-        case FIELD_T::DATASHEET:       return s_CanonicalDatasheet;   // Link to a datasheet for symbol
-        case FIELD_T::DESCRIPTION:     return s_CanonicalDescription; // The symbol description
-        case FIELD_T::SHEET_NAME:      return s_CanonicalSheetName;
-        case FIELD_T::SHEET_FILENAME:  return s_CanonicalSheetFile;
-        case FIELD_T::INTERSHEET_REFS: return s_CanonicalIntersheetRefs;
-        default:                       return GetUserFieldName( 42, aTranslateForHI );
+        case FIELD_T::REFERENCE:       return s_UntranslatedReference;   // The symbol reference, R1, C1, etc.
+        case FIELD_T::VALUE:           return s_UntranslatedValue;       // The symbol value
+        case FIELD_T::FOOTPRINT:       return s_UntranslatedFootprint;   // The footprint for use with Pcbnew
+        case FIELD_T::DATASHEET:       return s_UntranslatedDatasheet;   // Link to a datasheet for symbol
+        case FIELD_T::DESCRIPTION:     return s_UntranslatedDescription; // The symbol description
+        case FIELD_T::SHEET_NAME:      return s_UntranslatedSheetName;
+        case FIELD_T::SHEET_FILENAME:  return s_UntranslatedSheetFile;
+        case FIELD_T::INTERSHEET_REFS: return s_UntranslatedIntersheetRefs;
+        default:                       return GetUserFieldName( 42, aTranslation );
         }
     }
     else
     {
         switch( aFieldId )
         {
-        case FIELD_T::REFERENCE:       return _( REFERENCE_CANONICAL );   // The symbol reference, R1, C1, etc.
-        case FIELD_T::VALUE:           return _( VALUE_CANONICAL );       // The symbol value
-        case FIELD_T::FOOTPRINT:       return _( FOOTPRINT_CANONICAL );   // The footprint for use with Pcbnew
-        case FIELD_T::DATASHEET:       return _( DATASHEET_CANONICAL );   // Link to a datasheet for symbol
-        case FIELD_T::DESCRIPTION:     return _( DESCRIPTION_CANONICAL ); // The symbol description
-        case FIELD_T::SHEET_NAME:      return _( SHEET_NAME_CANONICAL );
-        case FIELD_T::SHEET_FILENAME:  return _( SHEET_FILE_CANONICAL );
-        case FIELD_T::INTERSHEET_REFS: return _( INTERSHEET_REFS_CANONICAL );
-        default:                       return GetUserFieldName( 42, aTranslateForHI );
+        case FIELD_T::REFERENCE:       return _( REFERENCE_UNTRANSLATED );   // The symbol reference, R1, C1, etc.
+        case FIELD_T::VALUE:           return _( VALUE_UNTRANSLATED );       // The symbol value
+        case FIELD_T::FOOTPRINT:       return _( FOOTPRINT_UNTRANSLATED );   // The footprint for use with Pcbnew
+        case FIELD_T::DATASHEET:       return _( DATASHEET_UNTRANSLATED );   // Link to a datasheet for symbol
+        case FIELD_T::DESCRIPTION:     return _( DESCRIPTION_UNTRANSLATED ); // The symbol description
+        case FIELD_T::SHEET_NAME:      return _( SHEET_NAME_UNTRANSLATED );
+        case FIELD_T::SHEET_FILENAME:  return _( SHEET_FILE_UNTRANSLATED );
+        case FIELD_T::INTERSHEET_REFS: return _( INTERSHEET_REFS_UNTRANSLATED );
+        default:                       return GetUserFieldName( 42, aTranslation );
         }
     }
 }
 
 
-wxString GetUserFieldName( int aFieldNdx, bool aTranslateForHI )
+wxString GetUserFieldName( int aFieldNdx, TRANSLATION aTranslation )
 {
-    if( !aTranslateForHI )
-        return wxString::Format( wxS( USER_FIELD_CANONICAL ), aFieldNdx );
+    if( aTranslation == UNTRANSLATED )
+        return wxString::Format( wxS( USER_FIELD_UNTRANSLATED_FORMAT ), aFieldNdx );
     else
-        return wxString::Format( _( USER_FIELD_CANONICAL ), aFieldNdx );
+        return wxString::Format( _( USER_FIELD_UNTRANSLATED_FORMAT ), aFieldNdx );
 }
 
 
@@ -99,15 +99,15 @@ bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs,
         return true;
 
     // If they don't even match case-insensitively they can't both be variants of the same
-    // canonical mandatory field name.
+    // untranslated mandatory field name.
     if( aLhs.CmpNoCase( aRhs ) != 0 )
         return false;
 
     // Mandatory field names are folded case-insensitively by the s-expression parser, so any
-    // case variant of a mandatory canonical name collides with the canonical mandatory field.
+    // case variant of an untranslated mandatory name collides with that mandatory field.
     for( FIELD_T fieldId : aMandatoryFields )
     {
-        if( aLhs.CmpNoCase( GetCanonicalFieldName( fieldId ) ) == 0 )
+        if( aLhs.CmpNoCase( GetDefaultFieldName( fieldId, UNTRANSLATED ) ) == 0 )
             return true;
     }
 
@@ -180,13 +180,13 @@ void TEMPLATE_FIELDNAME::Parse( TEMPLATE_FIELDNAMES_LEXER* in )
 }
 
 
-void TEMPLATES::Format( OUTPUTFORMATTER* out, bool aGlobal ) const
+void TEMPLATES::Format( OUTPUTFORMATTER* out, SCOPE aScope ) const
 {
     // We'll keep this general, and include the \n, even though the only known
     // use at this time will not want the newlines or the indentation.
     out->Print( "(templatefields" );
 
-    const std::vector<TEMPLATE_FIELDNAME>& source = aGlobal ? m_globals : m_project;
+    const std::vector<TEMPLATE_FIELDNAME>& source = aScope == SCOPE::GLOBAL ? m_globals : m_project;
 
     for( const TEMPLATE_FIELDNAME& temp : source )
     {
@@ -198,7 +198,7 @@ void TEMPLATES::Format( OUTPUTFORMATTER* out, bool aGlobal ) const
 }
 
 
-void TEMPLATES::parse( TEMPLATE_FIELDNAMES_LEXER* in, bool aGlobal )
+void TEMPLATES::parse( TEMPLATE_FIELDNAMES_LEXER* in, SCOPE aScope )
 {
     T  tok;
 
@@ -226,7 +226,7 @@ void TEMPLATES::parse( TEMPLATE_FIELDNAMES_LEXER* in, bool aGlobal )
 
                 // add the field
                 if( !field.m_Name.IsEmpty() )
-                    AddTemplateFieldName( field, aGlobal );
+                    AddTemplateFieldName( field, aScope );
             }
             break;
 
@@ -270,17 +270,18 @@ void TEMPLATES::resolveTemplates()
 }
 
 
-void TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, bool aGlobal )
+void TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, SCOPE aScope )
 {
-    // Reject any case variant of a mandatory fieldname; the s-expression parser folds those
-    // onto the canonical mandatory field, so they can never become a distinct user field.
+    // Reject any case variant of a mandatory fieldname; the s-expression parser folds those onto
+    // the mandatory field with the matching untranslated name, so they can never become a
+    // distinct user field.
     for( FIELD_T fieldId : MANDATORY_FIELDS )
     {
-        if( GetCanonicalFieldName( fieldId ).CmpNoCase( aFieldName.m_Name ) == 0 )
+        if( GetDefaultFieldName( fieldId, UNTRANSLATED ).CmpNoCase( aFieldName.m_Name ) == 0 )
             return;
     }
 
-    std::vector<TEMPLATE_FIELDNAME>& target = aGlobal ? m_globals : m_project;
+    std::vector<TEMPLATE_FIELDNAME>& target = aScope == SCOPE::GLOBAL ? m_globals : m_project;
 
     // ensure uniqueness, overwrite any template fieldname by the same name.
     for( TEMPLATE_FIELDNAME& temp : target )
@@ -300,13 +301,13 @@ void TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, bool
 }
 
 
-void TEMPLATES::AddTemplateFieldNames( const wxString& aSerializedFieldNames )
+void TEMPLATES::AddTemplateFieldNames( const wxString& aSerializedFieldNames, SCOPE aScope )
 {
     TEMPLATE_FIELDNAMES_LEXER field_lexer( TO_UTF8( aSerializedFieldNames ) );
 
     try
     {
-        parse( &field_lexer, true );
+        parse( &field_lexer, aScope );
     }
     catch( const IO_ERROR& )
     {
@@ -314,9 +315,9 @@ void TEMPLATES::AddTemplateFieldNames( const wxString& aSerializedFieldNames )
 }
 
 
-void TEMPLATES::DeleteAllFieldNameTemplates( bool aGlobal )
+void TEMPLATES::DeleteFieldNameTemplates( SCOPE aScope )
 {
-    if( aGlobal )
+    if( aScope == SCOPE::GLOBAL )
     {
         m_globals.clear();
         m_resolved = m_project;
@@ -331,7 +332,7 @@ void TEMPLATES::DeleteAllFieldNameTemplates( bool aGlobal )
 }
 
 
-const std::vector<TEMPLATE_FIELDNAME>& TEMPLATES::GetTemplateFieldNames()
+const std::vector<TEMPLATE_FIELDNAME>& TEMPLATES::GetResolvedTemplateFieldNames()
 {
     if( m_resolvedDirty )
         resolveTemplates();
@@ -340,9 +341,9 @@ const std::vector<TEMPLATE_FIELDNAME>& TEMPLATES::GetTemplateFieldNames()
 }
 
 
-const std::vector<TEMPLATE_FIELDNAME>& TEMPLATES::GetTemplateFieldNames( bool aGlobal )
+const std::vector<TEMPLATE_FIELDNAME>& TEMPLATES::GetTemplateFieldNames( SCOPE aScope )
 {
-    if( aGlobal )
+    if( aScope == SCOPE::GLOBAL )
         return m_globals;
     else
         return m_project;
@@ -362,4 +363,3 @@ const TEMPLATE_FIELDNAME* TEMPLATES::GetFieldName( const wxString& aName )
 
     return nullptr;
 }
-

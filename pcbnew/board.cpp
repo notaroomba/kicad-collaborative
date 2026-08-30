@@ -48,6 +48,7 @@
 #include <pcb_base_frame.h>
 #include <pcb_track.h>
 #include <pcb_marker.h>
+#include <api/board/board_rules.pb.h>
 #include <pcb_group.h>
 #include <pcb_generator.h>
 #include <pcb_point.h>
@@ -169,7 +170,7 @@ BOARD::BOARD() :
 
 BOARD::~BOARD()
 {
-    // Clears m_indexedInBoard as it goes. Items that outlive the board rely on that to know
+    // Clears m_boardCacheOwner as it goes. Items that outlive the board rely on that to know
     // ~BOARD_ITEM must not walk their parent chain back into freed memory
     ClearItemByIdCache();
 
@@ -397,21 +398,16 @@ void BOARD::UpdateRatsnestExclusions()
 void BOARD::RecordDRCExclusions()
 {
     m_designSettings->m_DrcExclusions.clear();
-    m_designSettings->m_DrcExclusionComments.clear();
 
     for( PCB_MARKER* marker : m_markers )
     {
-        // SerializeToString() dereferences the RC_ITEM, so a marker carrying none would fault
-        // while persisting exclusions during a save or window close.
+        // DRC_EXCLUSION::FromMarker() dereferences the RC_ITEM, so a marker carrying none would
+        // fault while persisting exclusions during a save or window close.
         if( !marker->GetRCItem() )
             continue;
 
         if( marker->IsExcluded() )
-        {
-            wxString serialized = marker->SerializeToString();
-            m_designSettings->m_DrcExclusions.insert( serialized );
-            m_designSettings->m_DrcExclusionComments[serialized] = marker->GetComment();
-        }
+            m_designSettings->m_DrcExclusions.insert( DRC_EXCLUSION::FromMarker( *marker ) );
     }
 
     if( m_project )
@@ -419,90 +415,25 @@ void BOARD::RecordDRCExclusions()
         if( PROJECT_FILE* projectFile = &m_project->GetProjectFile() )
         {
             if( BOARD_DESIGN_SETTINGS* prjSettings = projectFile->m_BoardSettings )
-            {
                 prjSettings->m_DrcExclusions = m_designSettings->m_DrcExclusions;
-                prjSettings->m_DrcExclusionComments = m_designSettings->m_DrcExclusionComments;
-            }
         }
     }
 }
 
-std::set<wxString>::iterator FindByFirstNFields( std::set<wxString>& strSet, const wxString& searchStr, char delimiter,
-                                                 int n )
-{
-    wxString searchPrefix = searchStr;
-
-    // Extract first n fields from the search string
-    int    delimiterCount = 0;
-    size_t pos = 0;
-
-    while( pos < searchPrefix.length() && delimiterCount < n )
-    {
-        if( searchPrefix[pos] == delimiter )
-            delimiterCount++;
-
-        pos++;
-    }
-
-    if( delimiterCount == n )
-        searchPrefix = searchPrefix.Left( pos - 1 ); // Exclude the nth delimiter
-
-    for( auto it = strSet.begin(); it != strSet.end(); ++it )
-    {
-        if( it->StartsWith( searchPrefix + delimiter ) || *it == searchPrefix )
-            return it;
-    }
-
-    return strSet.end();
-}
 
 std::vector<PCB_MARKER*> BOARD::ResolveDRCExclusions( bool aCreateMarkers )
 {
-    std::set<wxString>           exclusions = m_designSettings->m_DrcExclusions;
-    std::map<wxString, wxString> comments = m_designSettings->m_DrcExclusionComments;
-
+    std::set<DRC_EXCLUSION, DRC_EXCLUSION_COMPARE> exclusions = m_designSettings->m_DrcExclusions;
     m_designSettings->m_DrcExclusions.clear();
-    m_designSettings->m_DrcExclusionComments.clear();
 
     for( PCB_MARKER* marker : GetBoard()->Markers() )
     {
-        wxString serialized = marker->SerializeToString();
-        wxString matchedExclusion;
-        bool     matched = false;
+        DRC_EXCLUSION lookup = DRC_EXCLUSION::FromMarker( *marker );
 
-        if( !serialized.Contains( "unconnected_items" ) )
+        if( auto it = exclusions.find( lookup ); it != exclusions.end() )
         {
-            // Markers reported on several layers serialize identically, so one stored exclusion
-            // has to cover them all or the extras can never be excluded
-            matched = exclusions.count( serialized ) > 0;
-            matchedExclusion = serialized;
-        }
-        else
-        {
-            const int  numberOfFieldsExcludingIds = 3;
-            const char delimiter = '|';
-            auto       it = FindByFirstNFields( exclusions, serialized, delimiter, numberOfFieldsExcludingIds );
-
-            if( it != exclusions.end() )
-            {
-                matchedExclusion = *it;
-                matched = true;
-
-                // Unlike the exact match above this one is a prefix match, so it has to be
-                // consumed or a single exclusion swallows every violation at that position
-                exclusions.erase( it );
-            }
-        }
-
-        if( matched )
-        {
-            const wxString& comment = comments[matchedExclusion];
-
-            marker->SetExcluded( true, comment );
-
-            // Exclusion still valid; store back to BOARD_DESIGN_SETTINGS
-            m_designSettings->m_DrcExclusions.insert( matchedExclusion );
-            m_designSettings->m_DrcExclusionComments[matchedExclusion] = comment;
+            marker->SetExcluded( true, it->GetComment() );
+            m_designSettings->m_DrcExclusions.insert( *it );
         }
     }
 
@@ -510,13 +441,12 @@ std::vector<PCB_MARKER*> BOARD::ResolveDRCExclusions( bool aCreateMarkers )
 
     if( aCreateMarkers )
     {
-        for( const wxString& serialized : exclusions )
+        for( const DRC_EXCLUSION& exclusion : exclusions )
         {
-            // Exact matches aren't consumed above, so skip the ones a marker already claimed
-            if( m_designSettings->m_DrcExclusions.count( serialized ) )
+            if( m_designSettings->m_DrcExclusions.contains( exclusion ) )
                 continue;
 
-            PCB_MARKER* marker = PCB_MARKER::DeserializeFromString( serialized );
+            PCB_MARKER* marker = PCB_MARKER::FromProto( exclusion.ToProto().marker() );
 
             if( !marker )
                 continue;
@@ -541,12 +471,9 @@ std::vector<PCB_MARKER*> BOARD::ResolveDRCExclusions( bool aCreateMarkers )
 
             if( marker )
             {
-                marker->SetExcluded( true, comments[serialized] );
+                marker->SetExcluded( true, exclusion.GetComment() );
                 newMarkers.push_back( marker );
-
-                // Exclusion still valid; store back to BOARD_DESIGN_SETTINGS
-                m_designSettings->m_DrcExclusions.insert( serialized );
-                m_designSettings->m_DrcExclusionComments[serialized] = comments[serialized];
+                m_designSettings->m_DrcExclusions.insert( exclusion );
             }
         }
     }
@@ -1629,6 +1556,9 @@ void BOARD::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aRemoveMode )
 
     m_connectivity->Remove( aBoardItem );
 
+    // Bump here, not in ~FOOTPRINT/~ZONE, so an item kept alive after removal (undo) still invalidates
+    IncrementTimeStamp();
+
     if( aRemoveMode != REMOVE_MODE::BULK )
         InvokeListeners( &BOARD_LISTENER::OnBoardItemRemoved, *this, aBoardItem );
 }
@@ -2120,6 +2050,10 @@ void BOARD::CacheItemById( BOARD_ITEM* aItem ) const
     if( IsFootprintHolder() )
         return;
 
+    // Hand the item to this board. A stale owner cannot evict it.
+    if( aItem->m_boardCacheOwner && aItem->m_boardCacheOwner != this )
+        aItem->m_boardCacheOwner->UncacheItemByPtr( aItem );
+
     // Called once per item on load, so probe and insert in one lookup per map and pay for the
     // aliasing fixups only when a key was already taken
     auto [idIt, idInserted] = m_itemByIdCache.try_emplace( aItem->m_Uuid, aItem );
@@ -2142,14 +2076,15 @@ void BOARD::CacheItemById( BOARD_ITEM* aItem ) const
         if( auto prev = m_cachedIdByItem.find( idIt->second );
             prev != m_cachedIdByItem.end() && prev->second == aItem->m_Uuid )
         {
-            idIt->second->m_indexedInBoard = false;
+            idIt->second->m_boardCacheOwner = nullptr;
             m_cachedIdByItem.erase( prev );
         }
 
         idIt->second = aItem;
     }
 
-    aItem->m_indexedInBoard = true;
+    // Set owner last, see CacheAndReturnItemById()
+    aItem->m_boardCacheOwner = const_cast<BOARD*>( this );
 }
 
 
@@ -2167,7 +2102,7 @@ void BOARD::UncacheItemById( const KIID& aId ) const
     if( auto cached = m_cachedIdByItem.find( item );
         cached != m_cachedIdByItem.end() && cached->second == aId )
     {
-        item->m_indexedInBoard = false;
+        item->m_boardCacheOwner = nullptr;
         m_cachedIdByItem.erase( cached );
     }
 }
@@ -2177,6 +2112,14 @@ BOARD_ITEM* BOARD::CacheAndReturnItemById( const KIID& aId, BOARD_ITEM* aItem ) 
 {
     if( IsFootprintHolder() )
         return aItem;
+
+    // Hand the item to this board. A stale owner cannot evict it.
+    if( aItem->m_boardCacheOwner && aItem->m_boardCacheOwner != this )
+        aItem->m_boardCacheOwner->UncacheItemByPtr( aItem );
+
+    // catches a future alias between the cache key and the cached item's own UUID
+    wxASSERT_MSG( aItem && aItem->m_Uuid == aId,
+                  wxT( "BOARD identity cache key must be the item's own UUID" ) );
 
     if( auto prev = m_cachedIdByItem.find( aItem );
         prev != m_cachedIdByItem.end() && prev->second != aId )
@@ -2193,14 +2136,16 @@ BOARD_ITEM* BOARD::CacheAndReturnItemById( const KIID& aId, BOARD_ITEM* aItem ) 
         if( auto prev = m_cachedIdByItem.find( existing->second );
             prev != m_cachedIdByItem.end() && prev->second == aId )
         {
-            existing->second->m_indexedInBoard = false;
+            existing->second->m_boardCacheOwner = nullptr;
             m_cachedIdByItem.erase( prev );
         }
     }
 
     m_itemByIdCache.insert_or_assign( aId, aItem );
     m_cachedIdByItem.insert_or_assign( aItem, aId );
-    aItem->m_indexedInBoard = true;
+
+    // Set owner last, a half-done update then reads as not indexed
+    aItem->m_boardCacheOwner = const_cast<BOARD*>( this );
 
     return aItem;
 }
@@ -2208,7 +2153,8 @@ BOARD_ITEM* BOARD::CacheAndReturnItemById( const KIID& aId, BOARD_ITEM* aItem ) 
 
 void BOARD::UncacheItemByPtr( const BOARD_ITEM* aItem )
 {
-    aItem->m_indexedInBoard = false;
+    // Clear owner first, the item no longer points to this board
+    aItem->m_boardCacheOwner = nullptr;
 
     if( auto cached = m_cachedIdByItem.find( aItem ); cached != m_cachedIdByItem.end() )
     {
@@ -2234,7 +2180,7 @@ void BOARD::UncacheItemByPtr( const BOARD_ITEM* aItem )
 void BOARD::ClearItemByIdCache()
 {
     for( const auto& [item, id] : m_cachedIdByItem )
-        item->m_indexedInBoard = false;
+        item->m_boardCacheOwner = nullptr;
 
     m_itemByIdCache.clear();
     m_cachedIdByItem.clear();
@@ -3742,6 +3688,16 @@ void BOARD::SanitizeNetcodes()
 }
 
 
+void BOARD::OnZonesFilled( const std::vector<ZONE*>& aZones )
+{
+    if( aZones.empty() )
+        return;
+
+    for( PCB_GENERATOR* generator : m_generators )
+        generator->OnZoneFillChanged( aZones );
+}
+
+
 void BOARD::AddListener( BOARD_LISTENER* aListener )
 {
     if( !alg::contains( m_listeners, aListener ) )
@@ -3776,6 +3732,12 @@ void BOARD::OnItemChanged( BOARD_ITEM* aItem )
 void BOARD::OnItemsChanged( std::vector<BOARD_ITEM*>& aItems )
 {
     InvokeListeners( &BOARD_LISTENER::OnBoardItemsChanged, *this, aItems );
+}
+
+
+void BOARD::OnBoardSelectionChanged()
+{
+    InvokeListeners( &BOARD_LISTENER::OnBoardSelectionChanged, *this );
 }
 
 

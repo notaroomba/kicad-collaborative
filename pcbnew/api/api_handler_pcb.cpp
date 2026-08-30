@@ -23,10 +23,13 @@
 #include <properties/property.h>
 
 #include <common.h>
+#include <fmt.h>
 #include <api/api_handler_pcb.h>
 #include <api/api_pcb_utils.h>
 #include <api/api_enums.h>
 #include <api/api_utils.h>
+#include <api/cross_probe_client.h>
+#include <wx/log.h>
 #include <base_screen.h>
 #include <board_commit.h>
 #include <board_connected_item.h>
@@ -46,6 +49,7 @@
 #include <pcb_track.h>
 #include <pcbnew_id.h>
 #include <pcb_marker.h>
+#include <pcb_point.h>
 #include <kiway.h>
 #include <drc/drc_item.h>
 #include <jobs/job_export_pcb_3d.h>
@@ -77,12 +81,15 @@
 #include <zone_filler.h>
 
 #include <api/common/types/base_types.pb.h>
+#include <api/board/board_rules.pb.h>
 #include <connectivity/connectivity_data.h>
+#include <google/protobuf/util/json_util.h>
 #include <drc/drc_rule_condition.h>
 #include <drc/drc_rule_parser.h>
 #include <widgets/appearance_controls.h>
 #include <widgets/report_severity.h>
 #include <drc/rule_editor/drc_re_rule_loader.h>
+#include <trace_helpers.h>
 #include <wx/ffile.h>
 
 using namespace kiapi::common::commands;
@@ -113,6 +120,9 @@ API_HANDLER_PCB::API_HANDLER_PCB( std::shared_ptr<PCB_CONTEXT> aContext, PCB_EDI
     registerHandler<SetBoardDesignRules, BoardDesignRulesResponse>( &API_HANDLER_PCB::handleSetBoardDesignRules );
     registerHandler<GetCustomDesignRules, CustomRulesResponse>( &API_HANDLER_PCB::handleGetCustomDesignRules );
     registerHandler<SetCustomDesignRules, CustomRulesResponse>( &API_HANDLER_PCB::handleSetCustomDesignRules );
+    registerHandler<GetEmbeddedFiles, common::types::EmbeddedFiles>( &API_HANDLER_PCB::handleGetEmbeddedFiles );
+    registerHandler<AddEmbeddedFiles, Empty>( &API_HANDLER_PCB::handleAddEmbeddedFiles );
+    registerHandler<SetEmbeddedFiles, Empty>( &API_HANDLER_PCB::handleSetEmbeddedFiles );
     registerHandler<GetBoardOrigin, types::Vector2>( &API_HANDLER_PCB::handleGetBoardOrigin );
     registerHandler<SetBoardOrigin, Empty>( &API_HANDLER_PCB::handleSetBoardOrigin );
     registerHandler<GetBoardLayerName, BoardLayerNameResponse>( &API_HANDLER_PCB::handleGetBoardLayerName );
@@ -167,6 +177,10 @@ API_HANDLER_PCB::API_HANDLER_PCB( std::shared_ptr<PCB_CONTEXT> aContext, PCB_EDI
 
     registerHandler<GetPageSettings, types::PageSettings>( &API_HANDLER_PCB::handleGetPageSettings );
     registerHandler<SetPageSettings, types::PageSettings>( &API_HANDLER_PCB::handleSetPageSettings );
+
+    registerHandler<CrossProbeAnnounce, CrossProbeAnnounceResponse>( &API_HANDLER_PCB::handleCrossProbeAnnounce );
+    registerHandler<SyncSelection, SyncSelectionResponse>( &API_HANDLER_PCB::handleSyncSelection );
+    registerHandler<HighlightNets, HighlightNetsResponse>( &API_HANDLER_PCB::handleHighlightNets );
 }
 
 
@@ -403,6 +417,7 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_PCB::handleGetItems( const HANDLER_
         }
 
         case PCB_SHAPE_T:
+        case PCB_TABLE_T:
         case PCB_TEXT_T:
         case PCB_TEXTBOX_T:
         case PCB_BARCODE_T:
@@ -477,6 +492,26 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_PCB::handleGetItems( const HANDLER_
             typesInserted.insert( PCB_GROUP_T );
             break;
         }
+
+        case PCB_POINT_T:
+        {
+            handledAnything = true;
+            std::copy( board->Points().begin(), board->Points().end(), std::back_inserter( items ) );
+            typesInserted.insert( PCB_POINT_T );
+            break;
+        }
+
+        case PCB_CONSTRAINT_T:
+        {
+            handledAnything = true;
+
+            std::copy( board->Constraints().begin(), board->Constraints().end(),
+                       std::back_inserter( items ) );
+
+            typesInserted.insert( PCB_CONSTRAINT_T );
+            break;
+        }
+
         default:
             break;
         }
@@ -575,6 +610,78 @@ HANDLER_RESULT<BoardEnabledLayersResponse> API_HANDLER_PCB::handleSetBoardEnable
     board::PackLayerSet( *response.mutable_layers(), enabled );
 
     return response;
+}
+
+
+HANDLER_RESULT<common::types::EmbeddedFiles>
+API_HANDLER_PCB::handleGetEmbeddedFiles( const HANDLER_CONTEXT<GetEmbeddedFiles>& aCtx )
+{
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.board() ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    common::types::EmbeddedFiles response;
+    board::PackEmbeddedFiles( response, *board()->GetEmbeddedFiles() );
+    return response;
+}
+
+
+HANDLER_RESULT<Empty> unpackEmbeddedFiles( EMBEDDED_FILES& aOutput, const common::types::EmbeddedFiles& aProto )
+{
+    if( !board::UnpackEmbeddedFiles( aOutput, aProto ) )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "embedded file validation failed" );
+        return tl::unexpected( e );
+    }
+
+    return Empty();
+}
+
+
+HANDLER_RESULT<Empty> API_HANDLER_PCB::handleAddEmbeddedFiles( const HANDLER_CONTEXT<AddEmbeddedFiles>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
+
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.board() ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    EMBEDDED_FILES files;
+    HANDLER_RESULT<Empty> result = unpackEmbeddedFiles( files, aCtx.Request.files() );
+
+    if( !result.has_value() )
+        return result;
+
+    EMBEDDED_FILES* boardFiles = board()->GetEmbeddedFiles();
+
+    for( const std::shared_ptr<EMBEDDED_FILES::EMBEDDED_FILE>& file : files.EmbeddedFileMap() | std::views::values )
+    {
+        auto copy = std::make_shared<EMBEDDED_FILES::EMBEDDED_FILE>( *file );
+        boardFiles->AddFile( copy );
+    }
+
+    onModified();
+    return result;
+}
+
+
+HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetEmbeddedFiles( const HANDLER_CONTEXT<SetEmbeddedFiles>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
+
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.board() ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    HANDLER_RESULT<Empty> result = unpackEmbeddedFiles( *board()->GetEmbeddedFiles(),
+                                                        aCtx.Request.files() );
+
+    if( !result.has_value() )
+        return result;
+
+    onModified();
+    return result;
 }
 
 
@@ -685,16 +792,8 @@ HANDLER_RESULT<BoardDesignRulesResponse> API_HANDLER_PCB::handleGetBoardDesignRu
         setting->set_severity( ToProtoEnum<SEVERITY, types::RuleSeverity>( severity ) );
     }
 
-    for( const wxString& serialized : bds.m_DrcExclusions )
-    {
-        kiapi::board::DrcExclusion* exclusion = rules->add_exclusions();
-        exclusion->mutable_marker()->mutable_id()->set_opaque_id( serialized.ToStdString() );
-
-        auto it = bds.m_DrcExclusionComments.find( serialized );
-
-        if( it != bds.m_DrcExclusionComments.end() )
-            exclusion->set_comment( it->second.ToStdString() );
-    }
+    for( const DRC_EXCLUSION& exclusion : bds.m_DrcExclusions )
+        rules->add_exclusions()->CopyFrom( exclusion.ToProto() );
 
     response.set_custom_rules_status( CRS_NONE );
 
@@ -879,23 +978,9 @@ HANDLER_RESULT<BoardDesignRulesResponse> API_HANDLER_PCB::handleSetBoardDesignRu
     if( rules.exclusions_size() > 0 )
     {
         newSettings.m_DrcExclusions.clear();
-        newSettings.m_DrcExclusionComments.clear();
 
         for( const kiapi::board::DrcExclusion& exclusion : rules.exclusions() )
-        {
-            wxString serialized = wxString::FromUTF8( exclusion.marker().id().opaque_id() );
-
-            if( serialized.IsEmpty() )
-            {
-                ApiResponseStatus e;
-                e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-                e.set_error_message( "DrcExclusion marker id must not be empty" );
-                return tl::unexpected( e );
-            }
-
-            newSettings.m_DrcExclusions.insert( serialized );
-            newSettings.m_DrcExclusionComments[serialized] = wxString::FromUTF8( exclusion.comment() );
-        }
+            newSettings.m_DrcExclusions.insert( DRC_EXCLUSION::FromProto( exclusion ) );
     }
 
     std::vector<BOARD_DESIGN_SETTINGS::VALIDATION_ERROR> errors = newSettings.ValidateDesignRules();
@@ -1543,8 +1628,6 @@ HANDLER_RESULT<NetClassForNetsResponse> API_HANDLER_PCB::handleGetNetClassForNet
 
     BOARD* board = this->board();
     const NETINFO_LIST& nets = board->GetNetInfo();
-    google::protobuf::Any any;
-
     for( const board::types::Net& net : aCtx.Request.net() )
     {
         NETINFO_ITEM* netInfo = nets.GetNetItem( wxString::FromUTF8( net.name() ) );
@@ -1552,9 +1635,8 @@ HANDLER_RESULT<NetClassForNetsResponse> API_HANDLER_PCB::handleGetNetClassForNet
         if( !netInfo )
             continue;
 
-        netInfo->GetNetClass()->Serialize( any );
         auto [pair, rc] = response.mutable_classes()->insert( { net.name(), {} } );
-        any.UnpackTo( &pair->second );
+        netInfo->GetNetClass()->Serialize( pair->second );
     }
 
     return response;
@@ -1755,7 +1837,6 @@ HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetBoardEditorAppearanceSettings(
         return tl::unexpected( *busy );
 
     PCB_DISPLAY_OPTIONS options = frame()->GetDisplayOptions();
-    KIGFX::PCB_VIEW* view = frame()->GetCanvas()->GetView();
     PCBNEW_SETTINGS* editorSettings = frame()->GetPcbNewSettings();
     const BoardEditorAppearanceSettings& newSettings = aCtx.Request.settings();
 
@@ -1763,14 +1844,7 @@ HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetBoardEditorAppearanceSettings(
             FromProtoEnum<HIGH_CONTRAST_MODE>( newSettings.inactive_layer_display() );
     options.m_NetColorMode =
             FromProtoEnum<NET_COLOR_MODE>( newSettings.net_color_display() );
-
-    bool flip = newSettings.board_flip() == BoardFlipMode::BFM_FLIPPED_X;
-
-    if( flip != view->IsMirroredX() )
-    {
-        view->SetMirror( !view->IsMirroredX(), view->IsMirroredY() );
-        view->RecacheAllItems();
-    }
+    options.m_FlipBoardView = newSettings.board_flip() == BoardFlipMode::BFM_FLIPPED_X;
 
     editorSettings->m_Display.m_RatsnestMode =
             FromProtoEnum<RATSNEST_MODE>( newSettings.ratsnest_display() );
@@ -2612,4 +2686,181 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_PCB::handleRunBoardJobExportSt
     job.m_subtractHolesFromCopperAreas = aCtx.Request.subtract_holes_from_copper_areas();
 
     return ExecuteBoardJob( pcbContext(), job );
+}
+
+
+HANDLER_RESULT<CrossProbeAnnounceResponse> API_HANDLER_PCB::handleCrossProbeAnnounce(
+        const HANDLER_CONTEXT<CrossProbeAnnounce>& aCtx )
+{
+    wxLogTrace( traceApi, "Received announce from frame %d at %s",
+                aCtx.Request.frame_type(), aCtx.Request.socket_path() );
+
+    CROSS_PROBE_CLIENT::RegisterPeer( static_cast<FRAME_T>( aCtx.Request.frame_type() ),
+                                      aCtx.Request.socket_path() );
+
+    CrossProbeAnnounceResponse response;
+    response.set_status( CPS_OK );
+    return response;
+}
+
+
+using google::protobuf::RepeatedPtrField;
+
+static std::vector<BOARD_ITEM*> findItemsFromSyncSelection( const BOARD* aBoard,
+                                                            const RepeatedPtrField<SelectionSpec>& aItems )
+{
+    std::vector<std::pair<int, BOARD_ITEM*>> orderPairs;
+    wxCHECK( aBoard, {} );
+
+    for( FOOTPRINT* footprint : aBoard->Footprints() )
+    {
+        wxString fpRef = footprint->GetReference();
+
+        for( int index = 0; index < aItems.size(); ++index )
+        {
+            const SelectionSpec& spec = aItems[index];
+
+            switch( spec.spec_case() )
+            {
+            case SelectionSpec::SpecCase::kFootprint:
+            {
+                if( fpRef == wxString::FromUTF8( spec.footprint().reference() ) )
+                    orderPairs.emplace_back( index, footprint );
+
+                break;
+            }
+
+            case SelectionSpec::SpecCase::kPad:
+            {
+                if( fpRef == wxString::FromUTF8( spec.footprint().reference() ) )
+                {
+                    wxString padNumber = wxString::FromUTF8( spec.pad().number() );
+
+                    for( PAD* pad : footprint->Pads() )
+                    {
+                        if( padNumber == pad->GetNumber() )
+                            orderPairs.emplace_back( index, pad );
+                    }
+                }
+
+                break;
+            }
+
+            case SelectionSpec::SpecCase::kSheetPath:
+            {
+                KIID_PATH fpSheetPath = footprint->GetPath();
+
+                if( fpSheetPath.IsContainedWithin( kiapi::common::UnpackSheetPath( spec.sheet_path() ) ) )
+                    orderPairs.emplace_back( index, footprint );
+
+                break;
+            }
+
+            default: break;
+            }
+        }
+    }
+
+    std::ranges::sort( orderPairs,
+                       []( const std::pair<int, BOARD_ITEM*>& a, const std::pair<int, BOARD_ITEM*>& b ) -> bool
+                       {
+                           return a.first < b.first;
+                       } );
+
+    std::vector<BOARD_ITEM*> items;
+    items.reserve( orderPairs.size() );
+
+    for( BOARD_ITEM* val : orderPairs | std::views::values )
+        items.push_back( val );
+
+    return items;
+}
+
+
+HANDLER_RESULT<SyncSelectionResponse> API_HANDLER_PCB::handleSyncSelection( const HANDLER_CONTEXT<SyncSelection>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "SyncSelection" ) )
+        return tl::unexpected( *headless );
+
+    std::string req = aCtx.Request.SerializeAsString();
+    frame()->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, req );
+
+    SyncSelectionResponse response;
+
+    const CROSS_PROBING_SETTINGS& settings = frame()->GetPcbNewSettings()->m_CrossProbing;
+
+    if( !settings.on_selection && aCtx.Request.context() != SyncSelectionContext::SSC_EXPLICIT )
+    {
+        response.set_status( CPS_DISABLED );
+        response.set_message( "implicit selection sync disabled by user" );
+        return response;
+    }
+
+    std::vector<BOARD_ITEM*> items = findItemsFromSyncSelection( board(), aCtx.Request.items() );
+
+    frame()->m_ProbingSchToPcb = true; // recursion guard
+
+    if( aCtx.Request.mode() == SyncSelectionMode::SSM_ITEMS_AND_NETS )
+        frame()->GetToolManager()->RunAction( PCB_ACTIONS::syncSelectionWithNets, &items );
+    else
+        frame()->GetToolManager()->RunAction( PCB_ACTIONS::syncSelection, &items );
+
+    // Update 3D viewer highlighting
+    frame()->Update3DView( false, frame()->GetPcbNewSettings()->m_Display.m_Live3DRefresh );
+
+    frame()->m_ProbingSchToPcb = false;
+
+    if( settings.flash_selection )
+    {
+        wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE) PCB: flash enabled, items=%zu", items.size() );
+        if( items.empty() )
+        {
+            wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE) PCB: nothing to flash" );
+        }
+        else
+        {
+            std::vector<BOARD_ITEM*> boardItems;
+            std::copy( items.begin(), items.end(), std::back_inserter( boardItems ) );
+            frame()->StartCrossProbeFlash( boardItems );
+        }
+    }
+    else
+    {
+        wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE) PCB: flash disabled" );
+    }
+
+    response.set_status( CPS_OK );
+    return response;
+}
+
+
+HANDLER_RESULT<HighlightNetsResponse> API_HANDLER_PCB::handleHighlightNets(
+        const HANDLER_CONTEXT<HighlightNets>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "HighlightNets" ) )
+        return tl::unexpected( *headless );
+
+    HighlightNetsResponse response;
+    CROSS_PROBING_SETTINGS& crossProbingSettings = frame()->GetPcbNewSettings()->m_CrossProbing;
+
+    if( aCtx.ClientName == StandaloneCrossProbeClientName
+        || aCtx.ClientName == KiwayClientName )
+    {
+        if( !crossProbingSettings.auto_highlight )
+        {
+            response.set_status( CPS_DISABLED );
+            response.set_message( "net highlight cross-probing disabled by user" );
+            return response;
+        }
+    }
+
+    std::vector<wxString> nets;
+
+    for( const std::string& name : aCtx.Request.net_name() )
+        nets.emplace_back( wxString::FromUTF8( name ) );
+
+    frame()->HandleRemoteNetHighlight( nets );
+
+    response.set_status( CPS_OK );
+    return response;
 }

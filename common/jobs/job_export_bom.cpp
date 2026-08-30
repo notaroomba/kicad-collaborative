@@ -41,6 +41,7 @@ JOB_EXPORT_BOM::JOB_EXPORT_BOM() :
     m_sortField(),
     m_sortAsc( true ),
     m_filterString(),
+    m_filterScope( BOM_FILTER_SCOPE::REFERENCE ),
     m_excludeDNP( false ),
     m_groupSymbols( true ),
     m_variantNames()
@@ -76,6 +77,7 @@ JOB_EXPORT_BOM::JOB_EXPORT_BOM() :
     m_params.emplace_back( new JOB_PARAM<wxString>( "sort_field", &m_sortField, m_sortField ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "sort_asc", &m_sortAsc, m_sortAsc ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "filter_string", &m_filterString, m_filterString ) );
+    m_params.emplace_back( new JOB_PARAM<BOM_FILTER_SCOPE>( "filter_scope", &m_filterScope, m_filterScope ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "exclude_dnp", &m_excludeDNP, m_excludeDNP ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "group_symbols", &m_groupSymbols, m_groupSymbols ) );
 
@@ -89,6 +91,14 @@ JOB_EXPORT_BOM::JOB_EXPORT_BOM() :
     m_params.emplace_back( new JOB_PARAM_LIST<wxString>( "variant_names",
                                                          &m_variantNames,
                                                          m_variantNames ) );
+}
+
+
+void JOB_EXPORT_BOM::FromJson( const nlohmann::json& aJson )
+{
+    JOB::FromJson( aJson );
+    m_bomPresetName = wxEmptyString;
+    m_bomFmtPresetName = wxEmptyString;
 }
 
 
@@ -123,4 +133,6 @@ wxString JOB_EXPORT_BOM::GetSettingsDialogTitle() const
 
 
 REGISTER_JOB( sch_export_bom, _HKI( "Schematic: Generate Bill of Materials" ), KIWAY::FACE_SCH,
+              JOB_EXPORT_BOM );
+REGISTER_JOB( pcb_export_bom, _HKI( "PCB: Generate Bill of Materials" ), KIWAY::FACE_PCB,
               JOB_EXPORT_BOM );

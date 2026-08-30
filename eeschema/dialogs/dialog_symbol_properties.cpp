@@ -19,6 +19,7 @@
 
 #include "dialog_symbol_properties.h"
 
+#include <algorithm>
 #include <memory>
 
 #include <bitmaps.h>
@@ -35,6 +36,7 @@
 #include <widgets/grid_combobox.h>
 #include <widgets/std_bitmap_button.h>
 #include <settings/settings_manager.h>
+#include <project/project_file.h>
 #include <sch_collectors.h>
 #include <fields_grid_table.h>
 #include <sch_edit_frame.h>
@@ -482,10 +484,13 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     std::optional<SCH_SYMBOL_VARIANT> variant = m_symbol->GetVariant( sheetPath, variantName );
     std::set<wxString> defined;
 
+    std::vector<SCH_FIELD*> orderedFields;
+    m_symbol->GetFields( orderedFields, false );
+
     // Push a copy of each field into m_updateFields
-    for( SCH_FIELD& srcField : m_symbol->GetFields() )
+    for( SCH_FIELD* srcField : orderedFields )
     {
-        SCH_FIELD field( srcField );
+        SCH_FIELD field( *srcField );
 
         // change offset to be symbol-relative
         field.Offset( -m_symbol->GetPosition() );
@@ -498,7 +503,7 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
 
     // Add in any template fieldnames not yet defined:
     for( const TEMPLATE_FIELDNAME& templateFieldname :
-         schematic.Settings().m_TemplateFieldNames.GetTemplateFieldNames() )
+         schematic.Project().GetProjectFile().m_TemplateFieldNames.GetResolvedTemplateFieldNames() )
     {
         if( defined.count( templateFieldname.m_Name ) <= 0 )
         {
@@ -828,12 +833,15 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
 
     for( SCH_FIELD& field : *m_fields )
     {
-        const wxString& fieldName = field.GetCanonicalName();
+        const wxString& fieldName = field.GetUntranslatedName();
 
         if( fieldName.IsEmpty() && field.GetText().IsEmpty() )
             continue;
         else if( fieldName.IsEmpty() )
             field.SetName( _( "untitled" ) );
+
+        if( !field.IsMandatory() )
+            field.SetOrdinal( ordinal++ );
 
         const SCH_FIELD* existingField = m_symbol->GetField( fieldName );
         SCH_FIELD* tmp;
@@ -859,9 +867,6 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
                 tmp->SetText( variantText, &currentSheet, currentVariant );
             }
         }
-
-        if( !field.IsMandatory() )
-            field.SetOrdinal( ordinal++ );
     }
 
     for( int ii = (int) m_symbol->GetFields().size() - 1; ii >= 0; ii-- )
@@ -883,8 +888,14 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
         }
 
         if( !found )
-            m_symbol->GetFields().erase( m_symbol->GetFields().begin() + ii );
+            m_symbol->RemoveField( symbolField.GetName() );
     }
+
+    std::stable_sort( m_symbol->GetFields().begin(), m_symbol->GetFields().end(),
+                      []( const SCH_FIELD& lhs, const SCH_FIELD& rhs )
+                      {
+                          return lhs.GetOrdinal() < rhs.GetOrdinal();
+                      } );
 
     if( currentVariant.IsEmpty() )
     {
@@ -995,7 +1006,7 @@ void DIALOG_SYMBOL_PROPERTIES::OnAddField( wxCommandEvent& event )
     m_fieldsGrid->OnAddRow(
             [&]() -> std::pair<int, int>
             {
-                SCH_FIELD newField( m_symbol, FIELD_T::USER, GetUserFieldName( m_fields->size(), DO_TRANSLATE ) );
+                SCH_FIELD newField( m_symbol, FIELD_T::USER, GetUserFieldName( m_fields->size(), TRANSLATED ) );
 
                 newField.SetTextAngle( m_fields->GetField( FIELD_T::REFERENCE )->GetTextAngle() );
                 newField.SetVisible( false );

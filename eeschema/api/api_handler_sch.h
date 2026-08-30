@@ -23,6 +23,7 @@
 
 #include <api/api_handler_editor.h>
 #include <api/sch_context.h>
+#include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/common/commands/editor_commands.pb.h>
 #include <api/common/commands/project_commands.pb.h>
 #include <google/protobuf/empty.pb.h>
@@ -103,6 +104,9 @@ private:
     HANDLER_RESULT<google::protobuf::Empty> handleSaveCopyOfDocument(
             const HANDLER_CONTEXT<commands::SaveCopyOfDocument>& aCtx );
 
+    HANDLER_RESULT<google::protobuf::Empty>
+    handleRevertDocument( const HANDLER_CONTEXT<commands::RevertDocument>& aCtx );
+
     HANDLER_RESULT<commands::GetOpenDocumentsResponse>
     handleGetOpenDocuments( const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
 
@@ -140,8 +144,8 @@ private:
     HANDLER_RESULT<types::RunJobResponse>
     handleRunSchematicJobExportBOM( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportBOM>& aCtx );
 
-    HANDLER_RESULT<kiapi::schematic::types::SchematicHierarchyResponse>
-    handleGetSchematicHierarchy( const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicHierarchy>& aCtx );
+    HANDLER_RESULT<kiapi::schematic::commands::SchematicHierarchyResponse>
+    handleGetSchematicHierarchy( const HANDLER_CONTEXT<kiapi::schematic::commands::GetSchematicHierarchy>& aCtx );
 
     void packSheetInstance( kiapi::schematic::types::SheetInstance* aInstance, SCH_SHEET_PATH& aPath,
                             SCH_SHEET* aSheet );
@@ -150,8 +154,17 @@ private:
     /// Returns false if the item could not be packed (e.g. a symbol/sheet missing instance data).
     bool packSchItem( google::protobuf::Any& aOut, SCH_ITEM* aItem, const SCH_SHEET_PATH& aPath );
 
-    HANDLER_RESULT<kiapi::schematic::types::SchematicNetlistResponse>
-    handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicNetlist>& aCtx );
+    HANDLER_RESULT<kiapi::schematic::commands::SchematicNetlistResponse>
+    handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schematic::commands::GetSchematicNetlist>& aCtx );
+
+    HANDLER_RESULT<commands::CrossProbeAnnounceResponse>
+    handleCrossProbeAnnounce( const HANDLER_CONTEXT<commands::CrossProbeAnnounce>& aCtx );
+
+    HANDLER_RESULT<commands::SyncSelectionResponse>
+    handleSyncSelection( const HANDLER_CONTEXT<commands::SyncSelection>& aCtx );
+
+    HANDLER_RESULT<commands::HighlightNetsResponse> handleHighlightNets(
+            const HANDLER_CONTEXT<commands::HighlightNets>& aCtx );
 
     SCHEMATIC* schematic() const;
 

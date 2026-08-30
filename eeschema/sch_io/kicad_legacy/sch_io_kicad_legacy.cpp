@@ -231,7 +231,7 @@ void SCH_IO_KICAD_LEGACY::loadHierarchy( SCH_SHEET* aSheet )
             aSheet->GetScreen()->SetFileName( fileName.GetFullPath() );
 
             if( aSheet == m_rootSheet )
-                const_cast<KIID&>( aSheet->m_Uuid ) = aSheet->GetScreen()->GetUuid();
+                aSheet->SyncUuidToScreen();
 
             try
             {
@@ -1087,8 +1087,9 @@ SCH_TEXT* SCH_IO_KICAD_LEGACY::loadText( LINE_READER& aReader )
             penWidth = parseInt( aReader, line, &line );
     }
 
+    // Legacy bold is a non-zero pen width; store auto thickness and let the Bold flag drive it.
     text->SetBoldFlag( penWidth != 0 );
-    text->SetTextThickness( penWidth != 0 ? GetPenSizeForBold( size ) : 0 );
+    text->SetTextThickness( 0 );
 
     // Read the text string for the text.
     char* tmp = aReader.ReadLine();
@@ -1385,9 +1386,9 @@ SCH_SYMBOL* SCH_IO_KICAD_LEGACY::loadSymbol( LINE_READER& aReader )
             if( name.IsEmpty() )
             {
                 if( field->IsMandatory() )
-                    name = GetCanonicalFieldName( field->GetId() );
+                    name = GetDefaultFieldName( field->GetId(), UNTRANSLATED );
                 else
-                    name = GetUserFieldName( legacy_field_id, !DO_TRANSLATE );
+                    name = GetUserFieldName( legacy_field_id, UNTRANSLATED );
             }
 
             field->SetName( name );

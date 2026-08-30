@@ -25,6 +25,7 @@
 #include <mouse_drag_action.h>
 #include <settings/environment.h>
 #include <settings/json_settings.h>
+#include <template_fieldnames.h>
 
 struct COMMON_SETTINGS_INTERNALS;
 
@@ -252,6 +253,7 @@ private:
     bool migrateSchema3to4();
     bool migrateSchema4to5();
     bool migrateSchema5to6();
+    bool migrateSchema6to7();
 
     struct LEGACY_3D_SEARCH_PATH
     {
@@ -282,6 +284,9 @@ public:
     API                 m_Api;
 
     COLLAB              m_Collab;
+
+    /// Global field name templates shared by all project editors.
+    TEMPLATES           m_FieldNameTemplates;
 
     /// Extra directories to search for 3D models, added by the user through
     /// the 3D model migration dialog.  Persists across sessions.

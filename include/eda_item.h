@@ -61,7 +61,7 @@ class EDA_GROUP;
 class MSG_PANEL_ITEM;
 class EMBEDDED_FILES;
 
-namespace google { namespace protobuf { class Any; } }
+namespace google::protobuf { class Any; }
 
 
 /**
@@ -533,8 +533,6 @@ public:
 private:
     /**
      * Run time identification, _keep private_ so it can never be changed after a ctor sets it.
-     *
-     * See comment near SetType() regarding virtual functions.
      */
     KICAD_T        m_structType;
 

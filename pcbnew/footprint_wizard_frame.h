@@ -34,6 +34,7 @@
 
 class wxSashLayoutWindow;
 class wxSashEvent;
+class wxTextCtrl;
 class FOOTPRINT_EDIT_FRAME;
 class FOOTPRINT_WIZARD_PROPERTIES_PANEL;
 
@@ -64,6 +65,8 @@ public:
     void OnWizardParametersChanged();
 
     FOOTPRINT_WIZARD_MANAGER* Manager() const { return m_wizardManager.get(); }
+
+    void SetBuildMessage( const wxString& aMessage );
 
 private:
     void                OnSize( wxSizeEvent& event ) override;
@@ -136,6 +139,7 @@ private:
 protected:
     FOOTPRINT_WIZARD* m_currentWizard;
     wxString        m_wizardStatus;         ///< current wizard status
+    FOOTPRINT*      m_builtFootprint;
 
 private:
     FOOTPRINT_WIZARD_PROPERTIES_PANEL* m_parametersPanel; ///< Panel for the parameter grid

@@ -32,6 +32,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_selection_tool.h>
 #include <view/view.h>
+#include <widgets/appearance_controls.h>
 #include <widgets/std_bitmap_button.h>
 #include <widgets/wx_progress_reporters.h>
 #include <zone.h>
@@ -55,7 +56,8 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
         m_priorityDragIndex( {} ),
         m_isFillingZones( false ),
         m_zoneFillComplete( false ),
-        m_zonesToDelete()
+        m_zonesToDelete(),
+        m_canvasSelectReady( false )
 {
 #ifdef __APPLE__
     m_sizerZoneOP->InsertSpacer( m_sizerZoneOP->GetItemCount(), 5 );
@@ -141,12 +143,16 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
     Bind( wxEVT_CHECKBOX, &DIALOG_ZONE_MANAGER::OnCheckBoxClicked, this );
     Bind( wxEVT_IDLE, &DIALOG_ZONE_MANAGER::OnIdle, this );
     Bind( wxEVT_CHAR_HOOK, &DIALOG_ZONE_MANAGER::OnDialogCharHook, this );
-    Bind( wxEVT_BOOKCTRL_PAGE_CHANGED,
-          [this]( wxNotebookEvent& aEvent )
-          {
-              Layout();
-          },
-          m_zonePreviewNotebook->GetId() );
+    Bind(
+            wxEVT_BOOKCTRL_PAGE_CHANGED,
+            [this]( wxNotebookEvent& aEvent )
+            {
+                Layout();
+                SelectZoneOnCanvas( m_panelZoneProperties->GetZone(), m_zonePreviewNotebook->GetCurrentLayer() );
+            },
+            m_zonePreviewNotebook->GetId() );
+
+    m_canvasSelectReady = true;
 }
 
 
@@ -202,17 +208,11 @@ void DIALOG_ZONE_MANAGER::GenericProcessChar( wxKeyEvent& aEvent )
 void DIALOG_ZONE_MANAGER::OnDialogCharHook( wxKeyEvent& aEvent )
 {
     if( aEvent.GetKeyCode() == WXK_UP )
-    {
         NavigateZoneSelection( -1 );
-    }
     else if( aEvent.GetKeyCode() == WXK_DOWN )
-    {
         NavigateZoneSelection( 1 );
-    }
     else
-    {
         aEvent.Skip();
-    }
 }
 
 
@@ -271,6 +271,58 @@ void DIALOG_ZONE_MANAGER::OnZoneSelectionChanged( ZONE* zone )
     m_zonePreviewNotebook->OnZoneSelectionChanged( zone );
 
     Layout();
+
+    SelectZoneOnCanvas( zone );
+}
+
+
+ZONE* DIALOG_ZONE_MANAGER::GetOriginalZone( ZONE* aClone )
+{
+    for( const auto& [orig, clone] : m_zoneSettingsBag.GetZonesCloneMap() )
+    {
+        if( clone.get() == aClone )
+            return orig;
+    }
+
+    return nullptr;
+}
+
+
+void DIALOG_ZONE_MANAGER::SelectZoneOnCanvas( ZONE* aClone, PCB_LAYER_ID aLayer )
+{
+    if( !m_canvasSelectReady || !m_checkAutoSelect->IsChecked() || !aClone )
+        return;
+
+    ZONE* originalZone = GetOriginalZone( aClone );
+
+    if( !originalZone )
+        return;
+
+    PCB_LAYER_ID layer = aLayer;
+
+    if( layer == UNDEFINED_LAYER || !originalZone->GetLayerSet().Contains( layer ) )
+    {
+        layer = m_pcbFrame->GetActiveLayer();
+
+        if( !originalZone->GetLayerSet().Contains( layer ) )
+            layer = originalZone->GetFirstLayer();
+    }
+
+    m_pcbFrame->SetActiveLayer( layer );
+
+    if( PCB_BASE_EDIT_FRAME* editFrame = dynamic_cast<PCB_BASE_EDIT_FRAME*>( m_pcbFrame ) )
+    {
+        if( APPEARANCE_CONTROLS* appearance = editFrame->GetAppearancePanel() )
+            appearance->SetLayerVisible( layer, true );
+    }
+
+    if( PCB_SELECTION_TOOL* selTool = m_pcbFrame->GetToolManager()->GetTool<PCB_SELECTION_TOOL>() )
+    {
+        selTool->ClearSelection();
+        selTool->AddItemToSel( originalZone, true );
+    }
+
+    m_pcbFrame->FocusOnItem( originalZone, layer );
 }
 
 
@@ -421,26 +473,13 @@ void DIALOG_ZONE_MANAGER::OnDeleteClick( wxCommandEvent& aEvent )
     if( !selectedZone )
         return;
 
-    // Find the original zone from the clone
-    ZONE* originalZone = nullptr;
-
-    for( const auto& [orig, clone] : m_zoneSettingsBag.GetZonesCloneMap() )
-    {
-        if( clone.get() == selectedZone )
-        {
-            originalZone = orig;
-            break;
-        }
-    }
+    ZONE* originalZone = GetOriginalZone( selectedZone );
 
     if( !originalZone )
         return;
 
-    if( std::find( m_zonesToDelete.begin(), m_zonesToDelete.end(), originalZone )
-        != m_zonesToDelete.end() )
-    {
+    if( std::find( m_zonesToDelete.begin(), m_zonesToDelete.end(), originalZone ) != m_zonesToDelete.end() )
         return;
-    }
 
     wxString msg = wxString::Format( _( "Delete zone '%s'?" ), originalZone->GetZoneName() );
 
@@ -505,9 +544,8 @@ void DIALOG_ZONE_MANAGER::OnAutoAssignClick( wxCommandEvent& aEvent )
             m_zoneSettingsBag.SetZonePriority( clone.get(), newPri );
         }
 
-        PostProcessZoneViewSelChange(
-                m_modelZonesOverview->ApplyFilter( m_filterCtrl->GetValue(),
-                                                   m_viewZonesOverview->GetSelection() ) );
+        PostProcessZoneViewSelChange( m_modelZonesOverview->ApplyFilter( m_filterCtrl->GetValue(),
+                                                                         m_viewZonesOverview->GetSelection() ) );
     }
 
     for( auto& [zone, priority] : savedPriorities )
@@ -561,9 +599,8 @@ void DIALOG_ZONE_MANAGER::OnLayerFilterChanged( wxCommandEvent& aEvent )
         m_modelZonesOverview->SetLayerFilter( layer );
     }
 
-    PostProcessZoneViewSelChange(
-            m_modelZonesOverview->ApplyFilter( m_filterCtrl->GetValue(),
-                                               m_viewZonesOverview->GetSelection() ) );
+    PostProcessZoneViewSelChange( m_modelZonesOverview->ApplyFilter( m_filterCtrl->GetValue(),
+                                                                     m_viewZonesOverview->GetSelection() ) );
 }
 
 
@@ -633,11 +670,8 @@ void DIALOG_ZONE_MANAGER::OnZonesTableRowCountChange( wxCommandEvent& aEvent )
 {
     unsigned count = aEvent.GetInt();
 
-    for( STD_BITMAP_BUTTON* btn : { m_btnMoveTop, m_btnMoveUp, m_btnMoveDown, m_btnMoveBottom,
-                                    m_btnAutoAssign } )
-    {
+    for( STD_BITMAP_BUTTON* btn : { m_btnMoveTop, m_btnMoveUp, m_btnMoveDown, m_btnMoveBottom, m_btnAutoAssign } )
         btn->Enable( count > 1 );
-    }
 }
 
 
@@ -652,6 +686,9 @@ void DIALOG_ZONE_MANAGER::OnCheckBoxClicked( wxCommandEvent& aEvent )
 
     if( ( sender == m_checkName || sender == m_checkNet ) && !m_filterCtrl->IsEmpty() )
         m_modelZonesOverview->ApplyFilter( m_filterCtrl->GetValue(), m_viewZonesOverview->GetSelection() );
+
+    if( sender == m_checkAutoSelect && aEvent.IsChecked() )
+        SelectZoneOnCanvas( m_panelZoneProperties->GetZone(), m_zonePreviewNotebook->GetCurrentLayer() );
 }
 
 

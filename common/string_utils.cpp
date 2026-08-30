@@ -27,6 +27,7 @@
 #include <map>
 #include <core/map_helpers.h>
 #include <fmt/core.h>
+#include <ki_exception.h>
 #include <macros.h>
 #include <string_utils.h>
 #include <widgets/kistatusbar.h>
@@ -1254,7 +1255,19 @@ int SplitString( const wxString& strToSplit,
             {
                 continue;
             }
-            if( infix == 0 && NUMERIC_EVALUATOR::IsOldSchoolDecimalSeparator( c, &scale ) )
+            // This can be tricky to get to parse things like 4K7 (or just K7)
+            // but not G4W
+            if(
+                // Only allow one infix character e.g. 4K7, not 4KK7
+                infix == 0
+                // Allowed only it isn't the first character, or nothing follows it,
+                // e.g. K7 but not K7X
+                && ( ii > 0 || strEnd->IsEmpty() )
+                // Also make sure its a valid SI separator, e.g. 4K7 but not 4X7
+                && NUMERIC_EVALUATOR::IsOldSchoolDecimalSeparator( c, &scale )
+                // Finally make that the combo makes sense e.g. T9G fails because TG is not a valid combo,
+                // but unfortunately cursed constructions like 1u5F are indeed found in the wild
+                && ApplyModifier( scale, c + *strEnd ) )
             {
                 infix = c;
                 continue;
@@ -1965,20 +1978,17 @@ int SortVariantNames( const wxString& aLhs, const wxString& aRhs )
 }
 
 
-std::vector<LOAD_MESSAGE> ExtractLibraryLoadErrors( const wxString& aErrorString, int aSeverity )
+wxString ExtractLibraryLoadException( const IO_ERROR& aException )
 {
-    std::vector<LOAD_MESSAGE> messages;
-
-    if( aErrorString.IsEmpty() )
-        return messages;
+    wxString err;
 
     // Errors are separated by newlines. We want to keep:
     // - Lines starting with "Library '" (library-level errors)
     // - Lines containing "Expecting" (file error location)
     // And strip:
     // - Lines starting with "from " (internal code location info)
-    wxStringTokenizer tokenizer( aErrorString, wxS( "\n" ), wxTOKEN_STRTOK );
-
+    wxStringTokenizer tokenizer( aException.What(), wxS( "\n" ), wxTOKEN_STRTOK );
+#if 0
     while( tokenizer.HasMoreTokens() )
     {
         wxString line = tokenizer.GetNextToken();
@@ -1988,9 +1998,9 @@ std::vector<LOAD_MESSAGE> ExtractLibraryLoadErrors( const wxString& aErrorString
             continue;
 
         if( line.StartsWith( wxS( "Library '" ) ) || line.Contains( wxS( "Expecting" ) ) )
-            messages.push_back( { line, static_cast<SEVERITY>( aSeverity ) } );
+        messages.push_back( KI_ERROR( static_cast<SEVERITY>( aSeverity ), line ) );
     }
-
-    return messages;
+#endif
+    return err;
 }
 

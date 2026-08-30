@@ -47,8 +47,12 @@
 #include <sch_label.h>
 #include <sch_line.h>
 #include <sch_marker.h>
+#include <api/schematic/schematic_rules.pb.h>
 #include <sch_no_connect.h>
 #include <sch_rule_area.h>
+#include <sch_symbol.h>
+#include <sch_pin.h>
+#include <sch_sheet.h>
 #include <sch_screen.h>
 #include <sch_sheet_pin.h>
 #include <sch_selection_tool.h>
@@ -189,6 +193,11 @@ void SCHEMATIC::SetProject( PROJECT* aPrj )
     {
         PROJECT_FILE& project = m_project->GetProjectFile();
 
+        // ERC exclusions migrations can't be resolved until the schematic is loaded.
+        // Make sure to process them here if they exist so that they get persisted by the save below.
+        if( project.m_ErcSettings && !project.m_ErcSettings->m_ErcExclusionsLegacy.empty() )
+            ResolveERCExclusionsPostUpdate();
+
         // d'tor will save settings to file
         delete project.m_ErcSettings;
         project.m_ErcSettings = nullptr;
@@ -296,8 +305,8 @@ void SCHEMATIC::ensureDefaultTopLevelSheet()
     SCH_SHEET*  rootSheet = new SCH_SHEET( this );
     SCH_SCREEN* rootScreen = new SCH_SCREEN( this );
 
-    const_cast<KIID&>( rootSheet->m_Uuid ) = rootScreen->GetUuid();
     rootSheet->SetScreen( rootScreen );
+    rootSheet->SyncUuidToScreen();
 
     SetTopLevelSheets( { rootSheet } );
 
@@ -397,11 +406,13 @@ void SCHEMATIC::SetTopLevelSheets( const std::vector<SCH_SHEET*>& aSheets )
 
     for( SCH_SHEET* sheet : validSheets )
     {
-        sheet->SetParent( m_rootSheet );
-
+        // Parent to the root sheet, not the root screen. SCH_SCREEN::Append() reparents to
+        // itself, so this has to follow it. A headless import reaches the schematic through
+        // the sheet, and SCHEMATIC::AdoptContent() parents the same way.
         if( m_rootSheet->GetScreen() )
             m_rootSheet->GetScreen()->Append( sheet );
 
+        sheet->SetParent( m_rootSheet );
         m_topLevelSheets.push_back( sheet );
     }
 
@@ -409,6 +420,117 @@ void SCHEMATIC::SetTopLevelSheets( const std::vector<SCH_SHEET*>& aSheets )
     rebuildHierarchyState( true );
 
     m_settingTopLevelSheets = wasAlreadySetting;
+}
+
+
+void SCHEMATIC::AdoptContent( SCHEMATIC_CONTENT&& aContent ) noexcept
+{
+    SCH_SHEET*  target = aContent.targetSheet ? aContent.targetSheet : m_rootSheet;
+    SCH_SCREEN* outgoingScreen = nullptr;
+
+    // Replacing the screen while also replacing the top level sheets frees the outgoing sheets
+    // twice, once through the screen's R-tree and once through the sheet list
+    wxCHECK_RET( !aContent.screen || aContent.topLevelSheets.empty(),
+                 wxS( "AdoptContent cannot replace both the screen and the top level sheets" ) );
+
+    // The virtual root's screen owns the top level sheets through its R-tree, so replacing it
+    // outright frees sheets that m_topLevelSheets still names
+    wxCHECK_RET( !aContent.screen || target != m_rootSheet,
+                 wxS( "AdoptContent cannot replace the virtual root screen" ) );
+
+    // Replacing the top level sheets deletes the outgoing ones and everything below them, so the
+    // only coherent target is the virtual root whose container index is being replaced with it
+    wxCHECK_RET( aContent.topLevelSheets.empty() || target == m_rootSheet,
+                 wxS( "AdoptContent can only replace the top level sheets through the virtual root" ) );
+
+    if( aContent.screen )
+    {
+        // A sheet and its screen are one identity to the rest of the schematic, so the
+        // incoming screen inherits the identity of the sheet it is hung on.
+        aContent.screen->m_uuid = target->m_Uuid;
+        aContent.screen->IncRefCount();
+        outgoingScreen = std::exchange( target->m_screen, aContent.screen.release() );
+    }
+    else if( SCH_SCREEN* screen = target->GetScreen() )
+    {
+        screen->m_rtree = std::move( aContent.screenItems );
+
+        if( aContent.screenLibSymbols )
+            screen->m_libSymbols.swap( aContent.screenLibSymbols->m_libSymbols );
+
+        --screen->m_modification_sync;
+
+        // The index now owns what it names, so the staged items lose their owners.
+        for( std::unique_ptr<SCH_ITEM>& item : aContent.itemOwners )
+            item.release();
+    }
+
+    std::vector<SCH_SHEET*> outgoingTopLevelSheets;
+
+    if( !aContent.topLevelSheets.empty() )
+    {
+        outgoingTopLevelSheets.swap( m_topLevelSheets );
+        m_topLevelSheets = std::move( aContent.topLevelSheets );
+
+        for( SCH_SHEET* sheet : m_topLevelSheets )
+            sheet->SetParent( m_rootSheet );
+    }
+
+    m_hierarchy.swap( aContent.hierarchy );
+
+    if( aContent.currentSheet )
+        m_currentSheet->Swap( *aContent.currentSheet );
+
+    m_labelToPageRefsMap.clear();
+
+    CONNECTION_GRAPH* outgoingGraph = std::exchange( m_connectionGraph, aContent.connectionGraph.release() );
+
+
+    // The hierarchy and the current sheet named sheets that the outgoing screen and the
+    // outgoing top level sheets own, so neither could be destroyed before now.
+    for( SCH_SHEET* sheet : outgoingTopLevelSheets )
+        delete sheet;
+
+    if( outgoingScreen )
+    {
+        outgoingScreen->DecRefCount();
+
+        if( outgoingScreen->GetRefCount() == 0 )
+            delete outgoingScreen;
+    }
+
+    if( aContent.embeddedFiles )
+    {
+        *GetEmbeddedFiles() = std::move( *aContent.embeddedFiles );
+        Settings().m_SchDrawingSheetFileName.swap( aContent.drawingSheetFileName );
+    }
+
+    // Anything still reachable once the outgoing sheets and screen are gone survived the adoption
+    // while holding SCH_CONNECTIONs that name the outgoing graph. Symbol and sheet pins carry
+    // their own connection maps, so the indexed items alone are not enough, and Recalculate only
+    // re-points what it considers dirty.
+    SCH_SCREENS retained( Root() );
+
+    for( SCH_SCREEN* screen = retained.GetFirst(); screen; screen = retained.GetNext() )
+    {
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            item->SetConnectionGraph( m_connectionGraph );
+
+            if( SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( item ) )
+            {
+                for( std::unique_ptr<SCH_PIN>& pin : symbol->GetRawPins() )
+                    pin->SetConnectionGraph( m_connectionGraph );
+            }
+            else if( SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( item ) )
+            {
+                for( SCH_SHEET_PIN* pin : sheet->GetPins() )
+                    pin->SetConnectionGraph( m_connectionGraph );
+            }
+        }
+    }
+
+    delete outgoingGraph;
 }
 
 
@@ -565,58 +687,44 @@ std::vector<SCH_MARKER*> SCHEMATIC::ResolveERCExclusions()
     SCH_SHEET_LIST sheetList = Hierarchy();
     ERC_SETTINGS&  settings = ErcSettings();
 
-    // Migrate legacy marker exclusions to new format to ensure exclusion matching functions across
-    // file versions. Silently drops any legacy exclusions which can not be mapped to the new format
-    // without risking an incorrect exclusion - this is preferable to silently dropping
-    // new ERC errors / warnings due to an incorrect match between a legacy and new
-    // marker serialization format
-    std::set<wxString> migratedExclusions;
-
-    for( auto it = settings.m_ErcExclusions.begin(); it != settings.m_ErcExclusions.end(); )
+    // Have to handle legacy exclusions here rather than as a settings migration
+    // because we need to pass the built sheet list after the schematic is fully loaded
+    for( const auto& [markerData, comment] : settings.m_ErcExclusionsLegacy )
     {
-        SCH_MARKER* testMarker = SCH_MARKER::DeserializeFromString( sheetList, *it );
-
-        if( !testMarker )
+        if( SCH_MARKER* testMarker = SCH_MARKER::FromLegacyString( sheetList, markerData ) )
         {
-            it = settings.m_ErcExclusions.erase( it );
-            continue;
-        }
+            ERC_EXCLUSION exclusion = ERC_EXCLUSION::FromMarker( *testMarker );
+            exclusion.SetComment( comment );
+            delete testMarker;
 
-        if( testMarker->IsLegacyMarker() )
-        {
-            const wxString settingsKey = testMarker->GetRCItem()->GetSettingsKey();
+            // Legacy format can sometimes have the same exclusion multiple times,
+            // without and with a comment.  If this happens, replace the existing one
+            // if we can go from no comment to comment
+            auto [it, inserted] = settings.m_ErcExclusions.insert( exclusion );
 
-            if( settingsKey != wxT( "pin_to_pin" ) && settingsKey != wxT( "hier_label_mismatch" )
-                && settingsKey != wxT( "different_unit_net" ) )
+            if( !inserted && !comment.empty() && it->GetComment().empty() )
             {
-                migratedExclusions.insert( testMarker->SerializeToString() );
+                ERC_EXCLUSION updated = *it;
+                updated.SetComment( comment );
+                settings.m_ErcExclusions.erase( it );
+                settings.m_ErcExclusions.insert( updated );
             }
-
-            it = settings.m_ErcExclusions.erase( it );
         }
-        else
-        {
-            ++it;
-        }
-
-        delete testMarker;
     }
 
-    settings.m_ErcExclusions.insert( migratedExclusions.begin(), migratedExclusions.end() );
-
-    // End of legacy exclusion removal / migrations
+    settings.m_ErcExclusionsLegacy.clear();
 
     for( const SCH_SHEET_PATH& sheet : sheetList )
     {
         for( SCH_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_MARKER_T ) )
         {
-            SCH_MARKER*                  marker = static_cast<SCH_MARKER*>( item );
-            wxString                     serialized = marker->SerializeToString();
-            std::set<wxString>::iterator it = settings.m_ErcExclusions.find( serialized );
+            SCH_MARKER* marker = static_cast<SCH_MARKER*>( item );
+            ERC_EXCLUSION lookup = ERC_EXCLUSION::FromMarker( *marker );
+            auto          it = settings.m_ErcExclusions.find( lookup );
 
             if( it != settings.m_ErcExclusions.end() )
             {
-                marker->SetExcluded( true, settings.m_ErcExclusionComments[serialized] );
+                marker->SetExcluded( true, it->GetComment() );
                 settings.m_ErcExclusions.erase( it );
             }
         }
@@ -624,13 +732,13 @@ std::vector<SCH_MARKER*> SCHEMATIC::ResolveERCExclusions()
 
     std::vector<SCH_MARKER*> newMarkers;
 
-    for( const wxString& serialized : settings.m_ErcExclusions )
+    for( const ERC_EXCLUSION& exclusion : settings.m_ErcExclusions )
     {
-        SCH_MARKER* marker = SCH_MARKER::DeserializeFromString( sheetList, serialized );
+        SCH_MARKER* marker = SCH_MARKER::FromProto( exclusion.ToProto().marker(), sheetList );
 
         if( marker )
         {
-            marker->SetExcluded( true, settings.m_ErcExclusionComments[serialized] );
+            marker->SetExcluded( true, exclusion.GetComment() );
             newMarkers.push_back( marker );
         }
     }
@@ -1126,7 +1234,19 @@ wxString SCHEMATIC::GetUniqueFilenameForCurrentSheet()
     if( startIdx >= CurrentSheet().size() )
         return wxEmptyString;
 
-    wxFileName rootFn( CurrentSheet().at( startIdx )->GetFileName() );
+    SCH_SHEET* topSheet = CurrentSheet().at( startIdx );
+
+    // A top-level sheet keeps its file on the screen, because the SHEET_FILENAME field is only
+    // set on the sheet instances that a parent sheet owns
+    wxString topFileName;
+
+    if( topSheet->GetScreen() )
+        topFileName = topSheet->GetScreen()->GetFileName();
+
+    if( topFileName.IsEmpty() )
+        topFileName = topSheet->GetFileName();
+
+    wxFileName rootFn( topFileName );
     wxString   filename = rootFn.GetName();
 
     for( unsigned i = startIdx + 1; i < CurrentSheet().size(); i++ )
@@ -1327,6 +1447,12 @@ void SCHEMATIC::OnSchSheetChanged()
 }
 
 
+void SCHEMATIC::OnSchSelectionChanged()
+{
+    InvokeListeners( &SCHEMATIC_LISTENER::OnSchSelectionChanged, *this );
+}
+
+
 void SCHEMATIC::AddListener( SCHEMATIC_LISTENER* aListener )
 {
     if( !alg::contains( m_listeners, aListener ) )
@@ -1356,10 +1482,9 @@ void SCHEMATIC::RecordERCExclusions()
 {
     // Use a sorted sheetList to reduce file churn
     SCH_SHEET_LIST sheetList = Hierarchy();
-    ERC_SETTINGS&  ercSettings = ErcSettings();
+    ERC_SETTINGS& ercSettings = ErcSettings();
 
     ercSettings.m_ErcExclusions.clear();
-    ercSettings.m_ErcExclusionComments.clear();
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
     {
@@ -1369,9 +1494,7 @@ void SCHEMATIC::RecordERCExclusions()
 
             if( marker->IsExcluded() )
             {
-                wxString serialized = marker->SerializeToString();
-                ercSettings.m_ErcExclusions.insert( serialized );
-                ercSettings.m_ErcExclusionComments[serialized] = marker->GetComment();
+                ercSettings.m_ErcExclusions.insert( ERC_EXCLUSION::FromMarker( *marker ) );
             }
         }
     }
@@ -2040,8 +2163,8 @@ void SCHEMATIC::CreateDefaultScreens()
     SCH_SHEET*  rootSheet = new SCH_SHEET( this );
     SCH_SCREEN* rootScreen = new SCH_SCREEN( this );
 
-    const_cast<KIID&>( rootSheet->m_Uuid ) = rootScreen->GetUuid();
     rootSheet->SetScreen( rootScreen );
+    rootSheet->SyncUuidToScreen();
     rootScreen->SetFileName( "untitled.kicad_sch" ); // Set default filename to avoid conflicts
     rootScreen->SetPageNumber( wxT( "1" ) );
 
@@ -2072,6 +2195,45 @@ SCH_SHEET* SCHEMATIC::GetTopLevelSheet( int aIndex ) const
 
     return m_topLevelSheets[index];
 }
+
+
+bool SCHEMATIC::IsTopLevelSheetUuid( const KIID& aUuid ) const
+{
+    if( !m_rootSheet )
+        return false;
+
+    // A non-virtual root is the only sheet above the hierarchy
+    if( m_rootSheet->m_Uuid != niluuid )
+        return aUuid == m_rootSheet->m_Uuid;
+
+    for( const SCH_SHEET* sheet : m_topLevelSheets )
+    {
+        if( sheet && sheet->m_Uuid == aUuid )
+            return true;
+    }
+
+    return false;
+}
+
+
+KIID_PATH SCHEMATIC::NormalizeInstancePath( const KIID_PATH& aPath ) const
+{
+    KIID_PATH path = aPath;
+
+    if( m_rootSheet && m_rootSheet->m_Uuid == niluuid && !path.empty() && path.front() == niluuid )
+        path.erase( path.begin() );
+
+    return path;
+}
+
+
+bool SCHEMATIC::IsInstancePathInProject( const KIID_PATH& aPath ) const
+{
+    const KIID_PATH path = NormalizeInstancePath( aPath );
+
+    return !path.empty() && IsTopLevelSheetUuid( path.front() );
+}
+
 
 void SCHEMATIC::AddTopLevelSheet( SCH_SHEET* aSheet )
 {

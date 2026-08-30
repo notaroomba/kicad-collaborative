@@ -20,7 +20,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include <boost/locale.hpp>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <nanodbc/nanodbc.h>
 
 // Some outdated definitions are used in sql.h
@@ -211,6 +211,8 @@ bool DATABASE_CONNECTION::CacheTableInfo( const std::string& aTable,
                                           const std::set<std::string>& aRequiredColumns,
                                           const std::set<std::string>& aOptionalColumns )
 {
+    std::lock_guard lock( m_queryMutex );
+
     if( !m_conn )
         return false;
 
@@ -369,6 +371,8 @@ bool DATABASE_CONNECTION::SelectOne( const std::string& aTable,
                                      const std::pair<std::string, std::string>& aWhere,
                                      DATABASE_CONNECTION::ROW& aResult )
 {
+    std::lock_guard lock( m_queryMutex );
+
     if( !m_conn )
     {
         wxLogTrace( traceDatabase, wxT( "Called SelectOne without valid connection!" ) );
@@ -568,8 +572,6 @@ bool DATABASE_CONNECTION::selectAllAndCache( const std::string& aTable, const st
                                                        columnsFor( aTable ),
                                                        m_quoteChar, aTable, m_quoteChar ) );
 
-        wxLogTrace( traceDatabase, wxT( "selectAllAndCache: `%s`" ), toUTF8( query ) );
-
         PROF_TIMER timer;
 
         try
@@ -727,6 +729,8 @@ bool DATABASE_CONNECTION::selectAllAndCache( const std::string& aTable, const st
 
 bool DATABASE_CONNECTION::SelectAll( const std::string& aTable, const std::string& aKey, std::vector<ROW>& aResults )
 {
+    std::lock_guard lock( m_queryMutex );
+
     if( !m_conn )
     {
         wxLogTrace( traceDatabase, wxT( "Called SelectAll without valid connection!" ) );
@@ -754,14 +758,16 @@ bool DATABASE_CONNECTION::SelectAll( const std::string& aTable, const std::strin
         // Now it should be filled
         m_cache->Get( aTable, cacheEntry );
     }
+    else
+    {
+        wxLogTrace( traceDatabase, wxT( "SelectAll: `%s` - returning cached results" ), aTable );
+    }
 
     if( !m_cache->Get( aTable, cacheEntry ) )
     {
         wxLogTrace( traceDatabase, wxT( "SelectAll: `%s` failed to get results from cache!" ), aTable );
         return false;
     }
-
-    wxLogTrace( traceDatabase, wxT( "SelectAll: `%s` - returning cached results" ), aTable );
 
     aResults.reserve( cacheEntry.size() );
 

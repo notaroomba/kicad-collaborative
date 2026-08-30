@@ -342,6 +342,7 @@ public:
     virtual void OnBoardNetSettingsChanged( BOARD& aBoard ) { }
     virtual void OnBoardItemChanged( BOARD& aBoard, BOARD_ITEM* aBoardItem ) { }
     virtual void OnBoardItemsChanged( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems ) { }
+    virtual void OnBoardSelectionChanged( BOARD& aBoard ) { }
     virtual void OnBoardHighlightNetChanged( BOARD& aBoard ) { }
     virtual void OnBoardRatsnestChanged( BOARD& aBoard ) { }
     virtual void OnBoardCompositeUpdate( BOARD& aBoard, std::vector<BOARD_ITEM*>& aAddedItems,
@@ -1487,6 +1488,11 @@ public:
     void OnItemsChanged( std::vector<BOARD_ITEM*>& aItems );
 
     /**
+     * Notify the board and its listeners that the editor selection has changed.
+     */
+    void OnBoardSelectionChanged();
+
+    /**
       * Notify the board and its listeners that items on the board have
       * been modified in a composite operations
       */
@@ -1498,6 +1504,11 @@ public:
      * Notify the board and its listeners that the ratsnest has been recomputed.
      */
     void OnRatsnestChanged();
+
+    /**
+     * Notify the board that the listed zones were just refilled. 
+     */
+    void OnZonesFilled( const std::vector<ZONE*>& aZones );
 
     /**
      * Consistency check of internal m_groups structure.

@@ -46,6 +46,7 @@
 #include <pcb_plot_params.h>                  // for PCB_PLOT_PARAMS, PCB_PL...
 #include <advanced_config.h>
 
+#include <line_ending.h>
 #include <pcb_dimension.h>
 #include <pcb_shape.h>
 #include <footprint.h>
@@ -86,16 +87,16 @@ void BRDITEMS_PLOTTER::PlotPadNumber( const PAD* aPad, const COLOR4D& aColor )
     VECTOR2I padsize = padBBox.GetSize();
 
     // TODO(JE) padstacks
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM )
+    if( aPad->GetShape( PADSTACK::TEMP_ALL_LAYERS ) == PAD_SHAPE::CUSTOM )
     {
         // See if we have a number box
-        for( const std::shared_ptr<PCB_SHAPE>& primitive : aPad->GetPrimitives( PADSTACK::ALL_LAYERS ) )
+        for( const std::shared_ptr<PCB_SHAPE>& primitive : aPad->GetPrimitives( PADSTACK::TEMP_ALL_LAYERS ) )
         {
             if( primitive->IsProxyItem() && primitive->GetShape() == SHAPE_T::RECTANGLE )
             {
                 position = primitive->GetCenter();
                 RotatePoint( position, aPad->GetOrientation() );
-                position += aPad->ShapePos( PADSTACK::ALL_LAYERS );
+                position += aPad->ShapePos( PADSTACK::TEMP_ALL_LAYERS );
 
                 padsize.x = abs( primitive->GetBotRight().x - primitive->GetTopLeft().x );
                 padsize.y = abs( primitive->GetBotRight().y - primitive->GetTopLeft().y );
@@ -105,11 +106,11 @@ void BRDITEMS_PLOTTER::PlotPadNumber( const PAD* aPad, const COLOR4D& aColor )
         }
     }
 
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) != PAD_SHAPE::CUSTOM )
+    if( aPad->GetShape( PADSTACK::TEMP_ALL_LAYERS ) != PAD_SHAPE::CUSTOM )
     {
         // Don't allow a 45° rotation to bloat a pad's bounding box unnecessarily
-        int limit = KiROUND( std::min( aPad->GetSize( PADSTACK::ALL_LAYERS ).x,
-                                       aPad->GetSize( PADSTACK::ALL_LAYERS ).y ) * 1.1 );
+        int limit = KiROUND( std::min( aPad->GetSize( PADSTACK::TEMP_ALL_LAYERS ).x,
+                                       aPad->GetSize( PADSTACK::TEMP_ALL_LAYERS ).y ) * 1.1 );
 
         if( padsize.x > limit && padsize.y > limit )
         {
@@ -307,7 +308,7 @@ void BRDITEMS_PLOTTER::PlotPad( const PAD* aPad, PCB_LAYER_ID aLayer, const COLO
         }
 
         default:
-            UNIMPLEMENTED_FOR( aPad->ShowPadShape( PADSTACK::ALL_LAYERS ) );
+            UNIMPLEMENTED_FOR( aPad->ShowPadShape( PADSTACK::TEMP_ALL_LAYERS ) );
         }
 
         return;
@@ -742,7 +743,9 @@ void BRDITEMS_PLOTTER::PlotText( const EDA_TEXT* aText, PCB_LAYER_ID aLayer, boo
     KIFONT::FONT* font = aText->GetDrawFont( m_plotter->RenderSettings() );
     wxString      shownText( aText->GetShownText( true ) );
 
-    if( shownText.IsEmpty() )
+    const PCB_TEXTBOX* knockoutBox = aIsKnockout ? dynamic_cast<const PCB_TEXTBOX*>( aText ) : nullptr;
+
+    if( shownText.IsEmpty() && !knockoutBox )
         return;
 
     if( !m_layerMask[aLayer] )
@@ -790,10 +793,10 @@ void BRDITEMS_PLOTTER::PlotText( const EDA_TEXT* aText, PCB_LAYER_ID aLayer, boo
     {
         SHAPE_POLY_SET  finalPoly;
 
-        if( const PCB_TEXT* text = dynamic_cast<const PCB_TEXT*>( aText) )
+        if( knockoutBox )
+            knockoutBox->TransformTextToPolySet( finalPoly, 0, maxError, ERROR_INSIDE );
+        else if( const PCB_TEXT* text = dynamic_cast<const PCB_TEXT*>( aText ) )
             text->TransformTextToPolySet( finalPoly, 0, maxError, ERROR_INSIDE );
-        else if( const PCB_TEXTBOX* textbox = dynamic_cast<const PCB_TEXTBOX*>( aText ) )
-            textbox->TransformTextToPolySet( finalPoly, 0, maxError, ERROR_INSIDE );
 
         finalPoly.Fracture();
 
@@ -989,8 +992,18 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
         switch( aShape->GetShape() )
         {
         case SHAPE_T::SEGMENT:
-            m_plotter->ThickSegment( aShape->GetStart(), aShape->GetEnd(), thickness, getMetadata() );
+        {
+            VECTOR2I segStart = aShape->GetStart();
+            VECTOR2I segEnd = aShape->GetEnd();
+
+            if( EDA_SHAPE::ShortenSegmentForEndings( segStart, segEnd, aShape->GetStartEnding(), aShape->GetEndEnding(),
+                                                     thickness ) )
+            {
+                m_plotter->ThickSegment( segStart, segEnd, thickness, getMetadata() );
+            }
+
             break;
+        }
 
         case SHAPE_T::CIRCLE:
             if( isSolidFill )
@@ -1022,6 +1035,20 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
                 m_plotter->ThickCircle( aShape->GetCenter(), aShape->GetRadius() * 2, thickness,
                                         getMetadata() );
             }
+            else if( aShape->GetStartEnding().GetStyle() != LINE_ENDING_STYLE::NONE
+                     || aShape->GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE )
+            {
+                EDA_ANGLE startAngle;
+                EDA_ANGLE endAngle;
+                aShape->CalcArcAngles( startAngle, endAngle );
+
+                EDA_ANGLE arcAngle = endAngle - startAngle;
+                if( aShape->ShortenArcForEndings( startAngle, arcAngle, aShape->GetRadius(), thickness ) )
+                {
+                    m_plotter->ThickArc( VECTOR2D( aShape->GetCenter() ), startAngle, arcAngle, aShape->GetRadius(),
+                                         thickness, getMetadata() );
+                }
+            }
             else
             {
                 m_plotter->ThickArc( *aShape, getMetadata(), thickness );
@@ -1031,14 +1058,59 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
         }
 
         case SHAPE_T::BEZIER:
-            m_plotter->BezierCurve( aShape->GetStart(), aShape->GetBezierC1(),
-                                    aShape->GetBezierC2(), aShape->GetEnd(), 0, thickness );
+        {
+            std::optional<BEZIER<double>> curve = aShape->ShortenedBezierCurve( thickness );
+
+            if( curve && m_plotter->GetPlotterType() == PLOT_FORMAT::SVG )
+            {
+                m_plotter->BezierCurve( VECTOR2I( curve->Start ), VECTOR2I( curve->C1 ), VECTOR2I( curve->C2 ),
+                                        VECTOR2I( curve->End ), aShape->GetMaxError(), thickness );
+            }
+            else
+            {
+                std::vector<VECTOR2D> pts = aShape->ShortenedBezierPolyline( thickness );
+
+                for( size_t i = 0; i + 1 < pts.size(); i++ )
+                {
+                    m_plotter->ThickSegment( VECTOR2I( pts[i] ), VECTOR2I( pts[i + 1] ), thickness, getMetadata() );
+                }
+            }
+
             break;
+        }
 
         case SHAPE_T::POLY:
             if( aShape->IsPolyShapeValid() )
             {
-                if( m_plotter->GetPlotterType() == PLOT_FORMAT::DXF && GetDXFPlotMode() == SKETCH )
+                bool hasEndings = aShape->GetStartEnding().GetStyle() != LINE_ENDING_STYLE::NONE
+                                  || aShape->GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE;
+
+                auto plotStrokeOutline = [&]( const SHAPE_LINE_CHAIN& aOutline, int aOutlineIdx )
+                {
+                    if( aOutline.PointCount() < 2 )
+                        return;
+
+                    if( hasEndings )
+                    {
+                        std::vector<VECTOR2I> pts;
+
+                        if( !aShape->GetShortenedBodyPolyPoints( aOutline, aOutlineIdx, pts, thickness ) )
+                            return;
+
+                        SHAPE_LINE_CHAIN shortened;
+
+                        for( const VECTOR2I& pt : pts )
+                            shortened.Append( pt );
+
+                        shortened.SetClosed( aOutline.IsClosed() );
+                        m_plotter->PlotPoly( shortened, FILL_T::NO_FILL, thickness, getMetadata() );
+                        return;
+                    }
+
+                    m_plotter->PlotPoly( aOutline, FILL_T::NO_FILL, thickness, getMetadata() );
+                };
+
+                if( !hasEndings && m_plotter->GetPlotterType() == PLOT_FORMAT::DXF && GetDXFPlotMode() == SKETCH )
                 {
                     m_plotter->ThickPoly( aShape->GetPolyShape(), thickness, getMetadata() );
                 }
@@ -1054,10 +1126,7 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
                     if( thickness > 0 )
                     {
                         for( int jj = 0; jj < origPoly.OutlineCount(); ++jj )
-                        {
-                            m_plotter->PlotPoly( origPoly.COutline( jj ), FILL_T::NO_FILL,
-                                                 thickness, getMetadata() );
-                        }
+                            plotStrokeOutline( origPoly.COutline( jj ), jj );
                     }
 
                     if( !isSolidFill )
@@ -1178,7 +1247,7 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
     }
     else
     {
-        std::vector<SHAPE*> shapes = aShape->MakeEffectiveShapesForStroking();
+        std::vector<SHAPE*> shapes = aShape->MakeEffectiveShapesForStroking( thickness );
 
         for( SHAPE* shape : shapes )
         {
@@ -1192,6 +1261,22 @@ void BRDITEMS_PLOTTER::PlotShape( const PCB_SHAPE* aShape )
 
         for( SHAPE* shape : shapes )
             delete shape;
+    }
+
+    // Plot line endings for open shapes.
+    if( aShape->GetStartEnding().GetStyle() != LINE_ENDING_STYLE::NONE
+        || aShape->GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE )
+    {
+        EDA_ANGLE startTangent, endTangent;
+        aShape->GetEndingTangents( startTangent, endTangent, thickness );
+
+        VECTOR2I startPt, endPt;
+
+        if( aShape->GetLineEndingEndpoints( startPt, endPt ) )
+        {
+            aShape->GetStartEnding().Plot( m_plotter, startPt, startTangent, thickness, getMetadata() );
+            aShape->GetEndEnding().Plot( m_plotter, endPt, endTangent, thickness, getMetadata() );
+        }
     }
 
     if( isHatchedFill )
@@ -1329,7 +1414,7 @@ void BRDITEMS_PLOTTER::PlotDrillMarks()
 
             plotOneDrillMark( PAD_DRILL_SHAPE::CIRCLE, via->GetStart(),
                               VECTOR2I( via->GetDrillValue(), 0 ),
-                              VECTOR2I( via->GetWidth( PADSTACK::ALL_LAYERS ), 0 ),
+                              VECTOR2I( via->GetWidth( PADSTACK::TEMP_ALL_LAYERS ), 0 ),
                               ANGLE_0, smallDrill );
         }
     }
@@ -1367,7 +1452,7 @@ void BRDITEMS_PLOTTER::PlotDrillMarks()
             }
 
             plotOneDrillMark( pad->GetDrillShape(), pad->GetPosition(), pad->GetDrillSize(),
-                              pad->GetSize( PADSTACK::ALL_LAYERS ), pad->GetOrientation(), smallDrill );
+                              pad->GetSize( PADSTACK::TEMP_ALL_LAYERS ), pad->GetOrientation(), smallDrill );
         }
     }
 

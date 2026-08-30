@@ -33,6 +33,11 @@
 class SCH_EDIT_FRAME;
 class SCH_TEXT;
 
+namespace kiapi::schematic::types
+{
+    class SchematicField;
+}
+
 
 struct SCH_FIELD_RENDER_CACHE_DATA
 {
@@ -54,6 +59,11 @@ public:
 
     void Serialize( google::protobuf::Any& aContainer ) const override;
     bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
+    void Serialize( kiapi::schematic::types::SchematicField& aOutput,
+                    const EDA_IU_SCALE& aScale ) const;
+    bool Deserialize( const kiapi::schematic::types::SchematicField& aInput,
+                      const EDA_IU_SCALE& aScale );
 
     ~SCH_FIELD() override
     { }
@@ -108,14 +118,14 @@ public:
     wxString GetName( bool aUseDefaultName = true ) const;
 
     /**
-     * Get a non-language-specific name for a field which can be used for storage, variable look-up, etc.
+     * Get the untranslated field name for storage, variable look-up, etc.
      */
-    wxString GetCanonicalName() const;
+    wxString GetUntranslatedName() const;
 
     /**
      * Test whether @a aName is one of the known translations of the directive-label net class
      * field name (used to recognise legacy/cross-locale files where the field name was saved as
-     * a translated string instead of the canonical "Netclass" token).
+     * a translated string instead of the untranslated "Netclass" token).
      */
     static bool IsNetclassLabelFieldName( const wxString& aName );
 

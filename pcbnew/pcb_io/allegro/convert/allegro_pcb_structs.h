@@ -141,6 +141,8 @@ enum class FMT_VER
     V_174, // Allegro 17.4, 0x00140900
     V_175, // Allegro 17.5, 0x00141500
     V_180, // Allegro 18.0, 0x00150000
+    V_181, // Allegro 18.1, 0x00150200
+    V_190, // Allegro 19.0, 0x00160100
 };
 
 constexpr bool operator>=( FMT_VER lhs, FMT_VER rhs )
@@ -355,6 +357,9 @@ struct FILE_HEADER
     COND_GE<FMT_VER::V_180, LINKED_LIST> m_LL_V18_6;
 
     COND_GE<FMT_VER::V_180, uint32_t> m_0x35_Start_V18;
+
+    COND_GE<FMT_VER::V_181, std::array<uint32_t, 8>> m_Unknown_V181;
+
     COND_GE<FMT_VER::V_180, uint32_t> m_0x35_End_V18;
 
     // Fixed length string field
@@ -978,6 +983,8 @@ struct BLK_0x0F_FUNCTION_SLOT
 
     std::array<char, 32> m_CompDeviceType;
 
+    COND_GE<FMT_VER::V_190, uint32_t> m_CompDeviceTypePtr;
+
     COND_GE<FMT_VER::V_172, uint32_t> m_Next;
 
     uint32_t m_Ptr0x06;
@@ -1205,8 +1212,8 @@ struct PADSTACK_COMPONENT
     COND_GE<FMT_VER::V_172, int32_t> m_Z1;
 
     // This is the pad component offset
-    int32_t m_X3;
-    int32_t m_X4;
+    int32_t m_OffsetX;
+    int32_t m_OffsetY;
 
     /**
      * Seems to point to various things:
@@ -1387,6 +1394,7 @@ struct BLK_0x1C_PADSTACK
      *
      * V>=172 (21 fixed):
      *   Slot 14 = ~TSM (top solder mask)
+     *   Slot 15 = ~BSM (bottom solder mask)
      */
     enum SLOTS
     {
@@ -1395,8 +1403,15 @@ struct BLK_0x1C_PADSTACK
         PASTEMASK_TOP_V16X  = 5,
         FILMMASK_TOP_V16X   = 7,
 
+        SOLDERMASK_TOP_V165 = 1,
+        PASTEMASK_TOP_V165  = 6,
+        FILMMASK_TOP_V165   = 8,
+
         // V>=172 verified slots
         SOLDERMASK_TOP_V17X = 14,
+        SOLDERMASK_BOT_V17X = 15,
+        PASTEMASK_TOP_V17X  = 16,
+        PASTEMASK_BOT_V17X  = 17
     };
 
     /**
@@ -2298,7 +2313,7 @@ struct BLK_0x36_DEF_TABLE
         uint32_t m_CharHeight;
         uint32_t m_CharWidth;
 
-        COND_GE<FMT_VER::V_174, uint32_t> m_Unknown2;
+        COND_GE_LT<FMT_VER::V_174, FMT_VER::V_190, uint32_t> m_Unknown2;
 
         uint32_t m_CharacterSpace;
         uint32_t m_LineSpace;
@@ -2457,6 +2472,15 @@ struct BLK_0x3B_PROPERTY
  * Ordered list of block keys. Context-dependent usage; appears alongside other
  * block types for grouping related objects.
  */
+struct BLK_0x3E
+{
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x3E;
+
+    uint32_t                m_Key;
+    std::array<uint32_t, 9> m_Unknown;
+};
+
+
 struct BLK_0x3C_KEY_LIST
 {
     static constexpr uint8_t BLOCK_TYPE_CODE = 0x3C;

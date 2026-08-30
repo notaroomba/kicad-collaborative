@@ -97,7 +97,7 @@ public:
     /**
      * Return a field in this sheet.
      *
-     * @param aFieldName is the canonical name of the field.
+     * @param aFieldName is the untranslated name of the field.
      *
      * @return Both non-const and const versions return nullptr if the field is not found.
      */
@@ -178,6 +178,14 @@ public:
      * @param aScreen The new screen to associate with the sheet.
      */
     void SetScreen( SCH_SCREEN* aScreen );
+
+    /**
+     * Take the identity of the screen this sheet owns.
+     *
+     * A sheet and its screen are one object to the rest of the schematic, so loaders and
+     * importers that build the pair together have to give them a single UUID.
+     */
+    void SyncUuidToScreen();
 
     /**
      * Return the number of times the associated screen for the sheet is being used.
@@ -580,6 +588,7 @@ public:
 protected:
     friend SCH_SHEET_PATH;
     friend SCH_IO_KICAD_SEXPR_PARSER;
+    friend SCHEMATIC;          // Only to swap a staged screen in, see SCHEMATIC::AdoptContent().
 
     void setInstances( const std::vector<SCH_SHEET_INSTANCE>& aInstances )
     {

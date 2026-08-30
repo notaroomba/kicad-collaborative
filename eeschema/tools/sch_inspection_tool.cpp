@@ -352,8 +352,7 @@ void SCH_INSPECTION_TOOL::DiffSymbol( SCH_SYMBOL* symbol )
     dialog->DeleteAllPages();
     dialog->SetUserItemID( symbol->m_Uuid );
 
-    wxString symbolDesc = wxString::Format( _( "Symbol %s" ),
-                                            symbol->GetField( FIELD_T::REFERENCE )->GetText() );
+    wxString symbolDesc = wxString::Format( _( "Symbol %s" ), symbol->GetField( FIELD_T::REFERENCE )->GetText() );
     LIB_ID   libId = symbol->GetLibId();
     wxString libName = libId.GetLibNickname();
     wxString symbolName = libId.GetLibItemName();
@@ -398,8 +397,7 @@ void SCH_INSPECTION_TOOL::DiffSymbol( SCH_SYMBOL* symbol )
 
         if( !flattenedLibSymbol )
         {
-            r->Report( wxString::Format( _( "The library no longer contains the item %s." ),
-                                         symbolName ) );
+            r->Report( wxString::Format( _( "The library no longer contains the item %s." ), symbolName ) );
         }
         else
         {
@@ -407,8 +405,7 @@ void SCH_INSPECTION_TOOL::DiffSymbol( SCH_SYMBOL* symbol )
 
             for( SCH_FIELD& field : symbol->GetFields() )
             {
-                fields.emplace_back( SCH_FIELD( flattenedLibSymbol.get(), field.GetId(),
-                                                field.GetName( false ) ) );
+                fields.emplace_back( SCH_FIELD( flattenedLibSymbol.get(), field.GetId(), field.GetName( false ) ) );
                 fields.back().CopyText( field );
                 fields.back().SetAttributes( field );
                 fields.back().Move( -symbol->GetPosition() );
@@ -416,11 +413,10 @@ void SCH_INSPECTION_TOOL::DiffSymbol( SCH_SYMBOL* symbol )
 
             flattenedSchSymbol->SetFields( fields );
 
-            if( flattenedSchSymbol->Compare( *flattenedLibSymbol, SCH_ITEM::COMPARE_FLAGS::ERC,
-                                             r ) == 0 )
-            {
+            int flags = schEditorFrame->Schematic().Settings().SymbolCompareFlags();
+
+            if( flattenedSchSymbol->Compare( *flattenedLibSymbol, flags, r ) == 0 )
                 r->Report( _( "No relevant differences detected." ) );
-            }
 
             wxPanel*            panel = dialog->AddBlankPage( _( "Visual" ) );
             SYMBOL_DIFF_WIDGET* diff = constructDiffPanel( panel );
@@ -551,6 +547,41 @@ DIALOG_KICAD_DIFF::SHEET_SWITCHER makeSchSwitcher( SCHEMATIC* aRef, SCHEMATIC* a
                                                    compScreen );
     };
 }
+
+
+struct DRILL_FRAME
+{
+    SCH_SHEET_PATH editorPath;
+    SCHEMATIC*     compSch = nullptr;
+    wxString       compFile;
+    KIID_PATH      compScope;
+};
+
+
+void reloadDrillFrame( DIALOG_KICAD_DIFF& aDlg, SCHEMATIC* aRefSch, const KICAD_DIFF::DIFF_COLOR_THEME& aTheme,
+                       const DRILL_FRAME& aFrame )
+{
+    KICAD_DIFF::SCH_DIFFER differ( aRefSch, aFrame.compSch, aFrame.compFile );
+    const KIID_PATH        scope = aFrame.editorPath.Path();
+
+    if( !scope.empty() && !aFrame.compScope.empty() )
+        differ.SetScope( scope, aFrame.compScope );
+
+    KICAD_DIFF::DOCUMENT_DIFF diff = differ.Diff();
+
+    std::map<KIID, KIGFX::COLOR4D>       refO;
+    std::map<KIID, KIGFX::COLOR4D>       compO;
+    std::map<KIID, KICAD_DIFF::CATEGORY> cats;
+    buildSchOverrides( diff, aTheme, refO, compO, cats );
+
+    auto switcher = makeSchSwitcher( aRefSch, aFrame.compSch, refO, compO, cats, aTheme );
+
+    SCH_SCREEN* refScreen = aFrame.editorPath.LastScreen();
+    wxString    refLabel = refScreen ? refScreen->GetFileName() : wxString();
+
+    aDlg.Reload( refLabel, aFrame.compFile, std::move( diff ), /*aReferenceGeometry=*/{},
+                 /*aComparisonGeometry=*/{}, std::move( switcher ), scope );
+}
 } // namespace
 
 
@@ -561,8 +592,7 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithFile( const TOOL_EVENT& aEvent )
     wxCHECK( schEditorFrame, 0 );
 
     wxFileDialog dlg( schEditorFrame, _( "Choose Schematic to Compare With" ), wxEmptyString,
-                      wxEmptyString, FILEEXT::KiCadSchematicFileWildcard(),
-                      wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+                      wxEmptyString, FILEEXT::KiCadSchematicFileWildcard(), wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
     if( dlg.ShowModal() != wxID_OK )
         return 0;
@@ -572,8 +602,7 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithFile( const TOOL_EVENT& aEvent )
 
     if( !otherFn.GetExt().IsSameAs( FILEEXT::KiCadSchematicFileExtension, false ) )
     {
-        schEditorFrame->ShowInfoBarError(
-                _( "Select a KiCad s-expression schematic file (.kicad_sch)." ) );
+        schEditorFrame->ShowInfoBarError( _( "Select a KiCad s-expression schematic file (.kicad_sch)." ) );
         return 0;
     }
 
@@ -590,8 +619,7 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithFile( const TOOL_EVENT& aEvent )
     // SCHEMATIC would clobber its ERC/schematic settings.
     if( projectFn.SameAs( activeProjectFn ) )
     {
-        schEditorFrame->ShowInfoBarError(
-                _( "Select a schematic file from another project to compare." ) );
+        schEditorFrame->ShowInfoBarError( _( "Select a schematic file from another project to compare." ) );
         return 0;
     }
 
@@ -656,8 +684,7 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
     // schematic and SetProject(nullptr) would destroy editor state.
     if( loadedSchematic == mySch )
     {
-        schEditorFrame->ShowInfoBarError(
-                _( "Select a schematic file from another project to compare." ) );
+        schEditorFrame->ShowInfoBarError( _( "Select a schematic file from another project to compare." ) );
         mgr->UnloadProject( otherPrj, false );
         return 0;
     }
@@ -697,13 +724,14 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
 
     buildSchOverrides( result, theme, refOverrides, compOverrides, kiidCategories );
 
-    KICAD_DIFF::DOCUMENT_GEOMETRY refGeometry =
-            KICAD_DIFF::ExtractSchematicGeometry( *mySch, theme.reference, refOverrides );
-    KICAD_DIFF::DOCUMENT_GEOMETRY compGeometry =
-            KICAD_DIFF::ExtractSchematicGeometry( *otherSchematic, theme.comparison, compOverrides );
+    KICAD_DIFF::DOCUMENT_GEOMETRY refGeometry = KICAD_DIFF::ExtractSchematicGeometry( *mySch, theme.reference,
+                                                                                      refOverrides );
+    KICAD_DIFF::DOCUMENT_GEOMETRY compGeometry = KICAD_DIFF::ExtractSchematicGeometry( *otherSchematic,
+                                                                                       theme.comparison,
+                                                                                       compOverrides );
 
-    auto initialSwitcher =
-            makeSchSwitcher( mySch, otherSchematic.get(), refOverrides, compOverrides, kiidCategories, theme );
+    DIALOG_KICAD_DIFF::SHEET_SWITCHER initialSwitcher = makeSchSwitcher( mySch, otherSchematic.get(), refOverrides,
+                                                                         compOverrides, kiidCategories, theme );
 
     KIID_PATH   initialSheet = schEditorFrame->GetCurrentSheet().Path();
     SCH_SCREEN* currentSheetScreen = schEditorFrame->GetCurrentSheet().LastScreen();
@@ -714,24 +742,18 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
 
     // Drill state owns the comparison schematics loaded across double-click
     // drills. The editor schematic stays the reference on all drills.
-    struct DRILL_STATE
-    {
-        SCH_SHEET_PATH                          editorPath;
-        SCHEMATIC*                              compSch;
-        wxString                                compFile;
-        std::vector<std::unique_ptr<SCHEMATIC>> ownedSchs;
-    };
+    DRILL_FRAME drillCurrent{ schEditorFrame->GetCurrentSheet(), otherSchematic.get(), aOtherPath, scopeAfter };
 
-    DRILL_STATE drillState;
-    drillState.editorPath = schEditorFrame->GetCurrentSheet();
-    drillState.compSch = otherSchematic.get();
-    drillState.compFile = aOtherPath;
-    drillState.ownedSchs.push_back( std::move( otherSchematic ) );
+    std::vector<DRILL_FRAME>                drillBack;
+    std::vector<std::unique_ptr<SCHEMATIC>> drilledSchs;
+
+    drilledSchs.push_back( std::move( otherSchematic ) );
 
     if( WIDGET_DIFF_CANVAS* canvas = dlgDiff.DiffCanvas() )
     {
         canvas->SetDoubleClickHandler(
-                [&dlgDiff, &drillState, mySch, otherPrj, theme, schEditorFrame]( KIGFX::VIEW_ITEM* aItem )
+                [&dlgDiff, &drillCurrent, &drillBack, &drilledSchs, mySch, otherPrj, theme,
+                 schEditorFrame]( KIGFX::VIEW_ITEM* aItem )
                 {
                     auto* sheet = dynamic_cast<SCH_SHEET*>( aItem );
 
@@ -743,7 +765,7 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
                     if( sheetFile.IsEmpty() )
                         return;
 
-                    KIID_PATH newEditorKiid = drillState.editorPath.Path();
+                    KIID_PATH newEditorKiid = drillCurrent.editorPath.Path();
                     newEditorKiid.push_back( sheet->m_Uuid );
 
                     auto newEditorSheet = mySch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true );
@@ -753,69 +775,60 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
 
                     // Prefer resolving inside the current comparison schematic so
                     // shared-sheet instance context is preserved on both sides.
-                    SCHEMATIC* compSch = drillState.compSch;
-                    wxString   compFile = drillState.compFile;
-                    KIID_PATH  scopeBefore = newEditorKiid;
-                    KIID_PATH  scopeAfter;
+                    DRILL_FRAME next{ *newEditorSheet, drillCurrent.compSch, drillCurrent.compFile };
 
-                    if( auto compMatch = compSch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true ) )
+                    if( auto compMatch = next.compSch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true ) )
                     {
-                        scopeAfter = compMatch->Path();
+                        next.compScope = compMatch->Path();
 
                         if( SCH_SCREEN* compMatchScreen = compMatch->LastScreen() )
-                            compFile = compMatchScreen->GetFileName();
+                            next.compFile = compMatchScreen->GetFileName();
                     }
                     else
                     {
-                        wxFileName newCompFn( wxFileName( drillState.compFile ).GetPath(), sheetFile );
+                        wxFileName newCompFn( wxFileName( drillCurrent.compFile ).GetPath(), sheetFile );
                         newCompFn.MakeAbsolute();
 
-                        SCHEMATIC* loaded =
-                                EESCHEMA_HELPERS::LoadSchematic( newCompFn.GetFullPath(), /*aSetActive=*/false,
-                                                                 /*aForceDefaultProject=*/false, otherPrj,
-                                                                 /*aCalculateConnectivity=*/false );
+                        SCHEMATIC* loaded = EESCHEMA_HELPERS::LoadSchematic( newCompFn.GetFullPath(),
+                                                                             /*aSetActive*/ false,
+                                                                             /*aForceDefaultProject*/ false, otherPrj,
+                                                                             /*aCalculateConnectivity*/ false );
 
                         if( !loaded )
                         {
-                            schEditorFrame->ShowInfoBarError(
-                                    wxString::Format( _( "Failed to load %s" ), newCompFn.GetFullPath() ) );
+                            schEditorFrame->ShowInfoBarError( wxString::Format( _( "Failed to load %s" ),
+                                                                                newCompFn.GetFullPath() ) );
                             return;
                         }
 
                         const SCH_SHEET_LIST loadedSheets = loaded->BuildSheetListSortedByPageNumbers();
 
                         if( !loadedSheets.empty() )
-                            scopeAfter = loadedSheets.front().Path();
+                            next.compScope = loadedSheets.front().Path();
 
-                        drillState.ownedSchs.emplace_back( loaded );
-                        compSch = loaded;
-                        compFile = newCompFn.GetFullPath();
+                        drilledSchs.emplace_back( loaded );
+                        next.compSch = loaded;
+                        next.compFile = newCompFn.GetFullPath();
                     }
 
-                    KICAD_DIFF::SCH_DIFFER newDiffer( mySch, compSch, compFile );
+                    reloadDrillFrame( dlgDiff, mySch, theme, next );
 
-                    if( !scopeBefore.empty() && !scopeAfter.empty() )
-                        newDiffer.SetScope( scopeBefore, scopeAfter );
+                    drillBack.push_back( drillCurrent );
+                    drillCurrent = next;
+                    dlgDiff.EnableUp( true );
+                } );
 
-                    KICAD_DIFF::DOCUMENT_DIFF newDiff = newDiffer.Diff();
+        dlgDiff.SetUpHandler(
+                [&dlgDiff, &drillCurrent, &drillBack, mySch, theme]()
+                {
+                    if( drillBack.empty() )
+                        return;
 
-                    std::map<KIID, KIGFX::COLOR4D>       newRefO;
-                    std::map<KIID, KIGFX::COLOR4D>       newCompO;
-                    std::map<KIID, KICAD_DIFF::CATEGORY> newCats;
-                    buildSchOverrides( newDiff, theme, newRefO, newCompO, newCats );
+                    reloadDrillFrame( dlgDiff, mySch, theme, drillBack.back() );
 
-                    auto newSwitcher = makeSchSwitcher( mySch, compSch, newRefO, newCompO, newCats, theme );
-
-                    drillState.editorPath = *newEditorSheet;
-                    drillState.compSch = compSch;
-                    drillState.compFile = compFile;
-
-                    SCH_SCREEN* newRefScreen = newEditorSheet->LastScreen();
-                    wxString    newRefLabel = newRefScreen ? newRefScreen->GetFileName() : wxString();
-
-                    dlgDiff.Reload( newRefLabel, compFile, std::move( newDiff ),
-                                    /*aReferenceGeometry=*/{}, /*aComparisonGeometry=*/{}, std::move( newSwitcher ),
-                                    scopeBefore );
+                    drillCurrent = drillBack.back();
+                    drillBack.pop_back();
+                    dlgDiff.EnableUp( !drillBack.empty() );
                 } );
     }
 
@@ -823,13 +836,13 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
 
     // Detach schematics from the project before unloading so the project's
     // ERC and schematic settings release cleanly.
-    for( auto& sch : drillState.ownedSchs )
+    for( auto& sch : drilledSchs )
     {
         if( sch )
             sch->SetProject( nullptr );
     }
 
-    drillState.ownedSchs.clear();
+    drilledSchs.clear();
 
     mgr->UnloadProject( otherPrj, false );
 
@@ -866,12 +879,13 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
 
     wxCHECK( mgr, 0 );
 
-    auto relTo = [&]( const wxString& aFull )
-    {
-        wxFileName fn( aFull );
-        fn.MakeRelativeTo( projectPath );
-        return fn.GetFullPath( wxPATH_UNIX );
-    };
+    auto relTo =
+            [&]( const wxString& aFull )
+            {
+                wxFileName fn( aFull );
+                fn.MakeRelativeTo( projectPath );
+                return fn.GetFullPath( wxPATH_UNIX );
+            };
 
     const wxString rootRel = relTo( mySch->GetFileName() );
     const wxString projRel = relTo( schEditorFrame->Prj().GetProjectFullName() );
@@ -918,43 +932,46 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
         KICAD_DIFF::DOCUMENT_GEOMETRY     refGeom;
         KICAD_DIFF::DOCUMENT_GEOMETRY     compGeom;
         DIALOG_KICAD_DIFF::SHEET_SWITCHER switcher;
+        KIID_PATH                         compScope;
     };
 
-    auto buildView = [&]( SCHEMATIC* aComp, const wxString& aPath ) -> SCH_DIFF_VIEW
-    {
-        SCH_DIFF_VIEW          view;
-        KICAD_DIFF::SCH_DIFFER differ( mySch, aComp, aPath );
+    auto buildView =
+            [&]( SCHEMATIC* aComp, const wxString& aPath ) -> SCH_DIFF_VIEW
+            {
+                SCH_DIFF_VIEW          view;
+                KICAD_DIFF::SCH_DIFFER differ( mySch, aComp, aPath );
 
-        KIID_PATH scopeAfter;
+                KIID_PATH scopeAfter;
 
-        if( auto sp = aComp->Hierarchy().GetSheetPathByKIIDPath( scopeBefore, true ) )
-        {
-            scopeAfter = sp->Path();
-        }
-        else
-        {
-            SCH_SHEET_LIST sheets = aComp->BuildSheetListSortedByPageNumbers();
+                if( std::optional<SCH_SHEET_PATH> sp = aComp->Hierarchy().GetSheetPathByKIIDPath( scopeBefore, true ) )
+                {
+                    scopeAfter = sp->Path();
+                }
+                else
+                {
+                    SCH_SHEET_LIST sheets = aComp->BuildSheetListSortedByPageNumbers();
 
-            if( !sheets.empty() )
-                scopeAfter = sheets.front().Path();
-        }
+                    if( !sheets.empty() )
+                        scopeAfter = sheets.front().Path();
+                }
 
-        if( !scopeBefore.empty() && !scopeAfter.empty() )
-            differ.SetScope( scopeBefore, scopeAfter );
+                if( !scopeBefore.empty() && !scopeAfter.empty() )
+                    differ.SetScope( scopeBefore, scopeAfter );
 
-        view.result = differ.Diff();
+                view.compScope = scopeAfter;
+                view.result = differ.Diff();
 
-        std::map<KIID, KIGFX::COLOR4D>       refO;
-        std::map<KIID, KIGFX::COLOR4D>       compO;
-        std::map<KIID, KICAD_DIFF::CATEGORY> cats;
-        buildSchOverrides( view.result, theme, refO, compO, cats );
+                std::map<KIID, KIGFX::COLOR4D>       refO;
+                std::map<KIID, KIGFX::COLOR4D>       compO;
+                std::map<KIID, KICAD_DIFF::CATEGORY> cats;
+                buildSchOverrides( view.result, theme, refO, compO, cats );
 
-        view.refGeom = KICAD_DIFF::ExtractSchematicGeometry( *mySch, theme.reference, refO );
-        view.compGeom = KICAD_DIFF::ExtractSchematicGeometry( *aComp, theme.comparison, compO );
-        view.switcher = makeSchSwitcher( mySch, aComp, refO, compO, cats, theme );
+                view.refGeom = KICAD_DIFF::ExtractSchematicGeometry( *mySch, theme.reference, refO );
+                view.compGeom = KICAD_DIFF::ExtractSchematicGeometry( *aComp, theme.comparison, compO );
+                view.switcher = makeSchSwitcher( mySch, aComp, refO, compO, cats, theme );
 
-        return view;
-    };
+                return view;
+            };
 
     // State for the revision currently shown. Swapped on each dropdown change.
     std::unique_ptr<SCHEMATIC> curSch;
@@ -963,121 +980,124 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
 
     // Drill state: which comparison sheet is shown and sub-schematics loaded on
     // double-click. Reset when the revision changes.
-    SCH_SHEET_PATH                          drillEditorPath = schEditorFrame->GetCurrentSheet();
-    SCHEMATIC*                              drillCompSch = nullptr;
-    wxString                                drillCompFile;
+    DRILL_FRAME                             drillCurrent;
+    std::vector<DRILL_FRAME>                drillBack;
     std::vector<std::unique_ptr<SCHEMATIC>> drilledSchs;
 
-    auto cleanupCurrent = [&]()
-    {
-        for( auto& sch : drilledSchs )
-        {
-            if( sch )
-                sch->SetProject( nullptr );
-        }
+    auto cleanupCurrent =
+            [&]()
+            {
+                for( std::unique_ptr<SCHEMATIC>& sch : drilledSchs )
+                {
+                    if( sch )
+                        sch->SetProject( nullptr );
+                }
 
-        drilledSchs.clear();
+                drilledSchs.clear();
 
-        if( curSch )
-        {
-            curSch->SetProject( nullptr );
-            curSch.reset();
-        }
+                if( curSch )
+                {
+                    curSch->SetProject( nullptr );
+                    curSch.reset();
+                }
 
-        // Skip if the project was already evicted from the manager.
-        if( curPrj && mgr->IsProjectLoaded( curPrj ) )
-            mgr->UnloadProject( curPrj, false );
+                // Skip if the project was already evicted from the manager.
+                if( curPrj && mgr->IsProjectLoaded( curPrj ) )
+                    mgr->UnloadProject( curPrj, false );
 
-        curPrj = nullptr;
+                curPrj = nullptr;
 
-        if( !curTempDir.IsEmpty() )
-        {
-            wxFileName::Rmdir( curTempDir, wxPATH_RMDIR_RECURSIVE );
-            curTempDir.Clear();
-        }
-    };
+                if( !curTempDir.IsEmpty() )
+                {
+                    wxFileName::Rmdir( curTempDir, wxPATH_RMDIR_RECURSIVE );
+                    curTempDir.Clear();
+                }
+            };
 
     // Extract the hierarchy at snapshot aIndex and load its root sheet, cleaning
     // up the temp dir on any failure.
-    auto loadRevision = [&]( int aIndex, std::unique_ptr<SCHEMATIC>& aSch, PROJECT*& aPrj, wxString& aTempDir ) -> bool
-    {
-        const wxString hash = snapshots[aIndex].hash;
-        wxFileName     dirFn;
-        dirFn.AssignDir( wxFileName::GetTempDir() );
-        dirFn.AppendDir( wxS( "kicad-history-" ) + hash.Left( 8 ) );
-        const wxString tempDir = dirFn.GetPath();
+    auto loadRevision =
+            [&]( int aIndex, std::unique_ptr<SCHEMATIC>& aSch, PROJECT*& aPrj, wxString& aTempDir ) -> bool
+            {
+                const wxString hash = snapshots[aIndex].hash;
+                wxFileName     dirFn;
+                dirFn.AssignDir( wxFileName::GetTempDir() );
+                dirFn.AppendDir( wxS( "kicad-history-" ) + hash.Left( 8 ) );
+                const wxString tempDir = dirFn.GetPath();
 
-        // Extract just the schematic sheets and project file, skipping the
-        // board, 3D models, gerbers, etc.
-        if( !history.ExtractAllFilesAtCommit( projectPath, hash, tempDir,
-                                              { wxS( ".kicad_sch" ), wxS( ".kicad_pro" ) } ) )
-        {
-            wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
-            return false;
-        }
+                // Extract just the schematic sheets and project file, skipping the
+                // board, 3D models, gerbers, etc.
+                if( !history.ExtractAllFilesAtCommit( projectPath, hash, tempDir,
+                                                      { wxS( ".kicad_sch" ), wxS( ".kicad_pro" ) } ) )
+                {
+                    wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
+                    return false;
+                }
 
-        const wxString root = tempDir + wxS( "/" ) + rootRel;
-        const wxString proj = tempDir + wxS( "/" ) + projRel;
+                const wxString root = tempDir + wxS( "/" ) + rootRel;
+                const wxString proj = tempDir + wxS( "/" ) + projRel;
 
-        mgr->LoadProject( proj, false );
-        PROJECT* prj = mgr->GetProject( proj );
+                mgr->LoadProject( proj, false );
+                PROJECT* prj = mgr->GetProject( proj );
 
-        if( !prj )
-        {
-            wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
-            return false;
-        }
+                if( !prj )
+                {
+                    wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
+                    return false;
+                }
 
-        SCHEMATIC* loaded = nullptr;
+                SCHEMATIC* loaded = nullptr;
 
-        try
-        {
-            loaded = EESCHEMA_HELPERS::LoadSchematic( root, /*aSetActive=*/false, /*aForceDefaultProject=*/false, prj,
-                                                      /*aCalculateConnectivity=*/false );
-        }
-        catch( ... )
-        {
-            mgr->UnloadProject( prj, false );
-            wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
-            return false;
-        }
+                try
+                {
+                    loaded = EESCHEMA_HELPERS::LoadSchematic( root, /*aSetActive*/ false,
+                                                              /*aForceDefaultProject*/ false, prj,
+                                                              /*aCalculateConnectivity*/ false );
+                }
+                catch( ... )
+                {
+                    mgr->UnloadProject( prj, false );
+                    wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
+                    return false;
+                }
 
-        if( !loaded || loaded == mySch )
-        {
-            mgr->UnloadProject( prj, false );
-            wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
-            return false;
-        }
+                if( !loaded || loaded == mySch )
+                {
+                    mgr->UnloadProject( prj, false );
+                    wxFileName::Rmdir( tempDir, wxPATH_RMDIR_RECURSIVE );
+                    return false;
+                }
 
-        aSch.reset( loaded );
-        aPrj = prj;
-        aTempDir = tempDir;
-        return true;
-    };
+                aSch.reset( loaded );
+                aPrj = prj;
+                aTempDir = tempDir;
+                return true;
+            };
 
-    auto loadView = [&]( int aIndex, std::unique_ptr<SCHEMATIC>& aSch, PROJECT*& aPrj, wxString& aTempDir,
-                         SCH_DIFF_VIEW& aView ) -> bool
-    {
-        if( !loadRevision( aIndex, aSch, aPrj, aTempDir ) )
-            return false;
+    auto loadView =
+            [&]( int aIndex, std::unique_ptr<SCHEMATIC>& aSch, PROJECT*& aPrj, wxString& aTempDir,
+                 SCH_DIFF_VIEW& aView ) -> bool
+            {
+                if( !loadRevision( aIndex, aSch, aPrj, aTempDir ) )
+                    return false;
 
-        try
-        {
-            aView = buildView( aSch.get(), aTempDir + wxS( "/" ) + rootRel );
-        }
-        catch( ... )
-        {
-            aSch->SetProject( nullptr );
-            aSch.reset();
-            mgr->UnloadProject( aPrj, false );
-            aPrj = nullptr;
-            wxFileName::Rmdir( aTempDir, wxPATH_RMDIR_RECURSIVE );
-            aTempDir.Clear();
-            return false;
-        }
+                try
+                {
+                    aView = buildView( aSch.get(), aTempDir + wxS( "/" ) + rootRel );
+                }
+                catch( ... )
+                {
+                    aSch->SetProject( nullptr );
+                    aSch.reset();
+                    mgr->UnloadProject( aPrj, false );
+                    aPrj = nullptr;
+                    wxFileName::Rmdir( aTempDir, wxPATH_RMDIR_RECURSIVE );
+                    aTempDir.Clear();
+                    return false;
+                }
 
-        return true;
-    };
+                return true;
+            };
 
     SCH_DIFF_VIEW view;
     int           startIndex = 0;
@@ -1108,14 +1128,18 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
         startIndex++;
     }
 
-    drillCompSch = curSch.get();
-    drillCompFile = curTempDir + wxS( "/" ) + rootRel;
+    drillCurrent = { schEditorFrame->GetCurrentSheet(), curSch.get(), curTempDir + wxS( "/" ) + rootRel,
+                     view.compScope };
+
+    int shownIndex = startIndex;
 
     SCH_SCREEN* curScreen = schEditorFrame->GetCurrentSheet().LastScreen();
     wxString    referenceLabel = curScreen ? curScreen->GetFileName() : mySch->GetFileName();
 
-    auto dlgDiff = std::make_unique<DIALOG_KICAD_DIFF>( schEditorFrame, referenceLabel, labels[startIndex], view.result,
-                                                        view.refGeom, view.compGeom, view.switcher, scopeBefore );
+    std::unique_ptr<DIALOG_KICAD_DIFF> dlgDiff = std::make_unique<DIALOG_KICAD_DIFF>( schEditorFrame, referenceLabel,
+                                                                                      labels[startIndex], view.result,
+                                                                                      view.refGeom, view.compGeom,
+                                                                                      view.switcher, scopeBefore );
 
     // Double-click a sheet to drill into its sub-schematic, within the current
     // revision's extracted hierarchy.
@@ -1124,12 +1148,12 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
         canvas->SetDoubleClickHandler(
                 [&]( KIGFX::VIEW_ITEM* aItem )
                 {
-                    auto* sheet = dynamic_cast<SCH_SHEET*>( aItem );
+                    SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( aItem );
 
                     if( !sheet || sheet->GetFileName().IsEmpty() )
                         return;
 
-                    KIID_PATH newEditorKiid = drillEditorPath.Path();
+                    KIID_PATH newEditorKiid = drillCurrent.editorPath.Path();
                     newEditorKiid.push_back( sheet->m_Uuid );
 
                     auto newEditorSheet = mySch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true );
@@ -1137,21 +1161,18 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
                     if( !newEditorSheet )
                         return;
 
-                    SCHEMATIC* compSch = drillCompSch;
-                    wxString   compFile = drillCompFile;
-                    KIID_PATH  drillScopeBefore = newEditorKiid;
-                    KIID_PATH  drillScopeAfter;
+                    DRILL_FRAME next{ *newEditorSheet, drillCurrent.compSch, drillCurrent.compFile };
 
-                    if( auto compMatch = compSch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true ) )
+                    if( auto compMatch = next.compSch->Hierarchy().GetSheetPathByKIIDPath( newEditorKiid, true ) )
                     {
-                        drillScopeAfter = compMatch->Path();
+                        next.compScope = compMatch->Path();
 
                         if( SCH_SCREEN* matchScreen = compMatch->LastScreen() )
-                            compFile = matchScreen->GetFileName();
+                            next.compFile = matchScreen->GetFileName();
                     }
                     else
                     {
-                        wxFileName subFn( wxFileName( drillCompFile ).GetPath(), sheet->GetFileName() );
+                        wxFileName subFn( wxFileName( drillCurrent.compFile ).GetPath(), sheet->GetFileName() );
                         subFn.MakeAbsolute();
 
                         SCHEMATIC* loaded = nullptr;
@@ -1169,42 +1190,24 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
 
                         if( !loaded || loaded == mySch )
                         {
-                            schEditorFrame->ShowInfoBarError(
-                                    wxString::Format( _( "Failed to load %s" ), subFn.GetFullPath() ) );
+                            schEditorFrame->ShowInfoBarError( wxString::Format( _( "Failed to load %s" ),
+                                                                                subFn.GetFullPath() ) );
                             return;
                         }
 
                         SCH_SHEET_LIST loadedSheets = loaded->BuildSheetListSortedByPageNumbers();
 
                         if( !loadedSheets.empty() )
-                            drillScopeAfter = loadedSheets.front().Path();
+                            next.compScope = loadedSheets.front().Path();
 
                         drilledSchs.emplace_back( loaded );
-                        compSch = loaded;
-                        compFile = subFn.GetFullPath();
+                        next.compSch = loaded;
+                        next.compFile = subFn.GetFullPath();
                     }
 
                     try
                     {
-                        KICAD_DIFF::SCH_DIFFER newDiffer( mySch, compSch, compFile );
-
-                        if( !drillScopeBefore.empty() && !drillScopeAfter.empty() )
-                            newDiffer.SetScope( drillScopeBefore, drillScopeAfter );
-
-                        KICAD_DIFF::DOCUMENT_DIFF newDiff = newDiffer.Diff();
-
-                        std::map<KIID, KIGFX::COLOR4D>       newRefO;
-                        std::map<KIID, KIGFX::COLOR4D>       newCompO;
-                        std::map<KIID, KICAD_DIFF::CATEGORY> newCats;
-                        buildSchOverrides( newDiff, theme, newRefO, newCompO, newCats );
-
-                        auto newSwitcher = makeSchSwitcher( mySch, compSch, newRefO, newCompO, newCats, theme );
-
-                        SCH_SCREEN* newRefScreen = newEditorSheet->LastScreen();
-                        wxString    newRefLabel = newRefScreen ? newRefScreen->GetFileName() : wxString();
-
-                        dlgDiff->Reload( newRefLabel, compFile, std::move( newDiff ), /*aReferenceGeometry=*/{},
-                                         /*aComparisonGeometry=*/{}, std::move( newSwitcher ), drillScopeBefore );
+                        reloadDrillFrame( *dlgDiff, mySch, theme, next );
                     }
                     catch( ... )
                     {
@@ -1212,41 +1215,67 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
                         return;
                     }
 
-                    drillEditorPath = *newEditorSheet;
-                    drillCompSch = compSch;
-                    drillCompFile = compFile;
+                    drillBack.push_back( drillCurrent );
+                    drillCurrent = next;
+                    dlgDiff->EnableUp( true );
+                } );
+
+        dlgDiff->SetUpHandler(
+                [&]()
+                {
+                    if( drillBack.empty() )
+                        return;
+
+                    try
+                    {
+                        reloadDrillFrame( *dlgDiff, mySch, theme, drillBack.back() );
+                    }
+                    catch( ... )
+                    {
+                        schEditorFrame->ShowInfoBarError( _( "Could not open this sheet for comparison." ) );
+                        return;
+                    }
+
+                    drillCurrent = drillBack.back();
+                    drillBack.pop_back();
+                    dlgDiff->EnableUp( !drillBack.empty() );
                 } );
     }
 
-    dlgDiff->SetRevisionChooser( labels, startIndex,
-                                 [&]( int aIndex )
-                                 {
-                                     std::unique_ptr<SCHEMATIC> newSch;
-                                     PROJECT*                   newPrj = nullptr;
-                                     wxString                   newTempDir;
-                                     SCH_DIFF_VIEW              newView;
+    dlgDiff->SetRevisionChooser(
+            labels, startIndex,
+            [&]( int aIndex )
+            {
+                if( aIndex == shownIndex )
+                    return;
 
-                                     if( !loadView( aIndex, newSch, newPrj, newTempDir, newView ) )
-                                     {
-                                         schEditorFrame->ShowInfoBarError(
-                                                 _( "Could not compare against the selected snapshot." ) );
-                                         return;
-                                     }
+                std::unique_ptr<SCHEMATIC> newSch;
+                PROJECT*                   newPrj = nullptr;
+                wxString                   newTempDir;
+                SCH_DIFF_VIEW              newView;
 
-                                     dlgDiff->Reload( referenceLabel, labels[aIndex], newView.result, newView.refGeom,
-                                                      newView.compGeom, newView.switcher, scopeBefore );
+                if( !loadView( aIndex, newSch, newPrj, newTempDir, newView ) )
+                {
+                    schEditorFrame->ShowInfoBarError( _( "Could not compare against the selected snapshot." ) );
+                    return;
+                }
 
-                                     cleanupCurrent();
-                                     view = std::move( newView );
-                                     curSch = std::move( newSch );
-                                     curPrj = newPrj;
-                                     curTempDir = newTempDir;
+                dlgDiff->Reload( referenceLabel, labels[aIndex], newView.result, newView.refGeom,
+                                 newView.compGeom, newView.switcher, scopeBefore );
 
-                                     // Restart drilling from the new revision's root.
-                                     drillEditorPath = schEditorFrame->GetCurrentSheet();
-                                     drillCompSch = curSch.get();
-                                     drillCompFile = curTempDir + wxS( "/" ) + rootRel;
-                                 } );
+                cleanupCurrent();
+                view = std::move( newView );
+                curSch = std::move( newSch );
+                curPrj = newPrj;
+                curTempDir = newTempDir;
+                shownIndex = aIndex;
+
+                // Restart drilling from the new revision's root.
+                drillBack.clear();
+                drillCurrent = { schEditorFrame->GetCurrentSheet(), curSch.get(), curTempDir + wxS( "/" ) + rootRel,
+                                 view.compScope };
+                dlgDiff->EnableUp( false );
+            } );
 
     dlgDiff->ShowModal();
 
@@ -1330,8 +1359,8 @@ int SCH_INSPECTION_TOOL::ShowDatasheet( const TOOL_EVENT& aEvent )
     }
     else
     {
-        GetAssociatedDocument( m_frame, datasheet, &m_frame->Prj(),
-                               PROJECT_SCH::SchSearchS( &m_frame->Prj() ), filesStack );
+        GetAssociatedDocument( m_frame, datasheet, &m_frame->Prj(), PROJECT_SCH::SchSearchS( &m_frame->Prj() ),
+                               filesStack );
     }
 
     return 0;
@@ -1378,29 +1407,28 @@ int SCH_INSPECTION_TOOL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
 
 void SCH_INSPECTION_TOOL::setTransitions()
 {
-    Go( &SCH_INSPECTION_TOOL::RunERC,                SCH_ACTIONS::runERC.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::PrevMarker,            SCH_ACTIONS::prevMarker.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::NextMarker,            SCH_ACTIONS::nextMarker.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::RunERC,                      SCH_ACTIONS::runERC.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::PrevMarker,                  SCH_ACTIONS::prevMarker.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::NextMarker,                  SCH_ACTIONS::nextMarker.MakeEvent() );
     // See note 1:
-    Go( &SCH_INSPECTION_TOOL::CrossProbe,            EVENTS::PointSelectedEvent );
-    Go( &SCH_INSPECTION_TOOL::CrossProbe,            EVENTS::SelectedEvent );
-    Go( &SCH_INSPECTION_TOOL::ExcludeMarker,         SCH_ACTIONS::excludeMarker.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::CrossProbe,                  EVENTS::PointSelectedEvent );
+    Go( &SCH_INSPECTION_TOOL::CrossProbe,                  EVENTS::SelectedEvent );
+    Go( &SCH_INSPECTION_TOOL::ExcludeMarker,               SCH_ACTIONS::excludeMarker.MakeEvent() );
 
-    Go( &SCH_INSPECTION_TOOL::CheckSymbol,           SCH_ACTIONS::checkSymbol.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::DiffSymbol,            SCH_ACTIONS::diffSymbol.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::CompareSchematicWithFile,
-        SCH_ACTIONS::compareSchematicWithFile.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::CheckSymbol,                 SCH_ACTIONS::checkSymbol.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::DiffSymbol,                  SCH_ACTIONS::diffSymbol.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::CompareSchematicWithFile,    SCH_ACTIONS::compareSchematicWithFile.MakeEvent() );
     Go( &SCH_INSPECTION_TOOL::CompareSchematicWithHistory, SCH_ACTIONS::compareSchematicWithHistory.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::RunSimulation,         SCH_ACTIONS::showSimulator.MakeEvent() );
-    Go( &SCH_INSPECTION_TOOL::ShowBusSyntaxHelp,     SCH_ACTIONS::showBusSyntaxHelp.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::RunSimulation,               SCH_ACTIONS::showSimulator.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::ShowBusSyntaxHelp,           SCH_ACTIONS::showBusSyntaxHelp.MakeEvent() );
 
-    Go( &SCH_INSPECTION_TOOL::ShowDatasheet,         ACTIONS::showDatasheet.MakeEvent() );
+    Go( &SCH_INSPECTION_TOOL::ShowDatasheet,               ACTIONS::showDatasheet.MakeEvent() );
 
     // Note 1: tUpdateMessagePanel is called by CrossProbe. So uncomment this line if
     // call to CrossProbe is modifiied
-    // Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel, EVENTS::SelectedEvent );
-    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,    EVENTS::UnselectedEvent );
-    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,    EVENTS::ClearedEvent );
-    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,    EVENTS::SelectedItemsModified );
+    // Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,       EVENTS::SelectedEvent );
+    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,          EVENTS::UnselectedEvent );
+    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,          EVENTS::ClearedEvent );
+    Go( &SCH_INSPECTION_TOOL::UpdateMessagePanel,          EVENTS::SelectedItemsModified );
 }
 

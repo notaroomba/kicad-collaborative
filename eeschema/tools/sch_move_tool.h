@@ -142,6 +142,9 @@ private:
     SCH_SHEET* findTargetSheet( const SCH_SELECTION& aSelection, const VECTOR2I& aCursorPos,
                                 bool aHasSheetPins, bool aIsGraphicsOnly, bool aCtrlDown );
 
+    ///< True when dropping the selection into aTargetSheet would make a sheet its own descendant
+    bool dropWouldRecurse( const SCH_SELECTION& aSelection, const SCH_SHEET* aTargetSheet );
+
     ///< Perform the actual move of items by delta, handling split moves and orthogonal dragging
     void performItemMove( SCH_SELECTION& aSelection, const VECTOR2I& aDelta,
                           SCH_COMMIT* aCommit, int& aXBendCount, int& aYBendCount,
@@ -156,6 +159,13 @@ private:
 
     ///< Update stored positions after transformations (rotation, mirroring, etc.) during move
     void updateStoredPositions( const SCH_SELECTION& aSelection );
+
+    ///< Hide the junction dots that the pending edit will make redundant, noting the line end
+    ///< each one marks
+    void recordRedundantJunctions( SCH_SELECTION& aSelection );
+
+    ///< Move those junction dots to wherever the line end they marked has ended up
+    void migrateHiddenJunctions( SCH_COMMIT* aCommit );
 
     ///< Finalize the move operation, updating junctions and cleaning up
     void finalizeMoveOperation( SCH_SELECTION& aSelection, SCH_COMMIT* aCommit, bool aUnselect,
@@ -178,7 +188,14 @@ private:
     ///< Lines changed by drag algorithm that weren't selected
     std::unordered_set<SCH_LINE*>       m_changedDragLines;
     ///< Junctions that were hidden during the move
-    std::vector<SCH_JUNCTION*>           m_hiddenJunctions;
+    struct HIDDEN_JUNCTION
+    {
+        SCH_JUNCTION* m_junction;
+        KIID          m_lineId;
+        bool          m_atLineStart;
+    };
+
+    std::vector<HIDDEN_JUNCTION> m_hiddenJunctions;
 
     VECTOR2I              m_moveOffset;
 

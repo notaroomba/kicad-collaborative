@@ -25,6 +25,7 @@
 #include <wx/listbox.h>
 #include <wx/numformatter.h>
 #include <wx/statline.h>
+#include <wx/textctrl.h>
 #include <wx/tokenzr.h>
 #include <wx/wupdlock.h>
 
@@ -98,6 +99,7 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
     SetIcon( icon );
 
     m_currentWizard = nullptr;
+    m_builtFootprint = nullptr;
     m_wizardManager = std::make_unique<FOOTPRINT_WIZARD_MANAGER>();
 
     // Create the GAL canvas.

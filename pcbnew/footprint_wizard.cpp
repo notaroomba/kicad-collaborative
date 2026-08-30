@@ -95,7 +95,7 @@ bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
     std::vector<wxString> args = {
         wxS( "--get-info" ),
         wxS( "--lang" ),
-        lang->CanonicalName
+        lang ? lang->CanonicalName : wxString( wxS( "en" ) )
     };
 
     wxString out, err;
@@ -227,6 +227,14 @@ std::unique_ptr<WIZARD_PARAMETER> WIZARD_PARAMETER::Create( const kiapi::common:
         p = std::make_unique<WIZARD_BOOL_PARAMETER>();
         static_cast<WIZARD_BOOL_PARAMETER*>( p.get() )->FromProto( aProto.bool_() );
     }
+    else if( aProto.has_enum_() )
+    {
+        p = std::make_unique<WIZARD_ENUM_PARAMETER>();
+        static_cast<WIZARD_ENUM_PARAMETER*>( p.get() )->FromProto( aProto.enum_() );
+    }
+
+    if( !p )
+        return p;
 
     p->identifier = wxString::FromUTF8( aProto.identifier() );
     p->name = wxString::FromUTF8( aProto.name() );
@@ -327,6 +335,28 @@ kiapi::common::types::WizardParameter WIZARD_STRING_PARAMETER::Pack( bool aCompa
 }
 
 
+kiapi::common::types::WizardParameter WIZARD_ENUM_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_enum_()->set_value( value );
+
+    if( !aCompact )
+    {
+        packed.mutable_enum_()->set_default_( default_value );
+
+        for( const auto& [id, label] : choices )
+        {
+            kiapi::common::types::WizardEnumChoice* choice = packed.mutable_enum_()->add_choices();
+            choice->set_identifier( id.ToUTF8() );
+            choice->set_label( label.ToUTF8() );
+        }
+    }
+
+    return packed;
+}
+
+
 void WIZARD_INT_PARAMETER::FromProto( const kiapi::common::types::WizardIntParameter& aProto )
 {
     value = aProto.value();
@@ -385,6 +415,19 @@ void WIZARD_STRING_PARAMETER::FromProto( const kiapi::common::types::WizardStrin
 }
 
 
+void WIZARD_ENUM_PARAMETER::FromProto( const kiapi::common::types::WizardEnumParameter& aProto )
+{
+    value = aProto.value();
+    default_value = aProto.default_();
+
+    choices.clear();
+    choices.reserve( aProto.choices_size() );
+
+    for( const kiapi::common::types::WizardEnumChoice& choice : aProto.choices() )
+        choices.emplace_back( wxString::FromUTF8( choice.identifier() ), wxString::FromUTF8( choice.label() ) );
+}
+
+
 void WIZARD_INFO::FromProto( const kiapi::common::types::WizardInfo& aProto )
 {
     meta.FromProto( aProto.meta() );
@@ -393,5 +436,8 @@ void WIZARD_INFO::FromProto( const kiapi::common::types::WizardInfo& aProto )
     parameters.reserve( aProto.parameters_size() );
 
     for( const kiapi::common::types::WizardParameter& parameter : aProto.parameters() )
-        parameters.emplace_back( WIZARD_PARAMETER::Create( parameter ) );
+    {
+        if( std::unique_ptr<WIZARD_PARAMETER> param = WIZARD_PARAMETER::Create( parameter ); param )
+            parameters.emplace_back( std::move( param ) );
+    }
 }

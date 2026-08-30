@@ -21,7 +21,7 @@
 #include <sim/sim_model_ideal.h>
 #include <pegtl.hpp>
 #include <pegtl/contrib/parse_tree.hpp>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <wx/regex.h>
 
 std::string SPICE_GENERATOR_IDEAL::ModelLine( const SPICE_ITEM& aItem ) const
@@ -51,7 +51,7 @@ std::string SPICE_GENERATOR_IDEAL::TunerCommand( const SPICE_ITEM& aItem, double
 
 
 SIM_MODEL_IDEAL::SIM_MODEL_IDEAL( TYPE aType ) :
-    SIM_MODEL( aType, std::make_unique<SPICE_GENERATOR_IDEAL>( *this ) )
+        SIM_MODEL( aType, std::make_unique<SPICE_GENERATOR_IDEAL>( *this ) )
 {
     static PARAM::INFO resistor  = makeParamInfo( "r", "Resistance",  "Ω" );
     static PARAM::INFO capacitor = makeParamInfo( "c", "Capacitance", "F" );
@@ -72,8 +72,7 @@ SIM_MODEL::PARAM::INFO SIM_MODEL_IDEAL::makeParamInfo( const std::string& aName,
                                                        const std::string& aDescription,
                                                        const std::string& aUnit )
 {
-    PARAM::INFO paramInfo( aName, 0, PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, aUnit,
-                           PARAM::CATEGORY::PRINCIPAL );
+    PARAM::INFO paramInfo( aName, 0, PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, aUnit, PARAM::CATEGORY::PRINCIPAL );
 
     paramInfo.description = aDescription;
 

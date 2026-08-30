@@ -21,8 +21,11 @@
 #ifndef ALTIUM_PCB_H
 #define ALTIUM_PCB_H
 
+#include <embedded_files.h>
 #include <functional>
 #include <layer_ids.h>
+#include <map>
+#include <memory>
 #include <vector>
 #include <pcb_io/common/plugin_common_layer_mapping.h>
 
@@ -90,6 +93,7 @@ class FOOTPRINT;
 class ZONE;
 class PCB_DIM_RADIAL;
 class PROGRESS_REPORTER;
+class NET_SETTINGS;
 
 namespace CFB
 {
@@ -97,6 +101,7 @@ struct COMPOUND_FILE_ENTRY;
 } // namespace CFB
 
 class ALTIUM_PCB_COMPOUND_FILE;
+struct ALTIUM_PCB_IMPORT_FIXTURE;
 
 // Structure for storing embedded model data
 struct ALTIUM_EMBEDDED_MODEL_DATA
@@ -111,6 +116,32 @@ struct ALTIUM_EMBEDDED_MODEL_DATA
         : m_modelname(name), m_rotation(rotation), m_z_offset(z_offset), m_data(std::move(data)) {}
 };
 
+/**
+ * Invent a placeholder name for an Altium net that has none.
+ *
+ * NETINFO_LIST keys nets by name and the unconnected net owns the empty string, so a nameless
+ * net has to be given one or it is merged into another net.  @p aCounter is advanced past every
+ * candidate that is already taken on @p aBoard.
+ */
+wxString AltiumUnnamedNetName( const BOARD& aBoard, int& aCounter );
+
+
+/**
+ * Copy the values of Altium rules scoped to a single netclass onto that netclass.
+ *
+ * Only rules of the form InNetClass('<name>') against All are considered, and only for the
+ * clearance, width and routing-via kinds.  Each vector in @p aRulesByKind must be sorted by
+ * ARULE6::priority ascending; the first enabled match for a netclass wins, because Altium
+ * priority 1 is the most specific.  Disabled rules are skipped.
+ *
+ * @p aUnresolved, when given, collects the rules that name a netclass the board does not define.
+ * Those constraints are lost, and the pointers alias @p aRulesByKind.
+ */
+void ApplyAltiumNetclassRules( const std::map<ALTIUM_RULE_KIND, std::vector<ARULE6>>& aRulesByKind,
+                               NET_SETTINGS& aNetSettings,
+                               std::vector<const ARULE6*>* aUnresolved = nullptr );
+
+
 // type declaration required for a helper method
 class ALTIUM_PCB;
 typedef std::function<void( const ALTIUM_PCB_COMPOUND_FILE&, const CFB::COMPOUND_FILE_ENTRY* )>
@@ -118,6 +149,8 @@ typedef std::function<void( const ALTIUM_PCB_COMPOUND_FILE&, const CFB::COMPOUND
 
 class ALTIUM_PCB
 {
+    friend struct ALTIUM_PCB_IMPORT_FIXTURE;
+
 public:
     explicit ALTIUM_PCB( BOARD* aBoard, PROGRESS_REPORTER* aProgressReporter,
                          LAYER_MAPPING_HANDLER& aLayerMappingHandler,
@@ -199,7 +232,13 @@ private:
                                                PCB_LAYER_ID aLayer );
     void ParseSmartUnions6Data( const ALTIUM_PCB_COMPOUND_FILE&  aAltiumPcbFile,
                                 const CFB::COMPOUND_FILE_ENTRY* aEntry );
+    void ParseUnionNamesData( const ALTIUM_PCB_COMPOUND_FILE& aAltiumPcbFile, const CFB::COMPOUND_FILE_ENTRY* aEntry );
     void HelperCreateTuningPatterns();
+    void HelperSetFootprintMountingStyles();
+
+    /// Rebuild the composite netclasses and point every net at its effective netclass.
+    void HelperAssignNetclassesToNets();
+
     void ParseTexts6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                           const CFB::COMPOUND_FILE_ENTRY* aEntry );
     void ConvertTexts6ToBoardItem( const ATEXT6& aElem );
@@ -254,6 +293,15 @@ private:
 
     void HelperSetZoneLayers( ZONE& aZone, const ALTIUM_LAYER aAltiumLayer );
     void HelperSetZoneKeepoutRestrictions( ZONE& aZone, const uint8_t aKeepoutRestrictions );
+
+    /**
+     * Resolve an Altium keepout restriction mask, substituting the restrictions implied by the
+     * layer when the mask is empty.
+     *
+     * @return the mask to apply, or zero if the keepout restricts nothing and should be dropped.
+     */
+    uint8_t HelperGetKeepoutRestrictions( const uint8_t aKeepoutRestrictions, const ALTIUM_LAYER aAltiumLayer );
+
     void HelperFootprintZoneToLibFrame( ZONE& aZone, const FOOTPRINT& aFootprint );
     void HelperPcpShapeAsBoardKeepoutRegion( const PCB_SHAPE&   aShape,
                                              const ALTIUM_LAYER aAltiumLayer,
@@ -270,6 +318,17 @@ private:
                                            const ALTIUM_LAYER aAltiumLayer );
 
     FOOTPRINT* HelperGetFootprint( uint16_t aComponent ) const;
+
+    /**
+     * Return the 3D model @p aModelName embedded in @p aFootprint, inflating and embedding
+     * @p aCompressedData first if it is not there yet.
+     *
+     * @param aIsNew is set when the model was embedded by this call and so still owes a
+     *               CompressAndEncode(), which the caller may run inline or on the pool.
+     */
+    std::shared_ptr<EMBEDDED_FILES::EMBEDDED_FILE>
+    HelperEmbedModel( FOOTPRINT* aFootprint, const wxString& aModelName,
+                      const std::vector<char>& aCompressedData, bool& aIsNew );
 
     void remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup );
 
@@ -288,6 +347,7 @@ private:
             m_extendedPrimitiveInformationMaps;
 
     std::vector<ASMARTUNION6>                  m_tuningUnions;
+    std::map<uint32_t, wxString>               m_unionNames;
     std::map<int, std::vector<BOARD_ITEM*>>    m_unionToBoardItems;
 
     std::map<ALTIUM_LAYER, ZONE*>        m_outer_plane;

@@ -43,6 +43,7 @@ set( QA_COMMON_SRCS
     test_commit.cpp
     test_coroutine.cpp
     test_design_block_io.cpp
+    test_design_block_library_adapter.cpp
     test_desktop_app_id.cpp
     test_dialog_shim.cpp
     test_eda_shape.cpp
@@ -79,12 +80,14 @@ set( QA_COMMON_SRCS
     test_png_plotter.cpp
     test_kiid.cpp
     test_layer_ids.cpp
+    test_line_ending.cpp
     test_lib_id.cpp
     test_lib_tree_model_adapter.cpp
     test_layer_range.cpp
     test_lset.cpp
     test_markup_parser.cpp
     test_notifications_manager.cpp
+    test_project_archiver.cpp
     test_property.cpp
     test_svg_plotter.cpp
     test_property_holder.cpp
@@ -136,6 +139,7 @@ set( QA_COMMON_SRCS
     io/test_csv.cpp
     io/altium/test_altium_parser.cpp
     io/altium/test_altium_parser_utils.cpp
+    io/altium/test_altium_project_variants.cpp
     io/cadstar/test_cadstar_parts_parser.cpp
 
     io/cadstar/test_cadstar_archive_parser.cpp

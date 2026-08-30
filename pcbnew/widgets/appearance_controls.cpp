@@ -355,6 +355,7 @@ const APPEARANCE_CONTROLS::APPEARANCE_SETTING APPEARANCE_CONTROLS::s_objectSetti
     RR( _HKI( "Anchors" ),              LAYER_ANCHOR,             _HKI( "Show footprint and text origins as a cross" ) ),
     RR( _HKI( "Points" ),               LAYER_POINTS,             _HKI( "Show explicit snap points as crosses" ) ),
     RR( _HKI( "Grid Items" ),           LAYER_GRIDITEMS,          _HKI( "Show custom routing/placement grids" ) ),
+    RR( _HKI( "Via Stitching" ),        LAYER_VIA_STITCHING,      _HKI( "Show via stitching generator outlines" ) ),
     RR( _HKI( "Locked Item Shadow" ),   LAYER_LOCKED_ITEM_SHADOW, _HKI( "Show a shadow on locked items" ) ),
     RR( _HKI( "Colliding Courtyards" ), LAYER_CONFLICTS_SHADOW,   _HKI( "Show colliding footprint courtyards" ) ),
     RR( _HKI( "Constrained Item Shadow" ), LAYER_CONSTRAINT_SHADOW, _HKI( "Show a shadow on constrained items" ) ),
@@ -378,6 +379,7 @@ static std::set<int> s_allowedInFpEditor =
             LAYER_DRAW_BITMAPS,
             LAYER_GRID,
             LAYER_POINTS,
+            LAYER_VIA_STITCHING,
         };
 
 // These are the built-in layer presets that cannot be deleted
@@ -3641,16 +3643,12 @@ void APPEARANCE_CONTROLS::onReadOnlySwatch()
 {
     WX_INFOBAR* infobar = m_frame->GetInfoBar();
 
-    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, _( "Open Preferences" ), wxEmptyString );
-
-    button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+    infobar->RemoveAllButtons();
+    infobar->AddLink( _( "Open Preferences" ),
             [&]( wxHyperlinkEvent& aEvent )
             {
                  m_frame->ShowPreferences( wxEmptyString, wxEmptyString );
-            } ) );
-
-    infobar->RemoveAllButtons();
-    infobar->AddButton( button );
+            } );
     infobar->AddCloseButton();
 
     infobar->ShowMessageFor( _( "The current color theme is read-only.  Create a new theme in Preferences to "

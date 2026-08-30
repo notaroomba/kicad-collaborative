@@ -46,7 +46,8 @@
 #include <sch_textbox.h>
 #include <lib_symbol_library_manager.h>
 #include <widgets/lib_tree.h>
-#include <wx/textdlg.h>     // for wxTextEntryDialog
+#include <widgets/wx_infobar.h>
+#include <widgets/properties_panel.h>
 #include <math/util.h>      // for KiROUND
 #include <io/kicad/kicad_io_utils.h>
 #include <trace_helpers.h>
@@ -934,6 +935,25 @@ int SYMBOL_EDITOR_EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
             break;
         }
     }
+    else if( selection.Size() > 1 )
+    {
+        WX_INFOBAR* infobar = frame()->GetInfoBar();
+
+        infobar->RemoveAllButtons();
+
+        if( !frame()->GetPropertiesPanel()->IsShownOnScreen() )
+        {
+            infobar->AddLink( _( "Show Properties panel" ),
+                    [this]( wxHyperlinkEvent& aEvent )
+                    {
+                        frame()->ToggleProperties();
+                    } );
+        }
+
+        infobar->AddCloseButton();
+        infobar->ShowMessageFor( _( "Use Properties panel to edit properties common to selected items." ),
+                                 8000, wxICON_INFORMATION );
+    }
 
     if( selection.IsHover() )
         m_toolMgr->RunAction( ACTIONS::selectionClear );
@@ -1103,10 +1123,6 @@ void SYMBOL_EDITOR_EDIT_TOOL::editSymbolProperties()
     // to the best value
     if( partLocked != symbol->UnitsLocked() )
     {
-        // Enable synchronized pin edit mode for symbols with interchangeable units
-        m_frame->m_SyncPinEdit = !symbol->UnitsLocked();
-
-        // also set default edit options to the better value
         // Usually if units are locked, graphic items are specific to each unit
         // and if units are interchangeable, graphic items are common to units
         m_frame->SetDrawSpecificUnit( symbol->UnitsLocked() );

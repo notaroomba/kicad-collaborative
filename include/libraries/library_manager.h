@@ -27,6 +27,7 @@
 #include <shared_mutex>
 
 #include <kicommon.h>
+#include <ki_error.h>
 #include <libraries/library_table.h>
 #include <io/io_base.h>
 
@@ -156,6 +157,9 @@ public:
 
     virtual std::optional<LIB_STATUS> LoadOne( LIB_DATA* aLib ) = 0;
 
+    /// Validates that a library is loadable.  May not necessarily load the library!
+    virtual std::optional<LIB_STATUS> CheckLibrary( LIB_DATA* aLib ) { return LoadOne( aLib ); }
+
     /// Returns async load progress between 0.0 and 1.0, or nullopt if load is not in progress
     std::optional<float> AsyncLoadProgress() const;
 
@@ -174,7 +178,7 @@ public:
     std::vector<std::pair<wxString, LIB_STATUS>> GetLibraryStatuses() const;
 
     /// Returns all library load errors as newline-separated strings for display
-    wxString GetLibraryLoadErrors() const;
+    std::vector<KI_ERROR> GetLibraryLoadErrors() const;
 
     void ReloadLibraryEntry( const wxString& aNickname,
                              LIBRARY_TABLE_SCOPE aScope = LIBRARY_TABLE_SCOPE::BOTH );

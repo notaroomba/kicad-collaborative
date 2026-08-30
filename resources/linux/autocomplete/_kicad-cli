@@ -373,6 +373,7 @@ _kicad_cli_pcb_export_commands() {
         'ply:Export PLY'
         'pos:Generate Position File'
         'ps:Generate Postscript from a list of layers'
+        'stackup:Export a board stackup report'
         'stats:Generate a board statistics report'
         'step:Export STEP'
         'stl:Export STL'
@@ -441,6 +442,9 @@ _kicad_cli_pcb_export() {
                     ;;
                 (ps)
                     _kicad_cli_pcb_export_ps
+                    ;;
+                (stackup)
+                    _kicad_cli_pcb_export_stackup
                     ;;
                 (stats)
                     _kicad_cli_pcb_export_stats
@@ -851,6 +855,25 @@ _kicad_cli_pcb_export_ps() {
         && return 0
 }
 
+_kicad_cli_pcb_export_stackup() {
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '--exclude-board-options[Omit board options from the CSV export]' \
+        '--exclude-color[Omit color from the CSV export]' \
+        '--exclude-epsilon-r[Omit Epsilon R from the CSV export]' \
+        '--exclude-finish[Omit board finish from the CSV export]' \
+        '--exclude-loss-tangent[Omit loss tangent from the CSV export]' \
+        '--exclude-material[Omit material from the CSV export]' \
+        '--exclude-thickness[Omit thickness from the CSV export]' \
+        '--format[Output file format; valid options: csv, json \[nargs=0..1\] \[default: "csv"\]]' \
+        '(--help -h)'{--help,-h}'[Shows help message and exits]' \
+        '(--output -o)'{--output,-o}'[Output file \[nargs=0..1\] \[default: ""\]]' \
+        '--units[CSV units; valid options: in, mm \[nargs=0..1\] \[default: "mm"\]]' \
+        && return 0
+}
+
 _kicad_cli_pcb_export_stats() {
     local context state state_descr line
     typeset -A opt_args
@@ -1245,6 +1268,7 @@ _kicad_cli_sch_export_bom() {
         '--field-delimiter[Separator between output fields/columns. \[nargs=0..1\] \[default: ","\]]' \
         '--fields[An ordered list of fields to export. See documentation for special substitutions. \[nargs=0..1\] \[default: "Reference,Value,Footprint,${QUANTITY},${DNP}"\]]' \
         '--filter[Filter string to remove output lines. \[nargs=0..1\] \[default: ""\]]' \
+        '--filter-scope[Fields to search when filtering: reference, visible, or all. \[nargs=0..1\] \[default: "reference"\]]' \
         '--format-preset[Use a named BOM format preset setting from the schematic, e.g. CSV. \[nargs=0..1\] \[default: ""\]]' \
         '--group-by[Fields to group references by when field values match. \[nargs=0..1\] \[default: ""\]]' \
         '(--help -h)'{--help,-h}'[Shows help message and exits]' \

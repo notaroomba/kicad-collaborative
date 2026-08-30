@@ -165,7 +165,8 @@ enum
 class REPLACE_TERMINAL_PIN_MENU : public ACTION_MENU
 {
 public:
-    REPLACE_TERMINAL_PIN_MENU() : ACTION_MENU( true )
+    REPLACE_TERMINAL_PIN_MENU() :
+            ACTION_MENU( true )
     {
         SetTitle( _( "Replace terminal pin" ) );
     }
@@ -247,7 +248,8 @@ static bool addCreateNetChainBetweenPinsIfApplicable( NET_CHAIN_MENU* aMenu, SCH
 class NET_CHAIN_MENU : public ACTION_MENU
 {
 public:
-    NET_CHAIN_MENU() : ACTION_MENU( true )
+    NET_CHAIN_MENU() :
+            ACTION_MENU( true )
     {
         SetTitle( _( "Net Chain..." ) );
         m_replaceMenu = new REPLACE_TERMINAL_PIN_MENU();
@@ -263,6 +265,7 @@ protected:
         wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] update() invoked" );
 
         TOOL_MANAGER* toolMgr = getToolManager();
+
         if( !toolMgr )
         {
             // Defer population; parent UpdateAll() will re-run us after SetTool().
@@ -284,6 +287,7 @@ protected:
         SCH_EDIT_FRAME* frame = static_cast<SCH_EDIT_FRAME*>( baseFrame );
 
         const SCH_SELECTION& sel = selTool->GetSelection();
+
         if( sel.Empty() )
         {
             wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] abort: empty selection" );
@@ -293,6 +297,7 @@ protected:
         wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] selection size=%u", sel.GetSize() );
 
         CONNECTION_GRAPH* graph = frame->Schematic().ConnectionGraph();
+
         if( !graph )
         {
             wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] abort: no connection graph" );
@@ -310,6 +315,7 @@ protected:
         {
             if( idx >= (int) sel.GetSize() )
                 return nullptr;
+
             return dynamic_cast<SCH_PIN*>( static_cast<SCH_ITEM*>( sel[idx] ) );
         };
 
@@ -323,6 +329,7 @@ protected:
         for( size_t i = 0; i < sel.GetSize(); ++i )
         {
             SCH_PIN* p = dynamic_cast<SCH_PIN*>( static_cast<SCH_ITEM*>( sel[i] ) );
+
             if( !p || !p->Connection() )
             {
                 wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] sel[%zu]: not a pin or no connection", i );
@@ -333,16 +340,19 @@ protected:
             bool hasSignal = graph->GetNetChainForNet( netName );
             wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] sel[%zu]: pin uuid=%s net=%s committedSignal=%d", i,
                         p->m_Uuid.AsString(), netName, hasSignal );
+
             if( graph->GetNetChainForNet( p->Connection()->Name() ) )
             {
                 inSignal = true;
                 canRemove = true; // current remove handler works on a pin in a chain
+
                 if( sel.GetSize() == 1 )
                     canName = true; // nameNetChain expects single pin selected
             }
         }
 
-        wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] flags: singlePin=%d inSignal=%d canName=%d canRemove=%d", singlePin, inSignal, canName, canRemove );
+        wxLogTrace( "KICAD_NET_CHAIN_MENU", "[NetChainMenu] flags: singlePin=%d inSignal=%d canName=%d canRemove=%d",
+                    singlePin, inSignal, canName, canRemove );
 
         // highlightNetChain action: only if we have a committed chain context
         if( inSignal )
@@ -387,8 +397,8 @@ protected:
             SCH_ITEM* item = static_cast<SCH_ITEM*>( sel.Front() );
             bool isConnectedPin = dynamic_cast<SCH_PIN*>( item ) && item->Connection();
             bool isConnectedWireOrBus = item && item->Type() == SCH_LINE_T
-                                        && item->IsType( { SCH_ITEM_LOCATE_WIRE_T, SCH_ITEM_LOCATE_BUS_T } )
-                                        && item->Connection();
+                                             && item->IsType( { SCH_ITEM_LOCATE_WIRE_T, SCH_ITEM_LOCATE_BUS_T } )
+                                             && item->Connection();
 
             if( isConnectedPin || isConnectedWireOrBus )
             {
@@ -412,13 +422,15 @@ private:
 };
 
 // Extend net-chains menu dynamically with createNetChainBetweenPins when two pins are selected
-static bool addCreateNetChainBetweenPinsIfApplicable( NET_CHAIN_MENU* aMenu, SCH_EDIT_FRAME* aFrame, const SCH_SELECTION& aSel )
+static bool addCreateNetChainBetweenPinsIfApplicable( NET_CHAIN_MENU* aMenu, SCH_EDIT_FRAME* aFrame,
+                                                      const SCH_SELECTION& aSel )
 {
     if( aSel.GetSize() != 2 )
         return false;
 
     SCH_PIN* pa = dynamic_cast<SCH_PIN*>( static_cast<SCH_ITEM*>( aSel[0] ) );
     SCH_PIN* pb = dynamic_cast<SCH_PIN*>( static_cast<SCH_ITEM*>( aSel[1] ) );
+
     if( !pa || !pb )
         return false;
 
@@ -595,8 +607,7 @@ bool SCH_SELECTION_TOOL::Init()
                 if( m_isSymbolEditor || m_isSymbolViewer )
                     return false;
 
-                return SCH_CONDITIONS::LessThan( 2 )( aSel )
-                        && SCH_CONDITIONS::OnlyTypes( sheetTypes )( aSel );
+                return SCH_CONDITIONS::LessThan( 2 )( aSel ) && SCH_CONDITIONS::OnlyTypes( sheetTypes )( aSel );
             };
 
     auto schEditCondition =
@@ -610,8 +621,7 @@ bool SCH_SELECTION_TOOL::Init()
             {
                 SCH_EDIT_FRAME* editFrame = dynamic_cast<SCH_EDIT_FRAME*>( m_frame );
 
-                return editFrame
-                        && editFrame->GetCurrentSheet().Last() != &editFrame->Schematic().Root();
+                return editFrame && editFrame->GetCurrentSheet().Last() != &editFrame->Schematic().Root();
             };
 
     auto haveHighlight =
@@ -625,8 +635,7 @@ bool SCH_SELECTION_TOOL::Init()
     auto haveSymbol =
             [this]( const SELECTION& sel )
             {
-                return m_isSymbolEditor &&
-                       static_cast<SYMBOL_EDIT_FRAME*>( m_frame )->GetCurSymbol();
+                return m_isSymbolEditor && static_cast<SYMBOL_EDIT_FRAME*>( m_frame )->GetCurSymbol();
             };
 
     auto groupEnterCondition =
@@ -638,107 +647,109 @@ bool SCH_SELECTION_TOOL::Init()
                 return m_enteredGroup != nullptr;
             };
 
-    auto multipleUnitsSelection = []( const SELECTION& aSel )
-        {
-            return !GetSameSymbolMultiUnitSelection( aSel ).empty();
-        };
+    auto multipleUnitsSelection =
+            []( const SELECTION& aSel )
+            {
+                return !GetSameSymbolMultiUnitSelection( aSel ).empty();
+            };
 
     auto allowPinSwaps =
-        [this]( const SELECTION& )
-        {
-            return m_frame->eeconfig() &&
-                   m_frame->eeconfig()->m_Input.allow_unconstrained_pin_swaps;
-        };
-
+            [this]( const SELECTION& )
+            {
+                return m_frame->eeconfig() && m_frame->eeconfig()->m_Input.allow_unconstrained_pin_swaps;
+            };
 
     auto& menu = m_menu->GetMenu();
 
     // Allow the Net Chain submenu for any selection consisting solely of pins (one or more).
     // Restricting to exactly one pin would prevent showing the menu (and thus the
     // "Create Net Chain between ..." action) when exactly two pins were selected.
-    SELECTION_CONDITION pinSelection = []( const SELECTION& aSel )
-    {
-        return aSel.GetSize() >= 1 && aSel.OnlyContains( { SCH_PIN_T } );
-    };
+    SELECTION_CONDITION pinSelection =
+            []( const SELECTION& aSel )
+            {
+                return aSel.GetSize() >= 1 && aSel.OnlyContains( { SCH_PIN_T } );
+            };
 
     // Also expose the Net Chain menu when right-clicking a single wire or bus.  SCH_LINE_T
     // covers both; IsType against the scan-aliases discriminates wire vs bus.
-    SELECTION_CONDITION wireOrBusInSignal = []( const SELECTION& aSel )
-    {
-        if( aSel.GetSize() != 1 )
-            return false;
+    SELECTION_CONDITION wireOrBusInSignal =
+            []( const SELECTION& aSel )
+            {
+                if( aSel.GetSize() != 1 )
+                    return false;
 
-        EDA_ITEM* item = aSel.Front();
+                EDA_ITEM* item = aSel.Front();
 
-        if( !item || item->Type() != SCH_LINE_T )
-            return false;
+                if( !item || item->Type() != SCH_LINE_T )
+                    return false;
 
-        SCH_ITEM* schItem = static_cast<SCH_ITEM*>( item );
+                SCH_ITEM* schItem = static_cast<SCH_ITEM*>( item );
 
-        if( !schItem->IsType( { SCH_ITEM_LOCATE_WIRE_T, SCH_ITEM_LOCATE_BUS_T } ) )
-            return false;
+                if( !schItem->IsType( { SCH_ITEM_LOCATE_WIRE_T, SCH_ITEM_LOCATE_BUS_T } ) )
+                    return false;
 
-        if( !schItem->Connection() )
-            return false;
+                if( !schItem->Connection() )
+                    return false;
 
-        return true; // Allow menu; handlers will rebuild/validate as needed
-    };
+                return true; // Allow menu; handlers will rebuild/validate as needed
+            };
 
-    SELECTION_CONDITION symbolSelection = []( const SELECTION& aSel )
-    {
-        return aSel.GetSize() >= 1 && aSel.OnlyContains( { SCH_SYMBOL_T } );
-    };
+    SELECTION_CONDITION symbolSelection =
+            []( const SELECTION& aSel )
+            {
+                return aSel.GetSize() >= 1 && aSel.OnlyContains( { SCH_SYMBOL_T } );
+            };
 
     std::shared_ptr<NET_CHAIN_MENU> netChainMenu = std::make_shared<NET_CHAIN_MENU>();
     netChainMenu->SetTool( this );
     m_menu->RegisterSubMenu( netChainMenu );
 
     // clang-format off
-    menu.AddItem( ACTIONS::groupEnter,                groupEnterCondition, 1 );
-    menu.AddItem( ACTIONS::groupLeave,                inGroupCondition,    1 );
-    menu.AddItem( SCH_ACTIONS::placeLinkedDesignBlock, groupEnterCondition, 1 );
+    menu.AddItem( ACTIONS::groupEnter,                  groupEnterCondition, 1 );
+    menu.AddItem( ACTIONS::groupLeave,                  inGroupCondition,    1 );
+    menu.AddItem( SCH_ACTIONS::placeLinkedDesignBlock,  groupEnterCondition, 1 );
     menu.AddItem( SCH_ACTIONS::saveToLinkedDesignBlock, groupEnterCondition, 1 );
-    menu.AddItem( SCH_ACTIONS::clearHighlight,        haveHighlight && SCH_CONDITIONS::Idle, 1 );
-    menu.AddSeparator(                                haveHighlight && SCH_CONDITIONS::Idle, 1 );
+    menu.AddItem( SCH_ACTIONS::clearHighlight,          haveHighlight && SCH_CONDITIONS::Idle, 1 );
+    menu.AddSeparator(                                  haveHighlight && SCH_CONDITIONS::Idle, 1 );
 
-    menu.AddItem( SCH_ACTIONS::selectConnection,      expandableSelection && SCH_CONDITIONS::Idle, 2 );
-    menu.AddItem( ACTIONS::selectColumns,             tableCellSelection && SCH_CONDITIONS::Idle, 2 );
-    menu.AddItem( ACTIONS::selectRows,                tableCellSelection && SCH_CONDITIONS::Idle, 2 );
-    menu.AddItem( ACTIONS::selectTable,               tableCellSelection && SCH_CONDITIONS::Idle, 2 );
-
-    menu.AddSeparator( 100 );
-    menu.AddItem( SCH_ACTIONS::drawWire,              schEditCondition && SCH_CONDITIONS::Empty, 100 );
-    menu.AddItem( SCH_ACTIONS::drawBus,               schEditCondition && SCH_CONDITIONS::Empty, 100 );
+    menu.AddItem( SCH_ACTIONS::selectConnection,        expandableSelection && SCH_CONDITIONS::Idle, 2 );
+    menu.AddItem( ACTIONS::selectColumns,               tableCellSelection && SCH_CONDITIONS::Idle, 2 );
+    menu.AddItem( ACTIONS::selectRows,                  tableCellSelection && SCH_CONDITIONS::Idle, 2 );
+    menu.AddItem( ACTIONS::selectTable,                 tableCellSelection && SCH_CONDITIONS::Idle, 2 );
 
     menu.AddSeparator( 100 );
-    menu.AddItem( ACTIONS::finishInteractive,         SCH_LINE_WIRE_BUS_TOOL::IsDrawingLineWireOrBus, 100 );
+    menu.AddItem( SCH_ACTIONS::drawWire,                schEditCondition && SCH_CONDITIONS::Empty, 100 );
+    menu.AddItem( SCH_ACTIONS::drawBus,                 schEditCondition && SCH_CONDITIONS::Empty, 100 );
 
-    menu.AddItem( SCH_ACTIONS::enterSheet,            sheetSelection && SCH_CONDITIONS::Idle, 150 );
-    menu.AddItem( SCH_ACTIONS::selectOnPCB,           crossProbingSelection && schEditCondition && SCH_CONDITIONS::Idle, 150 );
-    menu.AddItem( SCH_ACTIONS::leaveSheet,            belowRootSheetCondition, 150 );
+    menu.AddSeparator( 100 );
+    menu.AddItem( ACTIONS::finishInteractive,           SCH_LINE_WIRE_BUS_TOOL::IsDrawingLineWireOrBus, 100 );
+
+    menu.AddItem( SCH_ACTIONS::enterSheet,              sheetSelection && SCH_CONDITIONS::Idle, 150 );
+    menu.AddItem( SCH_ACTIONS::selectOnPCB,             crossProbingSelection && schEditCondition && SCH_CONDITIONS::Idle, 150 );
+    menu.AddItem( SCH_ACTIONS::leaveSheet,              belowRootSheetCondition, 150 );
 
     menu.AddSeparator( 200 );
-    menu.AddItem( SCH_ACTIONS::placeJunction,         wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::placeLabel,            wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::placeClassLabel,       wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::placeGlobalLabel,      wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::placeHierLabel,        wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::breakWire,             linesSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::slice,                 linesSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::placeSheetPin,         sheetSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::autoplaceAllSheetPins, sheetSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::syncSheetPins,         sheetSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::swapPinLabels,         multiplePinsSelection && schEditCondition && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::swapUnitLabels,        multipleUnitsSelection && schEditCondition && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::swapPins,              multiplePinsSelection && schEditCondition && SCH_CONDITIONS::Idle && allowPinSwaps, 250 );
-    menu.AddItem( SCH_ACTIONS::assignNetclass,        connectedSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::findNetInInspector,    connectedSelection && SCH_CONDITIONS::Idle, 250 );
-    menu.AddItem( SCH_ACTIONS::editPageNumber,        schEditSheetPageNumberCondition, 250 );
+    menu.AddItem( SCH_ACTIONS::placeJunction,           wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::placeLabel,              wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::placeClassLabel,         wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::placeGlobalLabel,        wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::placeHierLabel,          wireOrBusSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::breakWire,               linesSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::slice,                   linesSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::placeSheetPin,           sheetSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::autoplaceAllSheetPins,   sheetSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::syncSheetPins,           sheetSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::swapPinLabels,           multiplePinsSelection && schEditCondition && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::swapUnitLabels,          multipleUnitsSelection && schEditCondition && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::swapPins,                multiplePinsSelection && schEditCondition && SCH_CONDITIONS::Idle && allowPinSwaps, 250 );
+    menu.AddItem( SCH_ACTIONS::assignNetclass,          connectedSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::findNetInInspector,      connectedSelection && SCH_CONDITIONS::Idle, 250 );
+    menu.AddItem( SCH_ACTIONS::editPageNumber,          schEditSheetPageNumberCondition, 250 );
 
     menu.AddSeparator( 400 );
-    menu.AddItem( SCH_ACTIONS::symbolProperties,      haveSymbol && SCH_CONDITIONS::Empty, 400 );
-    menu.AddItem( SCH_ACTIONS::pinTable,              haveSymbol && SCH_CONDITIONS::Empty, 400 );
-    menu.AddMenu( netChainMenu.get(),                 ( pinSelection || wireOrBusInSignal || symbolSelection ) && SCH_CONDITIONS::Idle, 400 );
+    menu.AddItem( SCH_ACTIONS::symbolProperties,        haveSymbol && SCH_CONDITIONS::Empty, 400 );
+    menu.AddItem( SCH_ACTIONS::pinTable,                haveSymbol && SCH_CONDITIONS::Empty, 400 );
+    menu.AddMenu( netChainMenu.get(),                   ( pinSelection || wireOrBusInSignal || symbolSelection ) && SCH_CONDITIONS::Idle, 400 );
 
     menu.AddSeparator( 1000 );
     m_frame->AddStandardSubMenus( *m_menu.get() );
@@ -804,40 +815,40 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
     EE_GRID_HELPER grid( m_toolMgr );
 
     auto pinOrientation =
-        []( EDA_ITEM* aItem )
-        {
-            SCH_PIN* pin = dynamic_cast<SCH_PIN*>( aItem );
-
-            if( pin )
+            []( EDA_ITEM* aItem )
             {
-                const SCH_SYMBOL* parent = dynamic_cast<const SCH_SYMBOL*>( pin->GetParentSymbol() );
+                SCH_PIN* pin = dynamic_cast<SCH_PIN*>( aItem );
 
-                if( !parent )
-                    return pin->GetOrientation();
-                else
+                if( pin )
                 {
-                    SCH_PIN dummy( *pin );
-                    RotateAndMirrorPin( dummy, parent->GetOrientation() );
-                    return dummy.GetOrientation();
+                    const SCH_SYMBOL* parent = dynamic_cast<const SCH_SYMBOL*>( pin->GetParentSymbol() );
+
+                    if( !parent )
+                        return pin->GetOrientation();
+                    else
+                    {
+                        SCH_PIN dummy( *pin );
+                        RotateAndMirrorPin( dummy, parent->GetOrientation() );
+                        return dummy.GetOrientation();
+                    }
                 }
-            }
 
-            SCH_SHEET_PIN* sheetPin = dynamic_cast<SCH_SHEET_PIN*>( aItem );
+                SCH_SHEET_PIN* sheetPin = dynamic_cast<SCH_SHEET_PIN*>( aItem );
 
-            if( sheetPin )
-            {
-                switch( sheetPin->GetSide() )
+                if( sheetPin )
                 {
-                default:
-                case SHEET_SIDE::LEFT:   return PIN_ORIENTATION::PIN_RIGHT;
-                case SHEET_SIDE::RIGHT:  return PIN_ORIENTATION::PIN_LEFT;
-                case SHEET_SIDE::TOP:    return PIN_ORIENTATION::PIN_DOWN;
-                case SHEET_SIDE::BOTTOM: return PIN_ORIENTATION::PIN_UP;
+                    switch( sheetPin->GetSide() )
+                    {
+                    default:
+                    case SHEET_SIDE::LEFT:   return PIN_ORIENTATION::PIN_RIGHT;
+                    case SHEET_SIDE::RIGHT:  return PIN_ORIENTATION::PIN_LEFT;
+                    case SHEET_SIDE::TOP:    return PIN_ORIENTATION::PIN_DOWN;
+                    case SHEET_SIDE::BOTTOM: return PIN_ORIENTATION::PIN_UP;
+                    }
                 }
-            }
 
-            return PIN_ORIENTATION::PIN_LEFT;
-        };
+                return PIN_ORIENTATION::PIN_LEFT;
+            };
 
     // Main loop: keep receiving events
     while( TOOL_EVENT* evt = Wait() )
@@ -849,8 +860,7 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
         KIID rolloverItemId = lastRolloverItemId;
 
         // on left click, a selection is made, depending on modifiers ALT, SHIFT, CTRL:
-        setModifiersState( evt->Modifier( MD_SHIFT ), evt->Modifier( MD_CTRL ),
-                           evt->Modifier( MD_ALT ) );
+        setModifiersState( evt->Modifier( MD_SHIFT ), evt->Modifier( MD_CTRL ), evt->Modifier( MD_ALT ) );
 
         MOUSE_DRAG_ACTION drag_action = m_frame->GetDragAction();
 
@@ -901,17 +911,18 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             rejected.SetAll( false );
             narrowSelection( collector, evt->Position(), false, false, &rejected );
 
-            if( m_selection.GetSize() != 0 && dynamic_cast<SCH_TABLECELL*>( m_selection.GetItem( 0 ) ) && m_additive
-                && collector.GetCount() == 1 && dynamic_cast<SCH_TABLECELL*>( collector[0] ) )
+            if( m_selection.GetSize() != 0
+                    && dynamic_cast<SCH_TABLECELL*>( m_selection.GetItem( 0 ) )
+                    && m_additive
+                    && collector.GetCount() == 1
+                    && dynamic_cast<SCH_TABLECELL*>( collector[0] ) )
             {
                 SCH_TABLECELL* firstCell = static_cast<SCH_TABLECELL*>( m_selection.GetItem( 0 ) );
                 SCH_TABLECELL* clickedCell = static_cast<SCH_TABLECELL*>( collector[0] );
                 bool allCellsFromSameTable = true;
 
-                if( m_previous_first_cell == nullptr || m_selection.GetSize() == 1)
-                {
+                if( m_previous_first_cell == nullptr || m_selection.GetSize() == 1 )
                     m_previous_first_cell = firstCell;
-                }
 
                 for( EDA_ITEM* selection : m_selection )
                 {
@@ -980,10 +991,7 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             if( !selCancelled )
             {
                 if( collector.GetCount() == 0 && preFilterCount > 0 )
-                {
-                    if( SCH_BASE_FRAME* frame = dynamic_cast<SCH_BASE_FRAME*>( m_frame ) )
-                        frame->HighlightSelectionFilter( rejected );
-                }
+                    m_frame->HighlightSelectionFilter( rejected );
 
                 selectPoint( collector, evt->Position(), nullptr, nullptr, m_additive, m_subtractive, m_exclusive_or );
                 m_selection.SetIsHover( false );
@@ -1070,8 +1078,10 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
 
             SCH_COLLECTOR collector;
 
-            if( m_selection.GetSize() == 1 && dynamic_cast<SCH_TABLE*>( m_selection.GetItem( 0 ) )
-                    && evt->HasPosition() && selectionContains( evt->DragOrigin() ) )
+            if( m_selection.GetSize() == 1
+                    && dynamic_cast<SCH_TABLE*>( m_selection.GetItem( 0 ) )
+                    && evt->HasPosition()
+                    && selectionContains( evt->DragOrigin() ) )
             {
                 m_toolMgr->RunAction( SCH_ACTIONS::move );
             }
@@ -1088,17 +1098,25 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             {
                 if( m_selectionMode == SELECTION_MODE::INSIDE_LASSO
                         || m_selectionMode == SELECTION_MODE::TOUCHING_LASSO )
+                {
                     selectLasso();
+                }
                 else
+                {
                     selectMultiple();
+                }
             }
             else if( m_selection.Empty() && drag_action != MOUSE_DRAG_ACTION::DRAG_ANY )
             {
                 if( m_selectionMode == SELECTION_MODE::INSIDE_LASSO
                         || m_selectionMode == SELECTION_MODE::TOUCHING_LASSO )
-                    selectLasso();
+                {
+                     selectLasso();
+                }
                 else
+                {
                     selectMultiple();
+                }
             }
             else
             {
@@ -1120,6 +1138,24 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                 else
                 {
                     m_selection = RequestSelection( SCH_COLLECTOR::MovableItems );
+
+                    // Pins aren't movable in the schematic editor, so if someone starts a drag on a
+                    // pin, promote it to the parent symbol.
+                    if( m_selection.Size() == 0 )
+                    {
+                        m_selection = RequestSelection( { SCH_PIN_T } );
+
+                        if( m_selection.Size() > 0 )
+                        {
+                            SCH_PIN* pin = static_cast<SCH_PIN*>( m_selection.GetItem( 0 ) );
+
+                            if( SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( pin->GetParentSymbol() ) )
+                            {
+                                m_selection.Clear();
+                                m_selection.Add( symbol );
+                            }
+                        }
+                    }
                 }
 
                 // Check if dragging has started within any of selected items bounding box
@@ -1137,9 +1173,13 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                     // No -> drag a selection box
                     if( m_selectionMode == SELECTION_MODE::INSIDE_LASSO
                             || m_selectionMode == SELECTION_MODE::TOUCHING_LASSO )
+                    {
                         selectLasso();
+                    }
                     else
+                    {
                         selectMultiple();
+                    }
                 }
             }
         }
@@ -1190,8 +1230,10 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                 int unit = *evt->GetCommandId() - ID_POPUP_SCH_PLACE_UNIT;
 
                 if( symbol )
+                {
                     m_toolMgr->RunAction( SCH_ACTIONS::placeNextSymbolUnit,
                                            SCH_ACTIONS::PLACE_SYMBOL_UNIT_PARAMS{ symbol, unit } );
+                }
             }
             else if( *evt->GetCommandId() >= ID_POPUP_SCH_SELECT_BODY_STYLE
                      && *evt->GetCommandId() <= ID_POPUP_SCH_SELECT_BODY_STYLE_END )
@@ -1213,7 +1255,8 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             }
             else if( *evt->GetCommandId() >= ID_POPUP_SCH_PIN_TRICKS_START
                      && *evt->GetCommandId() <= ID_POPUP_SCH_PIN_TRICKS_END
-                     && !m_isSymbolEditor && !m_isSymbolViewer )
+                     && !m_isSymbolEditor
+                     && !m_isSymbolViewer )
             {
                 SCH_EDIT_FRAME* sch_frame = static_cast<SCH_EDIT_FRAME*>( m_frame );
 
@@ -1257,18 +1300,10 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                         switch( pinOrientation( item ) )
                         {
                         default:
-                        case PIN_ORIENTATION::PIN_RIGHT:
-                            stub = VECTOR2I( -1 * wireGrid.x, 0 );
-                            break;
-                        case PIN_ORIENTATION::PIN_LEFT:
-                            stub = VECTOR2I( 1 * wireGrid.x, 0 );
-                            break;
-                        case PIN_ORIENTATION::PIN_UP:
-                            stub = VECTOR2I( 0, 1 * wireGrid.y );
-                            break;
-                        case PIN_ORIENTATION::PIN_DOWN:
-                            stub = VECTOR2I( 0, -1 * wireGrid.y );
-                            break;
+                        case PIN_ORIENTATION::PIN_RIGHT: stub = VECTOR2I( -1 * wireGrid.x, 0 ); break;
+                        case PIN_ORIENTATION::PIN_LEFT:  stub = VECTOR2I( 1 * wireGrid.x, 0 );  break;
+                        case PIN_ORIENTATION::PIN_UP:    stub = VECTOR2I( 0, 1 * wireGrid.y );  break;
+                        case PIN_ORIENTATION::PIN_DOWN:  stub = VECTOR2I( 0, -1 * wireGrid.y ); break;
                         }
 
                         wire->SetEndPoint( item->GetPosition() + stub );
@@ -1285,7 +1320,7 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
 
                         // Select only the ends so we can immediately start dragging them
                         for( EDA_ITEM* item : newItems )
-                            static_cast<SCH_LINE*>( item )->SetFlags( ENDPOINT );
+                            item->SetFlags( ENDPOINT );
 
                         KIGFX::VIEW_CONTROLS* vc = getViewControls();
 
@@ -1352,18 +1387,10 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                         switch( pinOrientation( item ) )
                         {
                         default:
-                        case PIN_ORIENTATION::PIN_RIGHT:
-                            label->SetSpinStyle( SPIN_STYLE::SPIN::LEFT );
-                            break;
-                        case PIN_ORIENTATION::PIN_LEFT:
-                            label->SetSpinStyle( SPIN_STYLE::SPIN::RIGHT );
-                            break;
-                        case PIN_ORIENTATION::PIN_UP:
-                            label->SetSpinStyle( SPIN_STYLE::SPIN::BOTTOM );
-                            break;
-                        case PIN_ORIENTATION::PIN_DOWN:
-                            label->SetSpinStyle( SPIN_STYLE::SPIN::UP );
-                            break;
+                        case PIN_ORIENTATION::PIN_RIGHT: label->SetSpinStyle( SPIN_STYLE::SPIN::LEFT );   break;
+                        case PIN_ORIENTATION::PIN_LEFT:  label->SetSpinStyle( SPIN_STYLE::SPIN::RIGHT );  break;
+                        case PIN_ORIENTATION::PIN_UP:    label->SetSpinStyle( SPIN_STYLE::SPIN::BOTTOM ); break;
+                        case PIN_ORIENTATION::PIN_DOWN:  label->SetSpinStyle( SPIN_STYLE::SPIN::UP );     break;
                         }
 
                         ELECTRICAL_PINTYPE pinType = ELECTRICAL_PINTYPE::PT_UNSPECIFIED;
@@ -1628,8 +1655,7 @@ void SCH_SELECTION_TOOL::ExitGroup( bool aSelectGroup )
 }
 
 
-OPT_TOOL_EVENT SCH_SELECTION_TOOL::autostartEvent( TOOL_EVENT* aEvent, EE_GRID_HELPER& aGrid,
-                                                   SCH_ITEM* aItem )
+OPT_TOOL_EVENT SCH_SELECTION_TOOL::autostartEvent( TOOL_EVENT* aEvent, EE_GRID_HELPER& aGrid, SCH_ITEM* aItem )
 {
     VECTOR2I pos = aGrid.ResolveSnap( aEvent->Position(), aGrid.GetItemGrid( aItem ) ).position;
 
@@ -1659,8 +1685,10 @@ OPT_TOOL_EVENT SCH_SELECTION_TOOL::autostartEvent( TOOL_EVENT* aEvent, EE_GRID_H
             else if( line->IsGraphicLine() )
                 newEvt = SCH_ACTIONS::drawLines.MakeEvent();
         }
-        else if( aItem->Type() == SCH_LABEL_T || aItem->Type() == SCH_HIER_LABEL_T
-                 || aItem->Type() == SCH_SHEET_PIN_T || aItem->Type() == SCH_GLOBAL_LABEL_T )
+        else if( aItem->Type() == SCH_LABEL_T
+                    || aItem->Type() == SCH_HIER_LABEL_T
+                    || aItem->Type() == SCH_SHEET_PIN_T
+                    || aItem->Type() == SCH_GLOBAL_LABEL_T )
         {
             SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
             SCH_CONNECTION  possibleConnection( label->Schematic()->ConnectionGraph() );
@@ -1677,9 +1705,8 @@ OPT_TOOL_EVENT SCH_SELECTION_TOOL::autostartEvent( TOOL_EVENT* aEvent, EE_GRID_H
             if( !pin || !pin->IsPointClickableAnchor( pos ) )
                 return OPT_TOOL_EVENT();
 
-            if( !pin->IsVisible()
-                && !( m_frame->eeconfig()->m_Appearance.show_hidden_pins
-                      || m_frame->GetRenderSettings()->m_ShowHiddenPins ) )
+            if( !pin->IsVisible() && !(   m_frame->eeconfig()->m_Appearance.show_hidden_pins
+                                       || m_frame->GetRenderSettings()->m_ShowHiddenPins ) )
             {
                 return OPT_TOOL_EVENT();
             }
@@ -1702,12 +1729,11 @@ int SCH_SELECTION_TOOL::disambiguateCursor( const TOOL_EVENT& aEvent )
 {
     wxMouseState keyboardState = wxGetMouseState();
 
-    setModifiersState( keyboardState.ShiftDown(), keyboardState.ControlDown(),
-                       keyboardState.AltDown() );
+    setModifiersState( keyboardState.ShiftDown(), keyboardState.ControlDown(), keyboardState.AltDown() );
 
     m_skip_heuristics = true;
-    SelectPoint( m_originalCursor, { SCH_LOCATE_ANY_T }, nullptr, &m_canceledMenu, false,
-                 m_additive, m_subtractive, m_exclusive_or );
+    SelectPoint( m_originalCursor, { SCH_LOCATE_ANY_T }, nullptr, &m_canceledMenu, false, m_additive,
+                 m_subtractive, m_exclusive_or );
     m_skip_heuristics = false;
 
     return 0;
@@ -1720,8 +1746,7 @@ void SCH_SELECTION_TOOL::OnIdle( wxIdleEvent& aEvent )
     {
         wxMouseState keyboardState = wxGetMouseState();
 
-        setModifiersState( keyboardState.ShiftDown(), keyboardState.ControlDown(),
-                           keyboardState.AltDown() );
+        setModifiersState( keyboardState.ShiftDown(), keyboardState.ControlDown(), keyboardState.AltDown() );
 
         if( m_additive )
             m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::ADD );
@@ -1764,7 +1789,7 @@ bool SCH_SELECTION_TOOL::CollectHits( SCH_COLLECTOR& aCollector, const VECTOR2I&
 
         // If pins are disabled in the filter, they will be removed later.  Let's add the parent
         // so that people can use pins to select symbols in this case.
-        if( !m_filter.pins )
+        if( ( m_frame->eeconfig() && m_frame->eeconfig()->m_Selection.select_pin_selects_symbol ) || !m_filter.pins )
         {
             int originalCount = aCollector.GetCount();
 
@@ -1785,9 +1810,8 @@ bool SCH_SELECTION_TOOL::CollectHits( SCH_COLLECTOR& aCollector, const VECTOR2I&
 }
 
 
-void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR2I& aWhere,
-                                          bool aCheckLocked, bool aSelectedOnly,
-                                          SCH_SELECTION_FILTER_OPTIONS* aRejected )
+void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR2I& aWhere, bool aCheckLocked,
+                                          bool aSelectedOnly, SCH_SELECTION_FILTER_OPTIONS* aRejected )
 {
     SYMBOL_EDIT_FRAME* symbolEditorFrame = dynamic_cast<SYMBOL_EDIT_FRAME*>( m_frame );
 
@@ -1800,8 +1824,7 @@ void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR
 
             if( item->Type() == SCH_FIELD_T )
             {
-                if( !static_cast<SCH_FIELD*>( item )->IsVisible()
-                    && !symbolEditorFrame->GetShowInvisibleFields() )
+                if( !static_cast<SCH_FIELD*>( item )->IsVisible() && !symbolEditorFrame->GetShowInvisibleFields() )
                 {
                     collector.Remove( i );
                     continue;
@@ -1809,8 +1832,7 @@ void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR
             }
             else if( item->Type() == SCH_PIN_T )
             {
-                if( !static_cast<SCH_PIN*>( item )->IsVisible()
-                    && !symbolEditorFrame->GetShowInvisiblePins() )
+                if( !static_cast<SCH_PIN*>( item )->IsVisible() && !symbolEditorFrame->GetShowInvisiblePins() )
                 {
                     collector.Remove( i );
                     continue;
@@ -1828,6 +1850,7 @@ void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR
         {
             if( aRejected )
                 aRejected->lockedItems = true;
+
             collector.Remove( i );
             continue;
         }
@@ -1853,9 +1876,8 @@ void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR
 }
 
 
-bool SCH_SELECTION_TOOL::selectPoint( SCH_COLLECTOR& aCollector, const VECTOR2I& aWhere,
-                                      EDA_ITEM** aItem, bool* aSelectionCancelledFlag, bool aAdd,
-                                      bool aSubtract, bool aExclusiveOr )
+bool SCH_SELECTION_TOOL::selectPoint( SCH_COLLECTOR& aCollector, const VECTOR2I& aWhere, EDA_ITEM** aItem,
+                                      bool* aSelectionCancelledFlag, bool aAdd, bool aSubtract, bool aExclusiveOr )
 {
     m_selection.ClearReferencePoint();
 
@@ -1889,6 +1911,7 @@ bool SCH_SELECTION_TOOL::selectPoint( SCH_COLLECTOR& aCollector, const VECTOR2I&
     if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) )
     {
         bool foundEnteredGroup = false;
+
         for( EDA_ITEM* item : aCollector )
         {
             if( item->GetParentGroup() == m_enteredGroup )
@@ -1978,11 +2001,9 @@ bool SCH_SELECTION_TOOL::selectPoint( SCH_COLLECTOR& aCollector, const VECTOR2I&
 }
 
 
-bool SCH_SELECTION_TOOL::SelectPoint( const VECTOR2I& aWhere,
-                                      const std::vector<KICAD_T>& aScanTypes,
-                                      EDA_ITEM** aItem, bool* aSelectionCancelledFlag,
-                                      bool aCheckLocked, bool aAdd, bool aSubtract,
-                                      bool aExclusiveOr )
+bool SCH_SELECTION_TOOL::SelectPoint( const VECTOR2I& aWhere, const std::vector<KICAD_T>& aScanTypes,
+                                      EDA_ITEM** aItem, bool* aSelectionCancelledFlag, bool aCheckLocked,
+                                      bool aAdd, bool aSubtract, bool aExclusiveOr )
 {
     SCH_COLLECTOR collector;
 
@@ -2008,8 +2029,7 @@ bool SCH_SELECTION_TOOL::SelectPoint( const VECTOR2I& aWhere,
         return false;
     }
 
-    return selectPoint( collector, aWhere, aItem, aSelectionCancelledFlag, aAdd, aSubtract,
-                        aExclusiveOr );
+    return selectPoint( collector, aWhere, aItem, aSelectionCancelledFlag, aAdd, aSubtract, aExclusiveOr );
 }
 
 
@@ -2094,10 +2114,8 @@ int SCH_SELECTION_TOOL::UnselectAll( const TOOL_EVENT& aEvent )
         {
             for( SCH_SHEET_PIN* pin : sheet->GetPins() )
             {
-                EDA_ITEM* item = dynamic_cast<EDA_ITEM*>( pin );
-
-                if( item && Selectable( item ) )
-                    unselect( item );
+                if( pin && Selectable( pin ) )
+                    unselect( pin );
             }
         }
 
@@ -2126,6 +2144,7 @@ void SCH_SELECTION_TOOL::GuessSelectionCandidates( SCH_COLLECTOR& collector, con
         EDA_ITEM*   item = collector[ i ];
         SCH_LINE*   line = dynamic_cast<SCH_LINE*>( item );
         SCH_SHAPE*  shape = dynamic_cast<SCH_SHAPE*>( item );
+        SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( item );
         SCH_TABLE*  table = dynamic_cast<SCH_TABLE*>( item );
 
         // Lines are hard to hit.  Give them a bit more slop to still be considered "exact".
@@ -2135,6 +2154,11 @@ void SCH_SELECTION_TOOL::GuessSelectionCandidates( SCH_COLLECTOR& collector, con
             int pixelThreshold = KiROUND( getView()->ToWorld( 6 ) );
 
             if( item->HitTest( aPos, pixelThreshold ) )
+                exactHits.insert( item );
+        }
+        else if( symbol && m_frame->eeconfig()->m_Selection.select_pin_selects_symbol )
+        {
+            if( symbol->GetBodyAndPinsBoundingBox().Contains( aPos ) )
                 exactHits.insert( item );
         }
         else if( table )
@@ -2292,8 +2316,7 @@ void SCH_SELECTION_TOOL::GuessSelectionCandidates( SCH_COLLECTOR& collector, con
 
 
 SCH_SELECTION& SCH_SELECTION_TOOL::RequestSelection( const std::vector<KICAD_T>& aScanTypes,
-                                                     bool aPromoteCellSelections,
-                                                     bool aPromoteGroups )
+                                                     bool aPromoteCellSelections, bool aPromoteGroups )
 {
     bool anyUnselected = false;
     bool anySelected = false;
@@ -2314,7 +2337,7 @@ SCH_SELECTION& SCH_SELECTION_TOOL::RequestSelection( const std::vector<KICAD_T>&
         for( int i = (int) m_selection.GetSize() - 1; i >= 0; --i )
         {
             EDA_ITEM* item = (EDA_ITEM*) m_selection.GetItem( i );
-            isMoving |= static_cast<SCH_ITEM*>( item )->IsMoving();
+            isMoving |= item->IsMoving();
 
             if( !item->IsType( aScanTypes ) )
             {
@@ -2337,10 +2360,11 @@ SCH_SELECTION& SCH_SELECTION_TOOL::RequestSelection( const std::vector<KICAD_T>&
 
             if( item->Type() == SCH_GROUP_T )
             {
-                static_cast<SCH_ITEM*>(item)->RunOnChildren( [&]( SCH_ITEM* aChild )
+                static_cast<SCH_ITEM*>(item)->RunOnChildren(
+                        [&]( SCH_ITEM* aChild )
                         {
                             if( aChild->IsType( aScanTypes ) )
-                            selectedChildren.insert( aChild );
+                                selectedChildren.insert( aChild );
                         },
                         RECURSE_MODE::RECURSE );
                 unselect( item );
@@ -2352,7 +2376,7 @@ SCH_SELECTION& SCH_SELECTION_TOOL::RequestSelection( const std::vector<KICAD_T>&
                 if( !child->IsSelected() )
                 {
                     if( child->Type() == SCH_LINE_T )
-                        static_cast<SCH_LINE*>( child )->SetFlags( STARTPOINT | ENDPOINT );
+                        child->SetFlags( STARTPOINT | ENDPOINT );
 
                     select( child );
                     anySelected = true;
@@ -2439,6 +2463,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->symbols = true;
+
             return false;
         }
 
@@ -2450,6 +2475,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->pins = true;
+
             return false;
         }
 
@@ -2460,6 +2486,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->wires = true;
+
             return false;
         }
 
@@ -2475,6 +2502,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
             {
                 if( aRejected )
                     aRejected->wires = true;
+
                 return false;
             }
 
@@ -2485,6 +2513,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
             {
                 if( aRejected )
                     aRejected->graphics = true;
+
                 return false;
             }
         }
@@ -2497,6 +2526,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->graphics = true;
+
             return false;
         }
 
@@ -2511,6 +2541,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->text = true;
+
             return false;
         }
 
@@ -2523,6 +2554,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->labels = true;
+
             return false;
         }
 
@@ -2533,6 +2565,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->images = true;
+
             return false;
         }
 
@@ -2543,6 +2576,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->ruleAreas = true;
+
             return false;
         }
 
@@ -2553,6 +2587,7 @@ bool SCH_SELECTION_TOOL::itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER
         {
             if( aRejected )
                 aRejected->otherItems = true;
+
             return false;
         }
 
@@ -2814,7 +2849,9 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
             {
                 if( boxMode ? selectionRect.Intersects( pin->GetBoundingBox() )
                             : KIGEOM::BoxHitTest( aArea.GetPoly(), pin->GetBoundingBox(), true ) )
+                {
                     uniqueCandidates.insert( pin );
+                }
             }
         }
         else if( SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( item ) )
@@ -2823,7 +2860,9 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
             {
                 if( boxMode ? selectionRect.Intersects( pin->GetBoundingBox() )
                             : KIGEOM::BoxHitTest( aArea.GetPoly(), pin->GetBoundingBox(), true ) )
+                {
                     uniqueCandidates.insert( pin );
+                }
             }
 
             for( SCH_FIELD& field : symbol->GetFields() )
@@ -2865,7 +2904,7 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
                 if( !group_item->IsSCH_ITEM() )
                     continue;
 
-                if( Selectable( static_cast<SCH_ITEM*>( group_item ) ) )
+                if( Selectable( group_item ) )
                     collector.Append( group_item );
             }
         }
@@ -2883,8 +2922,9 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
 
     for( SCH_ITEM* item : uniqueCandidates )
     {
-        if( Selectable( item ) && ( hitTest( item ) || item->Type() == SCH_LINE_T )
-            && ( !containedMode || !group_items.count( item ) ) )
+        if( Selectable( item )
+                && ( hitTest( item ) || item->Type() == SCH_LINE_T )
+                && ( !containedMode || !group_items.count( item ) ) )
         {
             if( item->Type() == SCH_PIN_T && !m_isSymbolEditor )
                 pinsCollector.Append( item );
@@ -2951,7 +2991,7 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
             [&]( const VECTOR2I& aPoint )
             {
                 return boxMode ? selectionRect.Contains( aPoint )
-                                : aArea.GetPoly().PointInside( aPoint );
+                               : aArea.GetPoly().PointInside( aPoint );
             };
 
     for( EDA_ITEM* item : collector )
@@ -3003,8 +3043,8 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
             item->SetFlags( SHOW_ELEC_TYPE );
 
         // If the pin lives inside a group that is already being selected, don't also select the pin.
-        if( EDA_GROUP* group =
-                    SCH_GROUP::TopLevelGroup( static_cast<SCH_ITEM*>( item ), m_enteredGroup, m_isSymbolEditor ) )
+        if( EDA_GROUP* group = SCH_GROUP::TopLevelGroup( static_cast<SCH_ITEM*>( item ), m_enteredGroup,
+                                                         m_isSymbolEditor ) )
         {
             if( collector.HasItem( group->AsEdaItem() ) )
             {
@@ -3013,8 +3053,10 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
             }
         }
 
-        if( Selectable( item ) && itemPassesFilter( item, nullptr )
-            && !item->GetParent()->HasFlag( SELECTION_CANDIDATE ) && hitTest( static_cast<SCH_ITEM*>( item ) ) )
+        if( Selectable( item )
+                && itemPassesFilter( item, nullptr )
+                && !item->GetParent()->HasFlag( SELECTION_CANDIDATE )
+                && hitTest( static_cast<SCH_ITEM*>( item ) ) )
         {
             selectItem( item, 0 );
         }
@@ -3057,8 +3099,9 @@ void SCH_SELECTION_TOOL::FilterCollectorForHierarchy( SCH_COLLECTOR& aCollector,
 
     // Skip group promotion when the caller asked for specific types that exclude groups
     const std::vector<KICAD_T>& scanTypes = aCollector.GetScanTypes();
-    bool                        promoteToGroups = scanTypes.empty() || alg::contains( scanTypes, SCH_LOCATE_ANY_T )
-                           || alg::contains( scanTypes, SCH_GROUP_T );
+    bool                        promoteToGroups = scanTypes.empty()
+                                                    || alg::contains( scanTypes, SCH_LOCATE_ANY_T )
+                                                    || alg::contains( scanTypes, SCH_GROUP_T );
 
     for( int j = 0; j < aCollector.GetCount(); )
     {
@@ -3078,8 +3121,8 @@ void SCH_SELECTION_TOOL::FilterCollectorForHierarchy( SCH_COLLECTOR& aCollector,
 
         // If any element is a member of a group, replace those elements with the top containing
         // group.
-        if( EDA_GROUP* top =
-                    promoteToGroups ? SCH_GROUP::TopLevelGroup( start, m_enteredGroup, m_isSymbolEditor ) : nullptr )
+        if( EDA_GROUP* top = promoteToGroups ? SCH_GROUP::TopLevelGroup( start, m_enteredGroup, m_isSymbolEditor )
+                                             : nullptr )
         {
             if( top->AsEdaItem() != item )
             {
@@ -3991,8 +4034,7 @@ void SCH_SELECTION_TOOL::RebuildSelection()
 }
 
 
-bool SCH_SELECTION_TOOL::Selectable( const EDA_ITEM* aItem, const VECTOR2I* aPos,
-                                     bool checkVisibilityOnly ) const
+bool SCH_SELECTION_TOOL::Selectable( const EDA_ITEM* aItem, const VECTOR2I* aPos, bool checkVisibilityOnly ) const
 {
     // NOTE: in the future this is where Eeschema layer/itemtype visibility will be handled
 
@@ -4021,7 +4063,7 @@ bool SCH_SELECTION_TOOL::Selectable( const EDA_ITEM* aItem, const VECTOR2I* aPos
         if( !pin->IsVisible() && !m_frame->GetShowAllPins() )
             return false;
 
-        if( !m_filter.pins )
+        if( ( m_frame->eeconfig() && m_frame->eeconfig()->m_Selection.select_pin_selects_symbol ) || !m_filter.pins )
         {
             // Pin anchors have to be allowed for auto-starting wires.
             if( aPos )
@@ -4272,9 +4314,7 @@ int SCH_SELECTION_TOOL::SelectNext( const TOOL_EVENT& aEvent )
     if( !m_selection.Front()->IsBrightened() )
         return 0;
 
-    const SCH_ITEM* item = editFrame->SelectNextPrevNetNavigatorItem( true );
-
-    if( item )
+    if( const SCH_ITEM* item = editFrame->SelectNextPrevNetNavigatorItem( true ) )
     {
         ClearSelection();
         select( const_cast<SCH_ITEM*>( item ) );
@@ -4295,9 +4335,7 @@ int SCH_SELECTION_TOOL::SelectPrevious( const TOOL_EVENT& aEvent )
     if( !m_selection.Front()->IsBrightened() )
         return 0;
 
-    const SCH_ITEM* item = editFrame->SelectNextPrevNetNavigatorItem( false );
-
-    if( item )
+    if( const SCH_ITEM* item = editFrame->SelectNextPrevNetNavigatorItem( false ) )
     {
         ClearSelection();
         select( const_cast<SCH_ITEM*>( item ) );
