@@ -95,25 +95,34 @@ jobs:
         run: cmake --install build
 
       - name: Bundle runtime DLLs
-        # Recursively copy every MinGW DLL the shipped binaries load, so the
-        # installer works on a machine without MSYS2.
+        # Copy every MinGW DLL the shipped binaries load, so the installer
+        # works on a machine without MSYS2.  Queue-based: each binary is
+        # inspected exactly once (a rescan-everything loop blew the job
+        # timeout on the slow runner ldd).
         run: |
           set -e
-          copied=1
-          while [ $copied -eq 1 ]; do
-            copied=0
-            for f in stage/bin/*.exe stage/bin/*.dll; do
-              [ -f "$f" ] || continue
-              for dep in $(ldd "$f" | awk '/\/ucrt64\//{print $3}'); do
+          cd stage/bin
+          queue=$(ls *.exe *.dll *.kiface 2>/dev/null || true)
+          seen=""
+          while [ -n "$queue" ]; do
+            next=""
+            for f in $queue; do
+              case " $seen " in *" $f "*) continue;; esac
+              seen="$seen $f"
+              for dep in $(ldd "$f" 2>/dev/null | awk '/\/ucrt64\//{print $3}'); do
                 base=$(basename "$dep")
-                if [ ! -f "stage/bin/$base" ]; then
-                  cp "$dep" stage/bin/
-                  copied=1
+                if [ ! -f "$base" ]; then
+                  cp "$dep" .
+                  next="$next $base"
                 fi
               done
             done
+            queue=$next
           done
-          ls stage/bin/*.dll | wc -l
+          ls *.dll | wc -l
+
+      - name: Smoke test
+        run: stage/bin/kicad-cli.exe version
 
       - name: Build installer
         run: |
