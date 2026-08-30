@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <collab/collab_product.h>
 #include <build_version.h>
 #include <confirm.h>
 #include <eda_base_frame.h>
@@ -94,7 +95,8 @@ public:
         m_mainSizer = new wxBoxSizer( wxVERTICAL );
 
         wxStaticText* pageTitle = new wxStaticText(
-                this, -1, wxString::Format( _( "Welcome to KiCad %s" ), GetMajorMinorVersion() ) );
+                this, -1, wxString::Format( _( "Welcome to %s %s" ), KICAD_COLLAB_PRODUCT_NAME,
+                                            KICAD_COLLAB_PRODUCT_VERSION ) );
         pageTitle->SetFont(
                 wxFont( 14, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD ) );
         m_mainSizer->Add( pageTitle, 0, wxALIGN_CENTRE | wxALL, 5 );
@@ -104,9 +106,12 @@ public:
         m_mainSizer->Add( pageDivider, 0, wxEXPAND | wxALL, 5 );
 
         m_welcomeText = new wxStaticText( this, -1,
-            _( "KiCad is starting for the first time, or some of its configuration files are missing.\n\n"
-               "Let's take a moment to configure some basic settings.  You can always modify these "
-               "settings later by opening the Preferences dialog." ) );
+            wxString::Format( _( "%s is starting for the first time, or some of its configuration "
+                                 "files are missing.\n\n"
+                                 "Let's take a moment to configure some basic settings.  You can "
+                                 "always modify these settings later by opening the Preferences "
+                                 "dialog." ),
+                              KICAD_COLLAB_PRODUCT_NAME ) );
         m_mainSizer->Add( m_welcomeText, 0, wxEXPAND | wxALL, 5 );
 
         wxBoxSizer* helpSizer = new wxBoxSizer( wxHORIZONTAL );
@@ -184,7 +189,8 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
     // A second modal inside RunWizard makes GTK fail
     wxLog::FlushActive();
 
-    m_wizard = new wxWizard( aParent, wxID_ANY, _( "KiCad Setup" ) );
+    m_wizard = new wxWizard( aParent, wxID_ANY,
+                             wxString::Format( _( "%s Setup" ), KICAD_COLLAB_PRODUCT_NAME ) );
     m_wizard->SetWindowStyleFlag( wxRESIZE_BORDER );
 
     STARTWIZARD_WELCOME_PAGE* firstPage = new STARTWIZARD_WELCOME_PAGE( m_wizard );

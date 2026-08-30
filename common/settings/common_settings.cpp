@@ -939,6 +939,41 @@ void COMMON_SETTINGS::InitializeEnvironment()
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) ), PATHS::GetDefault3rdPartyPath() );
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ), PATHS::GetStockSymbolsPath() );
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ), PATHS::GetStockDesignBlocksPath() );
+
+    // KiCad Collaborative resolves the stock libraries from an installed
+    // stock KiCad when it ships none itself (PATHS::GetStockEDALibraryPath).
+    // That install's global library tables reference ITS versioned variables
+    // (e.g. ${KICAD9_SYMBOL_DIR}), so define those names for past majors too.
+    // The current major's real entries were added above and are not touched.
+    for( int major = 7; major <= 10; major++ )
+    {
+        auto addAlias =
+                [&]( const wxString& aBase, const wxString& aValue )
+                {
+                    wxString key = wxString::Format( wxS( "KICAD%d_%s" ), major, aBase );
+
+                    if( m_Env.vars.count( key ) == 0 )
+                        addVar( key, aValue );
+                };
+
+        addAlias( wxS( "FOOTPRINT_DIR" ), PATHS::GetStockFootprintsPath() );
+        addAlias( wxS( "3DMODEL_DIR" ), PATHS::GetStock3dmodelsPath() );
+        addAlias( wxS( "TEMPLATE_DIR" ), PATHS::GetStockTemplatesPath() );
+        addAlias( wxS( "SYMBOL_DIR" ), PATHS::GetStockSymbolsPath() );
+        addAlias( wxS( "DESIGN_BLOCK_DIR" ), PATHS::GetStockDesignBlocksPath() );
+
+        // A stock install's tables can also reference its PCM dir
+        // (~/Documents/KiCad/<major>.0/3rdparty); alias it when it exists.
+        wxFileName thirdParty;
+        thirdParty.AssignDir( PATHS::GetDefault3rdPartyPath() );
+        thirdParty.RemoveLastDir();     // 3rdparty
+        thirdParty.RemoveLastDir();     // our version dir
+        thirdParty.AppendDir( wxString::Format( wxS( "%d.0" ), major ) );
+        thirdParty.AppendDir( wxS( "3rdparty" ) );
+
+        if( thirdParty.DirExists() )
+            addAlias( wxS( "3RD_PARTY" ), thirdParty.GetPath() );
+    }
 }
 
 

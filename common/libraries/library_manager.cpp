@@ -567,6 +567,14 @@ bool LIBRARY_MANAGER::CreateGlobalTable( LIBRARY_TABLE_TYPE aType, bool aPopulat
 
 void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE> aTablesToLoad )
 {
+    // KiCad Collaborative: when a global table is missing but the stock
+    // default table is available (bundled, or auto-found from a stock KiCad
+    // install — see PATHS::GetStockEDALibraryPath), set the default
+    // configuration up silently instead of asking on first run.  A table the
+    // user emptied or customized is a valid file and is left alone.
+    for( LIBRARY_TABLE_TYPE type : InvalidGlobalTables() )
+        CreateGlobalTable( type, wxFileName( StockTablePath( type ) ).IsFileReadable() );
+
     // Cancel any in-progress load
     {
         std::scoped_lock lock( m_adaptersMutex );

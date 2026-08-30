@@ -178,7 +178,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_showBorderAndTitleBlock = true;   // true to show sheet references
     m_supportsAutoSave = true;
     m_syncingPcbToSchSelection = false;
-    m_aboutTitle = _HKI( "KiCad Schematic Editor" );
+    m_aboutTitle = _HKI( "KiCad Collaborative Schematic Editor" );
     m_show_search = false;
     // Ensure timer has an owner before binding so it generates events.
     m_crossProbeFlashTimer.SetOwner( this );

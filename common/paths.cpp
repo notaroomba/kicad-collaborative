@@ -278,6 +278,91 @@ wxString PATHS::GetWindowsBaseSharePath()
 #endif
 
 
+/**
+ * KiCad Collaborative ships without the stock symbol/footprint libraries.
+ * When our own EDA-library dir has none, quietly fall back to an installed
+ * stock KiCad's share dir so libraries, 3D models and library-table
+ * templates resolve out of the box.  The probe runs once per process; a
+ * bundle that does ship a symbols dir disables it naturally.
+ */
+static wxString withStockInstallFallback( const wxString& aOwnPath )
+{
+    wxFileName probe;
+    probe.AssignDir( aOwnPath );
+    probe.AppendDir( wxS( "symbols" ) );
+
+    if( probe.DirExists() )
+        return aOwnPath;
+
+    static bool     s_probed = false;
+    static wxString s_found;
+
+    if( !s_probed )
+    {
+        s_probed = true;
+
+        wxArrayString candidates;
+
+#if defined( __WXMAC__ )
+        candidates.Add( wxS( "/Applications/KiCad/KiCad.app/Contents/SharedSupport" ) );
+        candidates.Add( wxGetHomeDir()
+                        + wxS( "/Applications/KiCad/KiCad.app/Contents/SharedSupport" ) );
+#elif defined( __WXMSW__ )
+        // Official installers: C:\Program Files\KiCad\<version>\share\kicad
+        wxString programFiles;
+
+        if( !wxGetEnv( wxS( "ProgramW6432" ), &programFiles ) || programFiles.IsEmpty() )
+            programFiles = wxS( "C:\\Program Files" );
+
+        wxDir root( programFiles + wxS( "\\KiCad" ) );
+
+        if( root.IsOpened() )
+        {
+            wxString      sub;
+            wxArrayString versions;
+
+            for( bool more = root.GetFirst( &sub, wxEmptyString, wxDIR_DIRS ); more;
+                 more = root.GetNext( &sub ) )
+            {
+                versions.Add( sub );
+            }
+
+            // Newest install first ("10.0" above "9.0").
+            versions.Sort(
+                    []( const wxString& a, const wxString& b ) -> int
+                    {
+                        double va = wxAtof( a );
+                        double vb = wxAtof( b );
+                        return va < vb ? 1 : ( vb < va ? -1 : 0 );
+                    } );
+
+            for( const wxString& version : versions )
+                candidates.Add( programFiles + wxS( "\\KiCad\\" ) + version
+                                + wxS( "\\share\\kicad" ) );
+        }
+#else
+        candidates.Add( wxS( "/usr/share/kicad" ) );
+        candidates.Add( wxS( "/usr/local/share/kicad" ) );
+#endif
+
+        for( const wxString& candidate : candidates )
+        {
+            wxFileName fn;
+            fn.AssignDir( candidate );
+            fn.AppendDir( wxS( "symbols" ) );
+
+            if( fn.DirExists() )
+            {
+                s_found = candidate;
+                break;
+            }
+        }
+    }
+
+    return s_found.IsEmpty() ? aOwnPath : s_found;
+}
+
+
 wxString PATHS::GetStockEDALibraryPath()
 {
     wxString path;
@@ -293,7 +378,7 @@ wxString PATHS::GetStockEDALibraryPath()
         path = wxString::FromUTF8Unchecked( KICAD_LIBRARY_DATA );
 #endif
 
-    return path;
+    return withStockInstallFallback( path );
 }
 
 
