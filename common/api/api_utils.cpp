@@ -375,8 +375,8 @@ KICOMMON_API void PackProject( types::ProjectSpecifier& aOutput, const PROJECT& 
 }
 
 
-const KICOMMON_API std::string KiwayClientName = "org.kicad.internal.kiway";
-const KICOMMON_API std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
+extern const KICOMMON_API std::string KiwayClientName = "org.kicad.internal.kiway";
+extern const KICOMMON_API std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
 
 
 KICOMMON_API bool PackKiwayApiMessage( const google::protobuf::Message& aMessage, std::string& aBytes )
