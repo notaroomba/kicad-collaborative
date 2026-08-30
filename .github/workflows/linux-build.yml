@@ -37,6 +37,7 @@ jobs:
           tar xf curl-$CURL_VER.tar.gz
           cd curl-$CURL_VER
           ./configure --prefix=/opt/collab-curl --with-openssl --enable-websockets \
+            --enable-versioned-symbols \
             --disable-manual --without-libpsl > /dev/null
           make -j$(nproc) > /dev/null
           sudo make install > /dev/null
