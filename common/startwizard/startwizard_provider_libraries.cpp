@@ -229,6 +229,22 @@ STARTWIZARD_PROVIDER_LIBRARIES::STARTWIZARD_PROVIDER_LIBRARIES() :
 
 bool STARTWIZARD_PROVIDER_LIBRARIES::NeedsUserInput() const
 {
+    if( LIBRARY_MANAGER::GlobalTablesValid() )
+        return false;
+
+    // KiCad Collaborative: when the stock default tables are available
+    // (bundled, or auto-found from a stock KiCad install), set the default
+    // configuration up silently rather than asking.  The wizard page only
+    // remains for the case where there is nothing to find.
+    for( LIBRARY_TABLE_TYPE type : LIBRARY_MANAGER::InvalidGlobalTables() )
+    {
+        // No stock table for this kind (e.g. no design blocks in a stock
+        // KiCad 9/10 install): write a valid empty table, exactly what the
+        // wizard's "start with empty tables" choice produces.
+        LIBRARY_MANAGER::CreateGlobalTable(
+                type, wxFileName( LIBRARY_MANAGER::StockTablePath( type ) ).IsFileReadable() );
+    }
+
     return !LIBRARY_MANAGER::GlobalTablesValid();
 }
 

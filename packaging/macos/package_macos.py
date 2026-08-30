@@ -62,7 +62,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("build_dir")
     ap.add_argument("out_dir")
-    ap.add_argument("--version", default="10.99")
+    default_version = "1.0.0"
+    version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")
+    if os.path.exists(version_file):
+        default_version = open(version_file).read().strip() or default_version
+    ap.add_argument("--version", default=default_version)
     args = ap.parse_args()
 
     build_dir = os.path.realpath(args.build_dir)

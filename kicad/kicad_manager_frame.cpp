@@ -24,6 +24,7 @@
 #include "pgm_kicad.h"
 #include "project_tree.h"
 #include "project_tree_pane.h"
+#include <collab/collab_product.h>
 #include <dialogs/dialog_git_mr_review.h>
 #include "local_history_pane.h"
 #include "widgets/bitmap_button.h"
@@ -287,9 +288,9 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
     }
 
     if( ADVANCED_CFG::GetCfg().m_HideVersionFromTitle )
-        SetTitle( wxT( "KiCad" ) );
+        SetTitle( KICAD_COLLAB_PRODUCT_NAME );
     else
-        SetTitle( wxString( "KiCad " ) + GetMajorMinorVersion() );
+        SetTitle( wxString( KICAD_COLLAB_PRODUCT_NAME " " ) + KICAD_COLLAB_PRODUCT_VERSION );
 
     // Do not let the messages window have initial focus
     m_projectTreePane->SetFocus();
@@ -1327,9 +1328,10 @@ void KICAD_MANAGER_FRAME::ProjectChanged()
     }
 
     if( ADVANCED_CFG::GetCfg().m_HideVersionFromTitle )
-        title += wxT( " \u2014 " ) + wxString( wxS( "KiCad" ) );
+        title += wxT( " \u2014 " ) + wxString( KICAD_COLLAB_PRODUCT_NAME );
     else
-        title += wxT( " \u2014 " ) + wxString( wxS( "KiCad " ) ) + GetMajorMinorVersion();
+        title += wxT( " \u2014 " ) + wxString( KICAD_COLLAB_PRODUCT_NAME " " )
+                 + KICAD_COLLAB_PRODUCT_VERSION;
 
     SetTitle( title );
 

@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <collab/collab_product.h>
 #include <boost/version.hpp>
 #include <wx/aboutdlg.h>
 #include <wx/arrimpl.cpp>
@@ -1018,9 +1019,11 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     /* Set title */
     aInfo.SetAppName( Pgm().App().GetAppName() );
 
-    /* KiCad build version */
+    /* KiCad Collaborative product version, with the KiCad base it tracks */
     wxString version;
-    version << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( "(UNSUPPORTED)" ) )
+    version << KICAD_COLLAB_PRODUCT_VERSION
+            << wxT( " (" ) << KICAD_COLLAB_PRODUCT_NAME << wxT( "), based on KiCad " )
+            << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( "(UNSUPPORTED)" ) )
                                                                  : GetBuildVersion() )
 #ifdef DEBUG
             << wxT( ", debug" )

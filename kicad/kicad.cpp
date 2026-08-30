@@ -24,6 +24,7 @@
  */
 
 
+#include <collab/collab_product.h>
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/app.h>
@@ -98,7 +99,7 @@ PGM_KICAD& PgmTop()
 
 bool PGM_KICAD::OnPgmInit()
 {
-    App().SetAppDisplayName( wxT( "KiCad" ) );
+    App().SetAppDisplayName( KICAD_COLLAB_PRODUCT_NAME );
 
 #if defined(DEBUG)
     wxString absoluteArgv0 = wxStandardPaths::Get().GetExecutablePath();
