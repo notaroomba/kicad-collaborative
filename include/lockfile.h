@@ -40,6 +40,18 @@
 class LOCKFILE
 {
 public:
+    /**
+     * KiCad Collaborative never creates, overwrites or deletes lock files:
+     * it shares project directories with stock KiCad installs, and live
+     * sessions are coordinated by the collaboration server.  Existing locks
+     * (e.g. one held by a stock KiCad) are still read and honored.  Setting
+     * KICAD_COLLAB_CREATE_LOCKS=1 restores stock locking.  Read from the
+     * environment (not a static) so every shared library in the process
+     * agrees on the answer.
+     */
+    static bool CreateLocks() { return wxGetEnv( wxS( "KICAD_COLLAB_CREATE_LOCKS" ), nullptr ); }
+
+public:
     LOCKFILE( const wxString &filename, bool aRemoveOnRelease = true ) :
             m_originalFile( filename ), m_fileCreated( false ), m_status( false ),
             m_removeOnRelease( aRemoveOnRelease ), m_errorMsg( "" )
@@ -71,10 +83,20 @@ public:
             {
                 wxLogNull suppressExpectedErrorMessages;
 
-                lock_success = file.Open( m_lockFilename, wxFile::write_excl );
+                if( CreateLocks() )
+                    lock_success = file.Open( m_lockFilename, wxFile::write_excl );
 
                 if( !lock_success )
                     rw_success = file.Open( m_lockFilename, wxFile::read );
+            }
+
+            if( !CreateLocks() && !rw_success )
+            {
+                // No-create mode with no existing lock: proceed, touch nothing.
+                m_status = true;
+                m_removeOnRelease = false;
+                wxLogTrace( LCK, "Lock creation disabled; nothing to honor for %s", filename );
+                return;
             }
 
             if( lock_success )
@@ -184,6 +206,14 @@ public:
     bool OverrideLock( bool aRemoveOnRelease = true )
     {
         wxLogTrace( LCK, "Overriding lock on %s", m_lockFilename );
+
+        if( !CreateLocks() )
+        {
+            // Never rewrite or delete someone else's lock: just proceed.
+            m_status = true;
+            m_removeOnRelease = false;
+            return true;
+        }
 
         if( !m_fileCreated )
         {
