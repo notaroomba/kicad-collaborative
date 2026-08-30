@@ -38,8 +38,12 @@
 #include <diff_merge/sch_diff_utils.h>
 
 #include <schematic.h>
+#include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_screen.h>
 #include <sch_sheet.h>
+#include <wx/ffile.h>
+#include <wx/filename.h>
+#include <wx/utils.h>
 #include <sch_sheet_path.h>
 #include <sch_symbol.h>
 #include <settings/settings_manager.h>
@@ -324,6 +328,44 @@ BOOST_AUTO_TEST_CASE( AddedWithExistingUuidUpserts )
     BOOST_CHECK( replaced == twin );    // same live object, swapped data
     BOOST_CHECK_EQUAL( replaced->GetPosition().x, newPos.x );
     BOOST_CHECK_EQUAL( replaced->GetPosition().y, newPos.y );
+}
+
+
+// KiCad Collaborative must not restamp the file format version on save: a
+// project shared with a stock KiCad keeps the version it was opened with.
+BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
+{
+    SCH_SHEET*  root = &m_authoring->Root();
+    SCH_SCREEN* screen = root->GetScreen();
+    BOOST_REQUIRE( screen );
+
+    auto savedVersion = [&]( int aAtLoad ) -> std::string
+    {
+        screen->SetFileFormatVersionAtLoad( aAtLoad );
+
+        wxString tmp = wxFileName::CreateTempFileName( wxS( "collab_ver" ) );
+        SCH_IO_KICAD_SEXPR().SaveSchematicFile( tmp, root, m_authoring.get() );
+
+        wxFFile   file( tmp, wxS( "r" ) );
+        wxString  content;
+        file.ReadAll( &content );
+        wxRemoveFile( tmp );
+
+        int start = content.Find( wxS( "(version " ) );
+        BOOST_REQUIRE( start != wxNOT_FOUND );
+        return content.Mid( start + 9, content.Mid( start + 9 ).Find( ')' ) ).ToStdString();
+    };
+
+    // A file opened at an older (stock KiCad) version keeps that version.
+    BOOST_CHECK_EQUAL( savedVersion( 20241209 ), "20241209" );
+
+    // A legacy-format import (small integer version) gets the current stamp.
+    BOOST_CHECK( savedVersion( 2 ) != "2" );
+
+    // Stock stamping on request.
+    wxSetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), wxS( "1" ) );
+    BOOST_CHECK( savedVersion( 20241209 ) != "20241209" );
+    wxUnsetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ) );
 }
 
 

@@ -456,8 +456,24 @@ void SCH_IO_KICAD_SEXPR::Format( SCH_SHEET* aSheet )
     else
         m_schematic->GetEmbeddedFiles()->ClearEmbeddedFonts();
 
+    // KiCad Collaborative round-trips project files with stock KiCad
+    // installs: keep the format version the file was opened with instead of
+    // restamping it, so a save here doesn't flag the file as "newer format"
+    // for everyone else.  KICAD_COLLAB_STAMP_VERSIONS=1 restores stock
+    // stamping.  New files (no version at load) always get the current one.
+    int version = SEXPR_SCHEMATIC_FILE_VERSION;
+
+    // (The 20130000 floor excludes legacy-format loads, whose versions are
+    // small integers; a legacy import is a new s-expression file.)
+    if( screen->GetFileFormatVersionAtLoad() >= 20130000
+            && screen->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION
+            && !wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+    {
+        version = screen->GetFileFormatVersionAtLoad();
+    }
+
     m_out->Print( "(kicad_sch (version %d) (generator \"eeschema\") (generator_version %s)",
-                  SEXPR_SCHEMATIC_FILE_VERSION,
+                  version,
                   m_out->Quotew( GetMajorMinorVersion() ).c_str() );
 
     KICAD_FORMAT::FormatUuid( m_out, screen->m_uuid );

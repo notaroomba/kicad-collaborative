@@ -16,13 +16,15 @@ Installers are branded **KiCad Collaborative** and are designed to install
 - **No file associations.** The Windows installer does not register
   `.kicad_*` extensions and the macOS bundle uses its own bundle id, so
   double-clicking a board still opens your stock KiCad.
-- **File format:** files are saved in this fork's native format (KiCad
-  10.99 development format, unchanged from upstream). A stock KiCad of the
-  *same* version reads them as-is; an *older* stock KiCad (e.g. 9.0) will
-  warn about a newer format, exactly as it would for files from an upstream
-  10.99 nightly. True format downgrading on save is not supported —
-  upstream KiCad has no such mechanism and new-format features cannot be
-  expressed in old grammars.
+- **The format version is never touched.** Saving a board or schematic
+  keeps the `(version …)` stamp the file was opened with, so a file that
+  came from stock KiCad 9 still identifies as a KiCad 9 file after being
+  edited here and opens there without a "newer format" warning. New files
+  (and legacy-format imports) get the current version. Set
+  `KICAD_COLLAB_STAMP_VERSIONS=1` to restore stock restamping. Note the
+  version stamp is preserved, not the grammar: if you use an editor
+  feature that only exists in newer formats, its tokens are still written
+  and an old KiCad may reject them.
 
 ## macOS
 
