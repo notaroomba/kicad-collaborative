@@ -35,6 +35,12 @@
 
 #include <wx/fileconf.h>
 #include <wx/string.h>
+// windows.h (pulled in raw by some third-party headers) defines macros over
+// several wx method names; undo them before wx declares those methods, or
+// MinGW rejects the declarations as bad overrides.
+#if defined( _WIN32 ) && defined( GetClassInfo )
+#include <wx/msw/winundef.h>
+#endif
 #include <wx/process.h>
 
 #include <text_var_dependency.h>

@@ -390,7 +390,7 @@ bool SYSINFO::gpuFromDirectX( std::vector<GPU_INFO>& aGpuInfos )
     LPCREATEDXGIFACTORY pCreateDXGIFactory = NULL;
     HMODULE             hDXGI              = NULL;
 
-    hDXGI = LoadLibrary( L"dxgi.dll" );
+    hDXGI = LoadLibraryW( L"dxgi.dll" );
     //
     if( NULL == hDXGI )
     {
