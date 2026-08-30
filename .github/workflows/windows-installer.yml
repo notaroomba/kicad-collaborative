@@ -68,12 +68,21 @@ jobs:
           restore-keys: ccache-windows-
 
       - name: Configure
+        # Library hints mirror MSYS2's own mingw-w64-kicad PKGBUILD.
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_INSTALL_PREFIX=$PWD/stage
+          -DCMAKE_PREFIX_PATH=/ucrt64
+          -DwxWidgets_CONFIG_EXECUTABLE=/ucrt64/bin/wx-config-3.2
+          -DOCC_INCLUDE_DIR=/ucrt64/include/opencascade
+          -DOCC_LIBRARY_DIR=/ucrt64/lib
+          -DNGSPICE_ROOT_DIR=/ucrt64
+          -DPYTHON_EXECUTABLE=/ucrt64/bin/python.exe
+          -DKICAD_SCRIPTING_WXPYTHON=OFF
+          -DKICAD_BUILD_I18N=OFF
           -DKICAD_BUILD_QA_TESTS=OFF
           -DKICAD_UPDATE_CHECK=OFF
           -DKICAD_USE_PCH=ON
