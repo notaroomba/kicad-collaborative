@@ -32,6 +32,7 @@
 #include <drc/drc_engine.h>
 #include <drc/drc_item.h>
 #include <footprint.h>
+#include <netclass.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <pcb_marker.h>
@@ -86,6 +87,7 @@ struct BACKDRILL_TEST_FIXTURE
                                    int aSecondaryDrillSize )
     {
         PCB_VIA* via = new PCB_VIA( m_board.get() );
+        via->SetPadstackMode( PADSTACK::MODE::NORMAL );
         via->SetPosition( aPos );
         via->SetLayerPair( aPrimaryStart, aPrimaryEnd );
         via->SetDrill( pcbIUScale.mmToIU( 0.3 ) );
@@ -111,6 +113,7 @@ struct BACKDRILL_TEST_FIXTURE
                                     int aFrontSize, int aFrontDepth )
     {
         PCB_VIA* via = new PCB_VIA( m_board.get() );
+        via->SetPadstackMode( PADSTACK::MODE::NORMAL );
         via->SetPosition( aPos );
         via->SetLayerPair( F_Cu, B_Cu );
         via->SetDrill( pcbIUScale.mmToIU( 0.3 ) );
@@ -150,6 +153,7 @@ struct BACKDRILL_TEST_FIXTURE
         fp->SetReference( "U1" );
 
         PAD* pad = new PAD( fp );
+        pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
         pad->SetPosition( aPos );
         pad->SetNumber( aPadNumber );
         pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
@@ -378,40 +382,51 @@ BOOST_FIXTURE_TEST_CASE( PadBackdrillLayerDetection, BACKDRILL_TEST_FIXTURE )
 
 
 /**
- * Test that GetEffectiveShape returns the backdrill hole shape for affected layers
+ * Test that the backdrill widens the hole and the physical extents on affected layers, but
+ * leaves the copper shape alone
  */
 BOOST_FIXTURE_TEST_CASE( ViaEffectiveShapeOnBackdrilledLayer, BACKDRILL_TEST_FIXTURE )
 {
     int netCode = GetNetCode( "TestNet" );
 
-    int backdillSize = pcbIUScale.mmToIU( 0.6 );
+    int drillSize = pcbIUScale.mmToIU( 0.3 );
     int viaWidth = pcbIUScale.mmToIU( 0.8 );
+    int backdrillSize = pcbIUScale.mmToIU( 1.0 );
 
     PCB_VIA* via = CreateBackdrilledVia( VECTOR2I( pcbIUScale.mmToIU( 40 ), pcbIUScale.mmToIU( 10 ) ),
                                          netCode,
                                          F_Cu, B_Cu,
                                          F_Cu, In2_Cu,
-                                         backdillSize );
+                                         backdrillSize );
 
     via->SetWidth( PADSTACK::ALL_LAYERS, viaWidth );
 
-    // On a non-affected layer, should return full via size
-    std::shared_ptr<SHAPE> shapeB = via->GetEffectiveShape( B_Cu, FLASHING::DEFAULT, PHYSICAL_CLEARANCE_CONSTRAINT );
-    BOOST_REQUIRE( shapeB );
+    // The hole opens up to the backdrill on the layers the backdrill reaches
+    std::shared_ptr<SHAPE_SEGMENT> holeF = via->GetEffectiveHoleShape( F_Cu, PHYSICAL_CLEARANCE_CONSTRAINT );
+    std::shared_ptr<SHAPE_SEGMENT> holeB = via->GetEffectiveHoleShape( B_Cu, PHYSICAL_CLEARANCE_CONSTRAINT );
 
-    // On an affected layer, should return backdrill hole size
-    std::shared_ptr<SHAPE> shapeF = via->GetEffectiveShape( F_Cu, FLASHING::DEFAULT, PHYSICAL_CLEARANCE_CONSTRAINT );
-    BOOST_REQUIRE( shapeF );
+    BOOST_REQUIRE( holeF );
+    BOOST_REQUIRE( holeB );
+    BOOST_CHECK_EQUAL( holeF->GetWidth(), backdrillSize );
+    BOOST_CHECK_EQUAL( holeB->GetWidth(), drillSize );
 
-    // The effective shape on the backdrilled layer should be smaller (hole only)
-    BOX2I bboxB = shapeB->BBox();
-    BOX2I bboxF = shapeF->BBox();
+    // Physical clearance has to keep items out of the drilled area, so the shape grows with it
+    std::shared_ptr<SHAPE> physF = via->GetEffectiveShape( F_Cu, FLASHING::DEFAULT, PHYSICAL_CLEARANCE_CONSTRAINT );
+    std::shared_ptr<SHAPE> physB = via->GetEffectiveShape( B_Cu, FLASHING::DEFAULT, PHYSICAL_CLEARANCE_CONSTRAINT );
 
-    // Shape on B_Cu should be full via size
-    BOOST_CHECK_GE( bboxB.GetWidth(), viaWidth - 100 ); // Allow small tolerance
+    BOOST_REQUIRE( physF );
+    BOOST_REQUIRE( physB );
+    BOOST_CHECK_EQUAL( physF->BBox().GetWidth(), backdrillSize );
+    BOOST_CHECK_EQUAL( physB->BBox().GetWidth(), viaWidth );
 
-    // Shape on F_Cu should be backdrill size (smaller than via)
-    BOOST_CHECK_LE( bboxF.GetWidth(), backdillSize + 100 );
+    // Copper clearance measures copper, which the backdrill does not add
+    std::shared_ptr<SHAPE> copperF = via->GetEffectiveShape( F_Cu, FLASHING::DEFAULT, CLEARANCE_CONSTRAINT );
+    std::shared_ptr<SHAPE> copperB = via->GetEffectiveShape( B_Cu, FLASHING::DEFAULT, CLEARANCE_CONSTRAINT );
+
+    BOOST_REQUIRE( copperF );
+    BOOST_REQUIRE( copperB );
+    BOOST_CHECK_EQUAL( copperF->BBox().GetWidth(), viaWidth );
+    BOOST_CHECK_EQUAL( copperB->BBox().GetWidth(), viaWidth );
 }
 
 
@@ -683,6 +698,7 @@ BOOST_FIXTURE_TEST_CASE( CountersinkAngleDecidegrees, BACKDRILL_TEST_FIXTURE )
     int netCode = GetNetCode( "TestNet" );
 
     PCB_VIA* via = new PCB_VIA( m_board.get() );
+    via->SetPadstackMode( PADSTACK::MODE::NORMAL );
     via->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 130 ), pcbIUScale.mmToIU( 10 ) ) );
     via->SetLayerPair( F_Cu, B_Cu );
     via->SetDrill( pcbIUScale.mmToIU( 0.3 ) );
@@ -718,4 +734,108 @@ BOOST_FIXTURE_TEST_CASE( CountersinkAngleDecidegrees, BACKDRILL_TEST_FIXTURE )
 
     const PADSTACK::POST_MACHINING_PROPS& backPM = via->Padstack().BackPostMachining();
     BOOST_CHECK_EQUAL( backPM.angle, 600 );
+}
+
+
+/**
+ * A normal padstack holds one shape, stored under PADSTACK::ALL_LAYERS.  A backdrilled pad
+ * queried on an inner layer must still find that shape instead of throwing.
+ */
+BOOST_FIXTURE_TEST_CASE( PadEffectiveShapeOnBackdrilledInnerLayer, BACKDRILL_TEST_FIXTURE )
+{
+    int netCode = GetNetCode( "TestNet" );
+
+    int padSize = pcbIUScale.mmToIU( 1.5 );
+    int backdrillSize = pcbIUScale.mmToIU( 2.0 );
+
+    FOOTPRINT* fp = CreateFootprintWithPad( VECTOR2I( pcbIUScale.mmToIU( 140 ), pcbIUScale.mmToIU( 10 ) ),
+                                            netCode );
+
+    PAD* pad = fp->Pads().front();
+
+    BOOST_REQUIRE( pad->Padstack().Mode() == PADSTACK::MODE::NORMAL );
+
+    SetPadBackdrill( pad, F_Cu, In2_Cu, backdrillSize );
+
+    BOOST_REQUIRE( pad->IsBackdrilledOrPostMachined( In1_Cu ) );
+
+    std::shared_ptr<SHAPE> physIn1;
+    std::shared_ptr<SHAPE> silkIn1;
+
+    BOOST_REQUIRE_NO_THROW( physIn1 = pad->GetEffectiveShape( In1_Cu, FLASHING::ALWAYS_FLASHED,
+                                                              PHYSICAL_CLEARANCE_CONSTRAINT ) );
+    BOOST_REQUIRE_NO_THROW( silkIn1 = pad->GetEffectiveShape( In1_Cu, FLASHING::ALWAYS_FLASHED,
+                                                              SILK_CLEARANCE_CONSTRAINT ) );
+
+    // Physical and silk clearance have to keep items out of the drilled area
+    BOOST_REQUIRE( physIn1 );
+    BOOST_REQUIRE( silkIn1 );
+    BOOST_CHECK_EQUAL( physIn1->BBox().GetWidth(), backdrillSize );
+    BOOST_CHECK_EQUAL( silkIn1->BBox().GetWidth(), backdrillSize );
+
+    // B_Cu is outside the backdrill, so it keeps the copper shape
+    std::shared_ptr<SHAPE> physB;
+
+    BOOST_REQUIRE_NO_THROW( physB = pad->GetEffectiveShape( B_Cu, FLASHING::ALWAYS_FLASHED,
+                                                            PHYSICAL_CLEARANCE_CONSTRAINT ) );
+    BOOST_REQUIRE( physB );
+    BOOST_CHECK_EQUAL( physB->BBox().GetWidth(), padSize );
+}
+
+
+/**
+ * A via can leave its drill unset and inherit the netclass value.  The hole shape must resolve
+ * that fallback, or hole-to-hole DRC measures from a zero-width hole and reports nothing.
+ */
+BOOST_FIXTURE_TEST_CASE( ViaHoleShapeUsesNetclassDrill, BACKDRILL_TEST_FIXTURE )
+{
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+
+    int netclassDrill = pcbIUScale.mmToIU( 0.4 );
+    int holeToHoleMin = pcbIUScale.mmToIU( 0.5 );
+
+    bds.m_HoleToHoleMin = holeToHoleMin;
+    bds.m_DRCEngine->InitEngine( wxFileName() );
+
+    int netCode = GetNetCode( "TestNet" );
+
+    std::shared_ptr<NETCLASS> netclass = std::make_shared<NETCLASS>( "TestClass" );
+    netclass->SetViaDrill( netclassDrill );
+    m_board->FindNet( netCode )->SetNetClass( netclass );
+
+    // 0.7 mm apart leaves a 0.3 mm web between two 0.4 mm holes, under the minimum
+    VECTOR2I firstPos( pcbIUScale.mmToIU( 150 ), pcbIUScale.mmToIU( 10 ) );
+    VECTOR2I secondPos( firstPos.x + pcbIUScale.mmToIU( 0.7 ), firstPos.y );
+
+    auto addVia =
+            [&]( const VECTOR2I& aPos ) -> PCB_VIA*
+            {
+                PCB_VIA* via = new PCB_VIA( m_board.get() );
+                via->SetPadstackMode( PADSTACK::MODE::NORMAL );
+                via->SetPosition( aPos );
+                via->SetLayerPair( F_Cu, B_Cu );
+                via->SetWidth( PADSTACK::ALL_LAYERS, pcbIUScale.mmToIU( 0.6 ) );
+                via->SetDrillDefault();
+                via->SetNetCode( netCode );
+                m_board->Add( via );
+                return via;
+            };
+
+    PCB_VIA* first = addVia( firstPos );
+    PCB_VIA* second = addVia( secondPos );
+
+    BOOST_REQUIRE_EQUAL( first->GetDrillValue(), netclassDrill );
+
+    std::shared_ptr<SHAPE_SEGMENT> hole = first->GetEffectiveHoleShape( UNDEFINED_LAYER, HOLE_TO_HOLE_CONSTRAINT );
+
+    BOOST_REQUIRE( hole );
+    BOOST_CHECK_EQUAL( hole->GetWidth(), netclassDrill );
+
+    RebuildConnectivity();
+
+    std::vector<DRC_ITEM> violations = RunDRCForErrorCode( DRCE_DRILLED_HOLES_TOO_CLOSE );
+
+    BOOST_REQUIRE_EQUAL( violations.size(), 1u );
+    BOOST_CHECK( violations[0].GetMainItemID() == first->m_Uuid
+                 || violations[0].GetMainItemID() == second->m_Uuid );
 }

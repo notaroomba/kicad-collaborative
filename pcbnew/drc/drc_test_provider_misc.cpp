@@ -427,6 +427,10 @@ void DRC_TEST_PROVIDER_MISC::testTextVars()
         PCB_DIMENSION_T
     };
 
+    // The leading "(^|[^\\\\])" group requires the marker to start the string or follow a non-backslash,
+    // so `\${ERC_ERROR ...}` stays inert.  (The group is just to make it easier for a human to parse.)
+    static wxRegEx varRefRegEx( wxT( "(^|[^\\\\])\\$\\{.*\\}.*" ) );
+
     auto testAssertion =
             [&]( BOARD_ITEM* item, const wxString& text, const VECTOR2I& pos, int layer )
             {
@@ -458,8 +462,7 @@ void DRC_TEST_PROVIDER_MISC::testTextVars()
                                 {
                                     wxString drcText = aExpr.GetMatch( remaining, 2 );
 
-                                    std::shared_ptr<DRC_ITEM> drcItem =
-                                            DRC_ITEM::Create( aErrorCode );
+                                    std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( aErrorCode );
 
                                     if( item )
                                         drcItem->SetItems( item );
@@ -510,16 +513,14 @@ void DRC_TEST_PROVIDER_MISC::testTextVars()
                     // A matched ${DRC_ERROR}/${DRC_WARNING} is the intended signal; the resolved
                     // text still carries a literal ${...}, so flag the unresolved variable only
                     // when no marker fired (matching the drawing-sheet path below).
-                    if( testAssertion( item, textItem->GetText(), item->GetPosition(),
-                                       item->GetLayer() ) )
+                    if( testAssertion( item, textItem->GetText(), item->GetPosition(), item->GetLayer() ) )
                     {
                         // Don't run unresolved test
                     }
-                    else if( ExpandEnvVarSubstitutions( textItem->GetShownText( true ),
-                                                        nullptr /*project already done*/ )
-                                     .Matches( wxT( "*${*}*" ) ) )
+                    else if( varRefRegEx.Matches( ExpandEnvVarSubstitutions( textItem->GetShownText( false ),
+                                                                             nullptr /*project already done*/ ) ) )
                     {
-                        auto drcItem = DRC_ITEM::Create( DRCE_UNRESOLVED_VARIABLE );
+                        std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_UNRESOLVED_VARIABLE );
                         drcItem->SetItems( item );
 
                         reportViolation( drcItem, item->GetPosition(), item->GetLayer() );
@@ -557,7 +558,7 @@ void DRC_TEST_PROVIDER_MISC::testTextVars()
             {
                 // Don't run unresolved test
             }
-            else if( text->GetShownText( true ).Matches( wxT( "*${*}*" ) ) )
+            else if( varRefRegEx.Matches( text->GetShownText( false ) ) )
             {
                 std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_UNRESOLVED_VARIABLE );
                 drcItem->SetItems( drawingSheet );

@@ -1543,6 +1543,13 @@ void SCH_EDIT_FRAME::ProjectChanged()
 {
     SCH_BASE_FRAME::ProjectChanged();
 
+    // Drop the symbol fields table so export paths re-bind to the new project (#22395).
+    if( m_symbolFieldsTableDialog )
+    {
+        m_symbolFieldsTableDialog->Destroy();
+        m_symbolFieldsTableDialog = nullptr;
+    }
+
     // Register schematic saver for autosave history
     Kiway().LocalHistory().RegisterSaver( m_schematic,
             [this]( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
@@ -2052,10 +2059,6 @@ void SCH_EDIT_FRAME::CommonSettingsChanged( int aFlags )
 
         RefreshOperatingPointDisplay();
 
-        settings.m_TemplateFieldNames.DeleteAllFieldNameTemplates( true /* global */ );
-
-        if( !cfg->m_Drawing.field_names.IsEmpty() )
-            settings.m_TemplateFieldNames.AddTemplateFieldNames( cfg->m_Drawing.field_names );
     }
 
     SCH_SCREEN* screen = GetCurrentSheet().LastScreen();
@@ -2296,7 +2299,7 @@ void SCH_EDIT_FRAME::onSize( wxSizeEvent& aEvent )
 }
 
 
-void SCH_EDIT_FRAME::SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol,
+bool SCH_EDIT_FRAME::SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol,
                                             const KIID& aSchematicSymbolUUID )
 {
     SCH_SHEET_PATH principalPath;
@@ -2306,7 +2309,7 @@ void SCH_EDIT_FRAME::SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol,
     SCH_COMMIT     commit( m_toolManager );
 
     if( !principalSymbol )
-        return;
+        return false;
 
     wxString principalRef;
 
@@ -2365,6 +2368,8 @@ void SCH_EDIT_FRAME::SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol,
 
     if( !commit.Empty() )
         commit.Push( _( "Save Symbol to Schematic" ) );
+
+    return true;
 }
 
 
@@ -2464,6 +2469,9 @@ void SCH_EDIT_FRAME::DisplayCurrentSheet()
     m_hierarchy->UpdateHierarchySelection();
 
     m_schematic->OnSchSheetChanged();
+
+    std::string sheetPath = TO_UTF8( GetCurrentSheet().PathAsString() );
+    Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SCH_SHEET_CHANGED, sheetPath, this );
 }
 
 
@@ -3259,9 +3267,9 @@ bool SCH_EDIT_FRAME::validateNewVariantName( const wxString& aName, const wxStri
 
     if( aName.CmpNoCase( GetDefaultVariantName() ) == 0 )
     {
-        GetInfoBar()->ShowMessageFor(
-                wxString::Format( _( "'%s' is a reserved variant name." ), GetDefaultVariantName() ),
-                10000, wxICON_ERROR );
+        GetInfoBar()->ShowMessageFor( wxString::Format( _( "'%s' is a reserved variant name." ),
+                                                        GetDefaultVariantName() ),
+                                      10000, wxICON_ERROR );
         return false;
     }
 
@@ -3269,9 +3277,8 @@ bool SCH_EDIT_FRAME::validateNewVariantName( const wxString& aName, const wxStri
     {
         if( existingName.CmpNoCase( aName ) == 0 && existingName.CmpNoCase( aExcludeName ) != 0 )
         {
-            GetInfoBar()->ShowMessageFor(
-                    wxString::Format( _( "Variant '%s' already exists." ), existingName ),
-                    10000, wxICON_ERROR );
+            GetInfoBar()->ShowMessageFor( wxString::Format( _( "Variant '%s' already exists." ), existingName ),
+                                          10000, wxICON_ERROR );
             return false;
         }
     }

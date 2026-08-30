@@ -24,6 +24,7 @@
 #include <api/api_handler_board.h>
 #include <api/pcb_context.h>
 #include <api/board/board_jobs.pb.h>
+#include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/common/commands/project_commands.pb.h>
 #include <properties/property_mgr.h>
 
@@ -72,6 +73,15 @@ private:
 
     HANDLER_RESULT<CustomRulesResponse> handleSetCustomDesignRules(
             const HANDLER_CONTEXT<SetCustomDesignRules>& aCtx );
+
+    HANDLER_RESULT<common::types::EmbeddedFiles> handleGetEmbeddedFiles(
+            const HANDLER_CONTEXT<GetEmbeddedFiles>& aCtx );
+
+    HANDLER_RESULT<google::protobuf::Empty> handleAddEmbeddedFiles(
+            const HANDLER_CONTEXT<AddEmbeddedFiles>& aCtx );
+
+    HANDLER_RESULT<google::protobuf::Empty> handleSetEmbeddedFiles(
+            const HANDLER_CONTEXT<SetEmbeddedFiles>& aCtx );
 
     HANDLER_RESULT<types::Vector2> handleGetBoardOrigin(
             const HANDLER_CONTEXT<GetBoardOrigin>& aCtx );
@@ -158,6 +168,15 @@ private:
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportStats(
             const HANDLER_CONTEXT<RunBoardJobExportStats>& aCtx );
+
+    HANDLER_RESULT<commands::CrossProbeAnnounceResponse> handleCrossProbeAnnounce(
+            const HANDLER_CONTEXT<commands::CrossProbeAnnounce>& aCtx );
+
+    HANDLER_RESULT<commands::SyncSelectionResponse> handleSyncSelection(
+            const HANDLER_CONTEXT<commands::SyncSelection>& aCtx );
+
+    HANDLER_RESULT<commands::HighlightNetsResponse> handleHighlightNets(
+            const HANDLER_CONTEXT<commands::HighlightNets>& aCtx );
 
 protected:
     kiapi::common::types::DocumentType thisDocumentType() const override

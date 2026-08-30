@@ -86,17 +86,40 @@ int TEARDROP_MANAGER::GetWidth( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer )
 
 bool TEARDROP_MANAGER::IsRound( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer )
 {
+    if( aItem->Type() == PCB_VIA_T )
+        return true;
+
     if( aItem->Type() == PCB_PAD_T )
     {
-        PAD* pad = static_cast<PAD*>( aItem );
+        PAD*     pad = static_cast<PAD*>( aItem );
+        VECTOR2I size = pad->GetSize( aLayer );
 
         return pad->GetShape( aLayer ) == PAD_SHAPE::CIRCLE
-               || ( pad->GetShape( aLayer ) == PAD_SHAPE::OVAL
-                    && pad->GetSize( aLayer ).x
-                               == pad->GetSize( aLayer ).y );
+               || ( pad->GetShape( aLayer ) == PAD_SHAPE::OVAL && size.x == size.y );
     }
 
     return true;
+}
+
+
+bool TEARDROP_MANAGER::IsUniformlyRound(BOARD_ITEM* aItem)
+{
+    if( aItem->Type() == PCB_VIA_T )
+        return true;
+
+    bool nonRound = false;
+
+    if( aItem->Type() == PCB_PAD_T )
+    {
+        static_cast<PAD*>( aItem )->Padstack().ForEachUniqueLayer(
+                [&]( PCB_LAYER_ID aLayer )
+                {
+                    if( !TEARDROP_MANAGER::IsRound( aItem, aLayer ) )
+                        nonRound = true;
+                } );
+    }
+
+    return !nonRound;
 }
 
 
@@ -410,10 +433,8 @@ void TEARDROP_MANAGER::computeCurvedForRoundShape( const TEARDROP_PARAMETERS& aP
  * @param aDesiredDir the direction we want the control point to go (toward track)
  * @return the computed control point
  */
-static VECTOR2I computeCornerTangentControlPoint( const VECTOR2I& aAnchor,
-                                                   const VECTOR2I& aCornerCenter,
-                                                   double aBias,
-                                                   const VECTOR2I& aDesiredDir )
+static VECTOR2I computeCornerTangentControlPoint( const VECTOR2I& aAnchor, const VECTOR2I& aCornerCenter,
+                                                  double aBias, const VECTOR2I& aDesiredDir )
 {
     VECTOR2I radial = aAnchor - aCornerCenter;
 
@@ -921,8 +942,8 @@ bool TEARDROP_MANAGER::findAnchorPointsOnTrack( const TEARDROP_PARAMETERS& aPara
     {
         // To find the starting point we convert the arc to a polyline
         // and compute the intersection point with the pad/via shape
-        SHAPE_ARC arc( aTrack->GetStart(), static_cast<PCB_ARC*>( aTrack )->GetMid(),
-                       aTrack->GetEnd(), aTrack->GetWidth() );
+        SHAPE_ARC arc( aTrack->GetStart(), static_cast<PCB_ARC*>( aTrack )->GetMid(), aTrack->GetEnd(),
+                       aTrack->GetWidth() );
 
         SHAPE_LINE_CHAIN poly = arc.ConvertToPolyline( maxError );
         pt_count = outline.Intersect( poly, pts );
@@ -970,15 +991,9 @@ bool TEARDROP_MANAGER::findAnchorPointsOnTrack( const TEARDROP_PARAMETERS& aPara
             VECTOR2D secondDir;
 
             if( matchType == STARTPOINT )
-            {
-                secondDir = NormalizeVector( connected_track->GetEnd()
-                                             - connected_track->GetStart() );
-            }
+                secondDir = NormalizeVector( connected_track->GetEnd() - connected_track->GetStart() );
             else
-            {
-                secondDir = NormalizeVector( connected_track->GetStart()
-                                             - connected_track->GetEnd() );
-            }
+                secondDir = NormalizeVector( connected_track->GetStart() - connected_track->GetEnd() );
 
             double cosAngle = firstDir.x * secondDir.x + firstDir.y * secondDir.y;
 
@@ -1012,13 +1027,18 @@ bool TEARDROP_MANAGER::findAnchorPointsOnTrack( const TEARDROP_PARAMETERS& aPara
         // To find the best start and end points to build the teardrop shape, we convert
         // the arc to segments, and search for the segment having its start point at a dist
         // < actualTdLen, and its end point at adist > actualTdLen:
-        SHAPE_ARC arc( aTrack->GetStart(), static_cast<PCB_ARC*>( aTrack )->GetMid(),
-                       aTrack->GetEnd(), aTrack->GetWidth() );
+        SHAPE_ARC arc( aTrack->GetStart(), static_cast<PCB_ARC*>( aTrack )->GetMid(), aTrack->GetEnd(),
+                       aTrack->GetWidth() );
 
         if( need_swap )
             arc.Reverse();
 
         SHAPE_LINE_CHAIN poly = arc.ConvertToPolyline( maxError );
+
+        // The conversion places its corner points slightly outside the arc. Move them
+        // onto the arc so they can be used as points on the track centerline.
+        for( int ii = 0; ii < poly.PointCount(); ++ii )
+            poly.SetPoint( ii, arc.NearestPoint( poly.CPoint( ii ) ) );
 
         // Now, find the segment of the arc at a distance < actualTdLen from ref_lenght_point.
         // We just search for the first segment (starting from the farest segment) with its
@@ -1087,11 +1107,8 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
     // Save the original pointer so we can detect two-segment extension.
     PCB_TRACK* originalTrack = aTrack;
 
-    if( !findAnchorPointsOnTrack( aParams, start, end, intersection, aTrack, aOther, aOtherPos,
-                                  &track_stub_len ) )
-    {
+    if( !findAnchorPointsOnTrack( aParams, start, end, intersection, aTrack, aOther, aOtherPos, &track_stub_len ) )
         return false;
-    }
 
     // The start and end points must be different to calculate a valid polygon shape
     if( start == end )
@@ -1119,6 +1136,16 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
 
     // find the 2 points on the track, sharp end of the teardrop
     int track_halfwidth = aTrack->GetWidth() / 2;
+
+    // The canvas draws an arc track as short straight lines that can sit up to the max
+    // deviation inside the true edge. Keep the corners inside the track by that amount
+    // so they cannot show past the drawn edge.
+    if( aTrack->Type() == PCB_ARC_T )
+    {
+        int maxError = m_board->GetDesignSettings().m_MaxError;
+        track_halfwidth = std::max( aTrack->GetWidth() / 4, aTrack->GetWidth() / 2 - maxError );
+    }
+
     VECTOR2I pointB = start + VECTOR2I( vecT.x * track_stub_len + vecT.y * track_halfwidth,
                                         vecT.y * track_stub_len - vecT.x * track_halfwidth );
     VECTOR2I pointA = start + VECTOR2I( vecT.x * track_stub_len - vecT.y * track_halfwidth,
@@ -1370,11 +1397,8 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
                             VECTOR2D p2 = lineOrigin + vecVia * t2;
                             VECTOR2D intPt = VECTOR2D( intersection );
 
-                            if( ( p1 - intPt ).EuclideanNorm()
-                                < ( p2 - intPt ).EuclideanNorm() )
-                            {
+                            if( ( p1 - intPt ).EuclideanNorm() < ( p2 - intPt ).EuclideanNorm() )
                                 return VECTOR2I( KiROUND( p1.x ), KiROUND( p1.y ) );
-                            }
 
                             return VECTOR2I( KiROUND( p2.x ), KiROUND( p2.y ) );
                         };
@@ -1426,8 +1450,7 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
         if( twoSegments )
         {
             std::vector<VECTOR2I> curvePoly;
-            computeCurvedForRoundShape( aParams, curvePoly, layer, track_halfwidth,
-                                        vecVia, aOther, aOtherPos, pts );
+            computeCurvedForRoundShape( aParams, curvePoly, layer, track_halfwidth, vecVia, aOther, aOtherPos, pts );
 
             aCorners.push_back( pointB );
 
@@ -1444,8 +1467,7 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
         }
         else
         {
-            computeCurvedForRoundShape( aParams, aCorners, layer, track_halfwidth,
-                                        vecT, aOther, aOtherPos, pts );
+            computeCurvedForRoundShape( aParams, aCorners, layer, track_halfwidth, vecT, aOther, aOtherPos, pts );
         }
     }
     else
@@ -1458,8 +1480,8 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
         if( twoSegments )
         {
             std::vector<VECTOR2I> curvePoly;
-            computeCurvedForRectShape( aParams, curvePoly, td_width, track_halfwidth, pts,
-                                       intersection, aOther, aOtherPos, layer );
+            computeCurvedForRectShape( aParams, curvePoly, td_width, track_halfwidth, pts, intersection, aOther,
+                                       aOtherPos, layer );
 
             aCorners.push_back( pointB );
 
@@ -1476,8 +1498,8 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
         }
         else
         {
-            computeCurvedForRectShape( aParams, aCorners, td_width, track_halfwidth, pts,
-                                       intersection, aOther, aOtherPos, layer );
+            computeCurvedForRectShape( aParams, aCorners, td_width, track_halfwidth, pts, intersection, aOther,
+                                       aOtherPos, layer );
         }
     }
 

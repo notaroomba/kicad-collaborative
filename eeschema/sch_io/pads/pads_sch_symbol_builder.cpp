@@ -26,21 +26,25 @@
 #include <pin_type.h>
 #include <layer_ids.h>
 #include <sch_screen.h>
+#include <sch_sheet_path.h>
+#include <sch_symbol.h>
 #include <stroke_params.h>
 
 #include <advanced_config.h>
 #include <io/pads/pads_common.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <tuple>
 
 
 namespace PADS_SCH
 {
 
 PADS_SCH_SYMBOL_BUILDER::PADS_SCH_SYMBOL_BUILDER( const PARAMETERS& aParams ) :
-    m_params( aParams )
+        m_params( aParams )
 {
 }
 
@@ -63,7 +67,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildSymbol( const SYMBOL_DEF& aSymbolDef )
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( wxString::FromUTF8( aSymbolDef.name ) );
 
     // Add graphics
-    for( const auto& graphic : aSymbolDef.graphics )
+    for( const SYMBOL_GRAPHIC& graphic : aSymbolDef.graphics )
     {
         std::vector<SCH_SHAPE*> shapes = createShapes( graphic );
 
@@ -72,7 +76,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildSymbol( const SYMBOL_DEF& aSymbolDef )
     }
 
     // Add pins
-    for( const auto& pin : aSymbolDef.pins )
+    for( const SYMBOL_PIN& pin : aSymbolDef.pins )
     {
         SCH_PIN* schPin = createPin( pin, libSymbol );
 
@@ -81,29 +85,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildSymbol( const SYMBOL_DEF& aSymbolDef )
     }
 
     // Add embedded text labels
-    for( const auto& text : aSymbolDef.texts )
+    for( const SYMBOL_TEXT& text : aSymbolDef.texts )
     {
-        if( text.content.empty() )
-            continue;
-
-        SCH_TEXT* schText = new SCH_TEXT(
-                VECTOR2I( toKiCadUnits( text.position.x ), -toKiCadUnits( text.position.y ) ),
-                wxString::FromUTF8( text.content ), LAYER_DEVICE );
-
-        if( text.size > 0.0 )
-        {
-            int scaledSize = toKiCadUnits( text.size );
-            int charHeight = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
-            int charWidth = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
-            schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-        }
-
-        if( text.rotation != 0.0 )
-            schText->SetTextAngleDegrees( text.rotation );
-
-        libSymbol->AddDrawItem( schText );
+        if( SCH_TEXT* schText = createSymbolText( text ) )
+            libSymbol->AddDrawItem( schText );
     }
 
     libSymbol->SetShowPinNumbers( false );
@@ -127,16 +112,16 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateSymbol( const SYMBOL_DEF& aSymbo
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol(
-        const PARTTYPE_DEF& aPartType, const std::vector<SYMBOL_DEF>& aSymbolDefs )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol( const PARTTYPE_DEF&            aPartType,
+                                                           const std::vector<SYMBOL_DEF>& aSymbolDefs )
 {
     // Build a lookup from CAEDECAL name to definition
     std::map<std::string, const SYMBOL_DEF*> symDefByName;
 
-    for( const auto& sd : aSymbolDefs )
+    for( const SYMBOL_DEF& sd : aSymbolDefs )
         symDefByName[sd.name] = &sd;
 
-    int gateCount = static_cast<int>( aPartType.gates.size() );
+    int         gateCount = static_cast<int>( aPartType.gates.size() );
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( wxString::FromUTF8( aPartType.name ) );
     libSymbol->SetUnitCount( gateCount, false );
     libSymbol->LockUnits( true );
@@ -144,7 +129,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol(
     for( int gi = 0; gi < gateCount; gi++ )
     {
         const GATE_DEF& gate = aPartType.gates[gi];
-        int unit = gi + 1;
+        int             unit = gi + 1;
 
         // Resolve the CAEDECAL for this gate
         std::string decalName;
@@ -160,7 +145,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol(
         const SYMBOL_DEF& symDef = *sdIt->second;
 
         // Add graphics for this unit
-        for( const auto& graphic : symDef.graphics )
+        for( const SYMBOL_GRAPHIC& graphic : symDef.graphics )
         {
             std::vector<SCH_SHAPE*> shapes = createShapes( graphic );
 
@@ -195,31 +180,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol(
         }
 
         // Add embedded text labels for this unit
-        for( const auto& text : symDef.texts )
+        for( const SYMBOL_TEXT& text : symDef.texts )
         {
-            if( text.content.empty() )
-                continue;
-
-            SCH_TEXT* schText = new SCH_TEXT(
-                    VECTOR2I( toKiCadUnits( text.position.x ),
-                              -toKiCadUnits( text.position.y ) ),
-                    wxString::FromUTF8( text.content ), LAYER_DEVICE );
-
-            if( text.size > 0.0 )
-            {
-                int scaledSize = toKiCadUnits( text.size );
-                int charHeight = static_cast<int>(
-                            scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
-                int charWidth = static_cast<int>(
-                            scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
-                schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-            }
-
-            if( text.rotation != 0.0 )
-                schText->SetTextAngleDegrees( text.rotation );
-
-            schText->SetUnit( unit );
-            libSymbol->AddDrawItem( schText );
+            if( SCH_TEXT* schText = createSymbolText( text, unit ) )
+                libSymbol->AddDrawItem( schText );
         }
     }
 
@@ -230,8 +194,8 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitSymbol(
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateMultiUnitSymbol(
-        const PARTTYPE_DEF& aPartType, const std::vector<SYMBOL_DEF>& aSymbolDefs )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateMultiUnitSymbol( const PARTTYPE_DEF&            aPartType,
+                                                                 const std::vector<SYMBOL_DEF>& aSymbolDefs )
 {
     // Use a prefixed key to avoid collision with CAEDECAL symbols that may
     // share the same name as the PARTTYPE (e.g. both named "TL082").
@@ -248,14 +212,14 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateMultiUnitSymbol(
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol(
-        const PARTTYPE_DEF& aPartType, const SYMBOL_DEF& aSymbolDef )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol( const PARTTYPE_DEF& aPartType,
+                                                                const SYMBOL_DEF&   aSymbolDef )
 {
     // Cache by PARTTYPE + CAEDECAL pair. A single-gate PARTTYPE with multiple decal
     // variants (e.g. horizontal vs vertical resistor) needs a separate LIB_SYMBOL per
     // variant because the graphics and pin positions differ.
     std::string cacheKey = aPartType.name + ":" + aSymbolDef.name;
-    auto it = m_symbolCache.find( cacheKey );
+    auto        it = m_symbolCache.find( cacheKey );
 
     if( it != m_symbolCache.end() )
         return it->second.get();
@@ -266,7 +230,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol(
     // Build from the CAEDECAL then apply pin overrides from the PARTTYPE gate
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( wxString::FromUTF8( aSymbolDef.name ) );
 
-    for( const auto& graphic : aSymbolDef.graphics )
+    for( const SYMBOL_GRAPHIC& graphic : aSymbolDef.graphics )
     {
         std::vector<SCH_SHAPE*> shapes = createShapes( graphic );
 
@@ -295,36 +259,16 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol(
             libSymbol->AddDrawItem( schPin );
     }
 
-    for( const auto& text : aSymbolDef.texts )
+    for( const SYMBOL_TEXT& text : aSymbolDef.texts )
     {
-        if( text.content.empty() )
-            continue;
-
-        SCH_TEXT* schText = new SCH_TEXT(
-                VECTOR2I( toKiCadUnits( text.position.x ),
-                          -toKiCadUnits( text.position.y ) ),
-                wxString::FromUTF8( text.content ), LAYER_DEVICE );
-
-        if( text.size > 0.0 )
-        {
-            int scaledSize = toKiCadUnits( text.size );
-            int charHeight = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
-            int charWidth = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
-            schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-        }
-
-        if( text.rotation != 0.0 )
-            schText->SetTextAngleDegrees( text.rotation );
-
-        libSymbol->AddDrawItem( schText );
+        if( SCH_TEXT* schText = createSymbolText( text ) )
+            libSymbol->AddDrawItem( schText );
     }
 
     // Show pin names/numbers if any gate pin has an explicit name
     bool hasPinNames = false;
 
-    for( const auto& pin : gate.pins )
+    for( const PARTTYPE_PIN& pin : gate.pins )
     {
         if( !pin.pin_name.empty() )
         {
@@ -345,19 +289,19 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol(
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateConnectorPinSymbol(
-        const PARTTYPE_DEF& aPartType, const SYMBOL_DEF& aSymbolDef,
-        const std::string& aPinNumber )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateConnectorPinSymbol( const PARTTYPE_DEF& aPartType,
+                                                                    const SYMBOL_DEF&   aSymbolDef,
+                                                                    const std::string&  aPinNumber )
 {
     std::string cacheKey = aPartType.name + ":" + aSymbolDef.name + ":" + aPinNumber;
-    auto it = m_symbolCache.find( cacheKey );
+    auto        it = m_symbolCache.find( cacheKey );
 
     if( it != m_symbolCache.end() )
         return it->second.get();
 
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( wxString::FromUTF8( aSymbolDef.name ) );
 
-    for( const auto& graphic : aSymbolDef.graphics )
+    for( const SYMBOL_GRAPHIC& graphic : aSymbolDef.graphics )
     {
         std::vector<SCH_SHAPE*> shapes = createShapes( graphic );
 
@@ -385,30 +329,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateConnectorPinSymbol(
             libSymbol->AddDrawItem( schPin );
     }
 
-    for( const auto& text : aSymbolDef.texts )
+    for( const SYMBOL_TEXT& text : aSymbolDef.texts )
     {
-        if( text.content.empty() )
-            continue;
-
-        SCH_TEXT* schText = new SCH_TEXT(
-                VECTOR2I( toKiCadUnits( text.position.x ),
-                          -toKiCadUnits( text.position.y ) ),
-                wxString::FromUTF8( text.content ), LAYER_DEVICE );
-
-        if( text.size > 0.0 )
-        {
-            int scaledSize = toKiCadUnits( text.size );
-            int charHeight = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
-            int charWidth = static_cast<int>(
-                        scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
-            schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-        }
-
-        if( text.rotation != 0.0 )
-            schText->SetTextAngleDegrees( text.rotation );
-
-        libSymbol->AddDrawItem( schText );
+        if( SCH_TEXT* schText = createSymbolText( text ) )
+            libSymbol->AddDrawItem( schText );
     }
 
     libSymbol->SetShowPinNumbers( false );
@@ -420,11 +344,11 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateConnectorPinSymbol(
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol(
-        const PARTTYPE_DEF& aPartType, const SYMBOL_DEF& aSymbolDef,
-        const std::vector<std::string>& aPinNumbers )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol( const PARTTYPE_DEF&             aPartType,
+                                                                    const SYMBOL_DEF&               aSymbolDef,
+                                                                    const std::vector<std::string>& aPinNumbers )
 {
-    int unitCount = static_cast<int>( aPinNumbers.size() );
+    int         unitCount = static_cast<int>( aPinNumbers.size() );
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( wxString::FromUTF8( aPartType.name ) );
     libSymbol->SetUnitCount( unitCount, false );
     libSymbol->LockUnits( true );
@@ -434,7 +358,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol(
 
     if( !aPartType.gates.empty() )
     {
-        for( const auto& ptPin : aPartType.gates[0].pins )
+        for( const PARTTYPE_PIN& ptPin : aPartType.gates[0].pins )
             ptPinById[ptPin.pin_id] = &ptPin;
     }
 
@@ -442,7 +366,7 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol(
     {
         int unit = u + 1;
 
-        for( const auto& graphic : aSymbolDef.graphics )
+        for( const SYMBOL_GRAPHIC& graphic : aSymbolDef.graphics )
         {
             std::vector<SCH_SHAPE*> shapes = createShapes( graphic );
 
@@ -479,31 +403,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol(
             }
         }
 
-        for( const auto& text : aSymbolDef.texts )
+        for( const SYMBOL_TEXT& text : aSymbolDef.texts )
         {
-            if( text.content.empty() )
-                continue;
-
-            SCH_TEXT* schText = new SCH_TEXT(
-                    VECTOR2I( toKiCadUnits( text.position.x ),
-                              -toKiCadUnits( text.position.y ) ),
-                    wxString::FromUTF8( text.content ), LAYER_DEVICE );
-
-            if( text.size > 0.0 )
-            {
-                int scaledSize = toKiCadUnits( text.size );
-                int charHeight = static_cast<int>(
-                            scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
-                int charWidth = static_cast<int>(
-                            scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
-                schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-            }
-
-            if( text.rotation != 0.0 )
-                schText->SetTextAngleDegrees( text.rotation );
-
-            schText->SetUnit( unit );
-            libSymbol->AddDrawItem( schText );
+            if( SCH_TEXT* schText = createSymbolText( text, unit ) )
+                libSymbol->AddDrawItem( schText );
         }
     }
 
@@ -514,9 +417,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildMultiUnitConnectorSymbol(
 }
 
 
-LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateMultiUnitConnectorSymbol(
-        const PARTTYPE_DEF& aPartType, const SYMBOL_DEF& aSymbolDef,
-        const std::vector<std::string>& aPinNumbers, const std::string& aCacheKey )
+LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreateMultiUnitConnectorSymbol( const PARTTYPE_DEF&             aPartType,
+                                                                          const SYMBOL_DEF&               aSymbolDef,
+                                                                          const std::vector<std::string>& aPinNumbers,
+                                                                          const std::string&              aCacheKey )
 {
     auto it = m_symbolCache.find( aCacheKey );
 
@@ -558,7 +462,7 @@ SCH_SHAPE* PADS_SCH_SYMBOL_BUILDER::createShape( const SYMBOL_GRAPHIC& aGraphic 
     {
         bool hasArcs = false;
 
-        for( const auto& pt : aGraphic.points )
+        for( const GRAPHIC_POINT& pt : aGraphic.points )
         {
             if( pt.arc.has_value() )
             {
@@ -572,8 +476,7 @@ SCH_SHAPE* PADS_SCH_SYMBOL_BUILDER::createShape( const SYMBOL_GRAPHIC& aGraphic 
             shape = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
 
             for( const auto& pt : aGraphic.points )
-                shape->AddPoint( VECTOR2I( toKiCadUnits( pt.coord.x ),
-                                           -toKiCadUnits( pt.coord.y ) ) );
+                shape->AddPoint( VECTOR2I( toKiCadUnits( pt.coord.x ), -toKiCadUnits( pt.coord.y ) ) );
         }
         else
         {
@@ -591,10 +494,8 @@ SCH_SHAPE* PADS_SCH_SYMBOL_BUILDER::createShape( const SYMBOL_GRAPHIC& aGraphic 
 
         if( aGraphic.points.size() >= 2 )
         {
-            VECTOR2I start( toKiCadUnits( aGraphic.points[0].coord.x ),
-                           -toKiCadUnits( aGraphic.points[0].coord.y ) );
-            VECTOR2I end( toKiCadUnits( aGraphic.points[1].coord.x ),
-                         -toKiCadUnits( aGraphic.points[1].coord.y ) );
+            VECTOR2I start( toKiCadUnits( aGraphic.points[0].coord.x ), -toKiCadUnits( aGraphic.points[0].coord.y ) );
+            VECTOR2I end( toKiCadUnits( aGraphic.points[1].coord.x ), -toKiCadUnits( aGraphic.points[1].coord.y ) );
 
             shape->SetStart( start );
             shape->SetEnd( end );
@@ -608,7 +509,7 @@ SCH_SHAPE* PADS_SCH_SYMBOL_BUILDER::createShape( const SYMBOL_GRAPHIC& aGraphic 
         shape = new SCH_SHAPE( SHAPE_T::CIRCLE, LAYER_DEVICE );
 
         VECTOR2I center( toKiCadUnits( aGraphic.center.x ), -toKiCadUnits( aGraphic.center.y ) );
-        int radius = toKiCadUnits( aGraphic.radius );
+        int      radius = toKiCadUnits( aGraphic.radius );
 
         shape->SetStart( center );
         shape->SetEnd( VECTOR2I( center.x + radius, center.y ) );
@@ -621,17 +522,15 @@ SCH_SHAPE* PADS_SCH_SYMBOL_BUILDER::createShape( const SYMBOL_GRAPHIC& aGraphic 
         shape = new SCH_SHAPE( SHAPE_T::ARC, LAYER_DEVICE );
 
         VECTOR2I center( toKiCadUnits( aGraphic.center.x ), -toKiCadUnits( aGraphic.center.y ) );
-        int radius = toKiCadUnits( aGraphic.radius );
+        int      radius = toKiCadUnits( aGraphic.radius );
 
         // Convert angles from PADS format to KiCad
         // PADS uses degrees, KiCad uses tenths of degrees for arc definition
         double startAngle = aGraphic.start_angle * M_PI / 180.0;
         double endAngle = aGraphic.end_angle * M_PI / 180.0;
 
-        VECTOR2I startPt( center.x + radius * cos( startAngle ),
-                          center.y - radius * sin( startAngle ) );
-        VECTOR2I endPt( center.x + radius * cos( endAngle ),
-                        center.y - radius * sin( endAngle ) );
+        VECTOR2I startPt( center.x + radius * cos( startAngle ), center.y - radius * sin( startAngle ) );
+        VECTOR2I endPt( center.x + radius * cos( endAngle ), center.y - radius * sin( endAngle ) );
 
         shape->SetStart( startPt );
         shape->SetEnd( endPt );
@@ -690,36 +589,11 @@ std::vector<SCH_SHAPE*> PADS_SCH_SYMBOL_BUILDER::createShapes( const SYMBOL_GRAP
         if( cur.arc.has_value() )
         {
             const ARC_DATA& ad = *cur.arc;
-            double cx = ( ad.bbox_x1 + ad.bbox_x2 ) / 2.0;
-            double cy = ( ad.bbox_y1 + ad.bbox_y2 ) / 2.0;
-            VECTOR2I center( toKiCadUnits( cx ), -toKiCadUnits( cy ) );
+            double          cx = ( ad.bbox_x1 + ad.bbox_x2 ) / 2.0;
+            double          cy = ( ad.bbox_y1 + ad.bbox_y2 ) / 2.0;
+            VECTOR2I        center( toKiCadUnits( cx ), -toKiCadUnits( cy ) );
 
-            // Compute the arc midpoint on the circle between start and end.
-            // Use vector math: midpoint of arc = center + R * normalize(midvector)
-            // where midvector = (start - center) + (end - center)
-            double sx = startPt.x - center.x;
-            double sy = startPt.y - center.y;
-            double ex = endPt.x - center.x;
-            double ey = endPt.y - center.y;
-            double radius = std::sqrt( sx * sx + sy * sy );
-
-            double mx = sx + ex;
-            double my = sy + ey;
-            double mlen = std::sqrt( mx * mx + my * my );
-
-            VECTOR2I midPt;
-
-            if( mlen > 0.001 )
-            {
-                midPt.x = center.x + static_cast<int>( radius * mx / mlen );
-                midPt.y = center.y + static_cast<int>( radius * my / mlen );
-            }
-            else
-            {
-                // Start and end are diametrically opposite, pick perpendicular direction
-                midPt.x = center.x + static_cast<int>( -sy * radius / std::max( radius, 1.0 ) );
-                midPt.y = center.y + static_cast<int>( sx * radius / std::max( radius, 1.0 ) );
-            }
+            VECTOR2I midPt = padsSchArcMidpoint( startPt, endPt, center );
 
             // The initial midpoint is always on the minor arc side (between start
             // and end radii). Flip to the major arc side when the sweep exceeds
@@ -761,13 +635,52 @@ std::vector<SCH_SHAPE*> PADS_SCH_SYMBOL_BUILDER::createShapes( const SYMBOL_GRAP
 }
 
 
+SCH_TEXT* PADS_SCH_SYMBOL_BUILDER::createSymbolText( const SYMBOL_TEXT& aText, int aUnit )
+{
+    if( aText.content.empty() )
+        return nullptr;
+
+    SCH_TEXT* schText = new SCH_TEXT( VECTOR2I( toKiCadUnits( aText.position.x ), -toKiCadUnits( aText.position.y ) ),
+                                      wxString::FromUTF8( aText.content ), LAYER_DEVICE );
+
+    if( aText.size > 0.0 )
+    {
+        int scaledSize = toKiCadUnits( aText.size );
+        int charHeight = static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextHeightScale );
+        int charWidth = static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsSchTextWidthScale );
+        schText->SetTextSize( VECTOR2I( charWidth, charHeight ) );
+    }
+
+    if( aText.rotation != 0.0 )
+        schText->SetTextAngleDegrees( aText.rotation );
+
+    if( aUnit != 0 )
+        schText->SetUnit( aUnit );
+
+    return schText;
+}
+
+
 SCH_PIN* PADS_SCH_SYMBOL_BUILDER::createPin( const SYMBOL_PIN& aPin, LIB_SYMBOL* aParent )
 {
     SCH_PIN* pin = new SCH_PIN( aParent );
 
     // Set pin name and number
-    pin->SetName( wxString::FromUTF8( aPin.name ) );
-    pin->SetNumber( wxString::FromUTF8( aPin.number ) );
+    if( aPin.name.empty() && aPin.number == "A" )
+    {
+        pin->SetName( wxString::FromUTF8( aPin.number ) );
+        pin->SetNumber( wxT( "2" ) );
+    }
+    else if( aPin.name.empty() && aPin.number == "K" )
+    {
+        pin->SetName( wxString::FromUTF8( aPin.number ) );
+        pin->SetNumber( wxT( "1" ) );
+    }
+    else
+    {
+        pin->SetName( wxString::FromUTF8( aPin.name ) );
+        pin->SetNumber( wxString::FromUTF8( aPin.number ) );
+    }
 
     // Set pin position (end point where wire connects)
     VECTOR2I pos( toKiCadUnits( aPin.position.x ), -toKiCadUnits( aPin.position.y ) );
@@ -782,34 +695,29 @@ SCH_PIN* PADS_SCH_SYMBOL_BUILDER::createPin( const SYMBOL_PIN& aPin, LIB_SYMBOL*
     // the side field indicates which edge of the symbol body the pin is on.
     // Pin decal names containing "VRT" indicate perpendicular pins.
     PIN_ORIENTATION orientation = PIN_ORIENTATION::PIN_RIGHT;
-    bool isVerticalDecal = ( aPin.pin_decal_name.find( "VRT" ) != std::string::npos );
-    int angle = static_cast<int>( aPin.rotation ) % 360;
+    bool            isVerticalDecal = ( aPin.pin_decal_name.find( "VRT" ) != std::string::npos );
+    int             angle = static_cast<int>( aPin.rotation ) % 360;
 
     if( isVerticalDecal )
     {
-        orientation = ( aPin.side == 2 ) ? PIN_ORIENTATION::PIN_UP
-                                         : PIN_ORIENTATION::PIN_DOWN;
+        orientation = ( aPin.side == 2 ) ? PIN_ORIENTATION::PIN_UP : PIN_ORIENTATION::PIN_DOWN;
     }
     else if( angle >= 45 && angle < 135 )
     {
         // Sides 0,1 (horizontal edges) point up; sides 2,3 (vertical edges) point down
-        orientation = ( aPin.side >= 2 ) ? PIN_ORIENTATION::PIN_DOWN
-                                         : PIN_ORIENTATION::PIN_UP;
+        orientation = ( aPin.side >= 2 ) ? PIN_ORIENTATION::PIN_DOWN : PIN_ORIENTATION::PIN_UP;
     }
     else if( angle >= 225 && angle < 315 )
     {
-        orientation = ( aPin.side >= 2 ) ? PIN_ORIENTATION::PIN_UP
-                                         : PIN_ORIENTATION::PIN_DOWN;
+        orientation = ( aPin.side >= 2 ) ? PIN_ORIENTATION::PIN_UP : PIN_ORIENTATION::PIN_DOWN;
     }
     else if( angle >= 135 && angle < 225 )
     {
-        orientation = ( aPin.side & 1 ) ? PIN_ORIENTATION::PIN_RIGHT
-                                        : PIN_ORIENTATION::PIN_LEFT;
+        orientation = ( aPin.side & 1 ) ? PIN_ORIENTATION::PIN_RIGHT : PIN_ORIENTATION::PIN_LEFT;
     }
     else
     {
-        orientation = ( aPin.side & 1 ) ? PIN_ORIENTATION::PIN_LEFT
-                                        : PIN_ORIENTATION::PIN_RIGHT;
+        orientation = ( aPin.side & 1 ) ? PIN_ORIENTATION::PIN_LEFT : PIN_ORIENTATION::PIN_RIGHT;
     }
 
     pin->SetOrientation( orientation );
@@ -836,10 +744,74 @@ SCH_PIN* PADS_SCH_SYMBOL_BUILDER::createPin( const SYMBOL_PIN& aPin, LIB_SYMBOL*
 }
 
 
+/// The distinct body shapes KiCad power symbols are drawn with. Several PADS power names share
+/// a shape, so the name maps to a style and the style alone decides the geometry.
+enum class POWER_STYLE
+{
+    GROUND_BARS,   // three descending horizontal bars, body below the pin
+    FILLED_BAR,    // one thick filled bar, body below the pin
+    FILLED_ARROW,  // filled triangle, body above the pin
+    OPEN_ARROW,    // two open arrow strokes, body below the pin
+    OPEN_CIRCLE    // open circle, body above the pin
+};
+
+
+static POWER_STYLE powerStyleFromName( const std::string& aUpperName )
+{
+    if( aUpperName == "GND" || aUpperName == "GNDA" || aUpperName == "GNDPWR" || aUpperName == "EARTH"
+        || aUpperName == "CHASSIS" )
+    {
+        return POWER_STYLE::GROUND_BARS;
+    }
+
+    if( aUpperName == "GNDD" || aUpperName == "PWR_BAR" )
+        return POWER_STYLE::FILLED_BAR;
+
+    if( aUpperName == "PWR_TRIANGLE" )
+        return POWER_STYLE::FILLED_ARROW;
+
+    if( aUpperName == "VEE" || aUpperName == "VSS" )
+        return POWER_STYLE::OPEN_ARROW;
+
+    return POWER_STYLE::OPEN_CIRCLE;
+}
+
+
+static SCH_SHAPE* addPolyline( LIB_SYMBOL* aSymbol, const std::vector<VECTOR2I>& aPoints, int aWidth = 0 )
+{
+    SCH_SHAPE* shape = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
+
+    for( const VECTOR2I& point : aPoints )
+        shape->AddPoint( point );
+
+    shape->SetStroke( STROKE_PARAMS( aWidth, LINE_STYLE::SOLID ) );
+    aSymbol->AddDrawItem( shape );
+
+    return shape;
+}
+
+
+static void addPowerPin( LIB_SYMBOL* aSymbol, const std::string& aKiCadName, PIN_ORIENTATION aOrientation )
+{
+    SCH_PIN* pin = new SCH_PIN( aSymbol );
+    pin->SetNumber( wxT( "1" ) );
+    pin->SetName( wxString::FromUTF8( aKiCadName ) );
+    pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
+    pin->SetVisible( false );
+    pin->SetLength( 0 );
+    pin->SetPosition( VECTOR2I( 0, 0 ) );
+    pin->SetOrientation( aOrientation );
+    aSymbol->AddDrawItem( pin );
+}
+
+
 LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildKiCadPowerSymbol( const std::string& aKiCadName )
 {
     // Convert mm coordinates from KiCad power symbol library to internal units
-    auto mm = [&]( double v ) { return schIUScale.mmToIU( v ); };
+    auto mm = [&]( double v )
+    {
+        return schIUScale.mmToIU( v );
+    };
 
     LIB_SYMBOL* sym = new LIB_SYMBOL( wxString::FromUTF8( aKiCadName ) );
     sym->SetGlobalPower();
@@ -849,45 +821,31 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildKiCadPowerSymbol( const std::string& a
     // Determine which visual style to use based on the KiCad symbol name
     std::string upper = aKiCadName;
     std::transform( upper.begin(), upper.end(), upper.begin(),
-                    []( unsigned char c ) { return std::toupper( c ); } );
+                    []( unsigned char c )
+                    {
+                        return std::toupper( c );
+                    } );
 
-    bool isGround = ( upper == "GND" || upper == "GNDA" || upper == "GNDPWR" );
-    bool isGNDD = ( upper == "GNDD" );
-    bool isPwrBar = ( upper == "PWR_BAR" );
-    bool isPwrTriangle = ( upper == "PWR_TRIANGLE" );
-    bool isVEE = ( upper == "VEE" || upper == "VSS" );
-    bool isEarth = ( upper == "EARTH" || upper == "CHASSIS" );
-
-    // Default to VCC style (open arrow up) for anything not matched above
-    bool isVCC = !isGround && !isGNDD && !isPwrBar && !isPwrTriangle
-                 && !isVEE && !isEarth;
-
-    if( isGround )
+    switch( powerStyleFromName( upper ) )
     {
-        // Standard GND chevron: polyline (0,0)→(0,-1.27)→(1.27,-1.27)→(0,-2.54)→(-1.27,-1.27)→(0,-1.27)
-        SCH_SHAPE* shape = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        shape->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        shape->AddPoint( VECTOR2I( mm( 0 ), mm( -1.27 ) ) );
-        shape->AddPoint( VECTOR2I( mm( 1.27 ), mm( -1.27 ) ) );
-        shape->AddPoint( VECTOR2I( mm( 0 ), mm( -2.54 ) ) );
-        shape->AddPoint( VECTOR2I( mm( -1.27 ), mm( -1.27 ) ) );
-        shape->AddPoint( VECTOR2I( mm( 0 ), mm( -1.27 ) ) );
-        shape->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( shape );
+    case POWER_STYLE::GROUND_BARS:
+    {
+        const std::array<std::tuple<double, double, double>, 3> bars{ std::tuple{ -1.27, 1.27, -1.27 },
+                                                                      std::tuple{ -0.762, 0.762, -1.778 },
+                                                                      std::tuple{ -0.254, 0.254, -2.286 } };
 
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );
-        sym->AddDrawItem( pin );
+        for( const auto& [x1, x2, y] : bars )
+            addPolyline( sym, { VECTOR2I( mm( x1 ), mm( y ) ), VECTOR2I( mm( x2 ), mm( y ) ) } );
+
+        addPolyline( sym, { VECTOR2I( 0, 0 ), VECTOR2I( 0, mm( -1.27 ) ) } );
+        addPowerPin( sym, aKiCadName, PIN_ORIENTATION::PIN_DOWN );
+        break;
     }
-    else if( isGNDD )
+
+    case POWER_STYLE::FILLED_BAR:
     {
-        // GNDD: thick filled bar + vertical stem
+        // Placed with 180 degree rotation for positive supplies (+V1) so the bar points up on
+        // the schematic. Negative supplies (-V1) use it unrotated.
         SCH_SHAPE* bar = new SCH_SHAPE( SHAPE_T::RECTANGLE, LAYER_DEVICE );
         bar->SetStart( VECTOR2I( mm( -1.27 ), mm( -1.524 ) ) );
         bar->SetEnd( VECTOR2I( mm( 1.27 ), mm( -2.032 ) ) );
@@ -895,176 +853,44 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::BuildKiCadPowerSymbol( const std::string& a
         bar->SetFillMode( FILL_T::FILLED_SHAPE );
         sym->AddDrawItem( bar );
 
-        SCH_SHAPE* stem = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( -1.524 ) ) );
-        stem->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stem );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );
-        sym->AddDrawItem( pin );
+        addPolyline( sym, { VECTOR2I( mm( 0 ), mm( 0 ) ), VECTOR2I( mm( 0 ), mm( -1.524 ) ) } );
+        addPowerPin( sym, aKiCadName, PIN_ORIENTATION::PIN_DOWN );
+        break;
     }
-    else if( isPwrBar )
-    {
-        // PWR_BAR: same bar-down shape as GNDD. Placed with 180° rotation for
-        // positive supplies (+V1) so the bar points up on the schematic.
-        // Negative supplies (-V1) use GNDD directly without rotation.
-        SCH_SHAPE* bar = new SCH_SHAPE( SHAPE_T::RECTANGLE, LAYER_DEVICE );
-        bar->SetStart( VECTOR2I( mm( -1.27 ), mm( -1.524 ) ) );
-        bar->SetEnd( VECTOR2I( mm( 1.27 ), mm( -2.032 ) ) );
-        bar->SetStroke( STROKE_PARAMS( mm( 0.254 ), LINE_STYLE::SOLID ) );
-        bar->SetFillMode( FILL_T::FILLED_SHAPE );
-        sym->AddDrawItem( bar );
 
-        SCH_SHAPE* stem = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( -1.524 ) ) );
-        stem->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stem );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );
-        sym->AddDrawItem( pin );
-    }
-    else if( isPwrTriangle )
+    case POWER_STYLE::FILLED_ARROW:
     {
-        // PWR_TRIANGLE: filled triangle pointing UP (like -9V style)
-        SCH_SHAPE* tri = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        tri->AddPoint( VECTOR2I( mm( 0.762 ), mm( 1.27 ) ) );
-        tri->AddPoint( VECTOR2I( mm( -0.762 ), mm( 1.27 ) ) );
-        tri->AddPoint( VECTOR2I( mm( 0 ), mm( 2.54 ) ) );
-        tri->AddPoint( VECTOR2I( mm( 0.762 ), mm( 1.27 ) ) );
-        tri->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
+        SCH_SHAPE* tri = addPolyline( sym, { VECTOR2I( mm( 0.762 ), mm( 1.27 ) ),
+                                             VECTOR2I( mm( -0.762 ), mm( 1.27 ) ),
+                                             VECTOR2I( mm( 0 ), mm( 2.54 ) ),
+                                             VECTOR2I( mm( 0.762 ), mm( 1.27 ) ) } );
         tri->SetFillMode( FILL_T::FILLED_SHAPE );
-        sym->AddDrawItem( tri );
 
-        SCH_SHAPE* stem = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stem->AddPoint( VECTOR2I( mm( 0 ), mm( 1.27 ) ) );
-        stem->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stem );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_UP );
-        sym->AddDrawItem( pin );
+        addPolyline( sym, { VECTOR2I( mm( 0 ), mm( 0 ) ), VECTOR2I( mm( 0 ), mm( 1.27 ) ) } );
+        addPowerPin( sym, aKiCadName, PIN_ORIENTATION::PIN_UP );
+        break;
     }
-    else if( isVEE )
+
+    case POWER_STYLE::OPEN_ARROW:
+        addPolyline( sym, { VECTOR2I( mm( -0.762 ), mm( -1.27 ) ), VECTOR2I( mm( 0 ), mm( -2.54 ) ) } );
+        addPolyline( sym, { VECTOR2I( mm( 0 ), mm( -2.54 ) ), VECTOR2I( mm( 0.762 ), mm( -1.27 ) ) } );
+        addPolyline( sym, { VECTOR2I( mm( 0 ), mm( 0 ) ), VECTOR2I( mm( 0 ), mm( -2.54 ) ) } );
+        addPowerPin( sym, aKiCadName, PIN_ORIENTATION::PIN_DOWN );
+        break;
+
+    case POWER_STYLE::OPEN_CIRCLE:
     {
-        // VEE: inverted arrow (pointing down), pin at bottom
-        SCH_SHAPE* arrow1 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        arrow1->AddPoint( VECTOR2I( mm( -0.762 ), mm( -1.27 ) ) );
-        arrow1->AddPoint( VECTOR2I( mm( 0 ), mm( -2.54 ) ) );
-        arrow1->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( arrow1 );
+        SCH_SHAPE* circle = new SCH_SHAPE( SHAPE_T::CIRCLE, LAYER_DEVICE );
+        circle->SetCenter( VECTOR2I( 0, mm( 2.032 ) ) );
+        circle->SetEnd( VECTOR2I( mm( 0.635 ), mm( 2.032 ) ) );
+        circle->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
+        circle->SetFillMode( FILL_T::NO_FILL );
+        sym->AddDrawItem( circle );
 
-        SCH_SHAPE* arrow2 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        arrow2->AddPoint( VECTOR2I( mm( 0 ), mm( -2.54 ) ) );
-        arrow2->AddPoint( VECTOR2I( mm( 0.762 ), mm( -1.27 ) ) );
-        arrow2->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( arrow2 );
-
-        SCH_SHAPE* stemLine = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( -2.54 ) ) );
-        stemLine->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stemLine );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );
-        sym->AddDrawItem( pin );
+        addPolyline( sym, { VECTOR2I( 0, 0 ), VECTOR2I( 0, mm( 1.397 ) ) } );
+        addPowerPin( sym, aKiCadName, PIN_ORIENTATION::PIN_UP );
+        break;
     }
-    else if( isEarth )
-    {
-        // Earth: horizontal bars descending in width + vertical stem
-        SCH_SHAPE* bar1 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        bar1->AddPoint( VECTOR2I( mm( -1.27 ), mm( -1.27 ) ) );
-        bar1->AddPoint( VECTOR2I( mm( 1.27 ), mm( -1.27 ) ) );
-        bar1->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( bar1 );
-
-        SCH_SHAPE* bar2 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        bar2->AddPoint( VECTOR2I( mm( -0.762 ), mm( -1.778 ) ) );
-        bar2->AddPoint( VECTOR2I( mm( 0.762 ), mm( -1.778 ) ) );
-        bar2->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( bar2 );
-
-        SCH_SHAPE* bar3 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        bar3->AddPoint( VECTOR2I( mm( -0.254 ), mm( -2.286 ) ) );
-        bar3->AddPoint( VECTOR2I( mm( 0.254 ), mm( -2.286 ) ) );
-        bar3->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( bar3 );
-
-        SCH_SHAPE* stemLine = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( -1.27 ) ) );
-        stemLine->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stemLine );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_DOWN );
-        sym->AddDrawItem( pin );
-    }
-    else if( isVCC )
-    {
-        // VCC style: open arrow pointing up + vertical stem
-        SCH_SHAPE* arrow1 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        arrow1->AddPoint( VECTOR2I( mm( -0.762 ), mm( 1.27 ) ) );
-        arrow1->AddPoint( VECTOR2I( mm( 0 ), mm( 2.54 ) ) );
-        arrow1->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( arrow1 );
-
-        SCH_SHAPE* arrow2 = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        arrow2->AddPoint( VECTOR2I( mm( 0 ), mm( 2.54 ) ) );
-        arrow2->AddPoint( VECTOR2I( mm( 0.762 ), mm( 1.27 ) ) );
-        arrow2->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( arrow2 );
-
-        SCH_SHAPE* stemLine = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( 0 ) ) );
-        stemLine->AddPoint( VECTOR2I( mm( 0 ), mm( 2.54 ) ) );
-        stemLine->SetStroke( STROKE_PARAMS( 0, LINE_STYLE::SOLID ) );
-        sym->AddDrawItem( stemLine );
-
-        SCH_PIN* pin = new SCH_PIN( sym );
-        pin->SetNumber( wxT( "1" ) );
-        pin->SetName( wxString::FromUTF8( aKiCadName ) );
-        pin->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
-        pin->SetVisible( false );
-        pin->SetLength( 0 );
-        pin->SetPosition( VECTOR2I( 0, 0 ) );
-        pin->SetOrientation( PIN_ORIENTATION::PIN_UP );
-        sym->AddDrawItem( pin );
     }
 
     sym->GetReferenceField().SetText( wxT( "#PWR" ) );
@@ -1079,7 +905,10 @@ std::string PADS_SCH_SYMBOL_BUILDER::GetPowerStyleFromVariant( const std::string
 {
     std::string upper = aDecalName;
     std::transform( upper.begin(), upper.end(), upper.begin(),
-                    []( unsigned char c ) { return std::toupper( c ); } );
+                    []( unsigned char c )
+                    {
+                        return std::toupper( c );
+                    } );
 
     bool isPositive = !upper.empty() && upper[0] == '+';
     bool isGround = ( aPinType == "G" );
@@ -1108,8 +937,41 @@ std::string PADS_SCH_SYMBOL_BUILDER::GetPowerStyleFromVariant( const std::string
 }
 
 
-void PADS_SCH_SYMBOL_BUILDER::AddHiddenPowerPins(
-        LIB_SYMBOL* aSymbol, const std::vector<PARTTYPE_DEF::SIGPIN>& aSigpins )
+int PADS_SCH_SYMBOL_BUILDER::NextFreePowerOrdinal( SCH_SHEET* aSheet )
+{
+    int next = 1;
+
+    if( !aSheet )
+        return next;
+
+    // Walk the destination directly; SCHEMATIC::Hierarchy() is a cache the importer has
+    // no reason to have refreshed mid-load
+    for( const SCH_SHEET_PATH& path : SCH_SHEET_LIST( aSheet ) )
+    {
+        SCH_SCREEN* screen = path.LastScreen();
+
+        if( !screen )
+            continue;
+
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            wxString digits;
+            long     ordinal = 0;
+
+            if( static_cast<SCH_SYMBOL*>( item )->GetRef( &path ).StartsWith( wxS( "#PWR" ), &digits )
+                && digits.ToLong( &ordinal ) )
+            {
+                next = std::max( next, static_cast<int>( ordinal ) + 1 );
+            }
+        }
+    }
+
+    return next;
+}
+
+
+void PADS_SCH_SYMBOL_BUILDER::AddHiddenPowerPins( LIB_SYMBOL*                              aSymbol,
+                                                  const std::vector<PARTTYPE_DEF::SIGPIN>& aSigpins )
 {
     if( !aSymbol )
         return;
@@ -1123,7 +985,7 @@ void PADS_SCH_SYMBOL_BUILDER::AddHiddenPowerPins(
             existingPins.insert( static_cast<const SCH_PIN&>( item ).GetNumber() );
     }
 
-    for( const auto& sp : aSigpins )
+    for( const PARTTYPE_DEF::SIGPIN& sp : aSigpins )
     {
         wxString pinNum = wxString::FromUTF8( sp.pin_number );
 
@@ -1149,16 +1011,16 @@ int PADS_SCH_SYMBOL_BUILDER::mapPinType( PIN_TYPE aPadsType )
 {
     switch( aPadsType )
     {
-    case PIN_TYPE::INPUT:           return static_cast<int>( ELECTRICAL_PINTYPE::PT_INPUT );
-    case PIN_TYPE::OUTPUT:          return static_cast<int>( ELECTRICAL_PINTYPE::PT_OUTPUT );
-    case PIN_TYPE::BIDIRECTIONAL:   return static_cast<int>( ELECTRICAL_PINTYPE::PT_BIDI );
-    case PIN_TYPE::TRISTATE:        return static_cast<int>( ELECTRICAL_PINTYPE::PT_TRISTATE );
-    case PIN_TYPE::OPEN_COLLECTOR:  return static_cast<int>( ELECTRICAL_PINTYPE::PT_OPENCOLLECTOR );
-    case PIN_TYPE::OPEN_EMITTER:    return static_cast<int>( ELECTRICAL_PINTYPE::PT_OPENEMITTER );
-    case PIN_TYPE::POWER:           return static_cast<int>( ELECTRICAL_PINTYPE::PT_POWER_IN );
-    case PIN_TYPE::PASSIVE:         return static_cast<int>( ELECTRICAL_PINTYPE::PT_PASSIVE );
+    case PIN_TYPE::INPUT: return static_cast<int>( ELECTRICAL_PINTYPE::PT_INPUT );
+    case PIN_TYPE::OUTPUT: return static_cast<int>( ELECTRICAL_PINTYPE::PT_OUTPUT );
+    case PIN_TYPE::BIDIRECTIONAL: return static_cast<int>( ELECTRICAL_PINTYPE::PT_BIDI );
+    case PIN_TYPE::TRISTATE: return static_cast<int>( ELECTRICAL_PINTYPE::PT_TRISTATE );
+    case PIN_TYPE::OPEN_COLLECTOR: return static_cast<int>( ELECTRICAL_PINTYPE::PT_OPENCOLLECTOR );
+    case PIN_TYPE::OPEN_EMITTER: return static_cast<int>( ELECTRICAL_PINTYPE::PT_OPENEMITTER );
+    case PIN_TYPE::POWER: return static_cast<int>( ELECTRICAL_PINTYPE::PT_POWER_IN );
+    case PIN_TYPE::PASSIVE: return static_cast<int>( ELECTRICAL_PINTYPE::PT_PASSIVE );
     case PIN_TYPE::UNSPECIFIED:
-    default:                        return static_cast<int>( ELECTRICAL_PINTYPE::PT_UNSPECIFIED );
+    default: return static_cast<int>( ELECTRICAL_PINTYPE::PT_UNSPECIFIED );
     }
 }
 
@@ -1168,18 +1030,21 @@ bool PADS_SCH_SYMBOL_BUILDER::IsPowerSymbol( const std::string& aName )
     // Convert to uppercase for case-insensitive comparison
     std::string upper = aName;
     std::transform( upper.begin(), upper.end(), upper.begin(),
-                    []( unsigned char c ) { return std::toupper( c ); } );
+                    []( unsigned char c )
+                    {
+                        return std::toupper( c );
+                    } );
 
     // Check for ground variants
-    if( upper == "GND" || upper == "AGND" || upper == "DGND" || upper == "PGND" ||
-        upper == "EARTH" || upper == "CHASSIS" || upper == "VSS" || upper == "0V" )
+    if( upper == "GND" || upper == "AGND" || upper == "DGND" || upper == "PGND" || upper == "EARTH"
+        || upper == "CHASSIS" || upper == "VSS" || upper == "0V" )
     {
         return true;
     }
 
     // Check for power supply variants
-    if( upper == "VCC" || upper == "VDD" || upper == "VEE" || upper == "VPP" ||
-        upper == "VBAT" || upper == "VBUS" || upper == "V+" || upper == "V-" )
+    if( upper == "VCC" || upper == "VDD" || upper == "VEE" || upper == "VPP" || upper == "VBAT" || upper == "VBUS"
+        || upper == "V+" || upper == "V-" )
     {
         return true;
     }
@@ -1197,7 +1062,10 @@ std::optional<LIB_ID> PADS_SCH_SYMBOL_BUILDER::GetKiCadPowerSymbolId( const std:
     // Convert to uppercase for case-insensitive comparison
     std::string upper = aPadsName;
     std::transform( upper.begin(), upper.end(), upper.begin(),
-                    []( unsigned char c ) { return std::toupper( c ); } );
+                    []( unsigned char c )
+                    {
+                        return std::toupper( c );
+                    } );
 
     // Map common power symbol names to KiCad power library symbols
     struct PowerMapping
@@ -1207,34 +1075,12 @@ std::optional<LIB_ID> PADS_SCH_SYMBOL_BUILDER::GetKiCadPowerSymbolId( const std:
     };
 
     static const PowerMapping mappings[] = {
-        { "GND",     "GND" },
-        { "AGND",    "GND" },
-        { "DGND",    "GNDD" },
-        { "PGND",    "GNDPWR" },
-        { "EARTH",   "Earth" },
-        { "CHASSIS", "Chassis" },
-        { "VSS",     "VSS" },
-        { "0V",      "GND" },
-        { "VCC",     "VCC" },
-        { "VDD",     "VDD" },
-        { "VEE",     "VEE" },
-        { "VPP",     "VPP" },
-        { "VBAT",    "VBAT" },
-        { "VBUS",    "VBUS" },
-        { "V+",      "VCC" },
-        { "V-",      "VEE" },
-        { "+5V",     "+5V" },
-        { "-5V",     "-5V" },
-        { "+3V3",    "+3V3" },
-        { "+3.3V",   "+3V3" },
-        { "+12V",    "+12V" },
-        { "-12V",    "-12V" },
-        { "+15V",    "+15V" },
-        { "-15V",    "-15V" },
-        { "+1V8",    "+1V8" },
-        { "+2V5",    "+2V5" },
-        { "+9V",     "+9V" },
-        { "+24V",    "+24V" },
+        { "GND", "GND" },         { "AGND", "GND" },  { "DGND", "GNDD" }, { "PGND", "GNDPWR" }, { "EARTH", "Earth" },
+        { "CHASSIS", "Chassis" }, { "VSS", "VSS" },   { "0V", "GND" },    { "VCC", "VCC" },     { "VDD", "VDD" },
+        { "VEE", "VEE" },         { "VPP", "VPP" },   { "VBAT", "VBAT" }, { "VBUS", "VBUS" },   { "V+", "VCC" },
+        { "V-", "VEE" },          { "+5V", "+5V" },   { "-5V", "-5V" },   { "+3V3", "+3V3" },   { "+3.3V", "+3V3" },
+        { "+12V", "+12V" },       { "-12V", "-12V" }, { "+15V", "+15V" }, { "-15V", "-15V" },   { "+1V8", "+1V8" },
+        { "+2V5", "+2V5" },       { "+9V", "+9V" },   { "+24V", "+24V" },
     };
 
     for( const auto& mapping : mappings )
@@ -1248,7 +1094,7 @@ std::optional<LIB_ID> PADS_SCH_SYMBOL_BUILDER::GetKiCadPowerSymbolId( const std:
         }
     }
 
-    // Generic fallback for +/- prefixed names not in the table
+    // Generic handling for +/- prefixed names not in the table
     if( upper.length() >= 2 && upper[0] == '+' )
     {
         LIB_ID libId;

@@ -19,79 +19,63 @@
 
 #pragma once
 
-#include <dialog_lib_fields_table_base.h>
-#include <sch_reference_list.h>
+#include <vector>
+
+#include <dialogs/dialog_fields_table.h>
 #include <lib_fields_data_model.h>
-#include <fields_view_controls_grid_data_model.h>
 
-class SYMBOL_EDIT_FRAME;
 class LIB_SYMBOL;
+class SYMBOL_EDIT_FRAME;
 
 
-class DIALOG_LIB_FIELDS_TABLE : public DIALOG_LIB_FIELDS_TABLE_BASE
+class DIALOG_LIB_FIELDS_TABLE : public DIALOG_FIELDS_TABLE
 {
 public:
-    enum SCOPE : int
-    {
-        SCOPE_LIBRARY = 0,
-        SCOPE_RELATED_SYMBOLS
-    };
-
-    DIALOG_LIB_FIELDS_TABLE( SYMBOL_EDIT_FRAME* parent, DIALOG_LIB_FIELDS_TABLE::SCOPE aScope );
+    DIALOG_LIB_FIELDS_TABLE( SYMBOL_EDIT_FRAME* aParent,
+                             LIB_FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE aScope );
     ~DIALOG_LIB_FIELDS_TABLE() override;
 
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
 
-    void ShowHideColumn( int aCol, bool aShow );
+private:
+    void loadSymbols();
+
+    wxGridCellEditor* createDatasheetEditor() override;
+    wxGridCellEditor* createFootprintEditor() override;
+
+    // Don't mark the frame modified for lib tables, we're not modifying the library,
+    // just the application settings for the library editor.
+    void              onBomSettingsChanged() override {}
+
+    void setScope( LIB_FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE aScope );
+
+    /**
+     * Construct the rows of m_fieldsCtrl and the columns of m_dataModel from a union of all
+     * field names in use.
+     */
+    void LoadFieldNames();
+
+    void OnTableSelectionChanged( const std::set<int>& aRows ) override {}
+
+    void OnScope( wxCommandEvent& aEvent ) override;
+    void OnMenu( wxCommandEvent& aEvent ) override;
+
+    void OnSaveAndContinue( wxCommandEvent& aEvent ) override;
+    void OnCancel( wxCommandEvent& aEvent ) override;
+    void OnOk( wxCommandEvent& aEvent ) override;
+    void OnClose( wxCloseEvent& aEvent ) override;
+
+    FIELDS_TABLE_DATA_MODEL_BASE* getDataModel() const override { return m_dataModel; }
 
 private:
-    void UpdateFieldList();
-    void AddField( const wxString& aFieldName, const wxString& aLabelValue, bool show, bool groupBy,
-                   bool addedByUser = false, bool aIsCheckbox = false );
-    void RemoveField( const wxString& fieldName );
-    void RenameField( const wxString& oldName, const wxString& newName );
-    void RegroupSymbols();
+    std::vector<BOM_PRESET> getBuiltInBomPresets() const override;
 
-    void OnColSort( wxGridEvent& aEvent );
-    void OnColMove( wxGridEvent& aEvent );
-    void SetupColumnProperties( int aCol );
-    void SetupAllColumnProperties();
-    void setScope( SCOPE aScope );
-    // Set bitmap and tooltip according to left panel visibility
-    void setSideBarButtonLook( bool aIsLeftPanelCollapsed );
-
-    void loadSymbols( const wxArrayString& aSymbolNames );
-
-    void OnViewControlsCellChanged( wxGridEvent& aEvent ) override;
-    void OnSizeViewControlsGrid( wxSizeEvent& event ) override;
-    void OnAddField( wxCommandEvent& event ) override;
-    void OnRenameField( wxCommandEvent& event ) override;
-    void OnRemoveField( wxCommandEvent& event ) override;
-
-    void OnFilterMouseMoved( wxMouseEvent& event ) override;
-    void OnFilterText( wxCommandEvent& event ) override;
-    void OnScope( wxCommandEvent& event ) override;
-    void OnGroupSymbolsToggled( wxCommandEvent& event ) override;
-    void OnRegroupSymbols( wxCommandEvent& event ) override;
-
-    void OnTableValueChanged( wxGridEvent& event ) override;
-    void OnTableCellClick( wxGridEvent& event ) override;
-    void OnTableItemContextMenu( wxGridEvent& event ) override;
-    void OnTableColSize( wxGridSizeEvent& event ) override;
-
-    void OnSidebarToggle( wxCommandEvent& event ) override;
-    void OnCancel( wxCommandEvent& event ) override;
-    void OnOk( wxCommandEvent& event ) override;
-    void OnApply( wxCommandEvent& event ) override;
-    void OnClose( wxCloseEvent& event ) override;
+    wxString resolveVariant() const override;
+    bool     resolveTextVar( wxString* aToken ) const override;
 
 private:
     SYMBOL_EDIT_FRAME*                 m_parent;
-    SCOPE                              m_scope;
-
-    VIEW_CONTROLS_GRID_DATA_MODEL*     m_viewControlsDataModel;
-
-    LIB_FIELDS_EDITOR_GRID_DATA_MODEL* m_dataModel;
     std::vector<LIB_SYMBOL*>           m_symbolsList;
+    LIB_FIELDS_EDITOR_GRID_DATA_MODEL* m_dataModel = nullptr;
 };

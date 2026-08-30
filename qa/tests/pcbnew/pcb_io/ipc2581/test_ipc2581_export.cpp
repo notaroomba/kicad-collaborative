@@ -37,8 +37,10 @@
 #include <board_design_settings.h>
 #include <board_stackup_manager/board_stackup.h>
 #include <footprint.h>
+#include <netinfo.h>
 #include <pad.h>
 #include <pcb_shape.h>
+#include <pcb_textbox.h>
 #include <pcb_track.h>
 #include <base_units.h>
 
@@ -50,6 +52,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 
@@ -110,6 +113,20 @@ bool FileContainsPattern( const wxString& aFilePath, const wxString& aPattern )
     std::string content = buffer.str();
 
     return content.find( aPattern.ToStdString() ) != std::string::npos;
+}
+
+
+bool XmlRegionHasCoordinateNear( const std::string& aRegion, char aAxis, double aExpected, double aTolerance )
+{
+    std::regex coordinateRegex( std::string( 1, aAxis ) + "=\"(-?[0-9]+(?:\\.[0-9]+)?)\"" );
+
+    for( std::sregex_iterator it( aRegion.begin(), aRegion.end(), coordinateRegex ), end; it != end; ++it )
+    {
+        if( std::abs( std::stod( ( *it )[1].str() ) - aExpected ) <= aTolerance )
+            return true;
+    }
+
+    return false;
 }
 
 
@@ -179,7 +196,10 @@ struct IPC2581_EXPORT_FIXTURE
         return board;
     }
 
-    bool ExportAndValidate( BOARD* aBoard, char aVersion, wxString& aErrorMsg )
+    bool ExportAndValidate( BOARD* aBoard, char aVersion, wxString& aErrorMsg,
+                           const std::string& aMode = std::string(),
+                           const std::string& aRefDes = std::string(),
+                           const std::string& aSections = std::string() )
     {
         wxString tempPath = CreateTempFile();
 
@@ -187,6 +207,18 @@ struct IPC2581_EXPORT_FIXTURE
         props["units"] = "mm";
         props["version"] = std::string( 1, aVersion );
         props["sigfig"] = "3";
+
+        if( !aMode.empty() )
+            props["mode"] = aMode;
+
+        if( !aRefDes.empty() )
+        {
+            props["refdes"] = aRefDes;
+            props["netnames"] = "anonymize";
+        }
+
+        if( !aSections.empty() )
+            props["sections"] = aSections;
 
         try
         {
@@ -413,6 +445,105 @@ BOOST_AUTO_TEST_CASE( SchemaValidationVersionC )
  * Tests boards with zones, custom pads, and other features that may
  * exercise edge cases in the IPC-2581 exporter.
  */
+/**
+ * Every IPC-2581 data set must produce a schema-valid file in both revisions, including
+ * with net names and reference designators withheld.
+ */
+BOOST_AUTO_TEST_CASE( FunctionModeSchemaValidation )
+{
+    if( !m_xmllintAvailable )
+    {
+        BOOST_WARN_MESSAGE( false, "xmllint not available, skipping schema validation tests" );
+        return;
+    }
+
+    static const std::vector<std::string> modes = { "userdef",  "bom",  "stackup", "fabrication",
+                                                    "assembly", "test", "stencil" };
+
+    // Boards chosen for differing content: inner copper, custom pad shapes, and vias
+    static const std::vector<std::string> boards = { "padstacks_complex.kicad_pcb",
+                                                     "custom_pads.kicad_pcb",
+                                                     "tracks_arcs_vias.kicad_pcb" };
+
+    for( const std::string& boardFile : boards )
+    {
+        std::unique_ptr<BOARD> board = LoadBoard( boardFile );
+
+        if( !board )
+        {
+            BOOST_WARN_MESSAGE( false, "Could not load board: " + boardFile );
+            continue;
+        }
+
+        for( const std::string& mode : modes )
+        {
+            for( char version : { 'B', 'C' } )
+            {
+                if( !wxFileExists( GetXsdPath( version ) ) )
+                    continue;
+
+                for( const std::string& refdes : { std::string(), std::string( "omit" ) } )
+                {
+                    BOOST_TEST_CONTEXT( "Board: " << boardFile << " Mode: " << mode
+                                        << " Version: " << version
+                                        << " RefDes: " << ( refdes.empty() ? "include" : refdes ) )
+                    {
+                        wxString errorMsg;
+                        bool     valid = ExportAndValidate( board.get(), version, errorMsg, mode,
+                                                            refdes );
+
+                        BOOST_CHECK_MESSAGE( valid, "validation failed: " + errorMsg );
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Section keys the Table 4 data sets never produce on their own, where a referring
+ * attribute has to be suppressed rather than its section dragged back in.
+ */
+BOOST_AUTO_TEST_CASE( FunctionModeSuppressedReferences )
+{
+    if( !m_xmllintAvailable )
+    {
+        BOOST_WARN_MESSAGE( false, "xmllint not available, skipping schema validation tests" );
+        return;
+    }
+
+    // Components without packages, without a BOM, and without padstacks respectively
+    static const std::vector<std::string> sectionKeys = { "AOU", "ACOU", "KACOU", "ABOU" };
+
+    std::unique_ptr<BOARD> board = LoadBoard( "padstacks_complex.kicad_pcb" );
+
+    BOOST_REQUIRE( board );
+
+    for( const std::string& sections : sectionKeys )
+    {
+        for( char version : { 'B', 'C' } )
+        {
+            if( !wxFileExists( GetXsdPath( version ) ) )
+                continue;
+
+            BOOST_TEST_CONTEXT( "Sections: " << sections << " Version: " << version )
+            {
+                wxString errorMsg;
+                bool     valid = ExportAndValidate( board.get(), version, errorMsg, "userdef",
+                                                    std::string(), sections );
+
+                // Revision B cannot express components without packages and must say so
+                if( version == 'B' && sections.find( 'C' ) == std::string::npos )
+                    BOOST_CHECK_MESSAGE( !valid, "IPC-2581B accepted components with no package" );
+                else
+                    BOOST_CHECK_MESSAGE( valid, "validation failed: " + errorMsg );
+            }
+        }
+    }
+}
+
+
 BOOST_AUTO_TEST_CASE( ComplexBoardExport )
 {
     // Test boards with specific complex features
@@ -448,6 +579,92 @@ BOOST_AUTO_TEST_CASE( ComplexBoardExport )
             }
         }
     }
+}
+
+
+BOOST_AUTO_TEST_CASE( DegenerateTrackArcExportsAsLine )
+{
+    BOARD board;
+    board.SetCopperLayerCount( 2 );
+
+    NETINFO_ITEM* net = new NETINFO_ITEM( &board, wxT( "TestNet" ), 1 );
+    board.Add( net );
+
+    PCB_ARC* arc = new PCB_ARC( &board );
+    arc->SetStart( VECTOR2I( 110737101, 51206997 ) );
+    arc->SetMid( VECTOR2I( 110737003, 51206898 ) );
+    arc->SetEnd( VECTOR2I( 110736905, 51206799 ) );
+    arc->SetWidth( pcbIUScale.mmToIU( 0.11684 ) );
+    arc->SetLayer( F_Cu );
+    arc->SetNet( net );
+    board.Add( arc );
+
+    wxString tempPath = CreateTempFile();
+
+    std::map<std::string, UTF8> props;
+    props["units"] = "mm";
+    props["version"] = "C";
+    props["sigfig"] = "6";
+
+    m_ipc2581Plugin.SaveBoard( tempPath, &board, &props );
+    BOOST_REQUIRE( wxFileExists( tempPath ) );
+
+    BOOST_CHECK( FileContainsPattern( tempPath, wxT( "<Line " ) ) );
+    BOOST_CHECK( !FileContainsPattern( tempPath, wxT( "<Arc " ) ) );
+}
+
+
+/**
+ * Test that text boxes use their calculated drawing position in IPC-2581 output.
+ *
+ * Unlike ordinary text, PCB_TEXTBOX stores its anchor in the box geometry and
+ * overrides GetDrawPos() to calculate it.  GetTextPos() is normally zero, so
+ * using it places the exported text at the board origin.
+ */
+BOOST_AUTO_TEST_CASE( TextBoxUsesDrawPosition )
+{
+    BOARD board;
+
+    PCB_TEXTBOX* textbox = new PCB_TEXTBOX( &board );
+    textbox->SetLayer( F_SilkS );
+    textbox->SetStart( { pcbIUScale.mmToIU( 100 ), pcbIUScale.mmToIU( 50 ) } );
+    textbox->SetEnd( { pcbIUScale.mmToIU( 120 ), pcbIUScale.mmToIU( 60 ) } );
+    textbox->SetText( wxT( "IPC textbox" ) );
+    textbox->SetTextSize( { pcbIUScale.mmToIU( 1 ), pcbIUScale.mmToIU( 1 ) } );
+    textbox->SetTextThickness( pcbIUScale.mmToIU( 0.15 ) );
+    textbox->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
+    textbox->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
+    textbox->SetMarginLeft( 0 );
+    textbox->SetMarginTop( 0 );
+    textbox->SetBorderEnabled( false );
+    board.Add( textbox );
+
+    wxString tempPath = CreateTempFile();
+
+    std::map<std::string, UTF8> props;
+    props["units"] = "mm";
+    props["version"] = "C";
+    props["sigfig"] = "6";
+
+    m_ipc2581Plugin.SaveBoard( tempPath, &board, &props );
+    BOOST_REQUIRE( wxFileExists( tempPath ) );
+
+    std::ifstream xmlFile( tempPath.ToStdString() );
+    BOOST_REQUIRE( xmlFile.is_open() );
+
+    std::string xmlContent( ( std::istreambuf_iterator<char>( xmlFile ) ), std::istreambuf_iterator<char>() );
+    size_t      textStart = xmlContent.find( "value=\"IPC textbox\"" );
+    BOOST_REQUIRE_MESSAGE( textStart != std::string::npos, "Export should contain the text box feature" );
+
+    size_t setEnd = xmlContent.find( "</Set>", textStart );
+    BOOST_REQUIRE( setEnd != std::string::npos );
+
+    std::string textFeature = xmlContent.substr( textStart, setEnd - textStart );
+
+    BOOST_CHECK_MESSAGE( XmlRegionHasCoordinateNear( textFeature, 'x', 100.0, 5.0 ),
+                         "Text box geometry should use its X drawing position" );
+    BOOST_CHECK_MESSAGE( XmlRegionHasCoordinateNear( textFeature, 'y', -50.0, 5.0 ),
+                         "Text box geometry should use its Y drawing position" );
 }
 
 
@@ -696,11 +913,12 @@ BOOST_AUTO_TEST_CASE( BackdrillSpecEncoding )
     // Front-side backdrill: drill from F_Cu, must cut through In3_Cu. The
     // must-not-cut layer should therefore resolve to In4_Cu (the next signal
     // layer past must-cut going inward from the start surface).
-    auto* via = new PCB_VIA( &board );
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPadstackMode( PADSTACK::MODE::NORMAL );
     via->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 5 ), pcbIUScale.mmToIU( 5 ) ) );
     via->SetLayerPair( F_Cu, B_Cu );
     via->SetDrill( pcbIUScale.mmToIU( 0.30 ) );
-    via->SetWidth( pcbIUScale.mmToIU( 0.60 ) );
+    via->SetWidth( PADSTACK::ALL_LAYERS, pcbIUScale.mmToIU( 0.60 ) );
     via->SetSecondaryDrillSize( pcbIUScale.mmToIU( 0.40 ) );
     via->SetSecondaryDrillStartLayer( F_Cu );
     via->SetSecondaryDrillEndLayer( In3_Cu );
@@ -783,26 +1001,25 @@ BOOST_AUTO_TEST_CASE( ExposedPadPasteRespected_Issue24318 )
 
     // Copper-only thermal pad: F.Cu + F.Mask, deliberately NOT on F.Paste.
     PAD* thermalPad = new PAD( fp );
+    thermalPad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     thermalPad->SetNumber( wxT( "33" ) );
     thermalPad->SetAttribute( PAD_ATTRIB::SMD );
     thermalPad->SetProperty( PAD_PROP::HEATSINK );
     thermalPad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
-    thermalPad->SetSize( PADSTACK::ALL_LAYERS,
-                         VECTOR2I( pcbIUScale.mmToIU( 3.45 ), pcbIUScale.mmToIU( 3.45 ) ) );
+    thermalPad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 3.45 ), pcbIUScale.mmToIU( 3.45 ) ) );
     thermalPad->SetLayerSet( LSET( { F_Cu, F_Mask } ) );
     fp->Add( thermalPad );
 
     // Paste-only aperture pad, models a stencil opening for the thermal pad.
     PAD* pasteAperture = new PAD( fp );
+    pasteAperture->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pasteAperture->SetNumber( wxEmptyString );
     pasteAperture->SetAttribute( PAD_ATTRIB::SMD );
     pasteAperture->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
-    pasteAperture->SetSize( PADSTACK::ALL_LAYERS,
-                            VECTOR2I( pcbIUScale.mmToIU( 0.93 ),
-                                      pcbIUScale.mmToIU( 0.93 ) ) );
-    pasteAperture->SetPosition( fp->GetPosition()
-                                + VECTOR2I( pcbIUScale.mmToIU( 1.15 ),
-                                            pcbIUScale.mmToIU( 1.15 ) ) );
+    pasteAperture->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 0.93 ),
+                                                            pcbIUScale.mmToIU( 0.93 ) ) );
+    pasteAperture->SetPosition( fp->GetPosition() + VECTOR2I( pcbIUScale.mmToIU( 1.15 ),
+                                                              pcbIUScale.mmToIU( 1.15 ) ) );
     pasteAperture->SetLayerSet( LSET( { F_Paste } ) );
     fp->Add( pasteAperture );
 
@@ -814,24 +1031,23 @@ BOOST_AUTO_TEST_CASE( ExposedPadPasteRespected_Issue24318 )
     board.Add( fp2 );
 
     PAD* normalSmd = new PAD( fp2 );
+    normalSmd->SetPadstackMode( PADSTACK::MODE::NORMAL );
     normalSmd->SetNumber( wxT( "1" ) );
     normalSmd->SetAttribute( PAD_ATTRIB::SMD );
     normalSmd->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
-    normalSmd->SetSize( PADSTACK::ALL_LAYERS,
-                        VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
+    normalSmd->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
     normalSmd->SetLayerSet( LSET( { F_Cu, F_Mask, F_Paste } ) );
     fp2->Add( normalSmd );
 
     // Implicit-mask control pad: F.Cu only. Mask must be added implicitly by the exporter,
     // matching the #16658 fix. This guards against accidental removal of the mask code path.
     PAD* implicitMaskSmd = new PAD( fp2 );
+    implicitMaskSmd->SetPadstackMode( PADSTACK::MODE::NORMAL );
     implicitMaskSmd->SetNumber( wxT( "2" ) );
     implicitMaskSmd->SetAttribute( PAD_ATTRIB::SMD );
     implicitMaskSmd->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
-    implicitMaskSmd->SetSize( PADSTACK::ALL_LAYERS,
-                              VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
-    implicitMaskSmd->SetPosition( fp2->GetPosition()
-                                  + VECTOR2I( pcbIUScale.mmToIU( 2.0 ), 0 ) );
+    implicitMaskSmd->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
+    implicitMaskSmd->SetPosition( fp2->GetPosition() + VECTOR2I( pcbIUScale.mmToIU( 2.0 ), 0 ) );
     implicitMaskSmd->SetLayerSet( LSET( { F_Cu } ) );
     fp2->Add( implicitMaskSmd );
 
@@ -1007,11 +1223,11 @@ BOOST_AUTO_TEST_CASE( BackOnlyMaskNoFrontOpening_Issue24753 )
 
     // Through-hole pad masked on the back only: *.Cu + B.Mask, deliberately no F.Mask.
     PAD* pad = new PAD( fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetNumber( wxT( "1" ) );
     pad->SetAttribute( PAD_ATTRIB::PTH );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );
-    pad->SetSize( PADSTACK::ALL_LAYERS,
-                  VECTOR2I( pcbIUScale.mmToIU( 2.5 ), pcbIUScale.mmToIU( 4.0 ) ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 2.5 ), pcbIUScale.mmToIU( 4.0 ) ) );
     pad->SetDrillSize( VECTOR2I( pcbIUScale.mmToIU( 1.65 ), pcbIUScale.mmToIU( 1.65 ) ) );
     pad->SetLayerSet( LSET( { F_Cu, B_Cu, B_Mask } ) );
     fp->Add( pad );
@@ -1029,14 +1245,12 @@ BOOST_AUTO_TEST_CASE( BackOnlyMaskNoFrontOpening_Issue24753 )
 
     // The pad must appear on B.Mask (authored) but never on F.Mask.
     std::string fMask = LayerFeatureRegion( xml, "F.Mask" );
-    BOOST_CHECK_MESSAGE(
-            fMask.find( "<PinRef componentRef=\"J29\" pin=\"1\"" ) == std::string::npos,
-            "Back-only masked pad must not appear on F.Mask layer feature" );
+    BOOST_CHECK_MESSAGE( fMask.find( "<PinRef componentRef=\"J29\" pin=\"1\"" ) == std::string::npos,
+                         "Back-only masked pad must not appear on F.Mask layer feature" );
 
     std::string bMask = LayerFeatureRegion( xml, "B.Mask" );
-    BOOST_CHECK_MESSAGE(
-            bMask.find( "<PinRef componentRef=\"J29\" pin=\"1\"" ) != std::string::npos,
-            "Back-only masked pad should appear on B.Mask layer feature" );
+    BOOST_CHECK_MESSAGE( bMask.find( "<PinRef componentRef=\"J29\" pin=\"1\"" ) != std::string::npos,
+                         "Back-only masked pad should appear on B.Mask layer feature" );
 }
 
 
@@ -1058,11 +1272,11 @@ BOOST_AUTO_TEST_CASE( RoundRectMaskRadius_Issue24751 )
     board.Add( fp );
 
     PAD* pad = new PAD( fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetNumber( wxT( "1" ) );
     pad->SetAttribute( PAD_ATTRIB::SMD );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::ROUNDRECT );
-    pad->SetSize( PADSTACK::ALL_LAYERS,
-                  VECTOR2I( pcbIUScale.mmToIU( 0.45 ), pcbIUScale.mmToIU( 0.30 ) ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 0.45 ), pcbIUScale.mmToIU( 0.30 ) ) );
     pad->SetRoundRectRadiusRatio( PADSTACK::ALL_LAYERS, 0.3333333333 );
     pad->SetLayerSet( LSET( { F_Cu, F_Mask } ) );
     pad->SetLocalSolderMaskMargin( pcbIUScale.mmToIU( -0.05 ) );
@@ -1161,11 +1375,11 @@ BOOST_AUTO_TEST_CASE( SolderMaskMarginExpandsMaskPrimitive_Issue24749 )
     board.Add( fp );
 
     PAD* pad = new PAD( fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetNumber( wxT( "1" ) );
     pad->SetAttribute( PAD_ATTRIB::SMD );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
-    pad->SetSize( PADSTACK::ALL_LAYERS,
-                  VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
     pad->SetLayerSet( LSET( { F_Cu, F_Mask } ) );
     pad->SetLocalSolderMaskMargin( pcbIUScale.mmToIU( 0.5 ) );
     fp->Add( pad );
@@ -1212,6 +1426,91 @@ BOOST_AUTO_TEST_CASE( SolderMaskMarginExpandsMaskPrimitive_Issue24749 )
     BOOST_CHECK_MESSAGE( std::abs( diameter - 2.0 ) < 1e-4,
                          "F.Mask primitive diameter should be 2.0 mm (1.0 mm pad + 0.5 mm "
                          "margin per side), got " << diameter );
+}
+
+
+/**
+ * Validate the minimal boards attached to issue #25149 against the IPC-2581C schema.
+ */
+BOOST_AUTO_TEST_CASE( SchemaValidation_Issue25149 )
+{
+    static const std::vector<std::string> boards = {
+        "ipc2581/dielectric-sublayer.kicad_pcb",
+        "ipc2581/edgecuts-circles-only.kicad_pcb",
+        "ipc2581/filled-silk-circle.kicad_pcb",
+        "ipc2581/filled-tented-via.kicad_pcb",
+        "ipc2581/textbox-border.kicad_pcb",
+        "ipc2581/thirty-copper-layers.kicad_pcb",
+        "ipc2581/whitespace-text.kicad_pcb",
+    };
+
+    for( const std::string& boardFile : boards )
+    {
+        BOOST_TEST_CONTEXT( "Board: " << boardFile )
+        {
+            std::unique_ptr<BOARD> board = LoadBoard( boardFile );
+            BOOST_REQUIRE( board );
+
+            wxString errorMsg;
+            bool     valid = ExportAndValidate( board.get(), 'C', errorMsg );
+
+            BOOST_CHECK_MESSAGE( valid, "IPC-2581C validation failed for " + boardFile + ": " + errorMsg );
+        }
+    }
+}
+
+
+/**
+ * A board with no closed outline must export without crashing and omit Profile
+ * (Issue #25149).
+ */
+BOOST_AUTO_TEST_CASE( NoClosedOutline_Issue25149 )
+{
+    std::unique_ptr<BOARD> board = LoadBoard( "ipc2581/edgecuts-circles-only.kicad_pcb" );
+    BOOST_REQUIRE( board );
+
+    wxString tempPath = CreateTempFile();
+    std::map<std::string, UTF8> props;
+    props["units"] = "mm";
+    props["version"] = "C";
+    props["sigfig"] = "3";
+
+    BOOST_REQUIRE_NO_THROW( m_ipc2581Plugin.SaveBoard( tempPath, board.get(), &props ) );
+    BOOST_REQUIRE( wxFileExists( tempPath ) );
+
+    BOOST_CHECK_MESSAGE( !FileContainsPattern( tempPath, wxT( "<Profile" ) ),
+                         "A board with no closed outline must not write a Profile" );
+}
+
+
+/**
+ * Process-layer via pads must sit in a Set at the via position (Issue #25149).
+ */
+BOOST_AUTO_TEST_CASE( ProcessLayerViaPads_Issue25149 )
+{
+    std::unique_ptr<BOARD> board = LoadBoard( "ipc2581/filled-tented-via.kicad_pcb" );
+    BOOST_REQUIRE( board );
+
+    wxString tempPath = CreateTempFile();
+    std::map<std::string, UTF8> props;
+    props["units"] = "mm";
+    props["version"] = "C";
+    props["sigfig"] = "3";
+
+    BOOST_REQUIRE_NO_THROW( m_ipc2581Plugin.SaveBoard( tempPath, board.get(), &props ) );
+    BOOST_REQUIRE( wxFileExists( tempPath ) );
+
+    std::string xml = ReadFile( tempPath );
+
+    std::string region = LayerFeatureRegion( xml, "F.Cu_2" );
+    BOOST_REQUIRE_MESSAGE( !region.empty(), "Export should contain the F.Cu_2 process layer" );
+
+    BOOST_CHECK_MESSAGE( region.find( "<Set" ) != std::string::npos,
+                         "Process-layer via pads must be wrapped in a Set" );
+    BOOST_CHECK_MESSAGE( region.find( "x=\"120.0\" y=\"-115.0\"" ) != std::string::npos,
+                         "Process-layer via pad must be at the via position" );
+    BOOST_CHECK_MESSAGE( region.find( "x=\"0.0\" y=\"0.0\"" ) == std::string::npos,
+                         "Process-layer via pad must not be at (0,0)" );
 }
 
 

@@ -607,7 +607,7 @@ SCH_SHEET* SCH_IO_ALTIUM::LoadSchematicFile( const wxString& aFileName, SCHEMATI
 
         // For single-file import, use the screen's UUID for the root sheet
         if( !aFileName.empty() )
-            const_cast<KIID&>( m_rootSheet->m_Uuid ) = screen->GetUuid();
+            m_rootSheet->SyncUuidToScreen();
     }
 
     m_sheetPath.push_back( m_rootSheet );
@@ -5129,7 +5129,12 @@ void SCH_IO_ALTIUM::ParseSheet( const std::map<wxString, wxString>& aProperties 
 
     screen->SetPageSettings( pageInfo );
 
-    m_sheetOffset = { 0, pageInfo.GetHeightIU( schIUScale.IU_PER_MILS ) };
+    // Altium anchors its snap grid at the sheet origin, which the Y flip maps to the page bottom
+    // ISO heights are not whole mils, so truncate to a grid step rather than flip past the page
+    const int gridPitch = m_schematic->Settings().m_ConnectionGridSize;
+    const int pageHeight = pageInfo.GetHeightIU( schIUScale.IU_PER_MILS );
+
+    m_sheetOffset = { 0, ( pageHeight / gridPitch ) * gridPitch };
 }
 
 
@@ -5606,6 +5611,9 @@ SCH_IO_ALTIUM::ParseLibFile( const ALTIUM_COMPOUND_FILE& aAltiumLibFile )
 
     for( auto& [name, entry] : syms )
     {
+        if( m_reporter )
+            m_reporter->Report( wxString::Format( _( "Converting symbol '%s'" ), name ), RPT_SEVERITY_ACTION );
+
         std::map<int, SYMBOL_PIN_FRAC> pinFracs;
 
         if( entry.m_pinsFrac )
@@ -5784,6 +5792,14 @@ SCH_IO_ALTIUM::ParseLibFile( const ALTIUM_COMPOUND_FILE& aAltiumLibFile )
         ret[name] = symbol;
     }
 
+    if( m_reporter )
+    {
+        for( const auto& [msg, severity] : m_errorMessages )
+            m_reporter->Report( msg, severity );
+    }
+
+    m_errorMessages.clear();
+
     return ret;
 }
 
@@ -5894,6 +5910,9 @@ void SCH_IO_ALTIUM::ParseLibHeader( const ALTIUM_COMPOUND_FILE& aAltiumSchFile,
             if( !remaining.empty() )
             {
                 int ind = wxAtoi( remaining );
+
+                if( ind < 1 )
+                    continue;
 
                 if( static_cast<int>( aFontSizes.size() ) < ind )
                     aFontSizes.resize( ind );

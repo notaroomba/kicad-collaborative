@@ -36,13 +36,21 @@ class wxTextEntryBase;
 class ROW_ICON_PROVIDER;
 
 
-enum KICOMMON_API GROUP_TYPE
+/**
+ * Used primarily by the fields tables to collapse multiple grouped symbols, etc. to allow
+ * viewing and editing of the fields for multiple items at once.
+ */
+enum class KICOMMON_API ROW_STATE
 {
-    GROUP_SINGLETON,
-    GROUP_COLLAPSED,
-    GROUP_COLLAPSED_DURING_SORT,
-    GROUP_EXPANDED,
-    CHILD_ITEM
+    // This does not mean the row contains only one item. For instance,
+    // a row might contain references to U1A and U1B but symbol fields aren't
+    // independently editable for units of one symbol, so the row DATA_MODEL_ROW
+    // will contain multiple references but not be expandable to multiple child items
+    NON_EXPANDABLE,
+    COLLAPSED,
+    COLLAPSED_DURING_SORT,
+    EXPANDED_PARENT,
+    EXPANDED_CHILD
 };
 
 
@@ -73,7 +81,7 @@ public:
     }
 
     virtual bool IsExpanderColumn( int aCol ) const { return false; }
-    virtual GROUP_TYPE GetGroupType( int aRow ) const { return GROUP_SINGLETON; }
+    virtual ROW_STATE GetRowState( int aRow ) const { return ROW_STATE::NON_EXPANDABLE; }
 
     /**
      * Optional identity-based serialization for the host dialog's Ctrl+Z/Ctrl+Y.
@@ -132,6 +140,13 @@ public:
      * @param aEnable flag to specify to enable alternate row striping in the grid.
      */
     void EnableAlternateRowColors( bool aEnable = true );
+
+    /**
+     * Enable repainting for grids whose table uses the cursor row and column when rendering cells.
+     */
+    void EnableCursorRowColumnHighlight( bool aEnable = true ) { m_cursorRowColumnHighlight = aEnable; }
+
+    bool IsCursorRowColumnHighlightEnabled() const { return m_cursorRowColumnHighlight; }
 
     /**
      * Get a tokenized string containing the shown column indexes.
@@ -387,6 +402,7 @@ private:
 
 protected:
     bool                       m_weOwnTable;
+    bool                       m_cursorRowColumnHighlight = false;
 
     std::map<int, UNITS_PROVIDER*>                                 m_unitsProviders;
     std::unique_ptr<NUMERIC_EVALUATOR>                             m_eval;

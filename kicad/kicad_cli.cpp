@@ -75,6 +75,7 @@
 #include "cli/command_pcb_export_pos.h"
 #include "cli/command_pcb_export_ps.h"
 #include "cli/command_pcb_export_stats.h"
+#include "cli/command_pcb_export_stackup.h"
 #include "cli/command_pcb_export_svg.h"
 #include "cli/command_sch_export_pythonbom.h"
 #include "cli/command_sch_export_netlist.h"
@@ -151,6 +152,7 @@ static CLI::PCB_UPGRADE_COMMAND          pcbUpgradeCmd{};
 static CLI::PCB_IMPORT_COMMAND           pcbImportCmd{};
 static CLI::SCH_IMPORT_COMMAND           schImportCmd{};
 static CLI::IMPORT_COMMAND               importCmd{};
+static CLI::EXPORT_BOM_COMMAND           exportPcbBomCmd{ KIWAY::FACE_PCB };
 static CLI::PCB_EXPORT_DRILL_COMMAND     exportPcbDrillCmd{};
 static CLI::PCB_EXPORT_DXF_COMMAND       exportPcbDxfCmd{};
 static CLI::PCB_EXPORT_3D_COMMAND        exportPcbGlbCmd{ "glb", UTF8STDSTR( _( "Export GLB (binary GLTF)" ) ),
@@ -179,6 +181,7 @@ static CLI::PCB_EXPORT_PNG_COMMAND       exportPcbPngCmd{};
 static CLI::PCB_EXPORT_POS_COMMAND       exportPcbPosCmd{};
 static CLI::PCB_EXPORT_PS_COMMAND        exportPcbPsCmd{};
 static CLI::PCB_EXPORT_STATS_COMMAND     exportPcbStatsCmd{};
+static CLI::PCB_EXPORT_STACKUP_COMMAND   exportPcbStackupCmd{};
 static CLI::PCB_EXPORT_GERBERS_COMMAND   exportPcbGerbersCmd{};
 static CLI::PCB_EXPORT_HPGL_COMMAND      exportPcbHpglCmd{};
 static CLI::PCB_EXPORT_GENCAD_COMMAND    exportPcbGencadCmd{};
@@ -269,6 +272,7 @@ static std::vector<COMMAND_ENTRY> commandStack = {
             {
                 &exportPcbCmd,
                 {
+                    &exportPcbBomCmd,
                     &exportPcbBrepCmd,
                     &exportPcbDrillCmd,
                     &exportPcbDxfCmd,
@@ -284,6 +288,7 @@ static std::vector<COMMAND_ENTRY> commandStack = {
                     &exportPcbPosCmd,
                     &exportPcbPsCmd,
                     &exportPcbStatsCmd,
+                    &exportPcbStackupCmd,
                     &exportPcbStepCmd,
                     &exportPcbSvgCmd,
                     &exportPcbVrmlCmd,
@@ -679,9 +684,7 @@ void PGM_KICAD::OnPgmExit()
         SetGitBackend( nullptr );
     }
 
-    // Destroy everything in PGM_KICAD,
-    // especially wxSingleInstanceCheckerImpl earlier than wxApp and earlier
-    // than static destruction would.
+    // Destroy PGM_KICAD earlier than wxApp and static destruction would
     Destroy();
 }
 

@@ -19,6 +19,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <memory>
 #include <import_export.h>
 #include <qa_utils/api_test_utils.h>
 #include <qa_utils/wx_utils/wx_assert.h>
@@ -26,13 +27,19 @@
 #include <settings/settings_manager.h>
 
 #include <api/board/board_types.pb.h>
+#include <api/common/types/embedded_files.pb.h>
 
 #include <board.h>
+#include <embedded_files.h>
 #include <footprint.h>
 #include <pcb_barcode.h>
 #include <pcb_dimension.h>
 #include <pcb_griditem.h>
 #include <pcb_reference_image.h>
+#include <pcb_shape.h>
+#include <pcb_table.h>
+#include <pcb_text.h>
+#include <pcb_textbox.h>
 #include <pcb_track.h>
 #include <zone.h>
 
@@ -55,6 +62,10 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
 
     int barcodeCount = 0;
     int referenceImageCount = 0;
+    int tableCount = 0;
+    int textCount = 0;
+    int textBoxCount = 0;
+    int shapeCount = 0;
 
     for( PCB_TRACK* track : m_board->Tracks() )
     {
@@ -70,11 +81,8 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
             break;
 
         case PCB_VIA_T:
-            // Vias are not strict-checked at the moment because m_zoneLayerOverrides is not
-            // currently exposed to the API
-            // TODO(JE) enable strict when fixed
             testProtoFromKiCadObject<kiapi::board::types::Via>( static_cast<PCB_VIA*>( track ),
-                                                                m_board.get(), false );
+                                                                m_board.get() );
             break;
 
         default:
@@ -129,15 +137,50 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
             ++referenceImageCount;
             break;
 
+        case PCB_TABLE_T:
+            testProtoFromKiCadObject<kiapi::board::types::Table>( static_cast<PCB_TABLE*>( item ), m_board.get() );
+            ++tableCount;
+            break;
+
+        case PCB_TEXT_T:
+            testProtoFromKiCadObject<kiapi::board::types::BoardText>(
+                    static_cast<PCB_TEXT*>( item ), m_board.get() );
+            ++textCount;
+            break;
+
+        case PCB_TEXTBOX_T:
+            testProtoFromKiCadObject<kiapi::board::types::BoardTextBox>(
+                    static_cast<PCB_TEXTBOX*>( item ), m_board.get() );
+            ++textBoxCount;
+            break;
+
+        case PCB_SHAPE_T:
+            testProtoFromKiCadObject<kiapi::board::types::BoardGraphicShape>(
+                    static_cast<PCB_SHAPE*>( item ), m_board.get() );
+            ++shapeCount;
+            break;
+
         default: break;
         }
-        // TODO(JE) Shapes
-
-        // TODO(JE) Text
     }
 
     BOOST_CHECK_GT( barcodeCount, 0 );
     BOOST_CHECK_GT( referenceImageCount, 0 );
+    BOOST_CHECK_GT( tableCount, 0 );
+    BOOST_CHECK_GT( textCount, 0 );
+    BOOST_CHECK_GT( textBoxCount, 0 );
+    BOOST_CHECK_GT( shapeCount, 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( FootprintExcludeFromSimulationRoundTrip )
+{
+    BOARD     board;
+    FOOTPRINT footprint( &board );
+
+    footprint.SetExcludedFromSim( true );
+
+    testProtoFromKiCadObject<kiapi::board::types::FootprintInstance>( &footprint, &board );
 }
 
 
@@ -150,11 +193,7 @@ BOOST_FIXTURE_TEST_CASE( Padstacks, PROTO_TEST_FIXTURE )
         switch( track->Type() )
         {
         case PCB_VIA_T:
-            // Vias are not strict-checked at the moment because m_zoneLayerOverrides is not
-            // currently exposed to the API
-            // TODO(JE) enable strict when fixed
-            testProtoFromKiCadObject<kiapi::board::types::Via>( static_cast<PCB_VIA*>( track ),
-                                                                m_board.get(), false );
+            testProtoFromKiCadObject<kiapi::board::types::Via>( static_cast<PCB_VIA*>( track ), m_board.get() );
             break;
 
         default:
@@ -165,6 +204,45 @@ BOOST_FIXTURE_TEST_CASE( Padstacks, PROTO_TEST_FIXTURE )
     for( FOOTPRINT* footprint : m_board->Footprints() )
         testProtoFromKiCadObject<kiapi::board::types::FootprintInstance>( footprint, m_board.get() );
 }
+
+
+BOOST_FIXTURE_TEST_CASE( EmbeddedFiles, PROTO_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "api_kitchen_sink", m_board );
+
+    for( const FOOTPRINT* fp : m_board->Footprints() )
+    {
+        if( fp->EmbeddedFileMap().empty() )
+            continue;
+
+        BOOST_TEST_CONTEXT( wxString::Format( wxS( "Footprint %s embedded files" ), fp->m_Uuid.AsStdString() ) )
+        {
+            google::protobuf::Any any;
+            fp->Serialize( any );
+
+            kiapi::board::types::FootprintInstance proto;
+            BOOST_CHECK( any.UnpackTo( &proto ) );
+
+            BOOST_CHECK_GT( proto.embedded_files().files_size(), 0 );
+
+            const kiapi::common::types::EmbeddedFile& file = proto.embedded_files().files( 0 );
+            BOOST_CHECK( !file.data().empty() );
+
+            std::unique_ptr<FOOTPRINT> roundTripped = std::make_unique<FOOTPRINT>( m_board.get() );
+            BOOST_CHECK( roundTripped->Deserialize( any ) );
+
+            for( const auto& [name, expected] : fp->EmbeddedFileMap() )
+            {
+                const EMBEDDED_FILES::EMBEDDED_FILE* actual = roundTripped->GetEmbeddedFile( name );
+                BOOST_CHECK_MESSAGE( actual, wxString::Format( wxS( "Embedded file '%s' missing after round-trip" ), name ).c_str() );
+                BOOST_CHECK_EQUAL( magic_enum::enum_name( expected->type ), magic_enum::enum_name( actual->type ) );
+                BOOST_CHECK_EQUAL( expected->data_hash, actual->data_hash );
+                BOOST_CHECK_EQUAL( expected->compressedEncodedData, actual->compressedEncodedData );
+            }
+        }
+    }
+}
+
 
 /**
  * Round-trip a copper-thieving zone through the protobuf API.  The shared

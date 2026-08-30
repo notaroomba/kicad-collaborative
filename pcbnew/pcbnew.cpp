@@ -28,15 +28,14 @@
 #include <api/api_handler_pcb.h>
 #include <api/api_server.h>
 #include <api/api_utils.h>
+#include <api/cross_probe_client.h>
 #include <api/headless_footprint_context.h>
 #include <api/headless_pcb_context.h>
 #include <kiface_base.h>
 #include <kiface_ids.h>
 #include <kiway_holder.h>
 #include <pcb_edit_frame.h>
-#include <eda_dde.h>
 #include <macros.h>
-#include <wx/snglinst.h>
 #include <gestfich.h>
 #include <paths.h>
 #include <pcbnew_settings.h>
@@ -272,7 +271,8 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             if( Kiface().IsSingle() )
             {
                 // only run this under single_top, not under a project manager.
-                frame->CreateServer( KICAD_PCB_PORT_SERVICE_NUMBER );
+                if( !CROSS_PROBE_CLIENT::IsOnStandardSocketPath() )
+                    CROSS_PROBE_CLIENT::AnnounceToPrimary( FRAME_PCB_EDITOR );
             }
 
             return frame;
@@ -593,7 +593,7 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
     bool HandleJobConfig( JOB* aJob, wxWindow* aParent ) override;
 
-    bool HandleApiOpenDocument( const wxString& aPath,
+    bool HandleApiOpenDocument( const DOCUMENT_SPEC& aSpec,
                                 KICAD_API_SERVER* aServer,
                                 wxString* aError ) override;
 
@@ -879,11 +879,14 @@ void IFACE::closeCurrentDocument( KICAD_API_SERVER* aServer )
 }
 
 
-bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError )
+bool IFACE::HandleApiOpenDocument( const DOCUMENT_SPEC& aSpec, KICAD_API_SERVER* aServer, wxString* aError )
 {
     wxCHECK( aServer, false );
 
-    if( aPath.IsEmpty() )
+    if( aSpec.kind == DOCUMENT_SPEC::KIND::FPID )
+        return handleOpenFootprint( aSpec.path, aSpec.libId.GetUniStringLibId(), aServer, aError );
+
+    if( aSpec.path.IsEmpty() )
     {
         if( aError )
             *aError = wxS( "No path specified to open" );
@@ -891,7 +894,7 @@ bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aSer
         return false;
     }
 
-    return handleOpenPcb( aPath, aServer, aError );
+    return handleOpenPcb( aSpec.path, aServer, aError );
 }
 
 
@@ -977,19 +980,22 @@ bool IFACE::handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxS
 
     projectPath.MakeAbsolute();
 
-    // Close any existing document before loading a new project. LoadProject with
-    // aSetActive=true destroys the old PROJECT, which would leave the old board and
-    // context holding dangling m_project pointers.
+    // We currently only support one document per type (and each needs to come from
+    // the same project).  This will need evolution once we support MDI and multi-project.
     closeCurrentDocument( aServer );
 
     SETTINGS_MANAGER& settingsManager = Pgm().GetSettingsManager();
 
-    if( !settingsManager.LoadProject( projectPath.GetFullPath(), true ) )
-    {
-        wxLogTrace( traceApi, "Warning: no project file found for %s", aPath );
-    }
-
+    // Reuse an already-loaded project if one exists for this path.
     PROJECT* project = settingsManager.GetProject( projectPath.GetFullPath() );
+
+    if( !project )
+    {
+        if( !settingsManager.LoadProject( projectPath.GetFullPath(), true ) )
+            wxLogTrace( traceApi, "Warning: no project file found for %s", aPath );
+
+        project = settingsManager.GetProject( projectPath.GetFullPath() );
+    }
 
     if( !project )
     {
@@ -1171,28 +1177,8 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
             // crashes when switching projects during library preload.
             if( !aborted )
             {
-                // Collect and report library load errors from adapter
-                wxString errors = adapter->GetLibraryLoadErrors();
-
-                wxLogTrace( traceLibraries,
-                            "pcbnew PreloadLibraries: adapter errors.IsEmpty()=%d, length=%zu",
-                            errors.IsEmpty(), errors.length() );
-
-                if( !errors.IsEmpty() )
-                {
-                    std::vector<LOAD_MESSAGE> messages =
-                            ExtractLibraryLoadErrors( errors, RPT_SEVERITY_ERROR );
-
-                    wxLogTrace( traceLibraries, "  -> adapter: collected %zu messages",
-                                messages.size() );
-
-                    if( !messages.empty() )
-                        Pgm().AddLibraryLoadMessages( messages );
-                }
-                else
-                {
-                    wxLogTrace( traceLibraries, "  -> no errors from footprint adapter" );
-                }
+                // Report library load errors from adapter
+                Pgm().AddLibraryLoadMessages( adapter->GetLibraryLoadErrors() );
             }
             else
             {

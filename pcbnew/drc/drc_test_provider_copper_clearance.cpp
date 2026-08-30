@@ -80,7 +80,7 @@ private:
 
     void testTrackClearances();
 
-    bool testPadAgainstItem( PAD* pad, SHAPE* padShape, PCB_LAYER_ID layer, BOARD_ITEM* other );
+    bool testPadAgainstItem( PAD* pad, const std::shared_ptr<SHAPE>& padShape, PCB_LAYER_ID layer, BOARD_ITEM* other );
 
     void testPadClearances();
 
@@ -275,10 +275,13 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem( BOARD_I
             }
             else if( actual == 0 && otherNet && testShorting )
             {
+                int itemNetCode = itemNet ? itemNet->GetNetCode() : 0;
+                int otherNetCode = otherNet ? otherNet->GetNetCode() : 0;
+
                 std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_SHORTING_ITEMS );
                 drcItem->SetErrorDetail( wxString::Format( _( "(nets %s and %s)" ),
-                                                           itemNet ? itemNet->GetNetname() : _( "<no net>" ),
-                                                           otherNet ? otherNet->GetNetname() : _( "<no net>" ) ) );
+                                                           itemNetCode ? itemNet->GetNetname() : _( "<no net>" ),
+                                                           otherNetCode ? otherNet->GetNetname() : _( "<no net>" ) ) );
                 drcItem->SetItems( item, other );
                 reportTwoPointGeometry( drcItem, pos, pos, pos, layer );
                 has_error = true;
@@ -566,10 +569,14 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testKnockoutTextAgainstZone( BOARD_ITEM
 
             if( testShorts && actual == 0 && *aInheritedNet )
             {
+                int             inheritedNetCode = ( *aInheritedNet )->GetNetCode();
+                const wxString& inheritedNetname = ( *aInheritedNet )->GetNetname();
+                int             zoneNetCode = aZone->GetNetCode();
+
                 drcItem = DRC_ITEM::Create( DRCE_SHORTING_ITEMS );
                 drcItem->SetErrorDetail( wxString::Format( _( "(nets %s and %s)" ),
-                                                           ( *aInheritedNet )->GetNetname(),
-                                                           aZone->GetNetname() ) );
+                                                           inheritedNetCode ? inheritedNetname : _( "<no net>" ),
+                                                           zoneNetCode ? aZone->GetNetname() : _( "<no net>" ) ) );
             }
             else
             {
@@ -703,8 +710,8 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testTrackClearances()
 }
 
 
-bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* padShape, PCB_LAYER_ID aLayer,
-                                                             BOARD_ITEM* other )
+bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, const std::shared_ptr<SHAPE>& padShape,
+                                                             PCB_LAYER_ID aLayer, BOARD_ITEM* other )
 {
     bool testClearance = !m_drcEngine->IsErrorLimitExceeded( DRCE_CLEARANCE );
     bool testShorting = !m_drcEngine->IsErrorLimitExceeded( DRCE_SHORTING_ITEMS );
@@ -806,8 +813,9 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
 
             std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_SHORTING_ITEMS );
             drcItem->SetErrorDetail( wxString::Format( _( "(nets %s and %s)" ),
-                                                       pad->GetNetname(),
-                                                       otherPad->GetNetname() ) );
+                                                       padNet ? pad->GetNetname() : _( "<no net>" ),
+                                                       otherNet ? otherPad->GetNetname() : _( "<no net>" ) ) );
+
             drcItem->SetItems( pad, otherPad );
             reportViolation( drcItem, otherPad->GetPosition(), aLayer );
             has_error = true;
@@ -834,8 +842,8 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
                 {
                     std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_SHORTING_ITEMS );
                     drcItem->SetErrorDetail( wxString::Format( _( "(nets %s and %s)" ),
-                                                               pad->GetNetname(),
-                                                               otherCItem->GetNetname() ) );
+                                                               padNet ? pad->GetNetname() : _( "<no net>" ),
+                                                               otherNet ? otherPad->GetNetname() : _( "<no net>" ) ) );
                     drcItem->SetItems( pad, other );
                     reportTwoPointGeometry( drcItem, pos, pos, pos, aLayer );
                     has_error = true;
@@ -859,20 +867,20 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
     }
 
     auto doTestHole =
-            [&]( BOARD_ITEM* item, SHAPE* shape, BOARD_ITEM* otherItem, SHAPE* aOtherShape, int aClearance )
+            [&]( BOARD_ITEM* item, const std::shared_ptr<SHAPE>& shape, BOARD_ITEM* otherItem,
+                 const std::shared_ptr<SHAPE_SEGMENT>& aOtherShape, int aClearance )
             {
-                if( shape->Collide( aOtherShape, sub_e( aClearance ), &actual, &pos ) )
+                if( shape->Collide( aOtherShape.get(), sub_e( aClearance ), &actual, &pos ) )
                 {
                     std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_HOLE_CLEARANCE );
                     drcItem->SetErrorDetail( formatMsg( _( "(%s clearance %s; actual %s)" ),
-                                                        constraint.GetName(),
-                                                        aClearance,
-                                                        actual ) );
+                                             constraint.GetName(),
+                                             aClearance, actual ) );
                     drcItem->SetItems( item, otherItem );
                     drcItem->SetViolatingRule( constraint.GetParentRule() );
-                    reportTwoShapeGeometry( drcItem, pos, shape, aOtherShape, aLayer, actual );
+                    reportTwoShapeGeometry( drcItem, pos, shape.get(), aOtherShape.get(), aLayer, actual );
                     has_error = true;
-                    testHoles = false;  // No need for multiple violations
+                    testHoles = false; // No need for multiple violations
                 }
             };
 
@@ -890,8 +898,8 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
 
         if( clearance > 0 )
         {
-            SHAPE_SEGMENT* otherHole = otherPad->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ).get();
-            doTestHole( pad, padShape, otherPad, otherHole, clearance );
+            doTestHole( pad, padShape, otherPad, otherPad->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ),
+                        clearance );
         }
     }
 
@@ -903,8 +911,8 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
 
         if( clearance > 0 )
         {
-            SHAPE_SEGMENT* hole = pad->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ).get();
-            doTestHole( otherPad, otherShape.get(), pad, hole, clearance );
+            doTestHole( otherPad, otherShape, pad, pad->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ),
+                        clearance );
         }
     }
 
@@ -917,8 +925,8 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadAgainstItem( PAD* pad, SHAPE* pa
 
         if( clearance > 0 )
         {
-            SHAPE_SEGMENT* viaHole = otherVia->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ).get();
-            doTestHole( pad, padShape, otherVia, viaHole, clearance );
+            doTestHole( pad, padShape, otherVia, otherVia->GetEffectiveHoleShape( aLayer, HOLE_CLEARANCE_CONSTRAINT ),
+                        clearance );
         }
     }
 
@@ -950,7 +958,8 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadClearances( )
 
                         std::shared_ptr<SHAPE> padShape = pad->GetEffectiveShape( layer );
 
-                        m_board->m_CopperItemRTreeCache->QueryColliding( pad, layer, layer,
+                        m_board->m_CopperItemRTreeCache->QueryColliding(
+                                pad, layer, layer,
                                 // Filter:
                                 [&]( BOARD_ITEM* other ) -> bool
                                 {
@@ -966,7 +975,7 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadClearances( )
                                 // Visitor
                                 [&]( BOARD_ITEM* other ) -> bool
                                 {
-                                    testPadAgainstItem( pad, padShape.get(), layer, other );
+                                    testPadAgainstItem( pad, padShape, layer, other );
                                     return !m_drcEngine->IsCancelled();
                                 },
                                 m_board->m_DRCMaxClearance );
@@ -1231,9 +1240,7 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testZonesToZones()
             [this]( ZONE* zoneA, ZONE* zoneB, VECTOR2I& pt, int actual, const DRC_CONSTRAINT& constraint,
                     PCB_LAYER_ID layer ) -> void
             {
-                std::shared_ptr<DRC_ITEM> drcItem;
-
-                drcItem = DRC_ITEM::Create( DRCE_CLEARANCE );
+                std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_CLEARANCE );
                 drcItem->SetErrorDetail( formatMsg( _( "(%s clearance %s; actual %s)" ),
                                                     constraint.GetName(),
                                                     constraint.GetValue().Min(),

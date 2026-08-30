@@ -21,10 +21,9 @@
 #include <advanced_config.h>
 #include <common.h>
 #include <base_units.h>
-#include <bitmaps.h>
 #include <confirm.h>
 #include <eda_doc.h>
-#include <wildcards_and_files_ext.h>
+#include <fields_grid_table.h>
 #include <schematic_settings.h>
 #include <general.h>
 #include <grid_tricks.h>
@@ -32,28 +31,23 @@
 #include <template_fieldnames.h>
 #include <kiface_base.h>
 #include <sch_edit_frame.h>
+#include <sch_group.h>
 #include <widgets/wx_infobar.h>
 #include <sch_reference_list.h>
 #include <tools/sch_editor_control.h>
-#include <kiplatform/ui.h>
 #include <widgets/grid_text_button_helpers.h>
-#include <widgets/grid_text_helpers.h>
-#include <widgets/bitmap_button.h>
 #include <widgets/std_bitmap_button.h>
 #include <widgets/wx_grid.h>
-#include <widgets/grid_checkbox.h>
 #include <wx/debug.h>
-#include <wx/ffile.h>
 #include <wx/grid.h>
 #include <wx/textdlg.h>
-#include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 #include <dialogs/eda_view_switcher.h>
 #include "dialog_symbol_fields_table.h"
 #include "dialog_resolve_field_case_conflicts.h"
-#include <fields_data_model.h>
-#include <eda_list_dialog.h>
+#include <symbol_fields_data_model.h>
 #include <project_sch.h>
+#include <project/project_file.h>
 #include <jobs/job_export_bom.h>
 #include <tools/sch_actions.h>
 #include <tools/sch_selection_tool.h>
@@ -61,48 +55,56 @@
 
 wxDEFINE_EVENT( EDA_EVT_CLOSE_DIALOG_SYMBOL_FIELDS_TABLE, wxCommandEvent );
 
-#ifdef __WXMAC__
-#define COLUMN_MARGIN 4
-#else
-#define COLUMN_MARGIN 15
-#endif
+using SCOPE = SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE;
 
-using SCOPE = FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE;
+
+// Used for the footprint chooser grid helper
+static wxString getFootprintChooserSymbolNetlist( const std::vector<SCH_REFERENCE>& aReferences,
+                                                  const wxString&                   aVariantName )
+{
+    std::vector<LIB_SYMBOL*> symbols;
+
+    for( const SCH_REFERENCE& reference : aReferences )
+    {
+        SCH_SYMBOL* symbol = reference.GetSymbol();
+
+        if( !symbol )
+            return wxEmptyString;
+
+        LIB_SYMBOL* libSymbol = symbol->GetLibSymbolRef().get();
+
+        if( LIB_SYMBOL* variantSymbol =
+                    symbol->GetVariantLibSymbol( aVariantName, reference.GetSheetPath() ) )
+        {
+            libSymbol = variantSymbol;
+        }
+
+        symbols.push_back( libSymbol );
+    }
+
+    return BuildFootprintChooserSymbolNetlist( symbols );
+}
 
 
 enum
 {
-    MYID_SELECT_FOOTPRINT = GRIDTRICKS_FIRST_CLIENT_ID,
+    MYID_SELECT_FOOTPRINT = FIELDS_TABLE_GRID_TRICKS::FIRST_CLIENT_ID,
     MYID_SHOW_DATASHEET,
     MYID_SET_VARIANT_SYMBOL,
-    MYID_CLEAR_VARIANT_SYMBOL
+    MYID_CLEAR_VARIANT_SYMBOL,
+    MYID_INCLUDE_DNP,
+    MYID_INCLUDE_EXCLUDED_FROM_BOM,
+    MYID_HIGHLIGHT_ON_CROSS_PROBE,
+    MYID_SELECT_ON_CROSS_PROBE
 };
 
-class VIEW_CONTROLS_GRID_TRICKS : public GRID_TRICKS
+class SYMBOL_FIELDS_EDITOR_GRID_TRICKS : public FIELDS_TABLE_GRID_TRICKS
 {
 public:
-    VIEW_CONTROLS_GRID_TRICKS( WX_GRID* aGrid ) :
-            GRID_TRICKS( aGrid )
-    {}
-
-protected:
-    void doPopupSelection( wxCommandEvent& event ) override
-    {
-        if( event.GetId() >= GRIDTRICKS_FIRST_SHOWHIDE )
-            m_grid->PostSizeEvent();
-
-        GRID_TRICKS::doPopupSelection( event );
-    }
-};
-
-
-class FIELDS_EDITOR_GRID_TRICKS : public GRID_TRICKS
-{
-public:
-    FIELDS_EDITOR_GRID_TRICKS( DIALOG_SYMBOL_FIELDS_TABLE* aParent, WX_GRID* aGrid,
-                               VIEW_CONTROLS_GRID_DATA_MODEL* aViewFieldsData,
-                               FIELDS_EDITOR_GRID_DATA_MODEL* aDataModel, EMBEDDED_FILES* aFiles ) :
-            GRID_TRICKS( aGrid ),
+    SYMBOL_FIELDS_EDITOR_GRID_TRICKS( DIALOG_SYMBOL_FIELDS_TABLE* aParent, WX_GRID* aGrid,
+                                      VIEW_CONTROLS_GRID_DATA_MODEL*        aViewFieldsData,
+                                      SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL* aDataModel, EMBEDDED_FILES* aFiles ) :
+            FIELDS_TABLE_GRID_TRICKS( aParent, aGrid, aDataModel ),
             m_dlg( aParent ),
             m_viewControlsDataModel( aViewFieldsData ),
             m_dataModel( aDataModel ),
@@ -110,71 +112,80 @@ public:
     {}
 
 protected:
-    void showPopupMenu( wxMenu& menu, wxGridEvent& aEvent ) override
+    bool toggleCell( int aRow, int aCol, bool aPreserveSelection = false ) override
     {
-        int col = m_grid->GetGridCursorCol();
+        if( !m_grid->IsEditable() || m_dataModel->IsCellReadOnly( aRow, aCol ) )
+            return false;
 
-        if( m_dataModel->GetColFieldName( col ) == GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
-        {
-            menu.Append( MYID_SELECT_FOOTPRINT, _( "Select Footprint..." ), _( "Browse for footprint" ) );
-            menu.AppendSeparator();
-        }
-        else if( m_dataModel->GetColFieldName( col ) == GetCanonicalFieldName( FIELD_T::DATASHEET ) )
-        {
-            menu.Append( MYID_SHOW_DATASHEET, _( "Show Datasheet" ), _( "Show datasheet in browser" ) );
-            menu.AppendSeparator();
-        }
-
-        SCH_EDIT_FRAME* frame = dynamic_cast<SCH_EDIT_FRAME*>( m_dlg->GetParent() );
-
-        if( frame && !frame->Schematic().GetCurrentVariant().IsEmpty() )
-        {
-            int row = m_grid->GetGridCursorRow();
-            std::vector<SCH_REFERENCE> refs = m_dataModel->GetRowReferences( row );
-
-            if( refs.size() == 1 && refs[0].GetSymbol() )
-            {
-                menu.AppendSeparator();
-                menu.Append( MYID_SET_VARIANT_SYMBOL, _( "Set Variant Symbol..." ) );
-
-                const SCH_SYMBOL* sym = refs[0].GetSymbol();
-                wxString variantName = frame->Schematic().GetCurrentVariant();
-                auto variant = sym->GetVariant( refs[0].GetSheetPath(), variantName );
-
-                if( variant && variant->m_SymbolOverride )
-                    menu.Append( MYID_CLEAR_VARIANT_SYMBOL, _( "Clear Variant Symbol" ) );
-            }
-        }
-
-        GRID_TRICKS::showPopupMenu( menu, aEvent );
+        return GRID_TRICKS::toggleCell( aRow, aCol, aPreserveSelection );
     }
 
-    void doPopupSelection( wxCommandEvent& event ) override
+    void showFieldsTablePopupMenu( wxMenu& aMenu, wxGridEvent& aEvent ) override
     {
         int row = m_grid->GetGridCursorRow();
         int col = m_grid->GetGridCursorCol();
 
-        if( event.GetId() == MYID_SELECT_FOOTPRINT )
+        if( row >= 0 && col >= 0 )
+        {
+            if( m_dataModel->GetColFieldName( col ) == GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) )
+            {
+                aMenu.Append( MYID_SELECT_FOOTPRINT, _( "Select Footprint..." ), _( "Browse for footprint" ) );
+                aMenu.AppendSeparator();
+            }
+            else if( m_dataModel->GetColFieldName( col ) == GetDefaultFieldName( FIELD_T::DATASHEET, UNTRANSLATED ) )
+            {
+                aMenu.Append( MYID_SHOW_DATASHEET, _( "Show Datasheet" ), _( "Show datasheet in browser" ) );
+                aMenu.AppendSeparator();
+            }
+
+            SCH_EDIT_FRAME* frame = dynamic_cast<SCH_EDIT_FRAME*>( m_dlg->GetParent() );
+
+            if( frame && !frame->Schematic().GetCurrentVariant().IsEmpty() )
+            {
+                std::vector<SCH_REFERENCE> refs = m_dataModel->GetRowReferences( row );
+
+                if( refs.size() == 1 && refs[0].GetSymbol() )
+                {
+                    aMenu.AppendSeparator();
+                    aMenu.Append( MYID_SET_VARIANT_SYMBOL, _( "Set Variant Symbol..." ) );
+
+                    const SCH_SYMBOL* symbol = refs[0].GetSymbol();
+                    wxString          variantName = frame->Schematic().GetCurrentVariant();
+                    auto              variant = symbol->GetVariant( refs[0].GetSheetPath(), variantName );
+
+                    if( variant && variant->m_SymbolOverride )
+                        aMenu.Append( MYID_CLEAR_VARIANT_SYMBOL, _( "Clear Variant Symbol" ) );
+                }
+            }
+        }
+
+        GRID_TRICKS::showPopupMenu( aMenu, aEvent );
+    }
+
+    void doFieldsTablePopupSelection( wxCommandEvent& aEvent ) override
+    {
+        int row = m_grid->GetGridCursorRow();
+        int col = m_grid->GetGridCursorCol();
+
+        if( aEvent.GetId() == MYID_SELECT_FOOTPRINT )
         {
             // pick a footprint using the footprint picker.
             wxString fpid = m_grid->GetCellValue( row, col );
 
-            if( KIWAY_PLAYER* frame = m_dlg->Kiway().Player( FRAME_FOOTPRINT_CHOOSER, true, m_dlg ) )
-            {
-                if( frame->ShowModal( &fpid, m_dlg ) )
-                    m_grid->SetCellValue( row, col, fpid );
+            wxString symbolNetlist = getFootprintChooserSymbolNetlist(
+                    m_dataModel->GetRowReferences( row ), m_dataModel->GetCurrentVariant() );
 
-                frame->Destroy();
-            }
+            if( SelectFootprintFromChooser( m_dlg, fpid, symbolNetlist ) )
+                m_grid->SetCellValue( row, col, fpid );
         }
-        else if (event.GetId() == MYID_SHOW_DATASHEET )
+        else if( aEvent.GetId() == MYID_SHOW_DATASHEET )
         {
-            wxString datasheet_uri = m_grid->GetCellValue( row, col );
-            GetAssociatedDocument( m_dlg, datasheet_uri, &m_dlg->Prj(), PROJECT_SCH::SchSearchS( &m_dlg->Prj() ),
+            wxString datasheetUri = m_grid->GetCellValue( row, col );
+            GetAssociatedDocument( m_dlg, datasheetUri, &m_dlg->Prj(), PROJECT_SCH::SchSearchS( &m_dlg->Prj() ),
                                    { m_files } );
         }
-        else if( event.GetId() == MYID_SET_VARIANT_SYMBOL
-                 || event.GetId() == MYID_CLEAR_VARIANT_SYMBOL )
+        else if( aEvent.GetId() == MYID_SET_VARIANT_SYMBOL
+                 || aEvent.GetId() == MYID_CLEAR_VARIANT_SYMBOL )
         {
             SCH_EDIT_FRAME* frame = dynamic_cast<SCH_EDIT_FRAME*>( m_dlg->GetParent() );
 
@@ -186,23 +197,22 @@ protected:
             if( refs.size() != 1 || !refs[0].GetSymbol() )
                 return;
 
-            SCH_SELECTION_TOOL* selTool =
-                    frame->GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
+            SCH_SELECTION_TOOL*    selectionTool = frame->GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
             std::vector<SCH_ITEM*> items = { refs[0].GetSymbol() };
-            selTool->SyncSelection( refs[0].GetSheetPath(), nullptr, items );
+            selectionTool->SyncSelection( refs[0].GetSheetPath(), nullptr, items );
 
-            if( event.GetId() == MYID_SET_VARIANT_SYMBOL )
+            if( aEvent.GetId() == MYID_SET_VARIANT_SYMBOL )
                 frame->GetToolManager()->RunAction( SCH_ACTIONS::setVariantSymbol );
             else
                 frame->GetToolManager()->RunAction( SCH_ACTIONS::clearVariantSymbol );
         }
-        else if( event.GetId() >= GRIDTRICKS_FIRST_SHOWHIDE )
+        else if( aEvent.GetId() >= GRIDTRICKS_FIRST_SHOWHIDE )
         {
             if( !m_grid->CommitPendingChanges( false ) )
                 return;
 
             // Pop-up column order is the order of the shown fields, not the viewControls order
-            col = event.GetId() - GRIDTRICKS_FIRST_SHOWHIDE;
+            col = aEvent.GetId() - GRIDTRICKS_FIRST_SHOWHIDE;
 
             bool show = !m_dataModel->GetShowColumn( col );
 
@@ -212,7 +222,7 @@ protected:
 
             for( row = 0; row < m_viewControlsDataModel->GetNumberRows(); row++ )
             {
-                if( m_viewControlsDataModel->GetCanonicalFieldName( row ) == fieldName )
+                if( m_viewControlsDataModel->GetUntranslatedFieldName( row ) == fieldName )
                     m_viewControlsDataModel->SetValueAsBool( row, SHOW_FIELD_COLUMN, show );
             }
 
@@ -221,27 +231,23 @@ protected:
         }
         else
         {
-            GRID_TRICKS::doPopupSelection( event );
+            GRID_TRICKS::doPopupSelection( aEvent );
         }
     }
 
 private:
-    DIALOG_SYMBOL_FIELDS_TABLE*    m_dlg;
-    VIEW_CONTROLS_GRID_DATA_MODEL* m_viewControlsDataModel;
-    FIELDS_EDITOR_GRID_DATA_MODEL* m_dataModel;
-    EMBEDDED_FILES*                m_files;
+    DIALOG_SYMBOL_FIELDS_TABLE*           m_dlg;
+    VIEW_CONTROLS_GRID_DATA_MODEL*        m_viewControlsDataModel;
+    SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL* m_dataModel;
+    EMBEDDED_FILES*                       m_files;
 };
 
 
-DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, JOB_EXPORT_BOM* aJob ) :
-        DIALOG_FIELDS_TABLE( parent ),
-        m_currentBomPreset( nullptr ),
-        m_lastSelectedBomPreset( nullptr ),
-        m_parent( parent ),
-        m_viewControlsDataModel( nullptr ),
-        m_dataModel( nullptr ),
-        m_schSettings( parent->Schematic().Settings() ),
-        m_job( aJob )
+DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* aParent, JOB_EXPORT_BOM* aJob ) :
+        DIALOG_FIELDS_TABLE( aParent, aParent->eeconfig()->m_FieldEditorPanel,
+                             aParent->Schematic().Settings(), aJob ),
+        m_parent( aParent ),
+        m_templateFieldNames( aParent->Prj().GetProjectFile().m_TemplateFieldNames )
 {
     // Get all symbols from the list of schematic sheets
     m_parent->Schematic().Hierarchy().GetSymbols( m_symbolsList, SYMBOL_FILTER_NON_POWER );
@@ -260,61 +266,7 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, 
         m_parent->Schematic().Hierarchy().GetSymbols( m_symbolsList, SYMBOL_FILTER_NON_POWER );
     }
 
-    m_bRefresh->SetBitmap( KiBitmapBundle( BITMAPS::small_refresh ) );
-    m_bMenu->SetBitmap( KiBitmapBundle( BITMAPS::config ) );
-    m_bRefreshPreview->SetBitmap( KiBitmapBundle( BITMAPS::small_refresh ) );
-    m_browseButton->SetBitmap( KiBitmapBundle( BITMAPS::small_folder ) );
-
-    m_addFieldButton->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
-    m_removeFieldButton->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
-    m_renameFieldButton->SetBitmap( KiBitmapBundle( BITMAPS::small_edit ) );
-
-    m_addVariantButton->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
-    m_deleteVariantButton->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
-    m_renameVariantButton->SetBitmap( KiBitmapBundle( BITMAPS::small_edit ) );
-    m_copyVariantButton->SetBitmap( KiBitmapBundle( BITMAPS::copy ) );
-    m_editVariantDescButton->SetBitmap( KiBitmapBundle( BITMAPS::text ) );
-
-    m_sidebarButton->SetBitmap( KiBitmapBundle( BITMAPS::left ) );
-
-    // Do not OptOut the notebook. That would also exclude its child controls such as the
-    // scope selector from being persisted. The active page is forced by the opening tool.
-
-    m_viewControlsDataModel = new VIEW_CONTROLS_GRID_DATA_MODEL( true );
-
-    m_viewControlsGrid->UseNativeColHeader( true );
-    m_viewControlsGrid->SetTable( m_viewControlsDataModel, true );
-
-    // must be done after SetTable(), which appears to re-set it
-    m_viewControlsGrid->SetSelectionMode( wxGrid::wxGridSelectCells );
-
-    // add Cut, Copy, and Paste to wxGrid
-    m_viewControlsGrid->PushEventHandler( new VIEW_CONTROLS_GRID_TRICKS( m_viewControlsGrid ) );
-
-    wxGridCellAttr* attr = new wxGridCellAttr;
-    attr->SetReadOnly( true );
-    m_viewControlsDataModel->SetColAttr( attr, DISPLAY_NAME_COLUMN );
-
-    attr = new wxGridCellAttr;
-    attr->SetRenderer( new wxGridCellBoolRenderer() );
-    attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
-    attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
-    m_viewControlsDataModel->SetColAttr( attr, SHOW_FIELD_COLUMN );
-
-    attr = new wxGridCellAttr;
-    attr->SetRenderer( new wxGridCellBoolRenderer() );
-    attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
-    attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
-    m_viewControlsDataModel->SetColAttr( attr, GROUP_BY_COLUMN );
-
-    // Compress the view controls grid.  (We want it to look different from the fields grid.)
-    m_viewControlsGrid->SetDefaultRowSize( m_viewControlsGrid->GetDefaultRowSize() - FromDIP( 4 ) );
-
-    m_filter->SetDescriptiveText( _( "Filter" ) );
-
-    attr = new wxGridCellAttr;
-    attr->SetEditor( new GRID_CELL_URL_EDITOR( this, PROJECT_SCH::SchSearchS( &Prj() ), { &m_parent->Schematic() } ) );
-    m_dataModel = new FIELDS_EDITOR_GRID_DATA_MODEL( m_symbolsList, attr );
+    m_dataModel = new SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL( m_symbolsList );
 
     m_grid->UseNativeColHeader( true );
     m_grid->SetTable( m_dataModel, true );
@@ -327,10 +279,10 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, 
     m_grid->SetSelectionMode( wxGrid::wxGridSelectCells );
 
     // add Cut, Copy, and Paste to wxGrid
-    m_grid->PushEventHandler( new FIELDS_EDITOR_GRID_TRICKS( this, m_grid, m_viewControlsDataModel, m_dataModel,
-                                                             &m_parent->Schematic() ) );
+    m_grid->PushEventHandler( new SYMBOL_FIELDS_EDITOR_GRID_TRICKS( this, m_grid, m_viewControlsDataModel, m_dataModel,
+                                                                    &m_parent->Schematic() ) );
 
-    m_variantListBox->Set( parent->Schematic().GetVariantNamesForUI() );
+    m_variantListBox->Set( m_parent->Schematic().GetVariantNamesForUI() );
 
     // A job keeps its own variant, otherwise follow the schematic.
     wxString variantToSelect;
@@ -375,30 +327,16 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, 
 
     finishDialogSettings();
 
-    SetSize( wxSize( horizPixelsFromDU( 600 ), vertPixelsFromDU( 300 ) ) );
+    SetSize( GetDefaultDialogSize() );
 
-    EESCHEMA_SETTINGS::PANEL_SYMBOL_FIELDS_TABLE& cfg = m_parent->eeconfig()->m_FieldEditorPanel;
-
-    m_viewControlsGrid->ShowHideColumns( "0 1 2 3" );
-
-    CallAfter( [this, cfg]()
-               {
-                   if( cfg.sidebar_collapsed )
-                       m_splitterMainWindow->Unsplit( m_leftPanel );
-                   else
-                       m_splitterMainWindow->SetSashPosition( cfg.sash_pos );
-
-                   setSideBarButtonLook( cfg.sidebar_collapsed );
-
-                   m_splitter_left->SetSashPosition( cfg.variant_sash_pos );
-               } );
+    RestorePanelLayout();
 
     OptOut( m_outputFileName );
 
     if( m_job )
         m_outputFileName->SetValue( m_job->GetConfiguredOutputPath() );
     else
-        m_outputFileName->SetValue( m_schSettings.m_BomExportFileName );
+        m_outputFileName->SetValue( m_cfgBomSettings.m_BomExportFileName );
 
     Center();
 
@@ -408,7 +346,6 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, 
     m_grid->GetGridWindow()->Bind( wxEVT_MOTION, &DIALOG_SYMBOL_FIELDS_TABLE::OnGridMouseMove, this );
     m_cbBomPresets->Bind( wxEVT_CHOICE, &DIALOG_SYMBOL_FIELDS_TABLE::onBomPresetChanged, this );
     m_cbBomFmtPresets->Bind( wxEVT_CHOICE, &DIALOG_SYMBOL_FIELDS_TABLE::onBomFmtPresetChanged, this );
-    m_viewControlsGrid->Bind( wxEVT_GRID_CELL_CHANGED, &DIALOG_SYMBOL_FIELDS_TABLE::OnViewControlsCellChanged, this );
 
     if( !m_job )
     {
@@ -427,151 +364,46 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, 
 
 DIALOG_SYMBOL_FIELDS_TABLE::~DIALOG_SYMBOL_FIELDS_TABLE()
 {
-    savePresetsToSchematic();
+    if( m_aborted )
+        return;
 
-    EESCHEMA_SETTINGS::PANEL_SYMBOL_FIELDS_TABLE& cfg = m_parent->eeconfig()->m_FieldEditorPanel;
-
-    if( !cfg.sidebar_collapsed )
-        cfg.sash_pos = m_splitterMainWindow->GetSashPosition();
-
-    cfg.variant_sash_pos = m_splitter_left->GetSashPosition();
-
-    for( int i = 0; i < m_grid->GetNumberCols(); i++ )
+    if( savePresets( !m_job ) )
     {
-        if( m_grid->IsColShown( i ) )
-        {
-            std::string fieldName( m_dataModel->GetColFieldName( i ).ToUTF8() );
-            cfg.field_widths[fieldName] = m_grid->GetColSize( i );
-        }
+        m_parent->OnModify();
     }
+
+    SavePanelLayout();
+    SaveColumnWidths();
 
     // Disconnect Events
     m_grid->GetGridWindow()->Unbind( wxEVT_MOTION, &DIALOG_SYMBOL_FIELDS_TABLE::OnGridMouseMove, this );
     m_grid->Unbind( wxEVT_GRID_COL_SORT, &DIALOG_SYMBOL_FIELDS_TABLE::OnColSort, this );
-    m_grid->Unbind( wxEVT_GRID_COL_SORT, &DIALOG_SYMBOL_FIELDS_TABLE::OnColMove, this );
+    m_grid->Unbind( wxEVT_GRID_COL_MOVE, &DIALOG_SYMBOL_FIELDS_TABLE::OnColMove, this );
     m_cbBomPresets->Unbind( wxEVT_CHOICE, &DIALOG_SYMBOL_FIELDS_TABLE::onBomPresetChanged, this );
     m_cbBomFmtPresets->Unbind( wxEVT_CHOICE, &DIALOG_SYMBOL_FIELDS_TABLE::onBomFmtPresetChanged, this );
-    m_viewControlsGrid->Unbind( wxEVT_GRID_CELL_CHANGED, &DIALOG_SYMBOL_FIELDS_TABLE::OnViewControlsCellChanged, this );
 
     // Delete the GRID_TRICKS.
-    m_viewControlsGrid->PopEventHandler( true );
     m_grid->PopEventHandler( true );
 
     // we gave ownership of m_viewControlsDataModel & m_dataModel to the wxGrids...
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::SetupColumnProperties( int aCol )
+wxGridCellEditor* DIALOG_SYMBOL_FIELDS_TABLE::createDatasheetEditor()
 {
-    wxGridCellAttr* attr = new wxGridCellAttr;
-    attr->SetReadOnly( false );
-
-    // Set some column types to specific editors
-    if( m_dataModel->ColIsReference( aCol ) )
-    {
-        attr->SetReadOnly();
-        attr->SetRenderer( new GRID_CELL_TEXT_RENDERER() );
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else if( m_dataModel->GetColFieldName( aCol ) == GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
-    {
-        attr->SetEditor( new GRID_CELL_FPID_EDITOR( this, wxEmptyString ) );
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else if( m_dataModel->GetColFieldName( aCol ) == GetCanonicalFieldName( FIELD_T::DATASHEET ) )
-    {
-        // set datasheet column viewer button
-        attr->SetEditor( new GRID_CELL_URL_EDITOR( this, PROJECT_SCH::SchSearchS( &Prj() ),
-                                                   { &m_parent->Schematic() } ) );
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else if( m_dataModel->ColIsQuantity( aCol ) || m_dataModel->ColIsItemNumber( aCol ) )
-    {
-        attr->SetReadOnly();
-        attr->SetAlignment( wxALIGN_RIGHT, wxALIGN_CENTER );
-        attr->SetRenderer( new wxGridCellNumberRenderer() );
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else if( m_dataModel->ColIsAttribute( aCol ) )
-    {
-        attr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
-        attr->SetRenderer( new GRID_CELL_CHECKBOX_RENDERER() );
-        attr->SetReadOnly();    // not really; we delegate interactivity to GRID_TRICKS
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else if( IsGeneratedField( m_dataModel->GetColFieldName( aCol ) ) )
-    {
-        attr->SetReadOnly();
-        m_dataModel->SetColAttr( attr, aCol );
-    }
-    else
-    {
-        attr->SetRenderer( new GRID_CELL_TEXT_RENDERER() );
-        attr->SetEditor( m_grid->GetDefaultEditor() );
-        m_dataModel->SetColAttr( attr, aCol );
-    }
+    return new GRID_CELL_URL_EDITOR( this, PROJECT_SCH::SchSearchS( &Prj() ), { &m_parent->Schematic() } );
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::SetupAllColumnProperties()
+wxGridCellEditor* DIALOG_SYMBOL_FIELDS_TABLE::createFootprintEditor()
 {
-    EESCHEMA_SETTINGS* cfg = m_parent->eeconfig();
-    wxSize defaultDlgSize = ConvertDialogToPixels( wxSize( 600, 300 ) );
-
-    // Restore column sorting order and widths
-    m_grid->AutoSizeColumns( false );
-    int  sortCol = 0;
-    bool sortAscending = true;
-
-    for( int col = 0; col < m_grid->GetNumberCols(); ++col )
-    {
-        SetupColumnProperties( col );
-
-        if( col == m_dataModel->GetSortCol() )
-        {
-            sortCol = col;
-            sortAscending = m_dataModel->GetSortAsc();
-        }
-    }
-
-    // sync m_grid's column visibilities to Show checkboxes in m_viewControlsGrid
-    for( int i = 0; i < m_viewControlsDataModel->GetNumberRows(); ++i )
-    {
-        int col = m_dataModel->GetFieldNameCol( m_viewControlsDataModel->GetCanonicalFieldName( i ) );
-
-        if( col == -1 )
-            continue;
-
-        bool show = m_viewControlsDataModel->GetValueAsBool( i, SHOW_FIELD_COLUMN );
-        m_dataModel->SetShowColumn( col, show );
-
-        if( show )
-        {
-            m_grid->ShowCol( col );
-
-            std::string key( m_dataModel->GetColFieldName( col ).ToUTF8() );
-
-            if( cfg->m_FieldEditorPanel.field_widths.count( key )
-                && ( cfg->m_FieldEditorPanel.field_widths.at( key ) > 0 ) )
+    return new GRID_CELL_FPID_EDITOR(
+            this,
+            [this]( int aRow )
             {
-                m_grid->SetColSize( col, cfg->m_FieldEditorPanel.field_widths.at( key ) );
-            }
-            else
-            {
-                int textWidth = m_dataModel->GetDataWidth( col ) + COLUMN_MARGIN;
-                int maxWidth = defaultDlgSize.x / 3;
-
-                m_grid->SetColSize( col, std::clamp( textWidth, 100, maxWidth ) );
-            }
-        }
-        else
-        {
-            m_grid->HideCol( col );
-        }
-    }
-
-    m_dataModel->SetSorting( sortCol, sortAscending );
-    m_grid->SetSortingColumn( sortCol, sortAscending );
+                return getFootprintChooserSymbolNetlist( m_dataModel->GetRowReferences( aRow ),
+                                                         m_dataModel->GetCurrentVariant() );
+            } );
 }
 
 
@@ -583,66 +415,31 @@ bool DIALOG_SYMBOL_FIELDS_TABLE::TransferDataToWindow()
     LoadFieldNames();   // loads rows into m_viewControlsDataModel and columns into m_dataModel
 
     // Load our BOM view presets
-    SetUserBomPresets( m_schSettings.m_BomPresets );
+    SetUserBomPresets( m_cfgBomSettings.m_BomPresets );
 
-    BOM_PRESET preset = m_schSettings.m_BomSettings;
+    BOM_PRESET preset = m_cfgBomSettings.m_BomSettings;
 
     if( m_job )
-    {
-        preset.name = m_job->m_bomPresetName;
-        preset.excludeDNP = m_job->m_excludeDNP;
-        preset.filterString = m_job->m_filterString;
-        preset.sortAsc = m_job->m_sortAsc;
-        preset.sortField = m_job->m_sortField;
-        preset.groupSymbols = m_job->m_groupSymbols;
-
-        preset.fieldsOrdered.clear();
-
-        size_t i = 0;
-
-        for( const wxString& fieldName : m_job->m_fieldsOrdered )
-        {
-            BOM_FIELD field;
-            field.name = fieldName;
-            field.show = !fieldName.StartsWith( wxT( "__" ), &field.name );
-            field.groupBy = alg::contains( m_job->m_fieldsGroupBy, field.name );
-
-            if( ( m_job->m_fieldsLabels.size() > i ) && !m_job->m_fieldsLabels[i].IsEmpty() )
-                field.label = m_job->m_fieldsLabels[i];
-            else if( IsGeneratedField( field.name ) )
-                field.label = GetGeneratedFieldDisplayName( field.name );
-            else
-                field.label = field.name;
-
-            preset.fieldsOrdered.emplace_back( field );
-            i++;
-        }
-    }
+        loadJobBomPreset( *m_job, preset );
 
     ApplyBomPreset( preset );
     syncBomPresetSelection();
 
     // Load BOM export format presets
-    SetUserBomFmtPresets( m_schSettings.m_BomFmtPresets );
-    BOM_FMT_PRESET fmtPreset = m_schSettings.m_BomFmtSettings;
+    SetUserBomFmtPresets( m_cfgBomSettings.m_BomFmtPresets );
+    BOM_FMT_PRESET fmtPreset = m_cfgBomSettings.m_BomFmtSettings;
 
     if( m_job )
-    {
-        fmtPreset.name = m_job->m_bomFmtPresetName;
-        fmtPreset.fieldDelimiter = m_job->m_fieldDelimiter;
-        fmtPreset.keepLineBreaks = m_job->m_keepLineBreaks;
-        fmtPreset.keepTabs = m_job->m_keepTabs;
-        fmtPreset.includeByteOrderMark = m_job->m_includeByteOrderMark;
-        fmtPreset.refDelimiter = m_job->m_refDelimiter;
-        fmtPreset.refRangeDelimiter = m_job->m_refRangeDelimiter;
-        fmtPreset.stringDelimiter = m_job->m_stringDelimiter;
-    }
+        loadJobBomFmtPreset( *m_job, fmtPreset );
 
     ApplyBomFmtPreset( fmtPreset );
     syncBomFmtPresetSelection();
 
-    TOOL_MANAGER*       toolMgr = m_parent->GetToolManager();
-    SCH_SELECTION_TOOL* selectionTool = toolMgr->GetTool<SCH_SELECTION_TOOL>();
+    if( !m_job )
+        m_outputFileName->SetValue( m_cfgBomSettings.m_BomExportFileName );
+
+    TOOL_MANAGER*       toolManager = m_parent->GetToolManager();
+    SCH_SELECTION_TOOL* selectionTool = toolManager->GetTool<SCH_SELECTION_TOOL>();
     SCH_SELECTION&      selection = selectionTool->GetSelection();
     SCH_SYMBOL*         symbol = nullptr;
 
@@ -655,9 +452,9 @@ bool DIALOG_SYMBOL_FIELDS_TABLE::TransferDataToWindow()
         EDA_ITEM* item = selection.Front();
 
         if( item->Type() == SCH_SYMBOL_T )
-            symbol = (SCH_SYMBOL*) item;
+            symbol = static_cast<SCH_SYMBOL*>( item );
         else if( item->GetParent() && item->GetParent()->Type() == SCH_SYMBOL_T )
-            symbol = (SCH_SYMBOL*) item->GetParent();
+            symbol = static_cast<SCH_SYMBOL*>( item->GetParent() );
     }
 
     if( symbol )
@@ -732,7 +529,7 @@ bool DIALOG_SYMBOL_FIELDS_TABLE::TransferDataFromWindow()
     SCH_SHEET_PATH currentSheet = m_parent->GetCurrentSheet();
     wxString       currentVariant = m_parent->Schematic().GetCurrentVariant();
 
-    m_dataModel->ApplyData( commit, m_schSettings.m_TemplateFieldNames, currentVariant );
+    m_dataModel->ApplyData( commit, m_templateFieldNames, currentVariant );
 
     if( !commit.Empty() )
     {
@@ -749,44 +546,15 @@ bool DIALOG_SYMBOL_FIELDS_TABLE::TransferDataFromWindow()
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::AddField( const wxString& aFieldName, const wxString& aLabelValue,
-                                           bool show, bool groupBy, bool addedByUser )
-{
-    // Users can add fields with variable names that match the special names in the grid,
-    // e.g. ${QUANTITY} so make sure we don't add them twice
-    for( int row = 0; row < m_viewControlsDataModel->GetNumberRows(); row++ )
-    {
-        if( FieldNamesAreDuplicates( m_viewControlsDataModel->GetCanonicalFieldName( row ),
-                                     aFieldName ) )
-        {
-            return;
-        }
-    }
-
-    m_dataModel->AddColumn( aFieldName, aLabelValue, addedByUser );
-
-    wxGridTableMessage msg( m_dataModel, wxGRIDTABLE_NOTIFY_COLS_APPENDED, 1 );
-    m_grid->ProcessTableMessage( msg );
-
-    m_viewControlsGrid->OnAddRow(
-            [&]() -> std::pair<int, int>
-            {
-                m_viewControlsDataModel->AppendRow( aFieldName, aLabelValue, show, groupBy );
-
-                return { m_viewControlsDataModel->GetNumberRows() - 1, -1 };
-            } );
-}
-
-
 void DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames()
 {
     auto addMandatoryField =
-            [&]( FIELD_T fieldId, bool show, bool groupBy )
+            [&]( FIELD_T aFieldId, bool aShow, bool aGroupBy )
             {
-                m_mandatoryFieldListIndexes[fieldId] = m_viewControlsDataModel->GetNumberRows();
+                m_mandatoryFieldListIndexes[aFieldId] = m_viewControlsDataModel->GetNumberRows();
 
-                AddField( GetCanonicalFieldName( fieldId ), GetDefaultFieldName( fieldId, DO_TRANSLATE ),
-                          show, groupBy );
+                AddField( GetDefaultFieldName( aFieldId, UNTRANSLATED ), GetDefaultFieldName( aFieldId, TRANSLATED ),
+                          aShow, aGroupBy );
             };
 
     // Add mandatory fields first            show   groupBy
@@ -797,16 +565,16 @@ void DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames()
     addMandatoryField( FIELD_T::DESCRIPTION, false,  false  );
 
     // Generated fields present only in the fields table
-    AddField( FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE, _( "Qty" ), true, false );
-    AddField( FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE, _( "#" ), true, false );
+    AddField( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE, _( "Qty" ), true, false );
+    AddField( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE, _( "#" ), true, false );
 
     // User field names are stored and matched case-sensitively (see issue #24021), so each
     // distinct name gets its own column rather than collapsing case variants together.
     std::set<wxString> userFieldNames;
 
-    for( int ii = 0; ii < (int) m_symbolsList.GetCount(); ++ii )
+    for( const SCH_REFERENCE& ref : m_symbolsList )
     {
-        SCH_SYMBOL* symbol = m_symbolsList[ii].GetSymbol();
+        SCH_SYMBOL* symbol = ref.GetSymbol();
 
         for( const SCH_FIELD& field : symbol->GetFields() )
         {
@@ -819,152 +587,11 @@ void DIALOG_SYMBOL_FIELDS_TABLE::LoadFieldNames()
         AddField( fieldName, GetGeneratedFieldDisplayName( fieldName ), true, false );
 
     // Add any templateFieldNames which aren't already present.
-    for( const TEMPLATE_FIELDNAME& tfn : m_schSettings.m_TemplateFieldNames.GetTemplateFieldNames() )
+    for( const TEMPLATE_FIELDNAME& templateField : m_templateFieldNames.GetResolvedTemplateFieldNames() )
     {
-        if( userFieldNames.count( tfn.m_Name ) == 0 )
-            AddField( tfn.m_Name, GetGeneratedFieldDisplayName( tfn.m_Name ), false, false );
+        if( userFieldNames.count( templateField.m_Name ) == 0 )
+            AddField( templateField.m_Name, GetGeneratedFieldDisplayName( templateField.m_Name ), false, false );
     }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnAddField( wxCommandEvent& event )
-{
-    wxTextEntryDialog dlg( this, _( "New field name:" ), _( "Add Field" ) );
-
-    if( dlg.ShowModal() != wxID_OK )
-        return;
-
-    wxString fieldName = dlg.GetValue();
-
-    if( fieldName.IsEmpty() )
-    {
-        DisplayError( this, _( "Field must have a name." ) );
-        return;
-    }
-
-    for( int i = 0; i < m_dataModel->GetNumberCols(); ++i )
-    {
-        if( FieldNamesAreDuplicates( fieldName, m_dataModel->GetColFieldName( i ) ) )
-        {
-            DisplayError( this, wxString::Format( _( "Field name '%s' already in use." ), fieldName ) );
-            return;
-        }
-    }
-
-    AddField( fieldName, GetGeneratedFieldDisplayName( fieldName ), true, false, true );
-
-    SetupColumnProperties( m_dataModel->GetColsCount() - 1 );
-
-    syncBomPresetSelection();
-    OnModify();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnRemoveField( wxCommandEvent& event )
-{
-    m_viewControlsGrid->OnDeleteRows(
-            [&]( int row )
-            {
-                for( FIELD_T id : MANDATORY_FIELDS )
-                {
-                    if( m_mandatoryFieldListIndexes[id] == row )
-                    {
-                        DisplayError( this, wxString::Format( _( "The first %d fields are mandatory." ),
-                                                              (int) m_mandatoryFieldListIndexes.size() ) );
-                        return false;
-                    }
-                }
-
-                return IsOK( this, wxString::Format( _( "Are you sure you want to remove the field '%s'?" ),
-                                                     m_viewControlsDataModel->GetValue( row, DISPLAY_NAME_COLUMN ) ) );
-            },
-            [&]( int row )
-            {
-                wxString fieldName = m_viewControlsDataModel->GetCanonicalFieldName( row );
-                int col = m_dataModel->GetFieldNameCol( fieldName );
-
-                if( col != -1 )
-                    m_dataModel->RemoveColumn( col );
-
-                m_viewControlsDataModel->DeleteRow( row );
-
-                syncBomPresetSelection();
-                OnModify();
-            } );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnRenameField( wxCommandEvent& event )
-{
-    wxArrayInt selectedRows = m_viewControlsGrid->GetSelectedRows();
-
-    if( selectedRows.empty() && m_viewControlsGrid->GetGridCursorRow() >= 0 )
-        selectedRows.push_back( m_viewControlsGrid->GetGridCursorRow() );
-
-    if( selectedRows.empty() )
-        return;
-
-    int row = selectedRows[0];
-
-    for( FIELD_T id : MANDATORY_FIELDS )
-    {
-        if( m_mandatoryFieldListIndexes[id] == row )
-        {
-            DisplayError( this, wxString::Format( _( "The first %d fields are mandatory and names cannot be changed." ),
-                                                  (int) m_mandatoryFieldListIndexes.size() ) );
-            return;
-        }
-    }
-
-    wxString fieldName = m_viewControlsDataModel->GetCanonicalFieldName( row );
-    wxString label = m_viewControlsDataModel->GetValue( row, LABEL_COLUMN );
-    bool     labelIsAutogenerated = label.IsSameAs( GetGeneratedFieldDisplayName( fieldName ) );
-
-    int col = m_dataModel->GetFieldNameCol( fieldName );
-    wxCHECK_RET( col != -1, wxS( "Existing field name missing from data model" ) );
-
-    wxTextEntryDialog dlg( this, _( "New field name:" ), _( "Rename Field" ), fieldName );
-
-    if( dlg.ShowModal() != wxID_OK )
-         return;
-
-    wxString newFieldName = dlg.GetValue();
-
-    // No change, no-op
-    if( newFieldName == fieldName )
-         return;
-
-    // New field name already exists
-    if( m_dataModel->GetFieldNameCol( newFieldName ) != -1 )
-    {
-         wxString confirm_msg = wxString::Format( _( "Field name %s already exists." ), newFieldName );
-         DisplayError( this, confirm_msg );
-         return;
-    }
-
-    m_dataModel->RenameColumn( col, newFieldName );
-    m_viewControlsDataModel->SetCanonicalFieldName( row, newFieldName );
-    m_viewControlsDataModel->SetValue( row, DISPLAY_NAME_COLUMN, newFieldName );
-
-    if( labelIsAutogenerated )
-    {
-        m_viewControlsDataModel->SetValue( row, LABEL_COLUMN, GetGeneratedFieldDisplayName( newFieldName ) );
-        wxGridEvent evt( m_viewControlsGrid->GetId(), wxEVT_GRID_CELL_CHANGED, m_viewControlsGrid, row, LABEL_COLUMN );
-        OnViewControlsCellChanged( evt );
-    }
-
-    syncBomPresetSelection();
-    OnModify();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnFilterText( wxCommandEvent& aEvent )
-{
-    m_dataModel->SetFilter( m_filter->GetValue() );
-    m_dataModel->RebuildRows();
-    m_grid->ForceRefresh();
-
-    syncBomPresetSelection();
 }
 
 
@@ -972,7 +599,70 @@ void DIALOG_SYMBOL_FIELDS_TABLE::setScope( SCOPE aScope )
 {
     m_dataModel->SetPath( m_parent->GetCurrentSheet() );
     m_dataModel->SetScope( aScope );
+
+    if( aScope == SCOPE::SCOPE_SELECTION )
+        updateSelectionItems();
+
     m_dataModel->RebuildRows();
+}
+
+
+void DIALOG_SYMBOL_FIELDS_TABLE::updateSelectionItems()
+{
+    std::unordered_set<KIID_PATH> selectionItems;
+    SCH_SELECTION_TOOL*           selectionTool = m_parent->GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
+    const SCH_SELECTION&          selection = selectionTool->GetSelection();
+    const KIID_PATH               currentSheetPath = m_parent->GetCurrentSheet().Path();
+
+    auto addSelectionItem = [&]( EDA_ITEM* aItem )
+    {
+        SCH_SYMBOL* symbol = nullptr;
+
+        if( aItem->Type() == SCH_SYMBOL_T )
+            symbol = static_cast<SCH_SYMBOL*>( aItem );
+        else if( aItem->GetParent() && aItem->GetParent()->Type() == SCH_SYMBOL_T )
+            symbol = static_cast<SCH_SYMBOL*>( aItem->GetParent() );
+
+        if( symbol )
+        {
+            KIID_PATH path = currentSheetPath;
+            path.push_back( symbol->m_Uuid );
+            selectionItems.insert( path );
+
+            return;
+        }
+
+        if( aItem->Type() == SCH_SHEET_T )
+        {
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( aItem );
+
+            SCH_SHEET_PATH selectedPath = m_parent->GetCurrentSheet();
+            selectedPath.push_back( sheet );
+
+            SCH_REFERENCE_LIST references;
+            m_parent->Schematic().Hierarchy().GetSymbolsWithinPath( references, selectedPath, SYMBOL_FILTER_NON_POWER );
+
+            for( const SCH_REFERENCE& ref : references )
+            {
+                if( ref.GetSymbol() )
+                {
+                    KIID_PATH path = ref.GetSheetPath().Path();
+                    path.push_back( ref.GetSymbol()->m_Uuid );
+                    selectionItems.insert( path );
+                }
+            }
+        }
+    };
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( item->Type() == SCH_GROUP_T )
+            static_cast<SCH_GROUP*>( item )->RunOnChildren( addSelectionItem, RECURSE_MODE::RECURSE );
+        else
+            addSelectionItem( item );
+    }
+
+    m_dataModel->SetSelectionItems( selectionItems );
 }
 
 
@@ -983,55 +673,44 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnScope( wxCommandEvent& aEvent )
     case 0: setScope( SCOPE::SCOPE_ALL );             break;
     case 1: setScope( SCOPE::SCOPE_SHEET );           break;
     case 2: setScope( SCOPE::SCOPE_SHEET_RECURSIVE ); break;
+    case 3: setScope( SCOPE::SCOPE_SELECTION );       break;
     }
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::OnGroupSymbolsToggled( wxCommandEvent& event )
+void DIALOG_SYMBOL_FIELDS_TABLE::OnMenu( wxCommandEvent& aEvent )
 {
-    m_dataModel->SetGroupingEnabled( m_groupSymbolsBox->GetValue() );
-    m_dataModel->RebuildRows();
-    m_grid->ForceRefresh();
-
-    syncBomPresetSelection();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnMenu( wxCommandEvent& event )
-{
-    EESCHEMA_SETTINGS::PANEL_SYMBOL_FIELDS_TABLE& cfg = m_parent->eeconfig()->m_FieldEditorPanel;
-
     // Build a pop menu:
     wxMenu menu;
 
-    menu.Append( 4204, _( "Include 'DNP' Symbols" ),
+    menu.Append( MYID_INCLUDE_DNP, _( "Include 'DNP' Symbols" ),
                  _( "Show symbols marked 'DNP' in the table.  This setting also controls whether or not 'DNP' "
                     "symbols are included on export." ),
                  wxITEM_CHECK );
-    menu.Check( 4204, !m_dataModel->GetExcludeDNP() );
+    menu.Check( MYID_INCLUDE_DNP, !m_dataModel->GetExcludeDNP() );
 
-    menu.Append( 4205, _( "Include 'Exclude from BOM' Symbols" ),
+    menu.Append( MYID_INCLUDE_EXCLUDED_FROM_BOM, _( "Include 'Exclude from BOM' Symbols" ),
                  _( "Show symbols marked 'Exclude from BOM' in the table.  Symbols marked 'Exclude from BOM' "
                     "are never included on export." ),
                  wxITEM_CHECK );
-    menu.Check( 4205, m_dataModel->GetIncludeExcludedFromBOM() );
+    menu.Check( MYID_INCLUDE_EXCLUDED_FROM_BOM, m_dataModel->GetIncludeExcludedFromBOM() );
 
     menu.AppendSeparator();
 
-    menu.Append( 4206, _( "Highlight on Cross-probe" ),
+    menu.Append( MYID_HIGHLIGHT_ON_CROSS_PROBE, _( "Highlight on Cross-probe" ),
                  _( "Highlight corresponding item on canvas when it is selected in the table" ),
                  wxITEM_CHECK );
-    menu.Check( 4206, cfg.selection_mode == 0 );
+    menu.Check( MYID_HIGHLIGHT_ON_CROSS_PROBE, m_cfgDialogSettings.selection_mode == 0 );
 
-    menu.Append( 4207, _( "Select on Cross-probe" ),
+    menu.Append( MYID_SELECT_ON_CROSS_PROBE, _( "Select on Cross-probe" ),
                  _( "Select corresponding item on canvas when it is selected in the table" ),
                  wxITEM_CHECK );
-    menu.Check( 4207, cfg.selection_mode == 1 );
+    menu.Check( MYID_SELECT_ON_CROSS_PROBE, m_cfgDialogSettings.selection_mode == 1 );
 
-    // menu_id is the selected submenu id from the popup menu or wxID_NONE
-    int menu_id = m_bMenu->GetPopupMenuSelectionFromUser( menu );
+    // menuId is the selected submenu id from the popup menu or wxID_NONE
+    int menuId = m_bMenu->GetPopupMenuSelectionFromUser( menu );
 
-    if( menu_id == 0 || menu_id == 4204 )
+    if( menuId == 0 || menuId == MYID_INCLUDE_DNP )
     {
         m_dataModel->SetExcludeDNP( !m_dataModel->GetExcludeDNP() );
         m_dataModel->RebuildRows();
@@ -1039,7 +718,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnMenu( wxCommandEvent& event )
 
         syncBomPresetSelection();
     }
-    else if( menu_id == 1 || menu_id == 4205 )
+    else if( menuId == 1 || menuId == MYID_INCLUDE_EXCLUDED_FROM_BOM )
     {
         m_dataModel->SetIncludeExcludedFromBOM( !m_dataModel->GetIncludeExcludedFromBOM() );
         m_dataModel->RebuildRows();
@@ -1047,263 +726,32 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnMenu( wxCommandEvent& event )
 
         syncBomPresetSelection();
     }
-    else if( menu_id == 3 || menu_id == 4206 )
+    else if( menuId == 3 || menuId == MYID_HIGHLIGHT_ON_CROSS_PROBE )
     {
-        if( cfg.selection_mode != 0 )
-            cfg.selection_mode = 0;
+        if( m_cfgDialogSettings.selection_mode != 0 )
+            m_cfgDialogSettings.selection_mode = 0;
         else
-            cfg.selection_mode = 2;
+            m_cfgDialogSettings.selection_mode = 2;
     }
-    else if( menu_id == 4 || menu_id == 4207 )
+    else if( menuId == 4 || menuId == MYID_SELECT_ON_CROSS_PROBE )
     {
-        if( cfg.selection_mode != 1 )
-            cfg.selection_mode = 1;
+        if( m_cfgDialogSettings.selection_mode != 1 )
+            m_cfgDialogSettings.selection_mode = 1;
         else
-            cfg.selection_mode = 2;
+            m_cfgDialogSettings.selection_mode = 2;
     }
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::OnColSort( wxGridEvent& aEvent )
+void DIALOG_SYMBOL_FIELDS_TABLE::OnTableSelectionChanged( const std::set<int>& aRows )
 {
-    int         sortCol = aEvent.GetCol();
-    std::string key( m_dataModel->GetColFieldName( sortCol ).ToUTF8() );
-    bool        ascending;
-
-    // Don't sort by item number, it is generated by the sort
-    if( m_dataModel->ColIsItemNumber( sortCol ) )
-    {
-        aEvent.Veto();
-        return;
-    }
-
-    // This is bonkers, but wxWidgets doesn't tell us ascending/descending in the event, and
-    // if we ask it will give us pre-event info.
-    if( m_grid->IsSortingBy( sortCol ) )
-    {
-        // same column; invert ascending
-        ascending = !m_grid->IsSortOrderAscending();
-    }
-    else
-    {
-        // different column; start with ascending
-        ascending = true;
-    }
-
-    m_dataModel->SetSorting( sortCol, ascending );
-    m_dataModel->RebuildRows();
-    m_grid->ForceRefresh();
-
-    syncBomPresetSelection();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnColMove( wxGridEvent& aEvent )
-{
-    int origPos = aEvent.GetCol();
-
-    // Save column widths since the setup function uses the saved config values
-    EESCHEMA_SETTINGS* cfg = m_parent->eeconfig();
-
-    for( int i = 0; i < m_grid->GetNumberCols(); i++ )
-    {
-        if( m_grid->IsColShown( i ) )
-        {
-            std::string fieldName( m_dataModel->GetColFieldName( i ).ToUTF8() );
-            cfg->m_FieldEditorPanel.field_widths[fieldName] = m_grid->GetColSize( i );
-        }
-    }
-
-    CallAfter(
-            [origPos, this]()
-            {
-                int newPos = m_grid->GetColPos( origPos );
-
-#ifdef __WXMAC__
-                if( newPos < origPos )
-                    newPos += 1;
-#endif
-
-                m_dataModel->MoveColumn( origPos, newPos );
-
-                // "Unmove" the column since we've moved the column internally
-                m_grid->ResetColPos();
-
-                // We need to reset all the column attr's to the correct column order
-                SetupAllColumnProperties();
-
-                m_grid->ForceRefresh();
-            } );
-
-    syncBomPresetSelection();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::ShowHideColumn( int aCol, bool aShow )
-{
-    if( aShow )
-        m_grid->ShowCol( aCol );
-    else
-        m_grid->HideCol( aCol );
-
-    m_dataModel->SetShowColumn( aCol, aShow );
-
-    syncBomPresetSelection();
-
-    if( m_nbPages->GetSelection() == 1 )
-        PreviewRefresh();
-    else
-        m_grid->ForceRefresh();
-
-    OnModify();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnViewControlsCellChanged( wxGridEvent& aEvent )
-{
-    int row = aEvent.GetRow();
-
-    wxCHECK( row < m_viewControlsGrid->GetNumberRows(), /* void */ );
-
-    switch( aEvent.GetCol() )
-    {
-    case LABEL_COLUMN:
-    {
-        wxString label = m_viewControlsDataModel->GetValue( row, LABEL_COLUMN );
-        wxString fieldName = m_viewControlsDataModel->GetCanonicalFieldName( row );
-        int      dataCol = m_dataModel->GetFieldNameCol( fieldName );
-
-        if( dataCol != -1 )
-        {
-            m_dataModel->SetColLabelValue( dataCol, label );
-            m_grid->SetColLabelValue( dataCol, label );
-
-            if( m_nbPages->GetSelection() == 1 )
-                PreviewRefresh();
-            else
-                m_grid->ForceRefresh();
-
-            syncBomPresetSelection();
-            OnModify();
-        }
-
-        break;
-    }
-
-    case SHOW_FIELD_COLUMN:
-    {
-        wxString fieldName = m_viewControlsDataModel->GetCanonicalFieldName( row );
-        bool     value = m_viewControlsDataModel->GetValueAsBool( row, SHOW_FIELD_COLUMN );
-        int      dataCol = m_dataModel->GetFieldNameCol( fieldName );
-
-        if( dataCol != -1 )
-            ShowHideColumn( dataCol, value );
-
-        break;
-    }
-
-    case GROUP_BY_COLUMN:
-    {
-        wxString fieldName = m_viewControlsDataModel->GetCanonicalFieldName( row );
-        bool     value = m_viewControlsDataModel->GetValueAsBool( row, GROUP_BY_COLUMN );
-        int      dataCol = m_dataModel->GetFieldNameCol( fieldName );
-
-        if( m_dataModel->ColIsQuantity( dataCol ) && value )
-        {
-            DisplayError( this, _( "The Quantity column cannot be grouped by." ) );
-
-            value = false;
-            m_viewControlsDataModel->SetValueAsBool( row, GROUP_BY_COLUMN, value );
-            break;
-        }
-
-        if( m_dataModel->ColIsItemNumber( dataCol ) && value )
-        {
-            DisplayError( this, _( "The Item Number column cannot be grouped by." ) );
-
-            value = false;
-            m_viewControlsDataModel->SetValueAsBool( row, GROUP_BY_COLUMN, value );
-            break;
-        }
-
-        m_dataModel->SetGroupColumn( dataCol, value );
-        m_dataModel->RebuildRows();
-
-        if( m_nbPages->GetSelection() == 1 )
-            PreviewRefresh();
-        else
-            m_grid->ForceRefresh();
-
-        syncBomPresetSelection();
-        OnModify();
-        break;
-    }
-
-    default:
-        break;
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnRegroupSymbols( wxCommandEvent& aEvent )
-{
-    m_dataModel->RebuildRows();
-    m_grid->ForceRefresh();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnTableCellClick( wxGridEvent& event )
-{
-    if( m_dataModel->IsExpanderColumn( event.GetCol() ) )
-    {
-        m_grid->ClearSelection();
-
-        m_dataModel->ExpandCollapseRow( event.GetRow() );
-        m_grid->SetGridCursor( event.GetRow(), event.GetCol() );
-    }
-    else
-    {
-        event.Skip();
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnGridMouseMove( wxMouseEvent& aEvent )
-{
-    aEvent.Skip();
-
-    wxPoint pos = aEvent.GetPosition();
-    int     ux, uy;
-    m_grid->CalcUnscrolledPosition( pos.x, pos.y, &ux, &uy );
-    int row = m_grid->YToRow( uy );
-    int col = m_grid->XToCol( ux );
-
-
-    if( row == wxNOT_FOUND || col == wxNOT_FOUND )
-    {
-        m_grid->GetGridWindow()->UnsetToolTip();
-        return;
-    }
-
-    wxString rawValue = m_dataModel->GetValue( row, col );
-
-    if( rawValue.Contains( wxT( "${" ) ) )
-    {
-        m_grid->GetGridWindow()->SetToolTip( rawValue );
-    }
-    else
-    {
-        m_grid->GetGridWindow()->UnsetToolTip();
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnTableRangeSelected( wxGridRangeSelectEvent& aEvent )
-{
-    EESCHEMA_SETTINGS::PANEL_SYMBOL_FIELDS_TABLE& cfg = m_parent->eeconfig()->m_FieldEditorPanel;
-
     // Cross-probing should only work in Edit page
     if( m_nbPages->GetSelection() != 0 )
+        return;
+
+    // Cross-probing is disabled when we're in selection scope mode, otherwise
+    // we're just in a loop
+    if( m_dataModel->GetScope() == SCOPE::SCOPE_SELECTION )
         return;
 
     // Multi-select can grab the rows that are expanded child refs, and also the row
@@ -1311,20 +759,16 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnTableRangeSelected( wxGridRangeSelectEvent& a
     std::set<SCH_REFERENCE> refs;
     std::set<SCH_ITEM*>     symbols;
 
-    // This handler handles selecting and deselecting
-    if( aEvent.Selecting() )
+    for( int row : aRows )
     {
-        for( int i = aEvent.GetTopRow(); i <= aEvent.GetBottomRow(); i++ )
-        {
-            for( const SCH_REFERENCE& ref : m_dataModel->GetRowReferences( i ) )
-                refs.insert( ref );
-        }
-
-        for( const SCH_REFERENCE& ref : refs )
-            symbols.insert( ref.GetSymbol() );
+        for( const SCH_REFERENCE& ref : m_dataModel->GetRowReferences( row ) )
+            refs.insert( ref );
     }
 
-    if( cfg.selection_mode == 0 )
+    for( const SCH_REFERENCE& ref : refs )
+        symbols.insert( ref.GetSymbol() );
+
+    if( m_cfgDialogSettings.selection_mode == 0 )
     {
         SCH_EDITOR_CONTROL* editor = m_parent->GetToolManager()->GetTool<SCH_EDITOR_CONTROL>();
 
@@ -1332,25 +776,25 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnTableRangeSelected( wxGridRangeSelectEvent& a
         {
             // Use of full path based on UUID allows select of not yet annotated or duplicated
             // symbols
-            wxString symbol_path = refs.begin()->GetFullPath();
+            wxString symbolPath = refs.begin()->GetFullPath();
 
             // Focus only handles one item at this time
-            editor->FindSymbolAndItem( &symbol_path, nullptr, true, HIGHLIGHT_SYMBOL, wxEmptyString );
+            editor->FindSymbolAndItem( &symbolPath, nullptr, true, HIGHLIGHT_SYMBOL, wxEmptyString );
         }
         else
         {
             m_parent->ClearFocus();
         }
     }
-    else if( cfg.selection_mode == 1 )
+    else if( m_cfgDialogSettings.selection_mode == 1 )
     {
-        SCH_SELECTION_TOOL*    selTool = m_parent->GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
+        SCH_SELECTION_TOOL*    selectionTool = m_parent->GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
         std::vector<SCH_ITEM*> items( symbols.begin(), symbols.end() );
 
         if( refs.size() > 0 )
-            selTool->SyncSelection( refs.begin()->GetSheetPath(), nullptr, items );
+            selectionTool->SyncSelection( refs.begin()->GetSheetPath(), nullptr, items );
         else
-            selTool->ClearSelection();
+            selectionTool->ClearSelection();
     }
 }
 
@@ -1359,203 +803,10 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSaveAndContinue( wxCommandEvent& aEvent )
 {
     if( TransferDataFromWindow() )
     {
-        m_schSettings.m_BomExportFileName = m_outputFileName->GetValue();
+        m_cfgBomSettings.m_BomExportFileName = m_outputFileName->GetValue();
         m_parent->SaveProject();
         ClearModify();
     }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnPageChanged( wxNotebookEvent& event )
-{
-    if( m_dataModel->GetColsCount() )
-        PreviewRefresh();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnPreviewRefresh( wxCommandEvent& event )
-{
-    PreviewRefresh();
-    syncBomFmtPresetSelection();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::PreviewRefresh()
-{
-    bool saveIncludeExcudedFromBOM = m_dataModel->GetIncludeExcludedFromBOM();
-
-    m_dataModel->SetIncludeExcludedFromBOM( false );
-    m_dataModel->RebuildRows();
-
-    m_textOutput->SetValue( m_dataModel->Export( GetCurrentBomFmtSettings() ) );
-
-    if( saveIncludeExcudedFromBOM )
-    {
-        m_dataModel->SetIncludeExcludedFromBOM( true );
-        m_dataModel->RebuildRows();
-    }
-}
-
-
-BOM_FMT_PRESET DIALOG_SYMBOL_FIELDS_TABLE::GetCurrentBomFmtSettings()
-{
-    BOM_FMT_PRESET current;
-
-    current.name = m_cbBomFmtPresets->GetStringSelection();
-    current.fieldDelimiter = m_textFieldDelimiter->GetValue();
-    current.stringDelimiter = m_textStringDelimiter->GetValue();
-    current.refDelimiter = m_textRefDelimiter->GetValue();
-    current.refRangeDelimiter = m_textRefRangeDelimiter->GetValue();
-    current.keepTabs = m_checkKeepTabs->GetValue();
-    current.keepLineBreaks = m_checkKeepLineBreaks->GetValue();
-    current.includeByteOrderMark = m_checkIncludeByteOrderMark->GetValue();
-
-    return current;
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnOutputFileBrowseClicked( wxCommandEvent& event )
-{
-    // Build the absolute path of current output directory to preselect it in the file browser.
-    wxString path = ExpandEnvVarSubstitutions( m_outputFileName->GetValue(), &Prj() );
-    path = Prj().AbsolutePath( path );
-
-
-    // Calculate the export filename
-    wxFileName fn( Prj().AbsolutePath( m_parent->Schematic().GetFileName() ) );
-    fn.SetExt( FILEEXT::CsvFileExtension );
-
-    wxFileDialog saveDlg( this, _( "Bill of Materials Output File" ), path, fn.GetFullName(),
-                          FILEEXT::CsvFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
-
-    KIPLATFORM::UI::AllowNetworkFileSystems( &saveDlg );
-
-    if( saveDlg.ShowModal() == wxID_CANCEL )
-        return;
-
-
-    wxFileName file = wxFileName( saveDlg.GetPath() );
-    wxString   defaultPath = fn.GetPathWithSep();
-
-    if( IsOK( this, wxString::Format( _( "Do you want to use a path relative to\n'%s'?" ), defaultPath ) ) )
-    {
-        if( !file.MakeRelativeTo( defaultPath ) )
-        {
-            DisplayErrorMessage( this, _( "Cannot make path relative (target volume different from schematic "
-                                          "file volume)!" ) );
-        }
-    }
-
-    m_outputFileName->SetValue( file.GetFullPath() );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnSidebarToggle( wxCommandEvent& event )
-{
-    EESCHEMA_SETTINGS::PANEL_SYMBOL_FIELDS_TABLE& cfg = m_parent->eeconfig()->m_FieldEditorPanel;
-
-    if( cfg.sidebar_collapsed )
-    {
-        cfg.sidebar_collapsed = false;
-        m_splitterMainWindow->SplitVertically( m_leftPanel, m_rightPanel, cfg.sash_pos );
-    }
-    else
-    {
-        cfg.sash_pos = m_splitterMainWindow->GetSashPosition();
-
-        cfg.sidebar_collapsed = true;
-        m_splitterMainWindow->Unsplit( m_leftPanel );
-    }
-
-    setSideBarButtonLook( cfg.sidebar_collapsed );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::OnExport( wxCommandEvent& aEvent )
-{
-    if( m_dataModel->IsEdited() )
-    {
-        if( OKOrCancelDialog( nullptr, _( "Unsaved data" ),
-                              _( "Changes have not yet been saved. Export unsaved data?" ), "",
-                              _( "OK" ), _( "Cancel" ) )
-            == wxID_CANCEL )
-        {
-            return;
-        }
-    }
-
-    // Create output directory if it does not exist (also transform it in absolute form).
-    // Bail if it fails.
-
-    std::function<bool( wxString* )> textResolver =
-            [&]( wxString* token ) -> bool
-            {
-                SCHEMATIC& schematic = m_parent->Schematic();
-
-                // Handles m_board->GetTitleBlock() *and* m_board->GetProject()
-                return schematic.ResolveTextVar( &schematic.CurrentSheet(), token, 0 );
-            };
-
-    wxString path = m_outputFileName->GetValue();
-
-    if( path.IsEmpty() )
-    {
-        // Match the behaviour of other exporters and default to <schematic>.csv in the project
-        // directory when the user leaves the field blank.
-        path = GetDefaultBomFileName( m_parent->Schematic().GetFileName() );
-
-        if( path.IsEmpty() )
-        {
-            DisplayError( this, _( "No output file specified in Export tab." ) );
-            return;
-        }
-
-        m_outputFileName->SetValue( path );
-    }
-
-    path = ExpandTextVars( NormalizeFilePathForTextVars( path ), &textResolver );
-    path = ExpandEnvVarSubstitutions( path, &Prj() );
-
-    wxFileName outputFile = wxFileName::FileName( path );
-    wxString msg;
-
-    if( !EnsureFileDirectoryExists( &outputFile, Prj().AbsolutePath( m_parent->Schematic().GetFileName() ),
-                                    &NULL_REPORTER::GetInstance() ) )
-    {
-        msg.Printf( _( "Could not open/create path '%s'." ), outputFile.GetPath() );
-        DisplayError( this, msg );
-        return;
-    }
-
-    wxFFile out( outputFile.GetFullPath(), "wb" );
-
-    if( !out.IsOpened() )
-    {
-        msg.Printf( _( "Could not create BOM output '%s'." ), outputFile.GetFullPath() );
-        DisplayError( this, msg );
-        return;
-    }
-
-    PreviewRefresh();
-
-    if( !out.Write( m_textOutput->GetValue() ) )
-    {
-        msg.Printf( _( "Could not write BOM output '%s'." ), outputFile.GetFullPath() );
-        DisplayError( this, msg );
-        return;
-    }
-
-    // close the file before we tell the user it's done with the info modal :workflow meme:
-    out.Close();
-
-    if( m_schSettings.m_BomExportFileName != m_outputFileName->GetValue() )
-    {
-        m_schSettings.m_BomExportFileName = m_outputFileName->GetValue();
-        m_parent->OnModify();
-    }
-
-    msg.Printf( _( "Wrote BOM output to '%s'" ), outputFile.GetFullPath() );
-    DisplayInfoMessage( this, msg );
 }
 
 
@@ -1568,7 +819,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnCancel( wxCommandEvent& aEvent )
     else
     {
         // Discard any unsaved edit in the output filename field
-        m_outputFileName->SetValue( m_schSettings.m_BomExportFileName );
+        m_outputFileName->SetValue( m_cfgBomSettings.m_BomExportFileName );
         Close();
     }
 }
@@ -1576,64 +827,19 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnCancel( wxCommandEvent& aEvent )
 
 void DIALOG_SYMBOL_FIELDS_TABLE::OnOk( wxCommandEvent& aEvent )
 {
-    TransferDataFromWindow();
+    if( !TransferDataFromWindow() )
+        return;
 
     if( m_job )
     {
-        m_job->SetConfiguredOutputPath( m_outputFileName->GetValue() );
-
-        if( m_currentBomFmtPreset )
-            m_job->m_bomFmtPresetName = m_currentBomFmtPreset->name;
-        else
-            m_job->m_bomFmtPresetName = wxEmptyString;
-
-        if( m_currentBomPreset )
-            m_job->m_bomPresetName = m_currentBomPreset->name;
-        else
-            m_job->m_bomPresetName = wxEmptyString;
-
-        BOM_FMT_PRESET fmtSettings = GetCurrentBomFmtSettings();
-        m_job->m_fieldDelimiter = fmtSettings.fieldDelimiter;
-        m_job->m_stringDelimiter = fmtSettings.stringDelimiter;
-        m_job->m_refDelimiter = fmtSettings.refDelimiter;
-        m_job->m_refRangeDelimiter = fmtSettings.refRangeDelimiter;
-        m_job->m_keepTabs = fmtSettings.keepTabs;
-        m_job->m_keepLineBreaks = fmtSettings.keepLineBreaks;
-        m_job->m_includeByteOrderMark = fmtSettings.includeByteOrderMark;
-
-        BOM_PRESET presetFields = m_dataModel->GetBomSettings();
-        m_job->m_sortAsc = presetFields.sortAsc;
-        m_job->m_excludeDNP = presetFields.excludeDNP;
-        m_job->m_filterString = presetFields.filterString;
-        m_job->m_sortField = presetFields.sortField;
-        m_job->m_groupSymbols = presetFields.groupSymbols;
-
-        m_job->m_fieldsOrdered.clear();
-        m_job->m_fieldsLabels.clear();
-        m_job->m_fieldsGroupBy.clear();
-
-        for( const BOM_FIELD& modelField : m_dataModel->GetFieldsOrdered() )
-        {
-            if( modelField.show )
-                m_job->m_fieldsOrdered.emplace_back( modelField.name );
-            else
-                m_job->m_fieldsOrdered.emplace_back( wxT( "__" ) + modelField.name );
-
-            m_job->m_fieldsLabels.emplace_back( modelField.label );
-
-            if( modelField.groupBy )
-                m_job->m_fieldsGroupBy.emplace_back( modelField.name );
-        }
-
-        m_job->SetSelectedVariant( getSelectedVariant() );
-
+        saveJobSettings( *m_job );
         EndModal( wxID_OK );
     }
     else
     {
-        if( m_schSettings.m_BomExportFileName != m_outputFileName->GetValue() )
+        if( m_cfgBomSettings.m_BomExportFileName != m_outputFileName->GetValue() )
         {
-            m_schSettings.m_BomExportFileName = m_outputFileName->GetValue();
+            m_cfgBomSettings.m_BomExportFileName = m_outputFileName->GetValue();
             m_parent->OnModify();
         }
 
@@ -1669,833 +875,16 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnClose( wxCloseEvent& aEvent )
     m_parent->Schematic().RemoveListener( this );
     m_parent->ClearFocus();
 
-    wxCommandEvent* evt = new wxCommandEvent( EDA_EVT_CLOSE_DIALOG_SYMBOL_FIELDS_TABLE, wxID_ANY );
+    wxCommandEvent* event = new wxCommandEvent( EDA_EVT_CLOSE_DIALOG_SYMBOL_FIELDS_TABLE, wxID_ANY );
 
-    if( wxWindow* parent = GetParent() )
-        wxQueueEvent( parent, evt );
-}
-
-
-std::vector<BOM_PRESET> DIALOG_SYMBOL_FIELDS_TABLE::GetUserBomPresets() const
-{
-    std::vector<BOM_PRESET> ret;
-
-    for( const std::pair<const wxString, BOM_PRESET>& pair : m_bomPresets )
-    {
-        if( !pair.second.readOnly )
-            ret.emplace_back( pair.second );
-    }
-
-    return ret;
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::SetUserBomPresets( std::vector<BOM_PRESET>& aPresetList )
-{
-    // Reset to defaults
-    loadDefaultBomPresets();
-
-    for( const BOM_PRESET& preset : aPresetList )
-    {
-        if( m_bomPresets.count( preset.name ) )
-            continue;
-
-        m_bomPresets[preset.name] = preset;
-
-        m_bomPresetMRU.Add( preset.name );
-    }
-
-    rebuildBomPresetsWidget();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::ApplyBomPreset( const wxString& aPresetName )
-{
-    updateBomPresetSelection( aPresetName );
-
-    wxCommandEvent dummy;
-    onBomPresetChanged( dummy );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::ApplyBomPreset( const BOM_PRESET& aPreset )
-{
-    if( m_bomPresets.count( aPreset.name ) )
-        m_currentBomPreset = &m_bomPresets[aPreset.name];
-    else
-        m_currentBomPreset = nullptr;
-
-    if( m_currentBomPreset && !m_currentBomPreset->readOnly )
-        m_lastSelectedBomPreset = m_currentBomPreset;
-    else
-        m_lastSelectedBomPreset = nullptr;
-
-    updateBomPresetSelection( aPreset.name );
-    doApplyBomPreset( aPreset );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::loadDefaultBomPresets()
-{
-    m_bomPresets.clear();
-    m_bomPresetMRU.clear();
-
-    // Load the read-only defaults
-    for( const BOM_PRESET& preset : BOM_PRESET::BuiltInPresets() )
-    {
-        m_bomPresets[preset.name] = preset;
-        m_bomPresets[preset.name].readOnly = true;
-
-        m_bomPresetMRU.Add( preset.name );
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::rebuildBomPresetsWidget()
-{
-    m_cbBomPresets->Clear();
-
-    int idx = 0;
-    int default_idx = 0;
-
-    for( const auto& [presetName, preset] : m_bomPresets )
-    {
-        m_cbBomPresets->Append( wxGetTranslation( presetName ), (void*) &preset );
-
-        if( presetName == BOM_PRESET::DefaultEditing().name )
-            default_idx = idx;
-
-        idx++;
-    }
-
-    m_cbBomPresets->Append( wxT( "---" ) );
-    m_cbBomPresets->Append( _( "Save preset..." ) );
-    m_cbBomPresets->Append( _( "Delete preset..." ) );
-
-    // At least the built-in presets should always be present
-    wxASSERT( !m_bomPresets.empty() );
-
-    m_cbBomPresets->SetSelection( default_idx );
-    m_currentBomPreset = static_cast<BOM_PRESET*>( m_cbBomPresets->GetClientData( default_idx ) );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::syncBomPresetSelection()
-{
-    BOM_PRESET current = m_dataModel->GetBomSettings();
-
-    auto it = std::find_if( m_bomPresets.begin(), m_bomPresets.end(),
-            [&]( const std::pair<const wxString, BOM_PRESET>& aPair )
-            {
-                const BOM_PRESET& preset = aPair.second;
-
-                // Check the simple settings first
-                if( !( preset.sortAsc == current.sortAsc
-                       && preset.filterString == current.filterString
-                       && preset.groupSymbols == current.groupSymbols
-                       && preset.excludeDNP == current.excludeDNP
-                       && preset.includeExcludedFromBOM == current.includeExcludedFromBOM ) )
-                {
-                    return false;
-                }
-
-                // We should compare preset.name and current.name.  Unfortunately current.name is
-                // empty because m_dataModel->GetBomSettings() does not store the .name member.
-                // So use sortField member as a (not very efficient) auxiliary filter.
-                // As a further complication, sortField can be translated in m_bomPresets list, so
-                // current.sortField needs to be translated.
-                // Probably this not efficient and error prone test should be removed (JPC).
-                if( preset.sortField != wxGetTranslation( current.sortField ) )
-                    return false;
-
-                // Only compare shown or grouped fields
-                std::vector<BOM_FIELD> A, B;
-
-                for( const BOM_FIELD& field : preset.fieldsOrdered )
-                {
-                    if( field.show || field.groupBy )
-                        A.emplace_back( field );
-                }
-
-                for( const BOM_FIELD& field : current.fieldsOrdered )
-                {
-                    if( field.show || field.groupBy )
-                        B.emplace_back( field );
-                }
-
-                return A == B;
-            } );
-
-    if( it != m_bomPresets.end() )
-    {
-        // Select the right m_cbBomPresets item.
-        // but these items are translated if they are predefined items.
-        bool     do_translate = it->second.readOnly;
-        wxString text = do_translate ? wxGetTranslation( it->first ) : it->first;
-        m_cbBomPresets->SetStringSelection( text );
-    }
-    else
-    {
-        m_cbBomPresets->SetSelection( m_cbBomPresets->GetCount() - 3 ); // separator
-    }
-
-    m_currentBomPreset = static_cast<BOM_PRESET*>( m_cbBomPresets->GetClientData( m_cbBomPresets->GetSelection() ) );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::updateBomPresetSelection( const wxString& aName )
-{
-    // Look at m_userBomPresets to know if aName is a read only preset, or a user preset.
-    // Read-only presets have translated names in UI, so we have to use a translated name
-    // in UI selection.  But for a user preset name we search for the untranslated aName.
-    wxString ui_label = aName;
-
-    for( const auto& [presetName, preset] : m_bomPresets )
-    {
-        if( presetName == aName )
-        {
-            if( preset.readOnly == true )
-                ui_label = wxGetTranslation( aName );
-
-            break;
-        }
-    }
-
-    int idx = m_cbBomPresets->FindString( ui_label );
-
-    if( idx >= 0 && m_cbBomPresets->GetSelection() != idx )
-    {
-        m_cbBomPresets->SetSelection( idx );
-        m_currentBomPreset = static_cast<BOM_PRESET*>( m_cbBomPresets->GetClientData( idx ) );
-    }
-    else if( idx < 0 )
-    {
-        m_cbBomPresets->SetSelection( m_cbBomPresets->GetCount() - 3 ); // separator
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::onBomPresetChanged( wxCommandEvent& aEvent )
-{
-    int count = m_cbBomPresets->GetCount();
-    int index = m_cbBomPresets->GetSelection();
-
-    auto resetSelection =
-            [&]()
-            {
-                if( m_currentBomPreset )
-                    m_cbBomPresets->SetStringSelection( m_currentBomPreset->name );
-                else
-                    m_cbBomPresets->SetSelection( m_cbBomPresets->GetCount() - 3 );
-            };
-
-    if( index == count - 3 )
-    {
-        // Separator: reject the selection
-        resetSelection();
-        return;
-    }
-    else if( index == count - 2 )
-    {
-        // Save current state to new preset
-        wxString name;
-
-        if( m_lastSelectedBomPreset )
-            name = m_lastSelectedBomPreset->name;
-
-        wxTextEntryDialog dlg( this, _( "BOM preset name:" ), _( "Save BOM Preset" ), name );
-
-        if( dlg.ShowModal() != wxID_OK )
-        {
-            resetSelection();
-            return;
-        }
-
-        name = dlg.GetValue();
-        bool exists = m_bomPresets.count( name );
-
-        if( !exists )
-        {
-            m_bomPresets[name] = m_dataModel->GetBomSettings();
-            m_bomPresets[name].readOnly = false;
-            m_bomPresets[name].name = name;
-        }
-
-        BOM_PRESET* preset = &m_bomPresets[name];
-
-        if( !exists )
-        {
-            index = m_cbBomPresets->Insert( name, index - 1, static_cast<void*>( preset ) );
-        }
-        else if( preset->readOnly )
-        {
-            wxMessageBox( _( "Default presets cannot be modified.\nPlease use a different name." ),
-                          _( "Error" ), wxOK | wxICON_ERROR, this );
-            resetSelection();
-            return;
-        }
-        else
-        {
-            // Ask the user if they want to overwrite the existing preset
-            if( !IsOK( this, _( "Overwrite existing preset?" ) ) )
-            {
-                resetSelection();
-                return;
-            }
-
-            *preset = m_dataModel->GetBomSettings();
-            preset->name = name;
-
-            index = m_cbBomPresets->FindString( name );
-
-            if( m_bomPresetMRU.Index( name ) != wxNOT_FOUND )
-                m_bomPresetMRU.Remove( name );
-        }
-
-        m_currentBomPreset = preset;
-        m_cbBomPresets->SetSelection( index );
-        m_bomPresetMRU.Insert( name, 0 );
-
-        return;
-    }
-    else if( index == count - 1 )
-    {
-        // Delete a preset
-        wxArrayString              headers;
-        std::vector<wxArrayString> items;
-
-        headers.Add( _( "Presets" ) );
-
-        for( const auto& [name, preset] : m_bomPresets )
-        {
-            if( !preset.readOnly )
-            {
-                wxArrayString item;
-                item.Add( name );
-                items.emplace_back( item );
-            }
-        }
-
-        EDA_LIST_DIALOG dlg( this, _( "Delete Preset" ), headers, items );
-        dlg.SetListLabel( _( "Select preset:" ) );
-
-        if( dlg.ShowModal() == wxID_OK )
-        {
-            wxString presetName = dlg.GetTextSelection();
-            int      idx = m_cbBomPresets->FindString( presetName );
-
-            if( idx != wxNOT_FOUND )
-            {
-                m_bomPresets.erase( presetName );
-
-                m_cbBomPresets->Delete( idx );
-                m_currentBomPreset = nullptr;
-            }
-
-            if( m_bomPresetMRU.Index( presetName ) != wxNOT_FOUND )
-                m_bomPresetMRU.Remove( presetName );
-        }
-
-        resetSelection();
-        return;
-    }
-
-    BOM_PRESET* preset = static_cast<BOM_PRESET*>( m_cbBomPresets->GetClientData( index ) );
-    m_currentBomPreset = preset;
-
-    m_lastSelectedBomPreset = ( !preset || preset->readOnly ) ? nullptr : preset;
-
-    if( preset )
-    {
-        doApplyBomPreset( *preset );
-        syncBomPresetSelection();
-        m_currentBomPreset = preset;
-
-        if( !m_currentBomPreset->name.IsEmpty() )
-        {
-            if( m_bomPresetMRU.Index( preset->name ) != wxNOT_FOUND )
-                m_bomPresetMRU.Remove( preset->name );
-
-            m_bomPresetMRU.Insert( preset->name, 0 );
-        }
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::doApplyBomPreset( const BOM_PRESET& aPreset )
-{
-    // Disable rebuilds while we're applying the preset otherwise we'll be
-    // rebuilding the model constantly while firing off wx events
-    m_dataModel->DisableRebuilds();
-
-    // Basically, we apply the BOM preset to the data model and then
-    // update our UI to reflect resulting the data model state, not the preset.
-    m_dataModel->SetCurrentVariant( resolveVariant() );
-    m_dataModel->ApplyBomPreset( aPreset );
-
-    // BOM Presets can add, but not remove, columns, so make sure the view controls
-    // grid has all of them before starting
-    for( int i = 0; i < m_dataModel->GetColsCount(); i++ )
-    {
-        const wxString& fieldName( m_dataModel->GetColFieldName( i ) );
-        bool            found = false;
-
-        for( int j = 0; j < m_viewControlsDataModel->GetNumberRows(); j++ )
-        {
-            if( m_viewControlsDataModel->GetCanonicalFieldName( j ) == fieldName )
-            {
-                found = true;
-                break;
-            }
-        }
-
-        // Properties like label, etc. will be added in the next loop
-        if( !found )
-            AddField( fieldName, GetGeneratedFieldDisplayName( fieldName ), false, false );
-    }
-
-    // Sync all fields
-    for( int i = 0; i < m_viewControlsDataModel->GetNumberRows(); i++ )
-    {
-        const wxString& fieldName( m_viewControlsDataModel->GetCanonicalFieldName( i ) );
-        int             col = m_dataModel->GetFieldNameCol( fieldName );
-
-        if( col == -1 )
-        {
-            wxASSERT_MSG( true, "Fields control has a field not found in the data model." );
-            continue;
-        }
-
-        EESCHEMA_SETTINGS* cfg = m_parent->eeconfig();
-        std::string        fieldNameStr( fieldName.ToUTF8() );
-
-        // Set column labels
-        const wxString& label = m_dataModel->GetColLabelValue( col );
-        m_viewControlsDataModel->SetValue( i, LABEL_COLUMN, label );
-        m_grid->SetColLabelValue( col, label );
-
-        if( cfg->m_FieldEditorPanel.field_widths.count( fieldNameStr ) )
-            m_grid->SetColSize( col, cfg->m_FieldEditorPanel.field_widths.at( fieldNameStr ) );
-
-        // Set shown columns
-        bool show = m_dataModel->GetShowColumn( col );
-        m_viewControlsDataModel->SetValueAsBool( i, SHOW_FIELD_COLUMN, show );
-
-        if( show )
-            m_grid->ShowCol( col );
-        else
-            m_grid->HideCol( col );
-
-        // Set grouped columns
-        bool groupBy = m_dataModel->GetGroupColumn( col );
-        m_viewControlsDataModel->SetValueAsBool( i, GROUP_BY_COLUMN, groupBy );
-    }
-
-    m_grid->SetSortingColumn( m_dataModel->GetSortCol(), m_dataModel->GetSortAsc() );
-    m_groupSymbolsBox->SetValue( m_dataModel->GetGroupingEnabled() );
-    m_filter->ChangeValue( m_dataModel->GetFilter() );
-
-    SetupAllColumnProperties();
-
-    // This will rebuild all rows and columns in the model such that the order
-    // and labels are right, then we refresh the shown grid data to match
-    m_dataModel->EnableRebuilds();
-    m_dataModel->RebuildRows();
-
-    if( m_nbPages->GetSelection() == 1 )
-        PreviewRefresh();
-    else
-        m_grid->ForceRefresh();
-}
-
-
-std::vector<BOM_FMT_PRESET> DIALOG_SYMBOL_FIELDS_TABLE::GetUserBomFmtPresets() const
-{
-    std::vector<BOM_FMT_PRESET> ret;
-
-    for( const auto& [name, preset] : m_bomFmtPresets )
-    {
-        if( !preset.readOnly )
-            ret.emplace_back( preset );
-    }
-
-    return ret;
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::SetUserBomFmtPresets( std::vector<BOM_FMT_PRESET>& aPresetList )
-{
-    // Reset to defaults
-    loadDefaultBomFmtPresets();
-
-    for( const BOM_FMT_PRESET& preset : aPresetList )
-    {
-        if( m_bomFmtPresets.count( preset.name ) )
-            continue;
-
-        m_bomFmtPresets[preset.name] = preset;
-
-        m_bomFmtPresetMRU.Add( preset.name );
-    }
-
-    rebuildBomFmtPresetsWidget();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::ApplyBomFmtPreset( const wxString& aPresetName )
-{
-    updateBomFmtPresetSelection( aPresetName );
-
-    wxCommandEvent dummy;
-    onBomFmtPresetChanged( dummy );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::ApplyBomFmtPreset( const BOM_FMT_PRESET& aPreset )
-{
-    m_currentBomFmtPreset = nullptr;
-    m_lastSelectedBomFmtPreset = nullptr;
-
-    if( m_bomFmtPresets.count( aPreset.name ) )
-        m_currentBomFmtPreset = &m_bomFmtPresets[aPreset.name];
-
-    if( m_currentBomFmtPreset && !m_currentBomFmtPreset->readOnly )
-        m_lastSelectedBomFmtPreset =m_currentBomFmtPreset;
-
-    updateBomFmtPresetSelection( aPreset.name );
-    doApplyBomFmtPreset( aPreset );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::loadDefaultBomFmtPresets()
-{
-    m_bomFmtPresets.clear();
-    m_bomFmtPresetMRU.clear();
-
-    // Load the read-only defaults
-    for( const BOM_FMT_PRESET& preset : BOM_FMT_PRESET::BuiltInPresets() )
-    {
-        m_bomFmtPresets[preset.name] = preset;
-        m_bomFmtPresets[preset.name].readOnly = true;
-
-        m_bomFmtPresetMRU.Add( preset.name );
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::rebuildBomFmtPresetsWidget()
-{
-    m_cbBomFmtPresets->Clear();
-
-    int idx = 0;
-    int default_idx = 0;
-
-    for( const auto& [presetName, preset] : m_bomFmtPresets )
-    {
-        m_cbBomFmtPresets->Append( wxGetTranslation( presetName ), (void*) &preset );
-
-        if( presetName == BOM_FMT_PRESET::CSV().name )
-            default_idx = idx;
-
-        idx++;
-    }
-
-    m_cbBomFmtPresets->Append( wxT( "---" ) );
-    m_cbBomFmtPresets->Append( _( "Save preset..." ) );
-    m_cbBomFmtPresets->Append( _( "Delete preset..." ) );
-
-    // At least the built-in presets should always be present
-    wxASSERT( !m_bomFmtPresets.empty() );
-
-    m_cbBomFmtPresets->SetSelection( default_idx );
-    m_currentBomFmtPreset = static_cast<BOM_FMT_PRESET*>( m_cbBomFmtPresets->GetClientData( default_idx ) );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::syncBomFmtPresetSelection()
-{
-    BOM_FMT_PRESET current = GetCurrentBomFmtSettings();
-
-    auto it = std::find_if( m_bomFmtPresets.begin(), m_bomFmtPresets.end(),
-                            [&]( const std::pair<const wxString, BOM_FMT_PRESET>& aPair )
-                            {
-                                return ( aPair.second.fieldDelimiter == current.fieldDelimiter
-                                         && aPair.second.stringDelimiter == current.stringDelimiter
-                                         && aPair.second.refDelimiter == current.refDelimiter
-                                         && aPair.second.refRangeDelimiter == current.refRangeDelimiter
-                                         && aPair.second.keepTabs == current.keepTabs
-                                         && aPair.second.keepLineBreaks == current.keepLineBreaks
-                                         && aPair.second.includeByteOrderMark == current.includeByteOrderMark );
-                            } );
-
-    if( it != m_bomFmtPresets.end() )
-    {
-        // Select the right m_cbBomFmtPresets item.
-        // but these items are translated if they are predefined items.
-        bool     do_translate = it->second.readOnly;
-        wxString text = do_translate ? wxGetTranslation( it->first ) : it->first;
-
-        m_cbBomFmtPresets->SetStringSelection( text );
-    }
-    else
-    {
-        m_cbBomFmtPresets->SetSelection( m_cbBomFmtPresets->GetCount() - 3 ); // separator
-    }
-
-    int idx = m_cbBomFmtPresets->GetSelection();
-    m_currentBomFmtPreset = static_cast<BOM_FMT_PRESET*>( m_cbBomFmtPresets->GetClientData( idx ) );
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::updateBomFmtPresetSelection( const wxString& aName )
-{
-    // look at m_userBomFmtPresets to know if aName is a read only preset, or a user preset.
-    // Read only presets have translated names in UI, so we have to use a translated name in UI selection.
-    // But for a user preset name we should search for aName (not translated)
-    wxString ui_label = aName;
-
-    for( const auto& [presetName, preset] : m_bomFmtPresets )
-    {
-        if( presetName == aName )
-        {
-            if( preset.readOnly )
-                ui_label = wxGetTranslation( aName );
-
-            break;
-        }
-    }
-
-    int idx = m_cbBomFmtPresets->FindString( ui_label );
-
-    if( idx >= 0 && m_cbBomFmtPresets->GetSelection() != idx )
-    {
-        m_cbBomFmtPresets->SetSelection( idx );
-        m_currentBomFmtPreset = static_cast<BOM_FMT_PRESET*>( m_cbBomFmtPresets->GetClientData( idx ) );
-    }
-    else if( idx < 0 )
-    {
-        m_cbBomFmtPresets->SetSelection( m_cbBomFmtPresets->GetCount() - 3 ); // separator
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::onBomFmtPresetChanged( wxCommandEvent& aEvent )
-{
-    int count = m_cbBomFmtPresets->GetCount();
-    int index = m_cbBomFmtPresets->GetSelection();
-
-    auto resetSelection =
-            [&]()
-            {
-                if( m_currentBomFmtPreset )
-                    m_cbBomFmtPresets->SetStringSelection( m_currentBomFmtPreset->name );
-                else
-                    m_cbBomFmtPresets->SetSelection( m_cbBomFmtPresets->GetCount() - 3 );
-            };
-
-    if( index == count - 3 )
-    {
-        // Separator: reject the selection
-        resetSelection();
-        return;
-    }
-    else if( index == count - 2 )
-    {
-        // Save current state to new preset
-        wxString name;
-
-        if( m_lastSelectedBomFmtPreset )
-            name = m_lastSelectedBomFmtPreset->name;
-
-        wxTextEntryDialog dlg( this, _( "BOM preset name:" ), _( "Save BOM Preset" ), name );
-
-        if( dlg.ShowModal() != wxID_OK )
-        {
-            resetSelection();
-            return;
-        }
-
-        name = dlg.GetValue();
-        bool exists = m_bomFmtPresets.count( name );
-
-        if( !exists )
-        {
-            m_bomFmtPresets[name] = GetCurrentBomFmtSettings();
-            m_bomFmtPresets[name].readOnly = false;
-            m_bomFmtPresets[name].name = name;
-        }
-
-        BOM_FMT_PRESET* preset = &m_bomFmtPresets[name];
-
-        if( !exists )
-        {
-            index = m_cbBomFmtPresets->Insert( name, index - 1, static_cast<void*>( preset ) );
-        }
-        else if( preset->readOnly )
-        {
-            wxMessageBox( _( "Default presets cannot be modified.\nPlease use a different name." ),
-                          _( "Error" ), wxOK | wxICON_ERROR, this );
-            resetSelection();
-            return;
-        }
-        else
-        {
-            // Ask the user if they want to overwrite the existing preset
-            if( !IsOK( this, _( "Overwrite existing preset?" ) ) )
-            {
-                resetSelection();
-                return;
-            }
-
-            *preset = GetCurrentBomFmtSettings();
-            preset->name = name;
-
-            index = m_cbBomFmtPresets->FindString( name );
-
-            if( m_bomFmtPresetMRU.Index( name ) != wxNOT_FOUND )
-                m_bomFmtPresetMRU.Remove( name );
-        }
-
-        m_currentBomFmtPreset = preset;
-        m_cbBomFmtPresets->SetSelection( index );
-        m_bomFmtPresetMRU.Insert( name, 0 );
-
-        return;
-    }
-    else if( index == count - 1 )
-    {
-        // Delete a preset
-        wxArrayString              headers;
-        std::vector<wxArrayString> items;
-
-        headers.Add( _( "Presets" ) );
-
-        for( std::pair<const wxString, BOM_FMT_PRESET>& pair : m_bomFmtPresets )
-        {
-            if( !pair.second.readOnly )
-            {
-                wxArrayString item;
-                item.Add( pair.first );
-                items.emplace_back( item );
-            }
-        }
-
-        EDA_LIST_DIALOG dlg( this, _( "Delete Preset" ), headers, items );
-        dlg.SetListLabel( _( "Select preset:" ) );
-
-        if( dlg.ShowModal() == wxID_OK )
-        {
-            wxString presetName = dlg.GetTextSelection();
-            int      idx = m_cbBomFmtPresets->FindString( presetName );
-
-            if( idx != wxNOT_FOUND )
-            {
-                m_bomFmtPresets.erase( presetName );
-
-                m_cbBomFmtPresets->Delete( idx );
-                m_currentBomFmtPreset = nullptr;
-            }
-
-            if( m_bomFmtPresetMRU.Index( presetName ) != wxNOT_FOUND )
-                m_bomFmtPresetMRU.Remove( presetName );
-        }
-
-        resetSelection();
-        return;
-    }
-
-    auto* preset = static_cast<BOM_FMT_PRESET*>( m_cbBomFmtPresets->GetClientData( index ) );
-    m_currentBomFmtPreset = preset;
-
-    m_lastSelectedBomFmtPreset = ( !preset || preset->readOnly ) ? nullptr : preset;
-
-    if( preset )
-    {
-        doApplyBomFmtPreset( *preset );
-        syncBomFmtPresetSelection();
-        m_currentBomFmtPreset = preset;
-
-        if( !m_currentBomFmtPreset->name.IsEmpty() )
-        {
-            if( m_bomFmtPresetMRU.Index( preset->name ) != wxNOT_FOUND )
-                m_bomFmtPresetMRU.Remove( preset->name );
-
-            m_bomFmtPresetMRU.Insert( preset->name, 0 );
-        }
-    }
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::doApplyBomFmtPreset( const BOM_FMT_PRESET& aPreset )
-{
-    m_textFieldDelimiter->ChangeValue( aPreset.fieldDelimiter );
-    m_textStringDelimiter->ChangeValue( aPreset.stringDelimiter );
-    m_textRefDelimiter->ChangeValue( aPreset.refDelimiter );
-    m_textRefRangeDelimiter->ChangeValue( aPreset.refRangeDelimiter );
-    m_checkKeepTabs->SetValue( aPreset.keepTabs );
-    m_checkKeepLineBreaks->SetValue( aPreset.keepLineBreaks );
-    m_checkIncludeByteOrderMark->SetValue( aPreset.includeByteOrderMark );
-
-    // Refresh the preview if that's the current page
-    if( m_nbPages->GetSelection() == 1 )
-        PreviewRefresh();
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::savePresetsToSchematic()
-{
-    bool modified = false;
-
-    // Save our BOM presets
-    std::vector<BOM_PRESET> presets;
-
-    for( const auto& [name, preset] : m_bomPresets )
-    {
-        if( !preset.readOnly )
-            presets.emplace_back( preset );
-    }
-
-    if( m_schSettings.m_BomPresets != presets )
-    {
-        modified = true;
-        m_schSettings.m_BomPresets = presets;
-    }
-
-    if( m_schSettings.m_BomSettings != m_dataModel->GetBomSettings() && !m_job )
-    {
-        modified = true;
-        m_schSettings.m_BomSettings = m_dataModel->GetBomSettings();
-    }
-
-    // Save our BOM Format presets
-    std::vector<BOM_FMT_PRESET> fmts;
-
-    for( const auto& [name, preset] : m_bomFmtPresets )
-    {
-        if( !preset.readOnly )
-            fmts.emplace_back( preset );
-    }
-
-    if( m_schSettings.m_BomFmtPresets != fmts )
-    {
-        modified = true;
-        m_schSettings.m_BomFmtPresets = fmts;
-    }
-
-    if( m_schSettings.m_BomFmtSettings != GetCurrentBomFmtSettings() && !m_job )
-    {
-        modified = true;
-        m_schSettings.m_BomFmtSettings = GetCurrentBomFmtSettings();
-    }
-
-    if( modified )
-        m_parent->OnModify();
+    if( wxWindow* parentWindow = GetParent() )
+        wxQueueEvent( parentWindow, event );
 }
 
 
 void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsAdded( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem )
 {
-    std::set<wxString> savedSelection = SaveGridSelection();
+    std::set<KIID_PATH> savedSelection = SaveGridSelection();
 
     SCH_REFERENCE_LIST allRefs;
     m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_ALL );
@@ -2512,7 +901,10 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsAdded( SCHEMATIC& aSch, std::vector<S
 
             // Add all fields again in case this symbol has a new one
             for( SCH_FIELD& field : symbol->GetFields() )
-                AddField( field.GetCanonicalName(), field.GetName(), true, false, true );
+            {
+                if( !field.IsMandatory() && !field.IsPrivate() )
+                    AddField( field.GetUntranslatedName(), field.GetName(), true, false, false );
+            }
 
             m_dataModel->AddReferences( getSymbolReferences( symbol, allRefs ) );
         }
@@ -2528,23 +920,23 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsAdded( SCHEMATIC& aSch, std::vector<S
             {
                 // Add all fields again in case this symbol has a new one
                 for( SCH_FIELD& field : symbol->GetFields() )
-                    AddField( field.GetCanonicalName(), field.GetName(), true, false, true );
+                {
+                    if( !field.IsMandatory() && !field.IsPrivate() )
+                        AddField( field.GetUntranslatedName(), field.GetName(), true, false, false );
+                }
             }
 
             m_dataModel->AddReferences( refs );
         }
     }
 
-    DisableSelectionEvents();
-    m_dataModel->RebuildRows();
-    RestoreGridSelection( savedSelection );
-    EnableSelectionEvents();
+    rebuildRowsPreservingSelection( savedSelection );
 }
 
 
 void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsRemoved( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem )
 {
-    std::set<wxString> savedSelection = SaveGridSelection();
+    std::set<KIID_PATH> savedSelection = SaveGridSelection();
 
     for( SCH_ITEM* item : aSchItem )
     {
@@ -2554,16 +946,13 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsRemoved( SCHEMATIC& aSch, std::vector
             m_dataModel->RemoveReferences( getSheetSymbolReferences( *static_cast<SCH_SHEET*>( item ) ) );
     }
 
-    DisableSelectionEvents();
-    m_dataModel->RebuildRows();
-    RestoreGridSelection( savedSelection );
-    EnableSelectionEvents();
+    rebuildRowsPreservingSelection( savedSelection );
 }
 
 
 void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsChanged( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem )
 {
-    std::set<wxString> savedSelection = SaveGridSelection();
+    std::set<KIID_PATH> savedSelection = SaveGridSelection();
 
     SCH_REFERENCE_LIST allRefs;
     m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_ALL );
@@ -2580,7 +969,10 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsChanged( SCHEMATIC& aSch, std::vector
 
             // Add all fields again in case this symbol has a new one
             for( SCH_FIELD& field : symbol->GetFields() )
-                AddField( field.GetCanonicalName(), field.GetName(), true, false, true );
+            {
+                if( !field.IsMandatory() && !field.IsPrivate() )
+                    AddField( field.GetUntranslatedName(), field.GetName(), true, false, false );
+            }
 
             m_dataModel->UpdateReferences( getSymbolReferences( symbol, allRefs ) );
         }
@@ -2596,17 +988,17 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsChanged( SCHEMATIC& aSch, std::vector
             {
                 // Add all fields again in case this symbol has a new one
                 for( SCH_FIELD& field : symbol->GetFields() )
-                    AddField( field.GetCanonicalName(), field.GetName(), true, false, true );
+                {
+                    if( !field.IsMandatory() && !field.IsPrivate() )
+                        AddField( field.GetUntranslatedName(), field.GetName(), true, false, false );
+                }
             }
 
             m_dataModel->UpdateReferences( refs );
         }
     }
 
-    DisableSelectionEvents();
-    m_dataModel->RebuildRows();
-    RestoreGridSelection( savedSelection );
-    EnableSelectionEvents();
+    rebuildRowsPreservingSelection( savedSelection );
 }
 
 
@@ -2614,99 +1006,35 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchSheetChanged( SCHEMATIC& aSch )
 {
     m_dataModel->SetPath( aSch.CurrentSheet() );
 
-    if( m_dataModel->GetScope() != FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE::SCOPE_ALL )
-    {
-        std::set<wxString> savedSelection = SaveGridSelection();
-
-        DisableSelectionEvents();
-        m_dataModel->RebuildRows();
-        RestoreGridSelection( savedSelection );
-        EnableSelectionEvents();
-    }
+    if( m_dataModel->GetScope() != SCOPE::SCOPE_ALL )
+        rebuildRowsPreservingSelection();
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::EnableSelectionEvents()
+void DIALOG_SYMBOL_FIELDS_TABLE::OnSchSelectionChanged( SCHEMATIC& aSch )
 {
-    m_grid->Connect( wxEVT_GRID_RANGE_SELECTED,
-                     wxGridRangeSelectEventHandler( DIALOG_SYMBOL_FIELDS_TABLE::OnTableRangeSelected ),
-                     nullptr, this );
+    if( m_dataModel->GetScope() == SCOPE::SCOPE_SELECTION )
+        rebuildRowsPreservingSelection();
 }
 
 
-void DIALOG_SYMBOL_FIELDS_TABLE::DisableSelectionEvents()
+void DIALOG_SYMBOL_FIELDS_TABLE::rebuildRowsPreservingSelection()
 {
-    m_grid->Disconnect( wxEVT_GRID_RANGE_SELECTED,
-                        wxGridRangeSelectEventHandler( DIALOG_SYMBOL_FIELDS_TABLE::OnTableRangeSelected ),
-                        nullptr, this );
+    rebuildRowsPreservingSelection( SaveGridSelection() );
 }
 
 
-std::set<wxString> DIALOG_SYMBOL_FIELDS_TABLE::SaveGridSelection()
+void DIALOG_SYMBOL_FIELDS_TABLE::rebuildRowsPreservingSelection( const std::set<KIID_PATH>& aSavedSelection )
 {
-    std::set<wxString> selectedFullPaths;
+    DisableSelectionEvents();
 
-    wxGridCellCoordsArray topLeft = m_grid->GetSelectionBlockTopLeft();
-    wxGridCellCoordsArray bottomRight = m_grid->GetSelectionBlockBottomRight();
+    if( m_dataModel->GetScope() == SCOPE::SCOPE_SELECTION )
+        updateSelectionItems();
 
-    for( size_t i = 0; i < topLeft.size(); ++i )
-    {
-        for( int row = topLeft[i].GetRow(); row <= bottomRight[i].GetRow(); ++row )
-        {
-            for( const SCH_REFERENCE& ref : m_dataModel->GetRowReferences( row ) )
-                selectedFullPaths.insert( ref.GetFullPath() );
-        }
-    }
+    m_dataModel->RebuildRows();
+    RestoreGridSelection( aSavedSelection );
 
-    wxArrayInt selectedRows = m_grid->GetSelectedRows();
-
-    for( int row : selectedRows )
-    {
-        for( const SCH_REFERENCE& ref : m_dataModel->GetRowReferences( row ) )
-            selectedFullPaths.insert( ref.GetFullPath() );
-    }
-
-    int cursorRow = m_grid->GetGridCursorRow();
-
-    if( cursorRow >= 0 && selectedFullPaths.empty() )
-    {
-        for( const SCH_REFERENCE& ref : m_dataModel->GetRowReferences( cursorRow ) )
-            selectedFullPaths.insert( ref.GetFullPath() );
-    }
-
-    return selectedFullPaths;
-}
-
-
-void DIALOG_SYMBOL_FIELDS_TABLE::RestoreGridSelection( const std::set<wxString>& aFullPaths )
-{
-    if( aFullPaths.empty() )
-        return;
-
-    m_grid->ClearSelection();
-
-    bool firstSelection = true;
-
-    for( int row = 0; row < m_dataModel->GetNumberRows(); ++row )
-    {
-        std::vector<SCH_REFERENCE> refs = m_dataModel->GetRowReferences( row );
-
-        for( const SCH_REFERENCE& ref : refs )
-        {
-            if( aFullPaths.count( ref.GetFullPath() ) )
-            {
-                m_grid->SelectRow( row, true );
-
-                if( firstSelection )
-                {
-                    m_grid->SetGridCursor( row, m_grid->GetGridCursorCol() );
-                    firstSelection = false;
-                }
-
-                break;
-            }
-        }
-    }
+    EnableSelectionEvents();
 }
 
 
@@ -3057,7 +1385,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onVariantSelectionChange( wxCommandEvent& aEven
 
         SCH_COMMIT     commit( m_parent );
 
-        m_dataModel->ApplyData( commit, m_schSettings.m_TemplateFieldNames, currentVariant );
+        m_dataModel->ApplyData( commit, m_templateFieldNames, currentVariant );
 
         if( !commit.Empty() )
         {
@@ -3094,19 +1422,6 @@ void DIALOG_SYMBOL_FIELDS_TABLE::updateVariantButtonStates()
 }
 
 
-wxString DIALOG_SYMBOL_FIELDS_TABLE::getSelectedVariant() const
-{
-    wxString retv;
-
-    int selection = m_variantListBox->GetSelection();
-
-    if( ( selection == wxNOT_FOUND ) || ( m_variantListBox->GetString( selection ) == GetDefaultVariantName() ) )
-        return retv;
-
-    return m_variantListBox->GetString( selection );
-}
-
-
 wxString DIALOG_SYMBOL_FIELDS_TABLE::resolveVariant() const
 {
     // A job keeps its own variant, otherwise follow the schematic.
@@ -3114,4 +1429,12 @@ wxString DIALOG_SYMBOL_FIELDS_TABLE::resolveVariant() const
         return getSelectedVariant();
 
     return m_parent->Schematic().GetCurrentVariant();
+}
+
+
+bool DIALOG_SYMBOL_FIELDS_TABLE::resolveTextVar( wxString* aToken ) const
+{
+    SCHEMATIC& schematic = m_parent->Schematic();
+
+    return schematic.ResolveTextVar( &schematic.CurrentSheet(), aToken, 0 );
 }

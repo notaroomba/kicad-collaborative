@@ -23,14 +23,11 @@
 #include <wx/msgdlg.h>
 
 #include <pgm_base.h>
-#include <settings/settings_manager.h>
-#include <eeschema_settings.h>
+#include <settings/common_settings.h>
 #include <widgets/std_bitmap_button.h>
 #include <template_fieldnames.h>
 #include <grid_tricks.h>
 #include <bitmaps.h>
-#include <richio.h>
-#include <string_utils.h>
 #include <confirm.h>
 
 PANEL_TEMPLATE_FIELDNAMES::PANEL_TEMPLATE_FIELDNAMES( wxWindow* aWindow,
@@ -40,20 +37,14 @@ PANEL_TEMPLATE_FIELDNAMES::PANEL_TEMPLATE_FIELDNAMES( wxWindow* aWindow,
     if( aProjectTemplateMgr )
     {
         m_title->SetLabel( _( "Project Field Name Templates" ) );
-        m_global = false;
+        m_scope = TEMPLATES::SCOPE::PROJECT;
         m_templateMgr = aProjectTemplateMgr;
     }
     else
     {
         m_title->SetLabel( _( "Global Field Name Templates" ) );
-        m_global = true;
-        m_templateMgr = &m_templateMgrInstance;
-
-        if( EESCHEMA_SETTINGS* cfg = GetAppSettings<EESCHEMA_SETTINGS>( "eeschema" ) )
-        {
-            if( !cfg->m_Drawing.field_names.IsEmpty() )
-                m_templateMgr->AddTemplateFieldNames( cfg->m_Drawing.field_names );
-        }
+        m_scope = TEMPLATES::SCOPE::GLOBAL;
+        m_templateMgr = &Pgm().GetCommonSettings()->m_FieldNameTemplates;
     }
 
     m_addFieldButton->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
@@ -81,7 +72,7 @@ PANEL_TEMPLATE_FIELDNAMES::~PANEL_TEMPLATE_FIELDNAMES()
 
 bool PANEL_TEMPLATE_FIELDNAMES::TransferDataToWindow()
 {
-    m_fields = m_templateMgr->GetTemplateFieldNames( m_global );
+    m_fields = m_templateMgr->GetTemplateFieldNames( m_scope );
 
     return TransferDataToGrid();
 }
@@ -191,7 +182,7 @@ bool PANEL_TEMPLATE_FIELDNAMES::TransferDataFromWindow()
     if( !TransferDataFromGrid() )
         return false;
 
-    m_templateMgr->DeleteAllFieldNameTemplates( m_global );
+    m_templateMgr->DeleteFieldNameTemplates( m_scope );
 
     for( TEMPLATE_FIELDNAME& field : m_fields )
     {
@@ -225,22 +216,7 @@ bool PANEL_TEMPLATE_FIELDNAMES::TransferDataFromWindow()
                     field.m_Name = trimmedName;
             }
 
-            m_templateMgr->AddTemplateFieldName( field, m_global );
-        }
-    }
-
-    if( m_global )
-    {
-        if( EESCHEMA_SETTINGS* cfg = GetAppSettings<EESCHEMA_SETTINGS>( "eeschema" ) )
-        {
-            // Save global fieldname templates
-            STRING_FORMATTER sf;
-            m_templateMgr->Format( &sf, true );
-
-            wxString record = From_UTF8( sf.GetString().c_str() );
-            record.Replace( wxT( "  " ), wxT( " " ), true );  // double space to single
-
-            cfg->m_Drawing.field_names = record.ToStdString();
+            m_templateMgr->AddTemplateFieldName( field, m_scope );
         }
     }
 
@@ -250,8 +226,6 @@ bool PANEL_TEMPLATE_FIELDNAMES::TransferDataFromWindow()
 
 void PANEL_TEMPLATE_FIELDNAMES::ImportSettingsFrom( TEMPLATES* templateMgr )
 {
-    m_fields = templateMgr->GetTemplateFieldNames( m_global );
+    m_fields = templateMgr->GetTemplateFieldNames( m_scope );
     TransferDataToGrid();
 }
-
-

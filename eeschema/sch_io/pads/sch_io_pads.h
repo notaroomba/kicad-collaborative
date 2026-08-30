@@ -34,9 +34,6 @@ class LIB_SYMBOL;
 
 /**
  * A #SCH_IO derivation for loading PADS Logic schematic files.
- *
- * PADS Logic exports schematic designs as ASCII text files that can be parsed
- * and converted to KiCad schematic format.
  */
 class SCH_IO_PADS : public SCH_IO
 {
@@ -46,7 +43,8 @@ public:
 
     const IO_BASE::IO_FILE_DESC GetSchematicFileDesc() const override
     {
-        return IO_BASE::IO_FILE_DESC( _HKI( "PADS Logic schematic files" ), { "asc", "txt" } );
+        return IO_BASE::IO_FILE_DESC( _HKI( "PADS Logic schematic files" ),
+                                      { "asc", "txt", "sch" } );
     }
 
     const IO_BASE::IO_FILE_DESC GetLibraryDesc() const override
@@ -75,13 +73,17 @@ public:
     bool IsLibraryWritable( const wxString& aLibraryPath ) override { return false; }
 
 private:
-    /**
-     * Check if the file header indicates a PADS Logic schematic file.
-     *
-     * @param aFileName Path to the file to check.
-     * @return True if file appears to be a PADS Logic schematic.
-     */
     bool checkFileHeader( const wxString& aFileName ) const;
+
+    /**
+     * Recognize the PADS Logic binary family independently of version support so unsupported
+     * producer versions receive a binary-format diagnostic instead of reaching the ASCII parser.
+     */
+    bool isBinarySchematicFile( const wxString& aFileName ) const;
+
+    SCH_SHEET* loadBinarySchematicFile( const wxString& aFileName, SCHEMATIC* aSchematic,
+                                        SCH_SHEET*                         aAppendToMe,
+                                        const std::map<std::string, UTF8>* aProperties );
 
     /**
      * Parse the PADS Logic ASCII file and populate the library symbol cache.

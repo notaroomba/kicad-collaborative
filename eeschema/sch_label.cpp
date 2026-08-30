@@ -287,7 +287,6 @@ void SCH_LABEL_BASE::swapData( SCH_ITEM* aItem )
     SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
 
     m_fields.swap( label->m_fields );
-    std::swap( m_fieldsAutoplaced, label->m_fieldsAutoplaced );
 
     for( SCH_FIELD& field : m_fields )
         field.SetParent( this );
@@ -758,7 +757,7 @@ void SCH_LABEL_BASE::GetContextualTextVars( wxArrayString* aVars ) const
     for( const SCH_FIELD& field : m_fields )
     {
         if( field.IsMandatory() )
-            aVars->push_back( field.GetCanonicalName().Upper() );
+            aVars->push_back( field.GetUntranslatedName().Upper() );
         else
             aVars->push_back( field.GetName() );
     }
@@ -861,7 +860,7 @@ bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* toke
         for( SCH_RULE_AREA* ruleArea : directive->GetConnectedRuleAreas() )
         {
             if( ruleArea->GetExcludedFromBOM( aPath, variant ) )
-                *token = _( "Excluded from BOM" );
+                *token = wxS( "Excluded from BOM" );
         }
 
         return true;
@@ -874,7 +873,7 @@ bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* toke
         for( SCH_RULE_AREA* ruleArea : directive->GetConnectedRuleAreas() )
         {
             if( ruleArea->GetExcludedFromBoard( aPath, variant ) )
-                *token = _( "Excluded from board" );
+                *token = wxS( "Excluded from board" );
         }
 
         return true;
@@ -887,7 +886,7 @@ bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* toke
         for( SCH_RULE_AREA* ruleArea : directive->GetConnectedRuleAreas() )
         {
             if( ruleArea->GetExcludedFromSim( aPath, variant ) )
-                *token = _( "Excluded from simulation" );
+                *token = wxS( "Excluded from simulation" );
         }
 
         return true;
@@ -900,7 +899,7 @@ bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* toke
         for( SCH_RULE_AREA* ruleArea : directive->GetConnectedRuleAreas() )
         {
             if( ruleArea->GetDNP( aPath, variant ) )
-                *token = _( "DNP" );
+                *token = wxS( "DNP" );
         }
 
         return true;
@@ -979,11 +978,10 @@ wxString SCH_LABEL_BASE::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowE
     wxString text = EDA_TEXT::GetShownText( aAllowExtraText, depth );
 
     if( HasTextVars() )
+    {
         text = ResolveTextVars( text, &textResolver, depth );
-
-    // Convert escape markers back to literals for final display
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+        FinalizeTextVarExpansion( text, aAllowExtraText );
+    }
 
     return text;
 }
@@ -1368,13 +1366,13 @@ bool SCH_LABEL_BASE::HasConnectivityChanges( const SCH_ITEM* aItem, const SCH_SH
 
     for( const SCH_FIELD& field : m_fields )
     {
-        if( field.GetCanonicalName() == wxT( "Netclass" ) )
+        if( field.GetUntranslatedName() == wxT( "Netclass" ) )
             netclasses.push_back( field.GetText() );
     }
 
     for( const SCH_FIELD& field : label->m_fields )
     {
-        if( field.GetCanonicalName() == wxT( "Netclass" ) )
+        if( field.GetUntranslatedName() == wxT( "Netclass" ) )
             otherNetclasses.push_back( field.GetText() );
     }
 
@@ -1621,18 +1619,16 @@ void packLabel( LabelProto& aOutput, const SCH_LABEL_BASE& aLabel )
     aOutput.set_locked( aLabel.IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                           : kiapi::common::types::LockedState::LS_UNLOCKED );
 
-    google::protobuf::Any any;
-    aLabel.EDA_TEXT::Serialize( any, schIUScale );
-    any.UnpackTo( aOutput.mutable_text() );
+    aLabel.EDA_TEXT::Serialize( *aOutput.mutable_text(), schIUScale );
     kiapi::common::PackVector2( *aOutput.mutable_position(), aLabel.GetPosition(), schIUScale );
+    aOutput.set_fields_autoplaced( aLabel.GetFieldsAutoplaced() != AUTOPLACE_NONE );
 
     for( const SCH_FIELD& field : aLabel.GetFields() )
     {
         if( field.IsMandatory() )
             continue;
 
-        field.Serialize( any );
-        any.UnpackTo( aOutput.mutable_fields()->Add() );
+        field.Serialize( *aOutput.add_fields(), schIUScale );
     }
 }
 
@@ -1646,20 +1642,17 @@ bool unpackLabel( const LabelProto& aInput, SCH_LABEL_BASE& aLabel )
     aLabel.SetSpinStyle( FromProtoEnum<SPIN_STYLE::SPIN, types::SchematicLabelSpinStyle>( aInput.spin_style() ) );
     aLabel.SetLocked( aInput.locked() == kiapi::common::types::LockedState::LS_LOCKED );
 
-    google::protobuf::Any any;
-    any.PackFrom( aInput.text() );
-
-    if( !aLabel.EDA_TEXT::Deserialize( any, schIUScale ) )
+    if( !aLabel.EDA_TEXT::Deserialize( aInput.text(), schIUScale ) )
         return false;
 
     aLabel.SetPosition( kiapi::common::UnpackVector2( aInput.position(), schIUScale ) );
+    aLabel.SetFieldsAutoplaced( aInput.fields_autoplaced() ? AUTOPLACE_AUTO : AUTOPLACE_NONE );
     aLabel.GetFields().clear();
 
     for( const types::SchematicField& field : aInput.fields() )
     {
         aLabel.GetFields().emplace_back( &aLabel, FIELD_T::USER );
-        any.PackFrom( field );
-        aLabel.GetFields().back().Deserialize( any );
+        aLabel.GetFields().back().Deserialize( field, schIUScale );
     }
 
     return true;
@@ -2082,7 +2075,7 @@ bool SCH_DIRECTIVE_LABEL::IncrementLabel( int aIncrement )
 {
     for( SCH_FIELD& field : m_fields )
     {
-        if( field.GetCanonicalName() == wxT( "Netclass" ) || field.GetCanonicalName() == wxT( "Component Class" ) )
+        if( field.GetUntranslatedName() == wxT( "Netclass" ) || field.GetUntranslatedName() == wxT( "Component Class" ) )
         {
             wxString text = field.GetText();
 
@@ -2107,7 +2100,8 @@ SCH_GLOBALLABEL::SCH_GLOBALLABEL( const VECTOR2I& pos, const wxString& text ) :
     SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
 
     m_fields.emplace_back(
-            SCH_FIELD( this, FIELD_T::INTERSHEET_REFS, ::GetDefaultFieldName( FIELD_T::INTERSHEET_REFS, false ) ) );
+            SCH_FIELD( this, FIELD_T::INTERSHEET_REFS,
+                       ::GetDefaultFieldName( FIELD_T::INTERSHEET_REFS, UNTRANSLATED ) ) );
     m_fields.back().SetText( wxT( "${INTERSHEET_REFS}" ) );
     m_fields.back().SetVisible( false );
     m_fields.back().SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
@@ -2132,10 +2126,9 @@ void SCH_GLOBALLABEL::Serialize( google::protobuf::Any& aContainer ) const
     label.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                  : kiapi::common::types::LockedState::LS_UNLOCKED );
 
-    google::protobuf::Any any;
-    EDA_TEXT::Serialize( any, schIUScale );
-    any.UnpackTo( label.mutable_text() );
+    EDA_TEXT::Serialize( *label.mutable_text(), schIUScale );
     kiapi::common::PackVector2( *label.mutable_position(), GetPosition(), schIUScale );
+    label.set_fields_autoplaced( GetFieldsAutoplaced() != AUTOPLACE_NONE );
 
     label.set_shape( ToProtoEnum<LABEL_FLAG_SHAPE, types::SchematicLabelShape>( GetShape() ) );
 
@@ -2144,16 +2137,11 @@ void SCH_GLOBALLABEL::Serialize( google::protobuf::Any& aContainer ) const
         if( field.IsMandatory() )
             continue;
 
-        field.Serialize( any );
-        any.UnpackTo( label.mutable_fields()->Add() );
+        field.Serialize( *label.add_fields(), schIUScale );
     }
 
     if( const SCH_FIELD* field = GetField( FIELD_T::INTERSHEET_REFS ) )
-    {
-        google::protobuf::Any fieldAny;
-        field->Serialize( fieldAny );
-        fieldAny.UnpackTo( label.mutable_intersheet_refs_field() );
-    }
+        field->Serialize( *label.mutable_intersheet_refs_field(), schIUScale );
 
     aContainer.PackFrom( label );
 }
@@ -2173,11 +2161,7 @@ bool SCH_GLOBALLABEL::Deserialize( const google::protobuf::Any& aContainer )
             label.shape() ) );
 
     if( label.has_intersheet_refs_field() )
-    {
-        google::protobuf::Any any;
-        any.PackFrom( label.intersheet_refs_field() );
-        GetField( FIELD_T::INTERSHEET_REFS )->Deserialize( any );
-    }
+        GetField( FIELD_T::INTERSHEET_REFS )->Deserialize( label.intersheet_refs_field(), schIUScale );
 
     return true;
 }
@@ -2604,8 +2588,8 @@ static struct SCH_LABEL_DESC
             return false;
         };
 
-        propMgr.AddProperty( new PROPERTY_ENUM<SCH_LABEL_BASE, LABEL_SHAPE>(
-                                     _HKI( "Shape" ), &SCH_LABEL_BASE::SetLabelShape, &SCH_LABEL_BASE::GetLabelShape ) )
+        propMgr.AddProperty( new PROPERTY_ENUM<SCH_LABEL_BASE, LABEL_SHAPE>( _HKI( "Shape" ),
+                    &SCH_LABEL_BASE::SetLabelShape, &SCH_LABEL_BASE::GetLabelShape ) )
                 .SetAvailableFunc( hasLabelShape );
 
         propMgr.Mask( TYPE_HASH( SCH_LABEL_BASE ), TYPE_HASH( EDA_TEXT ), _HKI( "Hyperlink" ) );
@@ -2635,12 +2619,12 @@ static struct SCH_DIRECTIVE_LABEL_DESC
 
         propMgr.InheritsAfter( TYPE_HASH( SCH_DIRECTIVE_LABEL ), TYPE_HASH( SCH_LABEL_BASE ) );
 
-        propMgr.AddProperty( new PROPERTY_ENUM<SCH_DIRECTIVE_LABEL, FLAG_SHAPE>(
-                _HKI( "Shape" ), &SCH_DIRECTIVE_LABEL::SetFlagShape, &SCH_DIRECTIVE_LABEL::GetFlagShape ) );
+        propMgr.AddProperty( new PROPERTY_ENUM<SCH_DIRECTIVE_LABEL, FLAG_SHAPE>( _HKI( "Shape" ),
+                    &SCH_DIRECTIVE_LABEL::SetFlagShape, &SCH_DIRECTIVE_LABEL::GetFlagShape ) );
 
-        propMgr.AddProperty( new PROPERTY<SCH_DIRECTIVE_LABEL, int>(
-                _HKI( "Pin length" ), &SCH_DIRECTIVE_LABEL::SetPinLength, &SCH_DIRECTIVE_LABEL::GetPinLength,
-                PROPERTY_DISPLAY::PT_SIZE ) );
+        propMgr.AddProperty( new PROPERTY<SCH_DIRECTIVE_LABEL, int>( _HKI( "Pin length" ),
+                    &SCH_DIRECTIVE_LABEL::SetPinLength, &SCH_DIRECTIVE_LABEL::GetPinLength,
+                    PROPERTY_DISPLAY::PT_SIZE ) );
 
         propMgr.Mask( TYPE_HASH( SCH_DIRECTIVE_LABEL ), TYPE_HASH( EDA_TEXT ), _HKI( "Text" ) );
         propMgr.Mask( TYPE_HASH( SCH_DIRECTIVE_LABEL ), TYPE_HASH( EDA_TEXT ), _HKI( "Thickness" ) );

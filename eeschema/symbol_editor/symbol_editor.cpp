@@ -206,9 +206,6 @@ bool SYMBOL_EDIT_FRAME::LoadSymbolFromLib( const wxString& aLibName, const wxStr
     if( !symbol || !LoadOneLibrarySymbol( symbol, aLibName, aUnit, aBodyStyle ) )
         return false;
 
-    // Enable synchronized pin edit mode for symbols with interchangeable units
-    m_SyncPinEdit = GetCurSymbol()->IsMultiUnit() && !GetCurSymbol()->UnitsLocked();
-
     m_toolManager->RunAction( ACTIONS::zoomFitScreen );
 
     RebuildSymbolUnitAndBodyStyleLists();
@@ -955,12 +952,13 @@ void SYMBOL_EDIT_FRAME::saveSymbolCopyAs( bool aOpenCopy )
     auto strategy = SYMBOL_SAVE_AS_HANDLER::CONFLICT_STRATEGY::OVERWRITE;
 
     std::vector<wxString> parentSymbolNames;
+
     if( symbol->IsDerived() )
     {
         // The parents are everything but the leaf symbol
         std::vector<std::shared_ptr<LIB_SYMBOL>> parentChain = GetParentChain( *symbol, false );
 
-        for( const auto& parent : parentChain )
+        for( const std::shared_ptr<LIB_SYMBOL>& parent : parentChain )
             parentSymbolNames.push_back( parent->GetName() );
     }
 
@@ -1677,8 +1675,7 @@ bool SYMBOL_EDIT_FRAME::saveAllLibraries( bool aRequireConfirmation )
                     else
                     {
                         m_infoBar->Dismiss();
-                        m_infoBar->ShowMessageFor( msg + wxS( "  " ) + msg2,
-                                                   2000, wxICON_EXCLAMATION );
+                        m_infoBar->ShowMessageFor( msg + wxS( "  " ) + msg2, 5000, wxICON_EXCLAMATION );
 
                         while( m_infoBar->IsShownOnScreen() )
                             wxSafeYield();

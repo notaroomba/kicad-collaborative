@@ -34,6 +34,9 @@
 #include <sch_screen.h>
 #include <sch_sheet_path.h>
 #include <geometry/shape_rect.h>
+#include <api/api_utils.h>
+#include <api/schematic/schematic_types.pb.h>
+#include <base_units.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
 
@@ -65,6 +68,48 @@ wxString SCH_RULE_AREA::GetFriendlyName() const
 EDA_ITEM* SCH_RULE_AREA::Clone() const
 {
     return new SCH_RULE_AREA( *this );
+}
+
+
+void SCH_RULE_AREA::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::schematic::types::SchematicRuleArea ruleArea;
+
+    ruleArea.mutable_id()->set_value( m_Uuid.AsStdString() );
+    ruleArea.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
+                                    : kiapi::common::types::LockedState::LS_UNLOCKED );
+    ruleArea.set_exclude_from_sim( m_excludedFromSim );
+    ruleArea.set_exclude_from_bom( m_excludedFromBOM );
+    ruleArea.set_exclude_from_board( m_excludedFromBoard );
+    ruleArea.set_dnp( m_DNP );
+
+    EDA_SHAPE::Serialize( *ruleArea.mutable_shape(), schIUScale );
+
+    aContainer.PackFrom( ruleArea );
+}
+
+
+bool SCH_RULE_AREA::Deserialize( const google::protobuf::Any& aContainer )
+{
+    kiapi::schematic::types::SchematicRuleArea ruleArea;
+
+    if( !aContainer.UnpackTo( &ruleArea ) )
+        return false;
+
+    const_cast<KIID&>( m_Uuid ) = KIID( ruleArea.id().value() );
+    SetLocked( ruleArea.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    SetExcludedFromSim( ruleArea.exclude_from_sim() );
+    SetExcludedFromBOM( ruleArea.exclude_from_bom() );
+    SetExcludedFromBoard( ruleArea.exclude_from_board() );
+    SetDNP( ruleArea.dnp() );
+
+    if( !EDA_SHAPE::Deserialize( ruleArea.shape(), schIUScale ) )
+        return false;
+
+    if( GetShape() != SHAPE_T::POLY )
+        return false;
+
+    return true;
 }
 
 
@@ -364,7 +409,7 @@ SCH_RULE_AREA::GetResolvedNetclasses( const SCH_SHEET_PATH* aSheetPath ) const
                     {
                         SCH_FIELD* field = static_cast<SCH_FIELD*>( aChild );
 
-                        if( field->GetCanonicalName() == wxT( "Netclass" ) )
+                        if( field->GetUntranslatedName() == wxT( "Netclass" ) )
                         {
                             wxString netclass = field->GetShownText( aSheetPath, false );
 
@@ -448,22 +493,19 @@ static struct SCH_RULE_AREA_DESC
         const wxString groupAttributes = _HKI( "Attributes" );
 
         propMgr.AddProperty( new PROPERTY<SCH_RULE_AREA, bool>( _HKI( "Exclude From Board" ),
-                                                                &SCH_RULE_AREA::SetExcludedFromBoardProp,
-                                                                &SCH_RULE_AREA::GetExcludedFromBoardProp ),
-                             groupAttributes );
+                    &SCH_RULE_AREA::SetExcludedFromBoardProp, &SCH_RULE_AREA::GetExcludedFromBoardProp ),
+                    groupAttributes );
 
         propMgr.AddProperty( new PROPERTY<SCH_RULE_AREA, bool>( _HKI( "Exclude From Simulation" ),
-                                                                &SCH_RULE_AREA::SetExcludedFromSimProp,
-                                                                &SCH_RULE_AREA::GetExcludedFromSimProp ),
-                             groupAttributes );
+                    &SCH_RULE_AREA::SetExcludedFromSimProp, &SCH_RULE_AREA::GetExcludedFromSimProp ),
+                    groupAttributes );
 
         propMgr.AddProperty( new PROPERTY<SCH_RULE_AREA, bool>( _HKI( "Exclude From Bill of Materials" ),
-                                                                &SCH_RULE_AREA::SetExcludedFromBOMProp,
-                                                                &SCH_RULE_AREA::GetExcludedFromBOMProp ),
-                             groupAttributes );
+                    &SCH_RULE_AREA::SetExcludedFromBOMProp, &SCH_RULE_AREA::GetExcludedFromBOMProp ),
+                    groupAttributes );
 
-        propMgr.AddProperty( new PROPERTY<SCH_RULE_AREA, bool>( _HKI( "Do not Populate" ), &SCH_RULE_AREA::SetDNPProp,
-                                                                &SCH_RULE_AREA::GetDNPProp ),
-                             groupAttributes );
+        propMgr.AddProperty( new PROPERTY<SCH_RULE_AREA, bool>( _HKI( "Do not Populate" ),
+                    &SCH_RULE_AREA::SetDNPProp, &SCH_RULE_AREA::GetDNPProp ),
+                    groupAttributes );
     }
 } _SCH_RULE_AREA_DESC;

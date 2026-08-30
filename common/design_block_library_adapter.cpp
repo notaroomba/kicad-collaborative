@@ -123,7 +123,7 @@ std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib 
     catch( IO_ERROR& e )
     {
         aLib->status.load_status = LOAD_STATUS::LOAD_ERROR;
-        aLib->status.error = LIBRARY_ERROR( { e.What() } );
+        aLib->status.error = LIBRARY_ERROR( e.Problem(), e.Where() );
         wxLogTrace( traceLibraries, "DB: %s: plugin threw exception: %s", aLib->row->Nickname(), e.What() );
     }
 
@@ -204,8 +204,78 @@ std::vector<wxString> DESIGN_BLOCK_LIBRARY_ADAPTER::GetDesignBlockNames( const w
 }
 
 
+static wxString describeMissingLibrary( const wxString& aNickname, const std::vector<LIBRARY_TABLE_ROW*>& aRows )
+{
+    wxString message = wxString::Format( _( "Design block library '%s' is not in the design block "
+                                            "library table." ),
+                                         aNickname );
+
+    // If one name sits inside the other, it can be the same library after a rename.
+    if( !aNickname.IsEmpty() )
+    {
+        const wxString wanted = aNickname.Lower();
+
+        for( const LIBRARY_TABLE_ROW* row : aRows )
+        {
+            const wxString candidate = row->Nickname().Lower();
+
+            if( candidate.IsEmpty() || ( !candidate.Contains( wanted ) && !wanted.Contains( candidate ) ) )
+                continue;
+
+            message += wxString::Format( _( " Did you mean '%s'?" ), row->Nickname() );
+            break;
+        }
+    }
+
+    if( aRows.empty() )
+        return message + wxS( "\n\n" ) + _( "No design block libraries are configured." );
+
+    message += wxS( "\n\n" ) + _( "Configured design block libraries:" );
+
+    const size_t maxListed = 20;
+
+    for( size_t ii = 0; ii < aRows.size(); ii++ )
+    {
+        if( ii == maxListed )
+        {
+            message += wxT( "\n" ) + wxString::Format( _( "and %d more" ), (int) ( aRows.size() - maxListed ) );
+            break;
+        }
+
+        message +=
+                wxString::Format( wxT( "\n  %s (%s)" ), aRows[ii]->Nickname(),
+                                  aRows[ii]->Scope() == LIBRARY_TABLE_SCOPE::PROJECT ? _( "project" ) : _( "global" ) );
+    }
+
+    return message;
+}
+
+
+wxString DESIGN_BLOCK_LIBRARY_ADAPTER::libraryUnavailableMessage( const wxString& aNickname ) const
+{
+    std::optional<LIBRARY_TABLE_ROW*> row = GetRow( aNickname );
+
+    if( !row )
+        return describeMissingLibrary( aNickname, Rows() );
+
+    if( ( *row )->Disabled() )
+        return wxString::Format( _( "Design block library '%s' is disabled in the library table." ), aNickname );
+
+    std::optional<LIB_STATUS> status = GetLibraryStatus( aNickname );
+
+    if( status && status->load_status == LOAD_STATUS::LOAD_ERROR )
+    {
+        return wxString::Format( _( "Design block library '%s' could not be opened." ) + wxS( "\n%s" ), aNickname,
+                                 status->error ? status->error->message : wxString() );
+    }
+
+    return wxString::Format( _( "Design block library '%s' is still loading." ), aNickname );
+}
+
+
 DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::LoadDesignBlock( const wxString& aNickname,
-                                                             const wxString& aDesignBlockName, bool aKeepUUID )
+                                                             const wxString& aDesignBlockName, bool aKeepUUID,
+                                                             wxString* aErrorMsg )
 {
     if( std::optional<const LIB_DATA*> maybeLib = fetchIfLoaded( aNickname ) )
     {
@@ -225,11 +295,17 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::LoadDesignBlock( const wxString& aNi
         {
             wxLogTrace( traceLibraries, "LoadDesignBlock: error loading %s:%s: %s", aNickname, aDesignBlockName,
                         ioe.What() );
+
+            if( aErrorMsg )
+                *aErrorMsg = ioe.What();
         }
     }
     else
     {
         wxLogTrace( traceLibraries, "LoadDesignBlock: requested library %s not loaded", aNickname );
+
+        if( aErrorMsg )
+            *aErrorMsg = libraryUnavailableMessage( aNickname );
     }
 
     return nullptr;
@@ -309,13 +385,13 @@ bool DESIGN_BLOCK_LIBRARY_ADAPTER::IsDesignBlockLibWritable( const wxString& aNi
 
 
 DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::DesignBlockLoadWithOptionalNickname( const LIB_ID& aDesignBlockId,
-        bool aKeepUUID )
+                                                                                 bool aKeepUUID, wxString* aErrorMsg )
 {
     wxString nickname = aDesignBlockId.GetLibNickname();
     wxString DesignBlockname = aDesignBlockId.GetLibItemName();
 
     if( nickname.size() )
-        return LoadDesignBlock( nickname, DesignBlockname, aKeepUUID );
+        return LoadDesignBlock( nickname, DesignBlockname, aKeepUUID, aErrorMsg );
 
     // nickname is empty, sequentially search (alphabetically) all libs/nicks for first match:
     for( const wxString& library : GetLibraryNames() )
@@ -325,6 +401,9 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::DesignBlockLoadWithOptionalNickname(
         if( DESIGN_BLOCK* ret = LoadDesignBlock( library, DesignBlockname, aKeepUUID ) )
             return ret;
     }
+
+    if( aErrorMsg )
+        *aErrorMsg = wxString::Format( _( "Design block '%s' not found in any library." ), DesignBlockname );
 
     return nullptr;
 }

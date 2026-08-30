@@ -138,6 +138,44 @@ wxString GetSelectedItemsAsText( const SELECTION& aSel )
 }
 
 
+template <typename T>
+static std::vector<SCH_ITEM*> flattenGroups( const T& aItems )
+{
+    std::vector<SCH_ITEM*> flattened;
+    std::vector<SCH_ITEM*> toVisit;
+
+    for( EDA_ITEM* item : aItems )
+        toVisit.push_back( static_cast<SCH_ITEM*>( item ) );
+
+    while( !toVisit.empty() )
+    {
+        SCH_ITEM* item = toVisit.back();
+        toVisit.pop_back();
+        flattened.push_back( item );
+
+        if( item->Type() == SCH_GROUP_T )
+        {
+            for( EDA_ITEM* child : static_cast<SCH_GROUP*>( item )->GetItems() )
+                toVisit.push_back( static_cast<SCH_ITEM*>( child ) );
+        }
+    }
+
+    return flattened;
+}
+
+
+std::vector<SCH_ITEM*> FlattenGroups( const EDA_ITEMS& aItems )
+{
+    return flattenGroups( aItems );
+}
+
+
+std::vector<SCH_ITEM*> FlattenGroups( const std::deque<EDA_ITEM*>& aItems )
+{
+    return flattenGroups( aItems );
+}
+
+
 bool IsUnannotatedUnitOccupied( const SCH_REFERENCE_LIST& aRefs, const wxString& aRef,
                                 const LIB_ID& aLibId, int aUnit )
 {
@@ -483,4 +521,26 @@ wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName )
     }
 
     return aBaseName;
+}
+
+
+void PrunePastedSymbolInstances( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSchematic )
+{
+    wxCHECK( aSymbol && aSchematic.IsValid(), /* void */ );
+
+    const wxString projectName = aSchematic.Project().GetProjectName();
+
+    std::vector<KIID_PATH> pathsToRemove;
+
+    // Claiming rewrites a field in place, so only the removals have to wait for the walk to end
+    for( const SCH_SYMBOL_INSTANCE& instance : aSymbol->GetInstances() )
+    {
+        if( !aSchematic.IsInstancePathInProject( instance.m_Path ) )
+            pathsToRemove.emplace_back( instance.m_Path );
+        else if( instance.m_ProjectName != projectName )
+            aSymbol->SetInstanceProjectName( instance.m_Path, projectName );
+    }
+
+    for( const KIID_PATH& path : pathsToRemove )
+        aSymbol->RemoveInstance( path );
 }

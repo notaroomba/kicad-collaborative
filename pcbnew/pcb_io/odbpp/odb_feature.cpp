@@ -470,12 +470,23 @@ void FEATURES_MANAGER::InitFeatureList( PCB_LAYER_ID aLayer, std::vector<BOARD_I
         }
         else if( track->Type() == PCB_ARC_T )
         {
-            PCB_ARC*  arc = static_cast<PCB_ARC*>( track );
-            PCB_SHAPE shape( nullptr, SHAPE_T::ARC );
-            shape.SetArcGeometry( arc->GetStart(), arc->GetMid(), arc->GetEnd() );
-            shape.SetWidth( arc->GetWidth() );
+            const PCB_ARC* arc = static_cast<const PCB_ARC*>( track );
 
-            AddShape( shape );
+            // Too small arcs cannot be really handled: arc center (and arc radius)
+            // cannot be safely computed
+            if( !arc->IsDegenerated( 10 /* in IU */ ) )
+            {
+                PCB_SHAPE shape( nullptr, SHAPE_T::ARC );
+                shape.SetArcGeometry( arc->GetStart(), arc->GetMid(), arc->GetEnd() );
+                shape.SetWidth( arc->GetWidth() );
+
+                AddShape( shape );
+            }
+            else
+            {
+                // Approximate this very small arc by a segment.
+                AddFeatureLine( track->GetStart(), track->GetEnd(), track->GetWidth() );
+            }
 
             subnet->AddFeatureID( EDA_DATA::FEATURE_ID::TYPE::COPPER, m_layerName,
                                   m_featuresList.size() - 1 );
@@ -846,10 +857,9 @@ void FEATURES_MANAGER::InitFeatureList( PCB_LAYER_ID aLayer, std::vector<BOARD_I
                 if( pad->GetDrillSizeX() == pad->GetDrillSizeY() )
                     dummy.SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE ); // round hole shape
                 else
-                    dummy.SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL ); // slot hole shape
+                    dummy.SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );   // slot hole shape
 
-                dummy.SetOffset( PADSTACK::ALL_LAYERS,
-                                 VECTOR2I( 0, 0 ) ); // use hole position not pad position
+                dummy.SetOffset( PADSTACK::ALL_LAYERS,  VECTOR2I( 0, 0 ) );    // use hole position not pad position
                 dummy.SetSize( PADSTACK::ALL_LAYERS, pad->GetDrillSize() );
 
                 AddPadShape( dummy, aLayer );
@@ -977,10 +987,11 @@ void FEATURES_MANAGER::AddVia( const PCB_VIA* aVia, PCB_LAYER_ID aLayer )
 
 void FEATURES_MANAGER::AddViaDrillHole( const PCB_VIA* aVia, PCB_LAYER_ID aLayer )
 {
-    PAD dummy( nullptr ); // default pad shape is circle
-    int hole = aVia->GetDrillValue();
+    PAD dummy( nullptr );
+    dummy.SetPadstackMode( PADSTACK::MODE::NORMAL );
+    dummy.SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
     dummy.SetPosition( aVia->GetStart() );
-    dummy.SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( hole, hole ) );
+    dummy.SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( aVia->GetDrillValue(), aVia->GetDrillValue() ) );
 
     AddPadShape( dummy, aLayer );
 }

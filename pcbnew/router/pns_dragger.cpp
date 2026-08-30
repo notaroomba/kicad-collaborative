@@ -573,48 +573,112 @@ void DRAGGER::optimizeAndUpdateDraggedLine( LINE& aDragged, const LINE& aOrig, c
     aDragged.ClearLinks();
     aDragged.Unmark();
 
-    if( Settings().GetOptimizeEntireDraggedTrack() )
+    OPTIMIZER optimizer( m_lastNode );
+
+    int effort = OPTIMIZER::MERGE_SEGMENTS;
+
+    if( Settings().SmoothDraggedSegments() )
+        effort |= OPTIMIZER::MERGE_COLINEAR;
+
+    if( Settings().GetRestrictAngles() )
+        effort |= OPTIMIZER::REQUIRE_OBTUSE_ANGLES;
+
+    optimizer.SetEffortLevel( effort );
+
+    VECTOR2I  anchor( aP );
+
+    if( aDragged.CLine().Find( aP ) < 0 )
+        anchor = bestAnchorForPoint( aDragged.CLine(), aP );
+
+    optimizer.SetPreserveVertex( anchor );
+    aDragged.Line().Split( anchor );
+
+    PNS_DBG( Dbg(), AddPoint, anchor, YELLOW, 100000, wxT( "drag-anchor" ) );
+
+    if( !Settings().GetOptimizeEntireDraggedTrack() )
     {
-        OPTIMIZER optimizer( m_lastNode );
-
-        int effort =
-                OPTIMIZER::MERGE_SEGMENTS | OPTIMIZER::KEEP_TOPOLOGY | OPTIMIZER::RESTRICT_AREA;
-
-        if( Settings().SmoothDraggedSegments() )
-            effort |= OPTIMIZER::MERGE_COLINEAR;
-
-        optimizer.SetEffortLevel( effort );
-
         OPT_BOX2I affectedArea = aDragged.ChangedArea( &aOrig );
-        VECTOR2I  anchor( aP );
-
-        if( aDragged.CLine().Find( aP ) < 0 )
-            anchor = aDragged.CLine().NearestPoint( aP );
-
-        optimizer.SetPreserveVertex( anchor );
 
         if( !affectedArea )
             affectedArea = BOX2I( aP ); // No valid area yet? set to minimum to disable optimization
 
-        PNS_DBG( Dbg(), AddPoint, anchor, YELLOW, 100000, wxT( "drag-anchor" ) );
         PNS_DBG( Dbg(), AddShape, *affectedArea, RED, 0, wxT( "drag-affected-area" ) );
 
         optimizer.SetRestrictArea( *affectedArea );
-
-        PNS_DBG( Dbg(), AddItem, &aDragged, RED, 0, wxT( "drag-preopt" ) );
-        aDragged.Line().Split( anchor );
-
-        optimizer.Optimize( &aDragged, &draggedPostOpt, &origLine );
-        PNS_DBG( Dbg(), AddItem, &aDragged, GREEN, 0, wxT( "drag-postopt" ) );
     }
-    else
-    {
-        draggedPostOpt = aDragged;
-    }
+
+    PNS_DBG( Dbg(), AddItem, &aDragged, RED, 0, wxT( "drag-preopt" ) );
+
+    optimizer.Optimize( &aDragged, &draggedPostOpt, &origLine );
+    aDragged = draggedPostOpt;
+    PNS_DBG( Dbg(), AddItem, &aDragged, GREEN, 0, wxT( "drag-postopt" ) );
 
     m_lastNode->Add( draggedPostOpt );
     m_draggedItems.Clear();
     m_draggedItems.Add( draggedPostOpt );
+}
+
+
+bool DRAGGER::pointHasBadCorner( const SHAPE_LINE_CHAIN& aLine, int aVertexIndex ) const
+{
+    if( aVertexIndex <= 0 || aVertexIndex >= aLine.PointCount() - 1 )
+        return false;
+
+    SEG segBefore( aLine.CPoint( aVertexIndex - 1 ), aLine.CPoint( aVertexIndex ) );
+    SEG segAfter( aLine.CPoint( aVertexIndex ), aLine.CPoint( aVertexIndex + 1 ) );
+
+    DIRECTION_45 dirBefore( segBefore );
+    DIRECTION_45 dirAfter( segAfter );
+
+    return dirBefore.Angle( dirAfter ) & ( DIRECTION_45::ANG_ACUTE
+                                           | DIRECTION_45::ANG_RIGHT
+                                           | DIRECTION_45::ANG_HALF_FULL );
+}
+
+
+VECTOR2I DRAGGER::bestAnchorForPoint( const SHAPE_LINE_CHAIN& aLine, const VECTOR2I& aP ) const
+{
+    VECTOR2I nearest = aLine.NearestPoint( aP );
+    int      vertIdx = aLine.Find( nearest );
+
+    if( vertIdx < 0 || !pointHasBadCorner( aLine, vertIdx ) )
+    {
+        PNS_DBG( Dbg(), Message, wxString::Format( "anchor: nearest pt used (vert=%d)", vertIdx ) );
+        return nearest;
+    }
+
+    for( int offset = 1; offset < aLine.PointCount(); offset++ )
+    {
+        int rightIdx = vertIdx + offset;
+        std::optional<VECTOR2I> candidate;
+
+        if( rightIdx < aLine.PointCount() && !pointHasBadCorner( aLine, rightIdx ) )
+            candidate = aLine.CPoint( rightIdx );
+
+        int leftIdx = vertIdx - offset;
+
+        if( leftIdx >= 0 && !pointHasBadCorner( aLine, leftIdx ) )
+        {
+            VECTOR2I leftPt = aLine.CPoint( leftIdx );
+
+            if( !candidate || ( leftPt - aP ).SquaredEuclideanNorm() < ( *candidate - aP ).SquaredEuclideanNorm() )
+            {
+                PNS_DBG( Dbg(), Message, wxString::Format( "anchor: good alt vertex idx %d", leftIdx ) );
+                PNS_DBG( Dbg(), AddPoint, leftPt, GREEN, 100000, wxT( "drag-anchor-alt" ) );
+                return leftPt;
+            }
+        }
+
+        if( candidate.has_value() )
+        {
+            PNS_DBG( Dbg(), Message, wxString::Format( "anchor: good alt vertex idx %d", rightIdx ) );
+            PNS_DBG( Dbg(), AddPoint, *candidate, GREEN, 100000, wxT( "drag-anchor-alt" ) );
+            return *candidate;
+        }
+    }
+
+    PNS_DBG( Dbg(), Message, wxString::Format( "anchor: nearest pt bad; no alternative (vert=%d)", vertIdx ) );
+    return nearest;
 }
 
 

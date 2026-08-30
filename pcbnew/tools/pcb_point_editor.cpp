@@ -614,6 +614,30 @@ private:
 };
 
 
+class GENERATOR_POLY_POINT_EDIT_BEHAVIOR : public POLYGON_POINT_EDIT_BEHAVIOR
+{
+public:
+    GENERATOR_POLY_POINT_EDIT_BEHAVIOR( PCB_GENERATOR_POLY& aGen ) :
+            POLYGON_POINT_EDIT_BEHAVIOR( aGen.Outline() ),
+            m_gen( aGen )
+    {
+    }
+
+    void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
+                     std::vector<EDA_ITEM*>& aUpdatedItems ) override
+    {
+        // Defer to the base class to update the polygon
+        POLYGON_POINT_EDIT_BEHAVIOR::UpdateItem( aEditedPoint, aPoints, aCommit, aUpdatedItems );
+
+        // Flag the generator has to be updated based on potential outline change
+        m_gen.MarkDirty();
+    }
+
+private:
+    PCB_GENERATOR_POLY& m_gen;
+};
+
+
 class REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR : public POINT_EDIT_BEHAVIOR
 {
     enum REFIMG_POINTS
@@ -1009,6 +1033,22 @@ public:
             m_cell( aCell )
     {}
 
+    void MakePoints( EDIT_POINTS& aPoints ) override
+    {
+        aPoints.AddPoint( edgeMidpoint( COL_WIDTH ) );
+        aPoints.AddPoint( edgeMidpoint( ROW_HEIGHT ) );
+    }
+
+    bool UpdatePoints( EDIT_POINTS& aPoints ) override
+    {
+        wxCHECK( aPoints.PointsSize() == TABLECELL_MAX_POINTS, false );
+
+        aPoints.Point( COL_WIDTH ).SetPosition( edgeMidpoint( COL_WIDTH ) );
+        aPoints.Point( ROW_HEIGHT ).SetPosition( edgeMidpoint( ROW_HEIGHT ) );
+
+        return true;
+    }
+
     void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
                      std::vector<EDA_ITEM*>& aUpdatedItems ) override
     {
@@ -1018,61 +1058,55 @@ public:
         aCommit.Modify( &table );
         aUpdatedItems.push_back( &table );
 
-        if( !m_cell.GetTextAngle().IsHorizontal() )
+        if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
         {
-            if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), aPoints.Point( ROW_HEIGHT ).GetY() ) );
+            m_cell.SetEnd( VECTOR2I( unturned( aPoints.Point( COL_WIDTH ).GetPosition() ).x, m_cell.GetEndY() ) );
 
-                int colWidth = std::abs( m_cell.GetRectangleHeight() );
+            int colWidth = m_cell.GetRectangleWidth();
 
-                for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
-                    colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
+            for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
+                colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
 
-                table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( aPoints.Point( COL_WIDTH ).GetX(), m_cell.GetEndY() ) );
-
-                int rowHeight = m_cell.GetRectangleWidth();
-
-                for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
-                    rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
-
-                table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
-            }
+            table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
         }
-        else
+        else if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
         {
-            if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( aPoints.Point( COL_WIDTH ).GetX(), m_cell.GetEndY() ) );
+            m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), unturned( aPoints.Point( ROW_HEIGHT ).GetPosition() ).y ) );
 
-                int colWidth = m_cell.GetRectangleWidth();
+            int rowHeight = m_cell.GetRectangleHeight();
 
-                for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
-                    colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
+            for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
+                rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
 
-                table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), aPoints.Point( ROW_HEIGHT ).GetY() ) );
-
-                int rowHeight = m_cell.GetRectangleHeight();
-
-                for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
-                    rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
-
-                table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
-            }
+            table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
         }
 
         table.Normalize();
     }
 
 private:
+    // A cell keeps its rectangle square to the board and carries the turn in its text angle, so
+    // the handles belong on the edges it is drawn with, not on the stored rectangle.
+    VECTOR2I edgeMidpoint( TABLECELL_POINTS aPoint ) const
+    {
+        std::vector<VECTOR2I> corners = m_cell.GetCorners();
+
+        return aPoint == COL_WIDTH ? ( corners[1] + corners[2] ) / 2 : ( corners[2] + corners[3] ) / 2;
+    }
+
+    // Bring a dragged handle back into the frame the rectangle is stored in.
+    VECTOR2I unturned( const VECTOR2I& aPoint ) const
+    {
+        BOX2I box;
+        box.Merge( m_cell.GetStart() );
+        box.Merge( m_cell.GetEnd() );
+
+        VECTOR2I pt = aPoint;
+        RotatePoint( pt, box.GetCenter(), -m_cell.GetDrawRotation() );
+
+        return pt;
+    }
+
     PCB_TABLECELL& m_cell;
 };
 
@@ -2329,7 +2363,7 @@ std::shared_ptr<EDIT_POINTS> PCB_POINT_EDITOR::makePoints( EDA_ITEM* aItem )
         if( m_isFootprintEditor )
         {
             PAD& pad = static_cast<PAD&>( *aItem );
-            PCB_LAYER_ID activeLayer = m_frame ? m_frame->GetActiveLayer() : PADSTACK::ALL_LAYERS;
+            PCB_LAYER_ID activeLayer = m_frame ? m_frame->GetActiveLayer() : PADSTACK::TEMP_ALL_LAYERS;
 
             // Point editor only handles copper shape changes
             if( !IsCopperLayer( activeLayer ) )
@@ -2349,8 +2383,17 @@ std::shared_ptr<EDIT_POINTS> PCB_POINT_EDITOR::makePoints( EDA_ITEM* aItem )
 
     case PCB_GENERATOR_T:
     {
-        PCB_GENERATOR* generator = static_cast<PCB_GENERATOR*>( aItem );
-        m_editorBehavior = std::make_unique<GENERATOR_POINT_EDIT_BEHAVIOR>( *generator );
+        if( dynamic_cast<PCB_GENERATOR_POLY*>( aItem ) )
+        {
+            PCB_GENERATOR_POLY* generator = static_cast<PCB_GENERATOR_POLY*>( aItem );
+            m_editorBehavior = std::make_unique<GENERATOR_POLY_POINT_EDIT_BEHAVIOR>( *generator );
+            break;
+        }
+        else
+        {
+            PCB_GENERATOR* generator = static_cast<PCB_GENERATOR*>( aItem );
+            m_editorBehavior = std::make_unique<GENERATOR_POINT_EDIT_BEHAVIOR>( *generator );
+        }
         break;
     }
 
@@ -2937,13 +2980,13 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             {
                 int editedIndex = getEditedPointIndex();
 
-                if( shape->GetShape() == SHAPE_T::RECTANGLE && editedIndex >= RECT_TOP_LEFT
-                    && editedIndex <= RECT_BOT_LEFT )
+                if( shape->GetShape() == SHAPE_T::RECTANGLE && m_editPoints->PointsSize() >= RECT_MAX_POINTS
+                    && editedIndex >= RECT_TOP_LEFT && editedIndex <= RECT_BOT_LEFT )
                 {
                     int opposite = ( editedIndex + 2 ) % 4;
                     stationarySelfPoints.push_back( m_editPoints->Point( opposite ).GetPosition() );
                 }
-                else if( shape->GetShape() == SHAPE_T::RECTANGLE )
+                else if( shape->GetShape() == SHAPE_T::RECTANGLE && m_editPoints->LinesSize() >= 4 )
                 {
                     for( unsigned i = 0; i < m_editPoints->LinesSize() && i < 4; ++i )
                     {

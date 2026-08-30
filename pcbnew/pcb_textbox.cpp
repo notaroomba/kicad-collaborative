@@ -73,11 +73,10 @@ void PCB_TEXTBOX::CopyFrom( const BOARD_ITEM* aOther )
 }
 
 
-void PCB_TEXTBOX::Serialize( google::protobuf::Any& aContainer ) const
+void PCB_TEXTBOX::Serialize( kiapi::board::types::BoardTextBox& boardText ) const
 {
     using namespace kiapi::common::types;
     using namespace kiapi::board;
-    types::BoardTextBox boardText;
     boardText.set_layer( ToProtoEnum<PCB_LAYER_ID, types::BoardLayer>( GetLayer() ) );
     boardText.mutable_id()->set_value( m_Uuid.AsStdString() );
     boardText.set_locked( IsLocked() ? LockedState::LS_LOCKED : LockedState::LS_UNLOCKED );
@@ -87,44 +86,37 @@ void PCB_TEXTBOX::Serialize( google::protobuf::Any& aContainer ) const
     kiapi::common::PackVector2( *text.mutable_top_left(), GetPosition() );
     kiapi::common::PackVector2( *text.mutable_bottom_right(), GetEnd() );
     text.set_text( GetText().ToStdString() );
-    //text.set_hyperlink( GetHyperlink().ToStdString() );
 
-    TextAttributes* attrs = text.mutable_attributes();
+    kiapi::common::PackTextAttributes( *text.mutable_attributes(), GetAttributes() );
 
-    if( GetFont() )
-        attrs->set_font_name( GetFont()->GetName().ToStdString() );
+    text.set_border_enabled( IsBorderEnabled() );
+    text.mutable_margin_left()->set_value_nm( GetMarginLeft() );
+    text.mutable_margin_top()->set_value_nm( GetMarginTop() );
+    text.mutable_margin_right()->set_value_nm( GetMarginRight() );
+    text.mutable_margin_bottom()->set_value_nm( GetMarginBottom() );
+
+    boardText.set_knockout( IsKnockout() );
 
     if( FOOTPRINT* parent = GetParentFootprint() )
         boardText.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
     else if( const BOARD* board = GetBoard() )
         boardText.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
 
-    attrs->set_horizontal_alignment( ToProtoEnum<GR_TEXT_H_ALIGN_T, HorizontalAlignment>( GetHorizJustify() ) );
+}
 
-    attrs->set_vertical_alignment( ToProtoEnum<GR_TEXT_V_ALIGN_T, VerticalAlignment>( GetVertJustify() ) );
 
-    attrs->mutable_angle()->set_value_degrees( GetTextAngleDegrees() );
-    attrs->set_line_spacing( GetLineSpacing() );
-    attrs->mutable_stroke_width()->set_value_nm( GetTextThickness() );
-    attrs->set_italic( IsItalic() );
-    attrs->set_bold( IsBold() );
-    attrs->set_underlined( GetAttributes().m_Underlined );
-    attrs->set_mirrored( IsMirrored() );
-    attrs->set_multiline( IsMultilineAllowed() );
-    attrs->set_keep_upright( IsKeepUpright() );
-    kiapi::common::PackVector2( *attrs->mutable_size(), GetTextSize() );
-
+void PCB_TEXTBOX::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::board::types::BoardTextBox boardText;
+    Serialize( boardText );
     aContainer.PackFrom( boardText );
 }
 
 
-bool PCB_TEXTBOX::Deserialize( const google::protobuf::Any& aContainer )
+bool PCB_TEXTBOX::Deserialize( const kiapi::board::types::BoardTextBox& boardText )
 {
     using namespace kiapi::board;
-    types::BoardTextBox boardText;
 
-    if( !aContainer.UnpackTo( &boardText ) )
-        return false;
 
     SetUuidDirect( KIID( boardText.id().value() ) );
     SetLayer( FromProtoEnum<PCB_LAYER_ID, types::BoardLayer>( boardText.layer() ) );
@@ -135,39 +127,41 @@ bool PCB_TEXTBOX::Deserialize( const google::protobuf::Any& aContainer )
     SetPosition( kiapi::common::UnpackVector2( text.top_left() ) );
     SetEnd( kiapi::common::UnpackVector2( text.bottom_right() ) );
     SetText( wxString( text.text().c_str(), wxConvUTF8 ) );
-    //SetHyperlink( wxString::FromUTF8( text.hyperlink() );
 
     if( text.has_attributes() )
     {
         TEXT_ATTRIBUTES attrs = GetAttributes();
-
-        attrs.m_Bold = text.attributes().bold();
-        attrs.m_Italic = text.attributes().italic();
-        attrs.m_Underlined = text.attributes().underlined();
-        attrs.m_Mirrored = text.attributes().mirrored();
-        attrs.m_Multiline = text.attributes().multiline();
-        attrs.m_KeepUpright = text.attributes().keep_upright();
-        attrs.m_Size = kiapi::common::UnpackVector2( text.attributes().size() );
-
-        if( !text.attributes().font_name().empty() )
-        {
-            attrs.m_Font = KIFONT::FONT::GetFont( wxString( text.attributes().font_name().c_str(), wxConvUTF8 ),
-                                                  attrs.m_Bold, attrs.m_Italic );
-        }
-
-        attrs.m_Angle = EDA_ANGLE( text.attributes().angle().value_degrees(), DEGREES_T );
-        attrs.m_LineSpacing = text.attributes().line_spacing();
-        attrs.m_StrokeWidth = text.attributes().stroke_width().value_nm();
-        attrs.m_Halign = FromProtoEnum<GR_TEXT_H_ALIGN_T, kiapi::common::types::HorizontalAlignment>(
-                text.attributes().horizontal_alignment() );
-
-        attrs.m_Valign = FromProtoEnum<GR_TEXT_V_ALIGN_T, kiapi::common::types::VerticalAlignment>(
-                text.attributes().vertical_alignment() );
-
+        kiapi::common::UnpackTextAttributes( attrs, text.attributes() );
         SetAttributes( attrs );
+
+        // Handles setting shape to rectangle or polygon
+        SetTextAngle( attrs.m_Angle );
     }
 
+    if( text.has_margin_left() )
+        SetMarginLeft( text.margin_left().value_nm() );
+    if( text.has_margin_top() )
+        SetMarginTop( text.margin_top().value_nm() );
+    if( text.has_margin_right() )
+        SetMarginRight( text.margin_right().value_nm() );
+    if( text.has_margin_bottom() )
+        SetMarginBottom( text.margin_bottom().value_nm() );
+
+    SetBorderEnabled( text.border_enabled() );
+    SetIsKnockout( boardText.knockout() );
+
     return true;
+}
+
+
+bool PCB_TEXTBOX::Deserialize( const google::protobuf::Any& aContainer )
+{
+    kiapi::board::types::BoardTextBox boardText;
+
+    if( !aContainer.UnpackTo( &boardText ) )
+        return false;
+
+    return Deserialize( boardText );
 }
 
 
@@ -516,7 +510,10 @@ wxString PCB_TEXTBOX::GetShownText( bool aAllowExtraText, int aDepth ) const
     wxString text = EDA_TEXT::GetShownText( aAllowExtraText, aDepth );
 
     if( HasTextVars() )
+    {
         text = ResolveTextVars( text, &resolver, aDepth );
+        FinalizeTextVarExpansion( text, aAllowExtraText );
+    }
 
     KIFONT::FONT*         font = GetDrawFont( nullptr );
     EDA_ANGLE             drawAngle = GetDrawRotation();
@@ -528,11 +525,7 @@ wxString PCB_TEXTBOX::GetShownText( bool aAllowExtraText, int aDepth ) const
     else
         colWidth -= ( GetMarginTop() + GetMarginBottom() );
 
-    font->LinebreakText( text, colWidth, GetTextSize(), GetTextThickness(), IsBold(), IsItalic() );
-
-    // Convert escape markers back to literal ${} and @{} for final display
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+    font->LinebreakText( text, colWidth, GetTextSize(), GetEffectiveTextPenWidth(), IsBold(), IsItalic() );
 
     return text;
 }
@@ -753,6 +746,20 @@ void PCB_TEXTBOX::OnFootprintRescaled( double aRatioX, double aRatioY, double aL
                                        const EDA_ANGLE& aParentRotate )
 {
     OnFootprintTransformed();
+}
+
+
+const BOX2I PCB_TEXTBOX::GetBoundingBox() const
+{
+    BOX2I bbox;
+
+    for( const VECTOR2I& pt : GetCorners() )
+        bbox.Merge( pt );
+
+    bbox.Inflate( std::max( 0, GetWidth() ) / 2 );
+    bbox.Normalize();
+
+    return bbox;
 }
 
 
@@ -1039,42 +1046,42 @@ static struct PCB_TEXTBOX_DESC
         propMgr.Mask( TYPE_HASH( PCB_TEXTBOX ), TYPE_HASH( PCB_SHAPE ), _HKI( "Soldermask" ) );
         propMgr.Mask( TYPE_HASH( PCB_TEXTBOX ), TYPE_HASH( PCB_SHAPE ), _HKI( "Soldermask Margin Override" ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, bool, BOARD_ITEM>(
-                                     _HKI( "Knockout" ), &BOARD_ITEM::SetIsKnockout, &BOARD_ITEM::IsKnockout ),
-                             _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, bool, BOARD_ITEM>( _HKI( "Knockout" ),
+                    &BOARD_ITEM::SetIsKnockout, &BOARD_ITEM::IsKnockout ),
+                    _HKI( "Text Properties" ) );
 
         const wxString borderProps = _( "Border Properties" );
 
         void ( PCB_TEXTBOX::*lineStyleSetter )( LINE_STYLE ) = &PCB_TEXTBOX::SetLineStyle;
         LINE_STYLE ( PCB_TEXTBOX::*lineStyleGetter )() const = &PCB_TEXTBOX::GetLineStyle;
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, bool>( _HKI( "Border" ), &PCB_TEXTBOX::SetBorderEnabled,
-                                                              &PCB_TEXTBOX::IsBorderEnabled ),
-                             borderProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, bool>( _HKI( "Border" ),
+                    &PCB_TEXTBOX::SetBorderEnabled, &PCB_TEXTBOX::IsBorderEnabled ),
+                    borderProps );
 
-        propMgr.AddProperty(
-                new PROPERTY_ENUM<PCB_TEXTBOX, LINE_STYLE>( _HKI( "Border Style" ), lineStyleSetter, lineStyleGetter ),
-                borderProps );
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_TEXTBOX, LINE_STYLE>( _HKI( "Border Style" ),
+                    lineStyleSetter, lineStyleGetter ),
+                    borderProps );
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Border Width" ), &PCB_TEXTBOX::SetBorderWidth,
-                                                             &PCB_TEXTBOX::GetBorderWidth, PROPERTY_DISPLAY::PT_SIZE ),
-                             borderProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Border Width" ),
+                    &PCB_TEXTBOX::SetBorderWidth, &PCB_TEXTBOX::GetBorderWidth, PROPERTY_DISPLAY::PT_SIZE ),
+                    borderProps );
 
         const wxString marginProps = _( "Margins" );
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Left" ), &PCB_TEXTBOX::SetMarginLeft,
-                                                             &PCB_TEXTBOX::GetMarginLeft, PROPERTY_DISPLAY::PT_SIZE ),
-                             marginProps );
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Top" ), &PCB_TEXTBOX::SetMarginTop,
-                                                             &PCB_TEXTBOX::GetMarginTop, PROPERTY_DISPLAY::PT_SIZE ),
-                             marginProps );
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Right" ), &PCB_TEXTBOX::SetMarginRight,
-                                                             &PCB_TEXTBOX::GetMarginRight, PROPERTY_DISPLAY::PT_SIZE ),
-                             marginProps );
-        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Bottom" ), &PCB_TEXTBOX::SetMarginBottom,
-                                                             &PCB_TEXTBOX::GetMarginBottom, PROPERTY_DISPLAY::PT_SIZE ),
-                             marginProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Left" ),
+                    &PCB_TEXTBOX::SetMarginLeft, &PCB_TEXTBOX::GetMarginLeft, PROPERTY_DISPLAY::PT_SIZE ),
+                    marginProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Top" ),
+                    &PCB_TEXTBOX::SetMarginTop, &PCB_TEXTBOX::GetMarginTop, PROPERTY_DISPLAY::PT_SIZE ),
+                    marginProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Right" ),
+                    &PCB_TEXTBOX::SetMarginRight, &PCB_TEXTBOX::GetMarginRight, PROPERTY_DISPLAY::PT_SIZE ),
+                    marginProps );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXTBOX, int>( _HKI( "Margin Bottom" ),
+                    &PCB_TEXTBOX::SetMarginBottom, &PCB_TEXTBOX::GetMarginBottom, PROPERTY_DISPLAY::PT_SIZE ),
+                    marginProps );
 
-        propMgr.Mask( TYPE_HASH( PCB_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Hyperlink" ) );
+        propMgr.Mask( TYPE_HASH( PCB_TEXTBOX ), TYPE_HASH( EDA_TEXT ), _HKI( "Hyperlink" ) );
     }
 } _PCB_TEXTBOX_DESC;

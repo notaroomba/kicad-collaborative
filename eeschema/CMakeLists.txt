@@ -99,6 +99,11 @@ set( EESCHEMA_SCH_IO
     sch_io/pads/pads_sch_parser.cpp
     sch_io/pads/pads_sch_symbol_builder.cpp
     sch_io/pads/pads_sch_schematic_builder.cpp
+    sch_io/pads/pads_sch_binary_reader.cpp
+    sch_io/pads/pads_sch_binary_builder.cpp
+    sch_io/pads/pads_sch_binary_parser.cpp
+    sch_io/pads/pads_sch_sdb.cpp
+    sch_io/ole_image.cpp
 
     # DipTrace IO plugin
     sch_io/diptrace/sch_io_diptrace.cpp
@@ -153,7 +158,6 @@ set( EESCHEMA_DLGS
     dialogs/dialog_label_properties_base.cpp
     dialogs/dialog_lib_edit_pin_table.cpp
     dialogs/dialog_lib_edit_pin_table_base.cpp
-    dialogs/dialog_lib_fields_table_base.cpp
     dialogs/dialog_lib_fields_table.cpp
     dialogs/dialog_lib_new_symbol.cpp
     dialogs/dialog_lib_new_symbol_base.cpp
@@ -224,6 +228,8 @@ set( EESCHEMA_DLGS
     dialogs/panel_setup_formatting_base.cpp
     dialogs/panel_setup_pinmap.cpp
     dialogs/panel_setup_pinmap_base.cpp
+    dialogs/panel_setup_symbol_parity.cpp
+    dialogs/panel_setup_symbol_parity_base.cpp
     dialogs/panel_symbol_pin_map.cpp
     dialogs/panel_symbol_pin_map_base.cpp
     dialogs/panel_simulator_preferences.cpp
@@ -382,6 +388,7 @@ set( SYNC_SHEET_PIN_SRCS
 
 set( EESCHEMA_ERC_SRCS
     erc/erc.cpp
+    erc/erc_exclusion.cpp
     erc/erc_item.cpp
     erc/erc_report.cpp
     erc/erc_sch_pin_context.cpp
@@ -419,7 +426,7 @@ set( EESCHEMA_SRCS
     eeschema_helpers.cpp
     eeschema_jobs_handler.cpp
     eeschema_settings.cpp
-    fields_data_model.cpp
+    symbol_fields_data_model.cpp
     fields_grid_table.cpp
     files-io.cpp
     generate_alias_info.cpp
@@ -500,6 +507,7 @@ set( EESCHEMA_SRCS
     api/sch_api_save.cpp
     api/sch_context.cpp
 
+    libraries/legacy_cache_reconcile.cpp
     libraries/legacy_symbol_library.cpp
     libraries/symbol_library_adapter.cpp
 

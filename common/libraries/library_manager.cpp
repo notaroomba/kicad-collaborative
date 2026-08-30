@@ -295,6 +295,7 @@ void LIBRARY_MANAGER::createEmptyTable( LIBRARY_TABLE_TYPE aType, LIBRARY_TABLE_
 
         m_projectTables[aType] = std::make_unique<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::PROJECT );
         m_projectTables[aType]->SetType( aType );
+        m_projectTables[aType]->SetOk();
     }
 }
 
@@ -1231,6 +1232,15 @@ void LIBRARY_MANAGER_ADAPTER::ProjectTablesReloaded(
 
 void LIBRARY_MANAGER_ADAPTER::CheckTableRow( LIBRARY_TABLE_ROW& aRow )
 {
+    // A disabled row is never used; skip validation so a disabled unreachable HTTP backend
+    // can't stall the library table dialog, and clear any stale error from an earlier check
+    if( aRow.Disabled() )
+    {
+        aRow.SetOk( true );
+        aRow.SetErrorDescription( wxEmptyString );
+        return;
+    }
+
     // Testing is expensive; skip it if we already have a library with the same
     // nickname and URI as the row under test
     if( std::optional<LIB_DATA*> libData = fetchIfLoaded( aRow.Nickname() ) )
@@ -1254,7 +1264,7 @@ void LIBRARY_MANAGER_ADAPTER::CheckTableRow( LIBRARY_TABLE_ROW& aRow )
         lib.row = &aRow;
         lib.plugin.reset( *plugin );
 
-        std::optional<LIB_STATUS> status = LoadOne( &lib );
+        std::optional<LIB_STATUS> status = CheckLibrary( &lib );
 
         if( status.has_value() )
         {
@@ -1515,19 +1525,23 @@ std::vector<std::pair<wxString, LIB_STATUS>> LIBRARY_MANAGER_ADAPTER::GetLibrary
 }
 
 
-wxString LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors() const
+std::vector<KI_ERROR> LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors() const
 {
-    wxString errors;
+    std::vector<KI_ERROR> errors;
 
     for( const auto& [nickname, status] : GetLibraryStatuses() )
     {
         if( status.load_status == LOAD_STATUS::LOAD_ERROR && status.error )
         {
-            if( !errors.IsEmpty() )
-                errors += wxS( "\n" );
-
-            errors += wxString::Format( _( "Library '%s': %s" ),
-                                         nickname, status.error->message );
+            wxString title = status.error->message.BeforeFirst( '\n' );
+            title.StartsWith( wxS( "IO_ERROR: " ), &title );
+            errors.emplace_back(
+                    KI_ERROR( RPT_SEVERITY_ERROR, wxString::Format( _( "Error loading library '%s'" ), nickname ) )
+                            .SetDescription( title )
+#ifdef DEBUG
+                            .SetDebugText( status.error->details )
+#endif
+                            );
         }
     }
 
@@ -1869,6 +1883,14 @@ void LIBRARY_MANAGER_ADAPTER::AsyncLoad()
         wxString nickname = row->Nickname();
         LIBRARY_TABLE_SCOPE scope = row->Scope();
 
+        // Disabled libraries must never be contacted; skipping here keeps a broken or slow
+        // backend (e.g. an unreachable HTTP library) from blocking startup loads
+        if( row->Disabled() )
+        {
+            m_loadTotal.fetch_sub( 1 );
+            continue;
+        }
+
         if( check( nickname, m_libraries, m_librariesMutex ) )
         {
             m_loadTotal.fetch_sub( 1 );
@@ -1951,7 +1973,7 @@ void LIBRARY_MANAGER_ADAPTER::AsyncLoad()
                                                 ? globalLibsMutex()
                                                 : m_librariesMutex );
                                 lib->status.load_status = LOAD_STATUS::LOAD_ERROR;
-                                lib->status.error = LIBRARY_ERROR( { e.What() } );
+                                lib->status.error = LIBRARY_ERROR( e.Problem(), e.Where() );
                                 wxLogTrace( traceLibraries, "%s: plugin threw exception: %s",
                                             work.nickname, e.What() );
                             }

@@ -1207,6 +1207,9 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
         stroke.Format( m_out, pcbIUScale );
     }
 
+    aShape->GetStartEnding().Format( m_out, pcbIUScale, "start_shape" );
+    aShape->GetEndEnding().Format( m_out, pcbIUScale, "end_shape" );
+
     // The filled flag represents if a solid fill is present on circles, rectangles and polygons
     if( ( aShape->GetShape() == SHAPE_T::POLY ) || ( aShape->GetShape() == SHAPE_T::RECTANGLE )
         || ( aShape->GetShape() == SHAPE_T::CIRCLE ) || ( aShape->GetShape() == SHAPE_T::ELLIPSE ) )
@@ -1428,7 +1431,7 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
             continue;
 
         m_out->Print( "(property %s %s",
-                      m_out->Quotew( field->GetCanonicalName() ).c_str(),
+                      m_out->Quotew( field->GetUntranslatedName() ).c_str(),
                       m_out->Quotew( field->GetText() ).c_str() );
 
         format( field );
@@ -1535,6 +1538,9 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
         if( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_BOM )
             m_out->Print( " exclude_from_bom" );
+
+        if( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_SIM )
+            m_out->Print( " exclude_from_sim" );
 
         if( aFootprint->AllowMissingCourtyard() )
             m_out->Print( " allow_missing_courtyard" );
@@ -1653,6 +1659,7 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
     // Save variants.
     const bool baseDnp = aFootprint->IsDNP();
     const bool baseExcludedFromBOM = aFootprint->IsExcludedFromBOM();
+    const bool baseExcludedFromSim = aFootprint->IsExcludedFromSim();
     const bool baseExcludedFromPosFiles = aFootprint->IsExcludedFromPosFiles();
 
     for( const auto& [variantName, variant] : aFootprint->GetVariants() )
@@ -1664,6 +1671,9 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
         if( variant.GetExcludedFromBOM() != baseExcludedFromBOM )
             KICAD_FORMAT::FormatBool( m_out, "exclude_from_bom", variant.GetExcludedFromBOM() );
+
+        if( variant.GetExcludedFromSim() != baseExcludedFromSim )
+            KICAD_FORMAT::FormatBool( m_out, "exclude_from_sim", variant.GetExcludedFromSim() );
 
         if( variant.GetExcludedFromPosFiles() != baseExcludedFromPosFiles )
         {
@@ -1922,36 +1932,32 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
     switch( aPad->GetSimElectricalType() )
     {
     case PAD_SIM_ELECTRICAL_TYPE::SOURCE: simElectricalType = "source"; break;
-    case PAD_SIM_ELECTRICAL_TYPE::SINK: simElectricalType = "sink"; break;
-    default: simElectricalType = nullptr; break;
+    case PAD_SIM_ELECTRICAL_TYPE::SINK:   simElectricalType = "sink";   break;
+    default:                              simElectricalType = nullptr;  break;
     }
 
     m_out->Print( "(pad %s %s %s",
                   m_out->Quotew( aPad->GetNumber() ).c_str(),
                   type,
-                  shapeName( PADSTACK::ALL_LAYERS ) );
+                  shapeName( F_Cu ) );
 
     m_out->Print( "(at %s %s)",
                   formatInternalUnits( aPad->GetFPRelativePosition() ).c_str(),
-                  aPad->GetOrientation().IsZero()
-                        ? ""
-                        : EDA_UNIT_UTILS::FormatAngle( aPad->GetOrientation() ).c_str() );
+                  aPad->GetOrientation().IsZero() ? ""
+                                                  : EDA_UNIT_UTILS::FormatAngle( aPad->GetOrientation() ).c_str() );
 
     // Write the stored library size directly: it is the footprint-frame value the parser
     // reads back, and avoids a bake/unbake that is not the inverse of GetSize() for a
     // pad rotated within the footprint.
-    m_out->Print( "(size %s)", formatInternalUnits( aPad->Padstack().Size( PADSTACK::ALL_LAYERS ) ).c_str() );
+    m_out->Print( "(size %s)", formatInternalUnits( aPad->Padstack().Size( F_Cu ) ).c_str() );
 
-    if( aPad->GetDelta( PADSTACK::ALL_LAYERS ).x != 0
-        || aPad->GetDelta( PADSTACK::ALL_LAYERS ).y != 0 )
-    {
-        m_out->Print( "(rect_delta %s)", formatInternalUnits( aPad->GetDelta( PADSTACK::ALL_LAYERS ) ).c_str() );
-    }
+    if( aPad->GetDelta( F_Cu ).x != 0 || aPad->GetDelta( F_Cu ).y != 0 )
+        m_out->Print( "(rect_delta %s)", formatInternalUnits( aPad->GetDelta( F_Cu ) ).c_str() );
 
     const VECTOR2I  drill = aPad->GetDrillShape() == PAD_DRILL_SHAPE::CIRCLE
-                                    ? unbakeSizeUniform( aPad->GetDrillSize(), parentFP )
-                                    : unbakeSize( aPad->GetDrillSize(), parentFP );
-    VECTOR2I        shapeoffset = aPad->GetOffset( PADSTACK::ALL_LAYERS );
+                                                                ? unbakeSizeUniform( aPad->GetDrillSize(), parentFP )
+                                                                : unbakeSize( aPad->GetDrillSize(), parentFP );
+    VECTOR2I        shapeoffset = aPad->GetOffset( F_Cu );
     bool            forceShapeOffsetOutput = false;
 
     aPad->Padstack().ForEachUniqueLayer(
@@ -1979,8 +1985,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
         // changes, but note that the other padstack layers (if present) will have an offset stored
         // separately.
         if( shapeoffset.x != 0 || shapeoffset.y != 0 || forceShapeOffsetOutput )
-            m_out->Print( "(offset %s)",
-                          formatInternalUnits( aPad->Padstack().Offset( PADSTACK::ALL_LAYERS ) ).c_str() );
+            m_out->Print( "(offset %s)", formatInternalUnits( aPad->Padstack().Offset( F_Cu ) ).c_str() );
 
         m_out->Print( ")" );
     }
@@ -2097,7 +2102,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
     // For normal padstacks, this is the one and only set of properties.  For complex ones, this
     // will represent the front layer properties, and other layers will be formatted below
-    formatCornerProperties( PADSTACK::ALL_LAYERS );
+    formatCornerProperties( F_Cu );
 
     // Unconnected pad is default net so don't save it.
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) && aPad->GetNetCode() > 0 )
@@ -2162,16 +2167,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                       formatInternalUnits( aPad->GetLocalThermalSpokeWidthOverride().value() ).c_str() );
     }
 
-    EDA_ANGLE defaultThermalSpokeAngle = ANGLE_90;
-
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CIRCLE
-        || ( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM
-             && aPad->GetAnchorPadShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CIRCLE ) )
-    {
-        defaultThermalSpokeAngle = ANGLE_45;
-    }
-
-    if( aPad->GetThermalSpokeAngle() != defaultThermalSpokeAngle )
+    if( aPad->GetThermalSpokeAngle() != aPad->Padstack().DefaultThermalSpokeAngleForShape() )
     {
         m_out->Print( "(thermal_bridge_angle %s)",
                       EDA_UNIT_UTILS::FormatAngle( aPad->GetThermalSpokeAngle() ).c_str() );
@@ -2296,7 +2292,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                 m_out->Print( ")" );   // end of (primitives
             };
 
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM )
+    if( aPad->GetShape( F_Cu ) == PAD_SHAPE::CUSTOM )
     {
         m_out->Print( "(options" );
 
@@ -2306,12 +2302,12 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
             m_out->Print( "(clearance outline)" );
 
         // Output the anchor pad shape (circle/rect)
-        m_out->Print( "(anchor %s)", anchorShape( PADSTACK::ALL_LAYERS ) );
+        m_out->Print( "(anchor %s)", anchorShape( F_Cu ) );
 
         m_out->Print( ")");  // end of (options ...
 
         // Output graphic primitive of the pad shape
-        formatPrimitives( PADSTACK::ALL_LAYERS );
+        formatPrimitives( F_Cu );
     }
 
     if( !isDefaultTeardropParameters( aPad->GetTeardropParams() ) )
@@ -2340,7 +2336,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
                 m_out->Print( "(size %s)", formatInternalUnits( padstack.Size( aLayer ) ).c_str() );
 
-                const VECTOR2I delta = aPad->GetDelta( aLayer );
+                const VECTOR2I& delta = aPad->GetDelta( aLayer );
 
                 if( delta.x != 0 || delta.y != 0 )
                     m_out->Print( "(rect_delta %s)", formatInternalUnits( delta ).c_str() );
@@ -2517,7 +2513,10 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXT* aText ) const
     std::string      prefix;
     std::string      type;
     VECTOR2I         pos = aText->GetTextPos();
-    const PCB_FIELD* field = dynamic_cast<const PCB_FIELD*>( aText );
+    // Match the Type() dispatch in Format(); a field body is headerless, so it is only valid
+    // inside the (property ...) its caller opened
+    const PCB_FIELD* field = aText->Type() == PCB_FIELD_T ? static_cast<const PCB_FIELD*>( aText )
+                                                          : nullptr;
 
     // Always format dimension text as gr_text
     if( dynamic_cast<const PCB_DIMENSION_BASE*>( aText ) )
@@ -2892,6 +2891,19 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
             formatPolyPts( val );
             m_out->Print( ")" );
         }
+        else if( value.CheckType<std::vector<VECTOR2I>>() )
+        {
+            // Unitless integer pairs
+            std::vector<VECTOR2I> val;
+            value.GetAs( &val );
+
+            m_out->Print( "(%s (cells", key.c_str() );
+
+            for( const VECTOR2I& cell : val )
+                m_out->Print( "(ij %d %d)", cell.x, cell.y );
+
+            m_out->Print( "))" );
+        }
         else
         {
             wxString val;
@@ -2910,6 +2922,25 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
 
             m_out->Print( "(%s %s)", key.c_str(), m_out->Quotew( val ).c_str() );
         }
+    }
+
+    std::vector<std::pair<wxString, const BOARD_ITEM*>> templateItems = aGenerator->GetTemplateItems();
+
+    if( !templateItems.empty() )
+    {
+        m_out->Print( "(templates" );
+
+        for( const auto& [name, item] : templateItems )
+        {
+            if( !item )
+                continue;
+
+            m_out->Print( "(template (name %s)", m_out->Quotew( name ).c_str() );
+            Format( item );
+            m_out->Print( ")" ); // Close `template` token.
+        }
+
+        m_out->Print( ")" ); // Close `templates` token.
     }
 
     wxArrayString memberIds;
@@ -3325,15 +3356,15 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
                       formatInternalUnits( aZone->GetThermalReliefSpokeWidth() ).c_str() );
     }
 
-    if( aZone->GetCornerSmoothingType() != ZONE_SETTINGS::SMOOTHING_NONE )
+    if( aZone->GetCornerSmoothingType() != ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING )
     {
         switch( aZone->GetCornerSmoothingType() )
         {
-        case ZONE_SETTINGS::SMOOTHING_CHAMFER:
+        case ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER:
             m_out->Print( "(smoothing chamfer)" );
             break;
 
-        case ZONE_SETTINGS::SMOOTHING_FILLET:
+        case ZONE_SETTINGS::CORNER_SMOOTHING::FILLET:
             m_out->Print( "(smoothing fillet)" );
             break;
 
@@ -3650,6 +3681,9 @@ void PCB_IO_KICAD_SEXPR::FootprintEnumerate( wxArrayString& aFootprintNames,
     try
     {
         validateCache( aLibPath );
+
+        if( !dir.IsOpened() )
+            THROW_IO_ERRORF( _( "Footprint library '%s' not found." ), aLibPath );
     }
     catch( const IO_ERROR& ioe )
     {

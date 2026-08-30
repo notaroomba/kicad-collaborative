@@ -1824,7 +1824,7 @@ std::unique_ptr<PNS::VIA> PNS_KICAD_IFACE_BASE::syncVia( PCB_VIA* aVia )
     switch( aVia->Padstack().Mode() )
     {
     case PADSTACK::MODE::NORMAL:
-        via->SetDiameter( 0, aVia->GetWidth( PADSTACK::ALL_LAYERS ) );
+        via->SetDiameter( 0, aVia->GetWidth( PADSTACK::TEMP_ALL_LAYERS ) );
         break;
 
     case PADSTACK::MODE::FRONT_INNER_BACK:
@@ -2047,7 +2047,7 @@ bool PNS_KICAD_IFACE_BASE::syncGraphicalItem( PNS::NODE* aWorld, PCB_SHAPE* aIte
             || aItem->GetLayer() == Margin
             || IsKicadCopperLayer( aItem->GetLayer() ) )
     {
-        std::vector<SHAPE*> shapes = aItem->MakeEffectiveShapes();
+        std::vector<SHAPE*> shapes = aItem->MakeEffectiveShapesWithLineEndings( aItem->GetEffectiveWidth() );
 
         for( SHAPE* shape : shapes )
         {
@@ -2690,22 +2690,16 @@ void PNS_KICAD_IFACE::modifyBoardItem( PNS::ITEM* aItem )
         m_commit->Modify( via_board );
 
         via_board->SetPosition( VECTOR2I( via->Pos().x, via->Pos().y ) );
-        via_board->SetWidth( PADSTACK::ALL_LAYERS, via->Diameter( 0 ) );
+        via_board->SetWidth( PADSTACK::TEMP_ALL_LAYERS, via->Diameter( 0 ) );
         via_board->SetDrill( via->Drill() );
         via_board->SetNet( static_cast<NETINFO_ITEM*>( via->Net() ) );
         via_board->SetViaType( via->ViaType() ); // MUST be before SetLayerPair()
         via_board->Padstack().SetUnconnectedLayerMode( via->UnconnectedLayerMode() );
         via_board->SetIsFree( via->IsFree() );
+        // A via holds its copper span in the primary drill layers, so this call is the only
+        // writer of both; a write back from the PNS hole layers can only repeat or corrupt it
         via_board->SetLayerPair( GetBoardLayerFromPNSLayer( via->Layers().Start() ),
                                  GetBoardLayerFromPNSLayer( via->Layers().End() ) );
-
-        PNS_LAYER_RANGE holeLayers = via->HoleLayers();
-
-        if( holeLayers.Start() >= 0 && holeLayers.End() >= 0 )
-        {
-            via_board->SetPrimaryDrillStartLayer( GetBoardLayerFromPNSLayer( holeLayers.Start() ) );
-            via_board->SetPrimaryDrillEndLayer( GetBoardLayerFromPNSLayer( holeLayers.End() ) );
-        }
 
         via_board->SetFrontPostMachining( via->HolePostMachining() );
         via_board->SetSecondaryDrillSize( via->SecondaryDrill() );
@@ -2813,22 +2807,16 @@ BOARD_CONNECTED_ITEM* PNS_KICAD_IFACE::createBoardItem( PNS::ITEM* aItem )
         PCB_VIA*  via_board = new PCB_VIA( m_board );
         PNS::VIA* via = static_cast<PNS::VIA*>( aItem );
         via_board->SetPosition( VECTOR2I( via->Pos().x, via->Pos().y ) );
-        via_board->SetWidth( PADSTACK::ALL_LAYERS, via->Diameter( 0 ) );
+        via_board->SetWidth( PADSTACK::TEMP_ALL_LAYERS, via->Diameter( 0 ) );
         via_board->SetDrill( via->Drill() );
         via_board->SetNet( net );
         via_board->SetViaType( via->ViaType() ); // MUST be before SetLayerPair()
         via_board->Padstack().SetUnconnectedLayerMode( via->UnconnectedLayerMode() );
         via_board->SetIsFree( via->IsFree() );
+        // A via holds its copper span in the primary drill layers, so this call is the only
+        // writer of both; a write back from the PNS hole layers can only repeat or corrupt it
         via_board->SetLayerPair( GetBoardLayerFromPNSLayer( via->Layers().Start() ),
                                  GetBoardLayerFromPNSLayer( via->Layers().End() ) );
-
-        PNS_LAYER_RANGE holeLayers = via->HoleLayers();
-
-        if( holeLayers.Start() >= 0 && holeLayers.End() >= 0 )
-        {
-            via_board->SetPrimaryDrillStartLayer( GetBoardLayerFromPNSLayer( holeLayers.Start() ) );
-            via_board->SetPrimaryDrillEndLayer( GetBoardLayerFromPNSLayer( holeLayers.End() ) );
-        }
 
         via_board->SetFrontPostMachining( via->HolePostMachining() );
         via_board->SetSecondaryDrillSize( via->SecondaryDrill() );
@@ -2883,6 +2871,12 @@ BOARD_CONNECTED_ITEM* PNS_KICAD_IFACE::createBoardItem( PNS::ITEM* aItem )
 
         if( BOARD_ITEM* src = aItem->GetSourceItem() )
         {
+            if( !m_itemGroups.contains( src ) )
+            {
+                if( EDA_GROUP* group = src->GetParentGroup() )
+                    m_itemGroups[src] = group;
+            }
+
             if( m_itemGroups.contains( src ) )
                 m_replacementMap[src].push_back( newBoardItem );
         }

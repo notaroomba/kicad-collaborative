@@ -21,6 +21,9 @@
  */
 #include "pcb_point.h"
 
+#include <api/api_enums.h>
+#include <api/api_utils.h>
+#include <api/board/board_types.pb.h>
 #include <base_units.h>
 #include <bitmaps.h>
 #include <board.h>
@@ -225,11 +228,55 @@ EDA_ITEM* PCB_POINT::Clone() const
 }
 
 
+void PCB_POINT::CopyFrom( const BOARD_ITEM* aOther )
+{
+    wxCHECK( aOther && aOther->Type() == PCB_POINT_T, /* void */ );
+    *this = *static_cast<const PCB_POINT*>( aOther );
+}
+
+
 void PCB_POINT::swapData( BOARD_ITEM* aOther )
 {
     assert( aOther->Type() == PCB_POINT_T );
 
     std::swap( *((PCB_POINT*) this), *((PCB_POINT*) aOther) );
+}
+
+
+void PCB_POINT::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::board::types::ReferencePoint point;
+
+    point.mutable_id()->set_value( m_Uuid.AsStdString() );
+    point.set_layer( ToProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( m_layer ) );
+    kiapi::common::PackVector2( *point.mutable_position(), m_pos );
+    point.mutable_size()->set_value_nm( m_size );
+    point.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
+                                 : kiapi::common::types::LockedState::LS_UNLOCKED );
+
+    if( FOOTPRINT* parent = GetParentFootprint() )
+        point.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
+    else if( const BOARD* board = GetBoard() )
+        point.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    aContainer.PackFrom( point );
+}
+
+
+bool PCB_POINT::Deserialize( const google::protobuf::Any& aContainer )
+{
+    kiapi::board::types::ReferencePoint point;
+
+    if( !aContainer.UnpackTo( &point ) )
+        return false;
+
+    SetUuidDirect( KIID( point.id().value() ) );
+    SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( point.layer() ) );
+    SetPosition( kiapi::common::UnpackVector2( point.position() ) );
+    SetSize( point.size().value_nm() );
+    SetLocked( point.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+
+    return true;
 }
 
 
@@ -300,8 +347,7 @@ static struct PCB_POINT_DESC
         propMgr.InheritsAfter( TYPE_HASH( PCB_POINT ), TYPE_HASH( BOARD_ITEM ) );
 
         propMgr.AddProperty( new PROPERTY<PCB_POINT, int>( _HKI( "Size" ),
-                &PCB_POINT::SetSize, &PCB_POINT::GetSize,
-                PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_POINT::SetSize, &PCB_POINT::GetSize, PROPERTY_DISPLAY::PT_SIZE ) );
     }
     // clang-format on
 } _PCB_POINT_DESC;

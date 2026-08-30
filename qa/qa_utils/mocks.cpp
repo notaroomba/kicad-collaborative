@@ -20,9 +20,7 @@
 #include <kiface_base.h>
 #include <confirm.h>
 #include <pcb_edit_frame.h>
-#include <eda_dde.h>
 #include <wx/file.h>
-#include <wx/snglinst.h>
 #include <wx/app.h>
 #include <board.h>
 #include <collectors.h>

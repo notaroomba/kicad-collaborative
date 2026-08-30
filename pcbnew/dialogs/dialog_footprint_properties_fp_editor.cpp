@@ -28,9 +28,11 @@
 #include <3d_rendering/opengl/3d_model.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
 #include <bitmaps.h>
+#include <board.h>
 #include <board_commit.h>
 #include <board_design_settings.h>
 #include <confirm.h>
+#include <core/kicad_algo.h>
 
 #include <dialogs/dialog_text_entry.h>
 #include <dialogs/panel_preview_3d_model.h>
@@ -399,6 +401,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
     }
 
     m_boardOnly->SetValue( m_footprint->GetAttributes() & FP_BOARD_ONLY );
+    m_cbExcludeFromSim->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_SIM );
     m_excludeFromPosFiles->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES );
     m_excludeFromBOM->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_BOM );
     m_cbDNP->SetValue( m_footprint->GetAttributes() & FP_DNP );
@@ -734,26 +737,31 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
     // Update fields
     m_frame->GetToolManager()->RunAction( ACTIONS::selectionClear );
 
-    while( !m_footprint->GetFields().empty() )
+    std::vector<PCB_FIELD*> addedFields;
+    std::vector<PCB_FIELD*> detachedFields;
+
+    m_footprint->UpdateFields( *m_fields, addedFields, detachedFields );
+
+    for( PCB_FIELD* field : detachedFields )
     {
-        PCB_FIELD* existing = m_footprint->GetFields().front();
-        view->Remove( existing );
-        m_footprint->Remove( existing );
-        delete existing;
+        view->Remove( field );
+        delete field;
     }
 
-    for( PCB_FIELD& field : *m_fields )
+    for( PCB_FIELD* field : m_footprint->GetFields() )
     {
-        PCB_FIELD* newField = field.CloneField();
-        m_footprint->Add( newField );
-        view->Add( newField );
+        // Reused fields are already known to the view
+        if( alg::contains( addedFields, field ) )
+            view->Add( field );
+        else
+            view->Update( field );
 
-        if( newField->IsSelected() )
+        if( field->IsSelected() )
         {
             // The old copy was in the selection list, but this one is not.  Remove the
             // out-of-sync selection flag so we can re-add the field to the selection.
-            newField->ClearSelected();
-            selectionTool->AddItemToSel( newField, true );
+            field->ClearSelected();
+            selectionTool->AddItemToSel( field, true );
         }
     }
 
@@ -788,6 +796,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
 
     if( m_boardOnly->GetValue() )
         attributes |= FP_BOARD_ONLY;
+
+    if( m_cbExcludeFromSim->GetValue() )
+        attributes |= FP_EXCLUDE_FROM_SIM;
 
     if( m_excludeFromPosFiles->GetValue() )
         attributes |= FP_EXCLUDE_FROM_POS_FILES;
@@ -891,7 +902,7 @@ void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnAddField( wxCommandEvent& event )
             {
                 const BOARD_DESIGN_SETTINGS& dsnSettings = m_frame->GetDesignSettings();
 
-                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), DO_TRANSLATE ) );
+                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), TRANSLATED ) );
 
                 // Set active layer if legal; otherwise copy layer from previous text item
                 if( LSET::AllTechMask().test( m_frame->GetActiveLayer() ) )

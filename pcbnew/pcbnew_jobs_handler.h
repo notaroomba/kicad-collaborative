@@ -42,6 +42,7 @@ public:
     PCBNEW_JOBS_HANDLER( KIWAY* aKiway );
     virtual ~PCBNEW_JOBS_HANDLER();
 
+    int JobExportBom( JOB* aJob );
     int JobExportStep( JOB* aJob );
     int JobExportRender( JOB* aJob );
     int JobExportSvg( JOB* aJob );
@@ -61,6 +62,7 @@ public:
     int JobExportOdb( JOB* aJob );
     int JobExportIpcD356( JOB* aJob );
     int JobExportStats( JOB* aJob );
+    int JobExportStackup( JOB* aJob );
     int JobUpgrade( JOB* aJob );
     int JobImport( JOB* aJob );
     int JobDiff( JOB* aJob );

@@ -121,7 +121,7 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         unique_peers.insert( drawItem->GetPeer() );
     }
 
-    m_frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
 
     Activate();
     // Must be done after Activate() so that it gets set into the correct context
@@ -142,8 +142,7 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         }
         catch( const fmt::format_error& exc )
         {
-            wxLogWarning( wxS( "Exception \"%s\" serializing string ocurred." ),
-                          exc.what() );
+            wxLogWarning( wxS( "Exception \"%s\" serializing string ocurred." ), exc.what() );
             return 1;
         }
     }
@@ -316,7 +315,6 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         m_toolMgr->PostEvent( EVENTS::SelectedEvent );
 
     m_moveInProgress = false;
-    m_frame->PopTool( aEvent );
     return 0;
 }
 
@@ -562,7 +560,7 @@ int PL_EDIT_TOOL::Paste( const TOOL_EVENT& aEvent )
     {
         if( dataItem->GetDrawItems().empty() )
         {
-            dataItem->SyncDrawItems( nullptr, getView() );
+            m_frame->SyncDataItem( dataItem );
             dataItem->GetDrawItems().front()->SetSelected();
         }
     }

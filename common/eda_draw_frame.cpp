@@ -67,7 +67,6 @@
 #include <widgets/net_inspector_panel.h>
 #include <widgets/filedlg_hook_new_library.h>
 #include <wx/event.h>
-#include <wx/snglinst.h>
 #include <widgets/ui_common.h>
 #include <widgets/search_pane.h>
 #include <wx/dirdlg.h>
@@ -75,7 +74,6 @@
 #include <wx/debug.h>
 #include <wx/socket.h>
 
-#include <wx/snglinst.h>
 #include <wx/fdrepdlg.h>
 #include <tool/editor_conditions.h>
 
@@ -282,17 +280,6 @@ bool EDA_DRAW_FRAME::LockFile( const wxString& aFileName )
 
     m_file_checker = std::make_unique<LOCKFILE>( aFileName );
 
-    if( !m_file_checker->Valid() && m_file_checker->IsLockedByMe() )
-    {
-        // If we cannot acquire the lock but we appear to be the one who locked it, reclaim it
-        // when the owning process is provably gone (the lock records its pid), or — for locks
-        // without a pid — when no other KiCad instance is running.  Leftover locks like these
-        // come from crashes or kills, and multi-instance collaboration sessions make the
-        // "no other instance" heuristic alone too conservative.
-        if( m_file_checker->OwnerProcessIsDead() || !Pgm().SingleInstance()->IsAnotherRunning() )
-            m_file_checker->OverrideLock();
-    }
-
     // If the file is valid, return true.  This could mean that the file is locked or it could mean
     // that the file is read-only.
     return m_file_checker->Valid();
@@ -371,7 +358,9 @@ void EDA_DRAW_FRAME::CommonSettingsChanged( int aFlags )
         m_lastToolbarIconSize = settings->m_Appearance.toolbar_icon_size;
     }
 
+#ifndef __WXMAC__
     resolveCanvasType();
+#endif
 
     // Notify all tools the preferences have changed
     if( m_toolManager )
@@ -1372,7 +1361,6 @@ void EDA_DRAW_FRAME::resolveCanvasType()
     if( m_openGLFailureOccured && m_canvasType == EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL )
         m_canvasType = EDA_DRAW_PANEL_GAL::GAL_FALLBACK;
 
-#ifndef __WXMAC__
     if( m_canvasType != GetCanvas()->GetBackend() )
     {
         // Try to switch (will automatically fallback if necessary)
@@ -1384,7 +1372,6 @@ void EDA_DRAW_FRAME::resolveCanvasType()
             m_openGLFailureOccured = true; // Store failure for other EDA_DRAW_FRAMEs
         }
     }
-#endif
 }
 
 

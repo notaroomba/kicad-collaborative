@@ -86,8 +86,18 @@ enum FOOTPRINT_ATTR_T
     FP_EXCLUDE_FROM_BOM         = 0x0008,
     FP_BOARD_ONLY               = 0x0010,   // Footprint has no corresponding symbol
     FP_JUST_ADDED               = 0x0020,   // Footprint just added by netlist update
-    FP_DNP                      = 0x0040
+    FP_DNP                      = 0x0040,
+    FP_EXCLUDE_FROM_SIM         = 0x0080
 };
+
+
+enum class FOOTPRINT_TYPE
+{
+    UNSPECIFIED,
+    THROUGH_HOLE,
+    SMD
+};
+
 
 enum class EXTRUSION_MATERIAL
 {
@@ -218,6 +228,7 @@ public:
             m_name( aName ),
             m_dnp( false ),
             m_excludedFromBOM( false ),
+            m_excludedFromSim( false ),
             m_excludedFromPosFiles( false )
     {
     }
@@ -230,6 +241,9 @@ public:
 
     bool GetExcludedFromBOM() const { return m_excludedFromBOM; }
     void SetExcludedFromBOM( bool aExclude ) { m_excludedFromBOM = aExclude; }
+
+    bool GetExcludedFromSim() const { return m_excludedFromSim; }
+    void SetExcludedFromSim( bool aExclude ) { m_excludedFromSim = aExclude; }
 
     bool GetExcludedFromPosFiles() const { return m_excludedFromPosFiles; }
     void SetExcludedFromPosFiles( bool aExclude ) { m_excludedFromPosFiles = aExclude; }
@@ -259,6 +273,14 @@ public:
         m_fields[aFieldName] = aValue;
     }
 
+    /**
+     * Remove a field value override for this variant.
+     */
+    void RemoveFieldValue( const wxString& aFieldName )
+    {
+        m_fields.erase( aFieldName );
+    }
+
     bool HasFieldValue( const wxString& aFieldName ) const
     {
         return m_fields.find( aFieldName ) != m_fields.end();
@@ -271,6 +293,7 @@ public:
         return m_name == aOther.m_name
                 && m_dnp == aOther.m_dnp
                 && m_excludedFromBOM == aOther.m_excludedFromBOM
+                && m_excludedFromSim == aOther.m_excludedFromSim
                 && m_excludedFromPosFiles == aOther.m_excludedFromPosFiles
                 && m_fields == aOther.m_fields;
     }
@@ -279,6 +302,7 @@ private:
     wxString                     m_name;
     bool                         m_dnp;
     bool                         m_excludedFromBOM;
+    bool                         m_excludedFromSim;
     bool                         m_excludedFromPosFiles;
     std::map<wxString, wxString> m_fields;  ///< Field value overrides for this variant
 };
@@ -510,6 +534,9 @@ public:
     int GetAttributes() const { return m_attributes; }
     void SetAttributes( int aAttributes ) { m_attributes = aAttributes; }
 
+    FOOTPRINT_TYPE GetFootprintType() const;
+    void           SetFootprintType( FOOTPRINT_TYPE aFootprintType );
+
     bool AllowMissingCourtyard() const { return m_allowMissingCourtyard; }
     void SetAllowMissingCourtyard( bool aAllow ) { m_allowMissingCourtyard = aAllow; }
 
@@ -696,7 +723,7 @@ public:
      * Footprints with plated through-hole pads should usually be marked through hole even if they
      * also have SMD because they might not be auto-placed.  Exceptions to this might be shielded
      * connectors.  Otherwise, footprints with SMD pads should be marked SMD.
-     * Footprints with no connecting pads should be marked "Other"
+     * Footprints with no connecting pads should be marked "Unspecified"
      *
      * @param aErrorHandler callback to handle the error messages generated
      */
@@ -816,6 +843,7 @@ public:
      * @param aDepth a counter to limit recursion and circular references.
      */
     bool ResolveTextVar( wxString* token, int aDepth = 0 ) const;
+    bool ResolveTextVar( wxString* token, const wxString& aVariantName, int aDepth = 0 ) const;
 
     /// @copydoc EDA_ITEM::GetMsgPanelInfo
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
@@ -872,6 +900,8 @@ public:
      * Bump the current reference by \a aDelta.
      */
     void IncrementReference( int aDelta );
+
+    bool IsAnnotated() const { return !GetReference().IsEmpty() && GetReference().Last() != '?'; }
 
     /**
      * @return the value text.
@@ -932,6 +962,21 @@ public:
     std::deque<PCB_FIELD*>& GetFields() { return m_fields; }
 
     /**
+     * Replace the fields with \a aFields, reusing the existing mandatory field objects.
+     *
+     * Destroying and recreating a mandatory field invalidates every pointer to it, including
+     * the board's item-by-id cache entry, and leaves the footprint without a reference or a
+     * value for as long as the rebuild takes.  The const field accessors return nullptr in
+     * that state, so anything reading the footprint meanwhile dereferences null.
+     *
+     * @param aFields is the new field set, mandatory fields included.
+     * @param aAdded receives the fields created here, which the footprint now owns.
+     * @param aDetached receives the fields dropped here, which the caller must dispose of.
+     */
+    void UpdateFields( const std::vector<PCB_FIELD>& aFields, std::vector<PCB_FIELD*>& aAdded,
+                       std::vector<PCB_FIELD*>& aDetached );
+
+    /**
      * Return the next ordinal for a user field for this footprint
      */
     int GetNextFieldOrdinal() const;
@@ -980,6 +1025,15 @@ public:
             m_attributes |= FP_EXCLUDE_FROM_BOM;
         else
             m_attributes &= ~FP_EXCLUDE_FROM_BOM;
+    }
+
+    bool IsExcludedFromSim() const { return m_attributes & FP_EXCLUDE_FROM_SIM; }
+    void SetExcludedFromSim( bool aExclude = true )
+    {
+        if( aExclude )
+            m_attributes |= FP_EXCLUDE_FROM_SIM;
+        else
+            m_attributes &= ~FP_EXCLUDE_FROM_SIM;
     }
 
     bool IsDNP() const { return m_attributes & FP_DNP; }
@@ -1067,6 +1121,16 @@ public:
      * @return true if excluded from BOM for the specified variant.
      */
     bool GetExcludedFromBOMForVariant( const wxString& aVariantName ) const;
+
+    /**
+     * Get the exclude-from-simulation status for a specific variant.
+     *
+     * If the variant doesn't exist, returns the default exclude-from-simulation status.
+     *
+     * @param aVariantName The variant name (empty for default).
+     * @return true if excluded from simulation for the specified variant.
+     */
+    bool GetExcludedFromSimForVariant( const wxString& aVariantName ) const;
 
     /**
      * Get the exclude-from-position-files status for a specific variant.
@@ -1182,7 +1246,7 @@ public:
 
     /**
      * Get the type of footprint
-     * @return "SMD"/"Through hole"/"Other" based on attributes
+     * @return "SMD"/"Through hole"/"Unspecified" based on attributes
      */
     wxString GetTypeName() const;
 

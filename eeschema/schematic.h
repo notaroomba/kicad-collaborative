@@ -24,9 +24,14 @@
 #include <embedded_files.h>
 #include <properties/property_mgr.h>
 #include <schematic_holder.h>
+#include <sch_rtree.h>
 #include <sch_sheet_path.h>
 #include <schematic_settings.h>
 #include <project.h>
+
+#include <memory>
+#include <optional>
+#include <vector>
 
 
 struct HISTORY_FILE_DATA;
@@ -70,6 +75,8 @@ public:
     // This is called when the user changes to a new sheet, not when a sheet is altered.
     // Sheet alteration events will call OnSchItems*
     virtual void OnSchSheetChanged( SCHEMATIC& aSch ) {}
+
+    virtual void OnSchSelectionChanged( SCHEMATIC& aSch ) {}
 };
 
 enum SCH_CLEANUP_FLAGS
@@ -77,6 +84,45 @@ enum SCH_CLEANUP_FLAGS
     NO_CLEANUP,
     LOCAL_CLEANUP,
     GLOBAL_CLEANUP
+};
+
+/**
+ * A schematic staged off to the side by an importer, ready to be swapped into a live
+ * #SCHEMATIC in one step.
+ *
+ * Everything reachable from here is owned by the content until SCHEMATIC::AdoptContent() takes
+ * it, so an import that fails while staging leaves the live schematic untouched.  A schematic,
+ * its screens and its sheets are woven together tightly enough that only the schematic can
+ * unpick the outgoing objects in a safe order, which is why importers hand over a whole
+ * content object instead of writing to the three layers themselves.
+ */
+struct SCHEMATIC_CONTENT
+{
+    /// Sheet whose screen receives the content.  Null names the schematic's virtual root.
+    SCH_SHEET* targetSheet = nullptr;
+
+    /// Screen that replaces the target sheet's screen outright.  When this is null the items
+    /// and library cache below replace the contents of the screen the target sheet already has.
+    std::unique_ptr<SCH_SCREEN> screen;
+
+    /// Spatial index that replaces the target screen's own.  It must already name every item
+    /// the target screen keeps, not just the imported ones.
+    EE_RTREE screenItems;
+
+    /// Screen holding only the library cache that the target screen adopts.
+    std::unique_ptr<SCH_SCREEN> screenLibSymbols;
+
+    /// Items in @a screenItems that nothing else owns yet.
+    std::vector<std::unique_ptr<SCH_ITEM>> itemOwners;
+
+    /// Replacement top level sheets.  Empty leaves the schematic's own in place.
+    std::vector<SCH_SHEET*> topLevelSheets;
+
+    SCH_SHEET_LIST                    hierarchy;
+    std::optional<SCH_SHEET_PATH>     currentSheet;
+    std::unique_ptr<CONNECTION_GRAPH> connectionGraph;
+    std::optional<EMBEDDED_FILES>     embeddedFiles;
+    wxString                          drawingSheetFileName;
 };
 
 /**
@@ -145,7 +191,56 @@ public:
 
     SCH_SHEET* GetTopLevelSheet( int aIndex = 0 ) const;
 
+    /**
+     * Check if a UUID names one of this schematic's top level sheets.
+     *
+     * @param aUuid is the sheet UUID to look for.
+     * @return true if aUuid belongs to a top-level sheet, or to the root sheet when it is not
+     *         virtual.
+     */
+    bool IsTopLevelSheetUuid( const KIID& aUuid ) const;
+
+    /**
+     * Strip the leading virtual root from a stored instance path, which SCH_SHEET_PATH::Path()
+     * omits but stored instances may still name.
+     *
+     * @param aPath is an instance path in either form.
+     * @return @a aPath in SCH_SHEET_PATH::Path() form.
+     */
+    KIID_PATH NormalizeInstancePath( const KIID_PATH& aPath ) const;
+
+    /**
+     * Test whether an instance path is rooted in this schematic's top level sheets.  A
+     * schematic file can be shared between projects, so the stored project name isn't reliable.
+     *
+     * @param aPath is an instance path, with or without a leading virtual root.
+     * @return true when @a aPath is rooted in this schematic.
+     */
+    bool IsInstancePathInProject( const KIID_PATH& aPath ) const;
+
+    /**
+     * Replace the top level sheets, rebuilding the hierarchy and connectivity around them.
+     *
+     * Each sheet is parented to the root sheet rather than the root screen, so the schematic
+     * stays reachable without a screen.
+     *
+     * @note SCHEMATIC::AdoptContent() is the other writer of the top level sheet list.  Any
+     *       invariant added here has to be mirrored there.
+     */
     void SetTopLevelSheets( const std::vector<SCH_SHEET*>& aSheets );
+
+    /**
+     * Take a staged schematic over from an importer in one indivisible step.
+     *
+     * The outgoing screen, top level sheets and connection graph are only destroyed once the
+     * hierarchy and current sheet that still name them have been replaced, so the destination is
+     * never left half replaced.  This is @c noexcept because there is no coherent way to unwind a
+     * partly adopted document; an allocation failure inside it terminates rather than corrupting
+     * the caller's schematic.
+     *
+     * @param aContent is the staged schematic; it is left empty.
+     */
+    void AdoptContent( SCHEMATIC_CONTENT&& aContent ) noexcept;
 
     /**
      * Add a new top-level sheet to the schematic.
@@ -352,6 +447,11 @@ public:
       * altered.
       */
     void OnSchSheetChanged();
+
+    /**
+     * Notify the schematic and its listeners that the editor selection has changed.
+     */
+    void OnSchSelectionChanged();
 
     /**
      * Add a listener to the schematic to receive calls whenever something on the

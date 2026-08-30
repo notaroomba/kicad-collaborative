@@ -22,7 +22,10 @@
 #include <api/api_enums.h>
 #include <api/api_sch_utils.h>
 #include <api/api_utils.h>
+#include <api/cross_probe_client.h>
 #include <api/sch_context.h>
+#include <fmt.h>
+#include <wx/log.h>
 #include <magic_enum.hpp>
 #include <base_screen.h>
 #include <jobs/job_export_bom.h>
@@ -43,12 +46,14 @@
 #include <schematic.h>
 #include <tool/actions.h>
 #include <tool/tool_manager.h>
+#include <tools/sch_actions.h>
 #include <tools/sch_selection_tool.h>
 #include <project.h>
 #include <wildcards_and_files_ext.h>
 #include <wx/filename.h>
 
 #include <api/common/types/base_types.pb.h>
+#include <trace_helpers.h>
 
 using namespace kiapi::common::commands;
 using kiapi::common::types::CommandStatus;
@@ -57,17 +62,17 @@ using kiapi::common::types::ItemRequestStatus;
 
 
 std::set<KICAD_T> API_HANDLER_SCH::s_allowedTypes = {
-    // SCH_MARKER_T,
     SCH_JUNCTION_T,
     SCH_NO_CONNECT_T,
     SCH_BUS_WIRE_ENTRY_T,
     SCH_BUS_BUS_ENTRY_T,
     SCH_LINE_T,
     SCH_SHAPE_T,
+    SCH_RULE_AREA_T,
     SCH_BITMAP_T,
     SCH_TEXTBOX_T,
     SCH_TEXT_T,
-    // SCH_TABLE_T,
+    SCH_TABLE_T,
     SCH_LABEL_T,
     SCH_GLOBAL_LABEL_T,
     SCH_GROUP_T,
@@ -115,6 +120,7 @@ API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
 {
     using namespace kiapi::schematic::jobs;
     using namespace kiapi::schematic::types;
+    using namespace kiapi::schematic::commands;
 
     registerHandler<GetOpenDocuments, GetOpenDocumentsResponse>(
             &API_HANDLER_SCH::handleGetOpenDocuments );
@@ -122,6 +128,7 @@ API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
             &API_HANDLER_SCH::handleSaveDocument );
     registerHandler<SaveCopyOfDocument, google::protobuf::Empty>(
             &API_HANDLER_SCH::handleSaveCopyOfDocument );
+    registerHandler<RevertDocument, google::protobuf::Empty>( &API_HANDLER_SCH::handleRevertDocument );
 
     registerHandler<GetItems, GetItemsResponse>( &API_HANDLER_SCH::handleGetItems );
     registerHandler<GetItemsById, GetItemsResponse>( &API_HANDLER_SCH::handleGetItemsById );
@@ -148,6 +155,10 @@ API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
     registerHandler<GetPageSettings, types::PageSettings>( &API_HANDLER_SCH::handleGetPageSettings );
     registerHandler<SetPageSettings, types::PageSettings>( &API_HANDLER_SCH::handleSetPageSettings );
     registerHandler<GetSchematicNetlist, SchematicNetlistResponse>( &API_HANDLER_SCH::handleGetSchematicNetlist );
+
+    registerHandler<CrossProbeAnnounce, CrossProbeAnnounceResponse>( &API_HANDLER_SCH::handleCrossProbeAnnounce );
+    registerHandler<SyncSelection, SyncSelectionResponse>( &API_HANDLER_SCH::handleSyncSelection );
+    registerHandler<HighlightNets, HighlightNetsResponse>( &API_HANDLER_SCH::handleHighlightNets );
 }
 
 
@@ -347,6 +358,55 @@ API_HANDLER_SCH::handleSaveCopyOfDocument( const HANDLER_CONTEXT<SaveCopyOfDocum
         e.set_error_message( "failed to save schematic copy" );
         return tl::unexpected( e );
     }
+
+    return google::protobuf::Empty();
+}
+
+
+HANDLER_RESULT<google::protobuf::Empty>
+API_HANDLER_SCH::handleRevertDocument( const HANDLER_CONTEXT<RevertDocument>& aCtx )
+{
+    if( aCtx.Request.document().type() != DocumentType::DOCTYPE_SCHEMATIC )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_UNHANDLED );
+        return tl::unexpected( e );
+    }
+
+    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
+
+    if( !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    if( !m_commits.empty() )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BUSY );
+        e.set_error_message( "cannot revert while a commit is open" );
+        return tl::unexpected( e );
+    }
+
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "RevertDocument" ) )
+        return tl::unexpected( *headless );
+
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
+
+    wxFileName fn = project().AbsolutePath( schematic()->GetFileName() );
+
+    if( m_frame->GetCurrentSheet().Last() != &schematic()->Root() )
+    {
+        SCH_SHEET_PATH rootSheetPath = schematic()->Hierarchy().at( 0 );
+        m_frame->GetToolManager()->RunAction<SCH_SHEET_PATH*>( SCH_ACTIONS::changeSheet, &rootSheetPath );
+    }
+
+    SCH_SCREENS screenList( schematic()->Root() );
+
+    for( SCH_SCREEN* screen = screenList.GetFirst(); screen; screen = screenList.GetNext() )
+        screen->SetContentModified( false );
+
+    m_frame->ReleaseFile();
+    m_frame->OpenProjectFiles( std::vector<wxString>( 1, fn.GetFullPath() ), KICTL_REVERT );
 
     return google::protobuf::Empty();
 }
@@ -1399,6 +1459,22 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
     bomJob.m_sortField = wxString::FromUTF8( aCtx.Request.fields().sort_field() );
     bomJob.m_filterString = wxString::FromUTF8( aCtx.Request.fields().filter() );
 
+    switch( aCtx.Request.fields().filter_scope() )
+    {
+    case kiapi::schematic::jobs::BOMFilterScope::BFS_VISIBLE:
+        bomJob.m_filterScope = BOM_FILTER_SCOPE::VISIBLE;
+        break;
+
+    case kiapi::schematic::jobs::BOMFilterScope::BFS_ALL:
+        bomJob.m_filterScope = BOM_FILTER_SCOPE::ALL;
+        break;
+
+    case kiapi::schematic::jobs::BOMFilterScope::BFS_REFERENCE:
+    default:
+        bomJob.m_filterScope = BOM_FILTER_SCOPE::REFERENCE;
+        break;
+    }
+
     if( aCtx.Request.fields().sort_direction() == kiapi::schematic::jobs::BOMSortDirection::BSD_ASCENDING )
     {
         bomJob.m_sortAsc = true;
@@ -1475,15 +1551,15 @@ void API_HANDLER_SCH::packSheetInstance( kiapi::schematic::types::SheetInstance*
 }
 
 
-HANDLER_RESULT<kiapi::schematic::types::SchematicHierarchyResponse> API_HANDLER_SCH::handleGetSchematicHierarchy(
-        const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicHierarchy>& aCtx )
+HANDLER_RESULT<kiapi::schematic::commands::SchematicHierarchyResponse> API_HANDLER_SCH::handleGetSchematicHierarchy(
+        const HANDLER_CONTEXT<kiapi::schematic::commands::GetSchematicHierarchy>& aCtx )
 {
     HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
 
     if( !documentValidation )
         return tl::unexpected( documentValidation.error() );
 
-    kiapi::schematic::types::SchematicHierarchyResponse response;
+    kiapi::schematic::commands::SchematicHierarchyResponse response;
     response.mutable_document()->CopyFrom( aCtx.Request.document() );
 
     if( !schematic()->HasHierarchy() )
@@ -1514,8 +1590,8 @@ HANDLER_RESULT<kiapi::schematic::types::SchematicHierarchyResponse> API_HANDLER_
 }
 
 
-HANDLER_RESULT<kiapi::schematic::types::SchematicNetlistResponse>
-API_HANDLER_SCH::handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicNetlist>& aCtx )
+HANDLER_RESULT<kiapi::schematic::commands::SchematicNetlistResponse>
+API_HANDLER_SCH::handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schematic::commands::GetSchematicNetlist>& aCtx )
 {
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
@@ -1548,7 +1624,7 @@ API_HANDLER_SCH::handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schemat
         return tl::unexpected( e );
     }
 
-    kiapi::schematic::types::SchematicNetlistResponse response;
+    kiapi::schematic::commands::SchematicNetlistResponse response;
     response.mutable_document()->CopyFrom( aCtx.Request.document() );
 
     for( const auto& [key, subgraphList] : connectionGraph->GetNetMap() )
@@ -1582,5 +1658,500 @@ API_HANDLER_SCH::handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schemat
         }
     }
 
+    return response;
+}
+
+
+// TODO(JE) factor out
+HANDLER_RESULT<CrossProbeAnnounceResponse> API_HANDLER_SCH::handleCrossProbeAnnounce(
+        const HANDLER_CONTEXT<CrossProbeAnnounce>& aCtx )
+{
+    wxLogTrace( traceApi, "Received announce from frame %d at %s",
+                aCtx.Request.frame_type(), aCtx.Request.socket_path() );
+
+    CROSS_PROBE_CLIENT::RegisterPeer( static_cast<FRAME_T>( aCtx.Request.frame_type() ),
+                                      aCtx.Request.socket_path() );
+
+    CrossProbeAnnounceResponse response;
+    response.set_status( CPS_OK );
+    return response;
+}
+
+
+bool findSymbolsAndPins( const SCH_SHEET_LIST& aSchematicSheetList, const SCH_SHEET_PATH& aSheetPath,
+                         std::unordered_map<wxString, std::vector<SCH_REFERENCE>>&             aSyncSymMap,
+                         std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>>& aSyncPinMap,
+                         const wxString& aVariantName = wxEmptyString, bool aRecursive = false )
+{
+    if( aRecursive )
+    {
+        // Iterate over children
+        for( const SCH_SHEET_PATH& candidate : aSchematicSheetList )
+        {
+            if( candidate == aSheetPath || !candidate.IsContainedWithin( aSheetPath ) )
+                continue;
+
+            findSymbolsAndPins( aSchematicSheetList, candidate, aSyncSymMap, aSyncPinMap, aVariantName, aRecursive );
+        }
+    }
+
+    SCH_REFERENCE_LIST references;
+
+    aSheetPath.GetSymbols( references, SYMBOL_FILTER_NON_POWER, true );
+
+    for( unsigned ii = 0; ii < references.GetCount(); ii++ )
+    {
+        SCH_REFERENCE& schRef = references[ii];
+
+        if( schRef.IsSplitNeeded() )
+            schRef.Split();
+
+        SCH_SYMBOL* symbol = schRef.GetSymbol();
+        wxString    refNum = schRef.GetRefNumber();
+        wxString    fullRef = schRef.GetRef() + refNum;
+
+        // Skip power symbols
+        if( fullRef.StartsWith( wxS( "#" ) ) )
+            continue;
+
+        // Unannotated symbols are not supported
+        if( refNum.compare( wxS( "?" ) ) == 0 )
+            continue;
+
+        // Look for whole footprint
+        auto symMatchIt = aSyncSymMap.find( fullRef );
+
+        if( symMatchIt != aSyncSymMap.end() )
+        {
+            symMatchIt->second.emplace_back( schRef );
+
+            // Whole footprint was selected, no need to select pins
+            continue;
+        }
+
+        // Look for pins
+        auto symPinMatchIt = aSyncPinMap.find( fullRef );
+
+        if( symPinMatchIt != aSyncPinMap.end() )
+        {
+            std::unordered_map<wxString, SCH_PIN*>& pinMap = symPinMatchIt->second;
+            std::vector<SCH_PIN*>                   pinsOnSheet = symbol->GetPins( &aSheetPath );
+
+            for( SCH_PIN* pin : pinsOnSheet )
+            {
+                int pinUnit = pin->GetLibPin()->GetUnit();
+
+                if( pinUnit > 0 && pinUnit != schRef.GetUnit() )
+                    continue;
+
+                // Reverse-map the requested pad back to the owning pin (issue #2282).  A pin may
+                // resolve to several pads via the map; match the first that pcbnew asked for.
+                for( const wxString& pad :
+                     ExpandStackedPinNotation( pin->GetEffectivePadNumber( aSheetPath, aVariantName ) ) )
+                {
+                    auto pinIt = pinMap.find( pad );
+
+                    if( pinIt != pinMap.end() )
+                    {
+                        pinIt->second = pin;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+
+bool sheetContainsOnlyWantedItems(
+        const SCH_SHEET_LIST& aSchematicSheetList, const SCH_SHEET_PATH& aSheetPath,
+        std::unordered_map<wxString, std::vector<SCH_REFERENCE>>&             aSyncSymMap,
+        std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>>& aSyncPinMap,
+        std::unordered_map<SCH_SHEET_PATH, bool>&                             aCache )
+{
+    auto cacheIt = aCache.find( aSheetPath );
+
+    if( cacheIt != aCache.end() )
+        return cacheIt->second;
+
+    // Iterate over children
+    for( const SCH_SHEET_PATH& candidate : aSchematicSheetList )
+    {
+        if( candidate == aSheetPath || !candidate.IsContainedWithin( aSheetPath ) )
+            continue;
+
+        bool childRet = sheetContainsOnlyWantedItems( aSchematicSheetList, candidate, aSyncSymMap,
+                                                      aSyncPinMap, aCache );
+
+        if( !childRet )
+        {
+            aCache.emplace( aSheetPath, false );
+            return false;
+        }
+    }
+
+    SCH_REFERENCE_LIST references;
+    aSheetPath.GetSymbols( references, SYMBOL_FILTER_NON_POWER, true );
+
+    if( references.GetCount() == 0 )    // Empty sheet, obviously do not contain wanted items
+    {
+        aCache.emplace( aSheetPath, false );
+        return false;
+    }
+
+    for( unsigned ii = 0; ii < references.GetCount(); ii++ )
+    {
+        SCH_REFERENCE& schRef = references[ii];
+
+        if( schRef.IsSplitNeeded() )
+            schRef.Split();
+
+        wxString refNum = schRef.GetRefNumber();
+        wxString fullRef = schRef.GetRef() + refNum;
+
+        // Skip power symbols
+        if( fullRef.StartsWith( wxS( "#" ) ) )
+            continue;
+
+        // Unannotated symbols are not supported
+        if( refNum.compare( wxS( "?" ) ) == 0 )
+            continue;
+
+        if( aSyncSymMap.find( fullRef ) == aSyncSymMap.end() )
+        {
+            aCache.emplace( aSheetPath, false );
+            return false; // Some symbol is not wanted.
+        }
+
+        if( aSyncPinMap.find( fullRef ) != aSyncPinMap.end() )
+        {
+            aCache.emplace( aSheetPath, false );
+            return false; // Looking for specific pins, so can't be mapped
+        }
+    }
+
+    aCache.emplace( aSheetPath, true );
+    return true;
+}
+
+
+std::optional<std::tuple<SCH_SHEET_PATH, SCH_ITEM*, std::vector<SCH_ITEM*>>>
+findItemsFromSyncSelection( const SCHEMATIC& aSchematic,
+                            const kiapi::common::commands::SyncSelection& aSync )
+{
+    std::unordered_map<wxString, std::vector<SCH_REFERENCE>>             syncSymMap;
+    std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>> syncPinMap;
+    std::unordered_map<SCH_SHEET_PATH, bool>                             fullyWantedCache;
+
+    std::optional<wxString>                                    focusSymbol;
+    std::optional<std::pair<wxString, wxString>>               focusPin;
+    std::unordered_map<SCH_SHEET_PATH, std::vector<SCH_ITEM*>> focusItemResults;
+
+    const SCH_SHEET_LIST allSheetsList = aSchematic.Hierarchy();
+
+    // In orderedSheets, the current sheet comes first.
+    std::vector<SCH_SHEET_PATH> orderedSheets;
+    orderedSheets.reserve( allSheetsList.size() );
+    orderedSheets.push_back( aSchematic.CurrentSheet() );
+
+    for( const SCH_SHEET_PATH& sheetPath : allSheetsList )
+    {
+        if( sheetPath != aSchematic.CurrentSheet() )
+            orderedSheets.push_back( sheetPath );
+    }
+
+    const bool focusOnFirst = ( aSync.mode() == kiapi::common::commands::SSM_ITEMS_AND_NETS ) && aSync.has_focus_item();
+
+    for( const kiapi::common::commands::SelectionSpec& spec : aSync.items() )
+    {
+        switch( spec.spec_case() )
+        {
+        case kiapi::common::commands::SelectionSpec::kFootprint:
+        {
+            wxString symRef = wxString::FromUTF8( spec.footprint().reference() );
+            syncSymMap[symRef] = std::vector<SCH_REFERENCE>();
+            break;
+        }
+
+        case kiapi::common::commands::SelectionSpec::kPad:
+        {
+            wxString symRef = wxString::FromUTF8( spec.pad().reference() );
+            wxString padNum = wxString::FromUTF8( spec.pad().number() );
+            syncPinMap[symRef][padNum] = nullptr;
+            break;
+        }
+
+        default:
+            break;
+        }
+    }
+
+    if( focusOnFirst )
+    {
+        const kiapi::common::commands::SelectionSpec& focusSpec = aSync.focus_item();
+
+        if( focusSpec.has_footprint() )
+            focusSymbol = wxString::FromUTF8( focusSpec.footprint().reference() );
+        else if( focusSpec.has_pad() )
+            focusPin = std::make_pair( wxString::FromUTF8( focusSpec.pad().reference() ),
+                                       wxString::FromUTF8( focusSpec.pad().number() ) );
+    }
+
+    // Lambda definitions
+    auto flattenSyncMaps =
+            [&syncSymMap, &syncPinMap]() -> std::vector<SCH_ITEM*>
+            {
+                std::vector<SCH_ITEM*> allVec;
+
+                for( const auto& [symRef, symbols] : syncSymMap )
+                {
+                    for( const SCH_REFERENCE& ref : symbols )
+                        allVec.push_back( ref.GetSymbol() );
+                }
+
+                for( const auto& [symRef, pinMap] : syncPinMap )
+                {
+                    for( const auto& [padNum, pin] : pinMap )
+                    {
+                        if( pin )
+                            allVec.push_back( pin );
+                    }
+                }
+
+                return allVec;
+            };
+
+    auto clearSyncMaps =
+            [&syncSymMap, &syncPinMap]()
+            {
+                for( auto& [symRef, symbols] : syncSymMap )
+                    symbols.clear();
+
+                for( auto& [reference, pins] : syncPinMap )
+                {
+                    for( auto& [number, pin] : pins )
+                        pin = nullptr;
+                }
+            };
+
+    auto syncMapsValuesEmpty =
+            [&syncSymMap, &syncPinMap]() -> bool
+            {
+                for( const auto& [symRef, symbols] : syncSymMap )
+                {
+                    if( symbols.size() > 0 )
+                        return false;
+                }
+
+                for( const auto& [symRef, pins] : syncPinMap )
+                {
+                    for( const auto& [padNum, pin] : pins )
+                    {
+                        if( pin )
+                            return false;
+                    }
+                }
+
+                return true;
+            };
+
+    auto checkFocusItems =
+            [&]( const SCH_SHEET_PATH& aSheet )
+            {
+                if( focusSymbol )
+                {
+                    auto findIt = syncSymMap.find( *focusSymbol );
+
+                    if( findIt != syncSymMap.end() )
+                    {
+                        if( findIt->second.size() > 0 )
+                            focusItemResults[aSheet].push_back( findIt->second.front().GetSymbol() );
+                    }
+                }
+                else if( focusPin )
+                {
+                    auto findIt = syncPinMap.find( focusPin->first );
+
+                    if( findIt != syncPinMap.end() )
+                    {
+                        if( findIt->second[focusPin->second] )
+                            focusItemResults[aSheet].push_back( findIt->second[focusPin->second] );
+                    }
+                }
+            };
+
+    auto makeRetForSheet =
+            [&]( const SCH_SHEET_PATH& aSheet, SCH_ITEM* aFocusItem )
+            {
+                clearSyncMaps();
+
+                // Fill sync maps
+                findSymbolsAndPins( allSheetsList, aSheet, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
+                std::vector<SCH_ITEM*> itemsVector = flattenSyncMaps();
+
+                // Add fully wanted sheets to vector
+                for( SCH_ITEM* item : aSheet.LastScreen()->Items().OfType( SCH_SHEET_T ) )
+                {
+                    KIID_PATH kiidPath = aSheet.Path();
+                    kiidPath.push_back( item->m_Uuid );
+
+                    std::optional<SCH_SHEET_PATH> subsheetPath =
+                            allSheetsList.GetSheetPathByKIIDPath( kiidPath );
+
+                    if( !subsheetPath )
+                        continue;
+
+                    if( sheetContainsOnlyWantedItems( allSheetsList, *subsheetPath, syncSymMap,
+                                                      syncPinMap, fullyWantedCache ) )
+                    {
+                        itemsVector.push_back( item );
+                    }
+                }
+
+                return std::make_tuple( aSheet, aFocusItem, itemsVector );
+            };
+
+    if( focusOnFirst )
+    {
+        for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
+        {
+            clearSyncMaps();
+
+            findSymbolsAndPins( allSheetsList, sheetPath, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
+
+            checkFocusItems( sheetPath );
+        }
+
+        if( focusItemResults.size() > 0 )
+        {
+            for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
+            {
+                const std::vector<SCH_ITEM*>& items = focusItemResults[sheetPath];
+
+                if( !items.empty() )
+                    return makeRetForSheet( sheetPath, items.front() );
+            }
+        }
+    }
+    else
+    {
+        for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
+        {
+            clearSyncMaps();
+
+            findSymbolsAndPins( allSheetsList, sheetPath, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
+
+            if( !syncMapsValuesEmpty() )
+            {
+                // Something found on sheet
+                return makeRetForSheet( sheetPath, nullptr );
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+
+HANDLER_RESULT<SyncSelectionResponse> API_HANDLER_SCH::handleSyncSelection(
+        const HANDLER_CONTEXT<SyncSelection>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "SyncSelection" ) )
+        return tl::unexpected( *headless );
+
+    SyncSelectionResponse response;
+
+    const CROSS_PROBING_SETTINGS& settings = m_frame->eeconfig()->m_CrossProbing;
+
+    if( !settings.on_selection && aCtx.Request.context() != SyncSelectionContext::SSC_EXPLICIT )
+    {
+        response.set_status( CPS_DISABLED );
+        response.set_message( "implicit selection sync disabled by user" );
+        return response;
+    }
+
+    // A request carrying no items asks for nothing to be selected, so there is nothing to find.
+    if( aCtx.Request.items_size() == 0 )
+    {
+        m_frame->SetSyncingSelection( true ); // recursion guard
+
+        m_frame->GetToolManager()->GetTool<SCH_SELECTION_TOOL>()->SyncSelection( std::nullopt, nullptr, {} );
+
+        m_frame->SetSyncingSelection( false );
+
+        response.set_status( CPS_OK );
+        return response;
+    }
+
+    std::optional<std::tuple<SCH_SHEET_PATH, SCH_ITEM*, std::vector<SCH_ITEM*>>> findRet =
+                    findItemsFromSyncSelection( *schematic(), aCtx.Request );
+
+    if( findRet )
+    {
+        auto& [sheetPath, focusItem, items] = *findRet;
+
+        m_frame->SetSyncingSelection( true ); // recursion guard
+
+        m_frame->GetToolManager()->GetTool<SCH_SELECTION_TOOL>()->SyncSelection( sheetPath, focusItem, items );
+
+        m_frame->SetSyncingSelection( false );
+
+        if( m_frame->eeconfig()->m_CrossProbing.flash_selection )
+        {
+            wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): flash enabled, items=%zu",
+                        items.size() );
+
+            if( items.empty() )
+            {
+                wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): nothing to flash" );
+            }
+            else
+            {
+                std::vector<SCH_ITEM*> itemPtrs;
+                std::copy( items.begin(), items.end(), std::back_inserter( itemPtrs ) );
+
+                m_frame->StartCrossProbeFlash( itemPtrs );
+            }
+        }
+        else
+        {
+            wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): flash disabled" );
+        }
+    }
+
+    response.set_status( CPS_OK );
+    return response;
+}
+
+
+HANDLER_RESULT<HighlightNetsResponse> API_HANDLER_SCH::handleHighlightNets(
+        const HANDLER_CONTEXT<HighlightNets>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "HighlightNets" ) )
+        return tl::unexpected( *headless );
+
+    HighlightNetsResponse response;
+    CROSS_PROBING_SETTINGS& crossProbingSettings = m_frame->eeconfig()->m_CrossProbing;
+
+    if( aCtx.ClientName == StandaloneCrossProbeClientName
+        || aCtx.ClientName == KiwayClientName )
+    {
+        if( !crossProbingSettings.auto_highlight )
+        {
+            response.set_status( CPS_DISABLED );
+            return response;
+        }
+    }
+
+    wxString net;
+
+    if( aCtx.Request.net_name_size() > 0 )
+        net = wxString::FromUTF8( aCtx.Request.net_name( 0 ) );
+
+    m_frame->HandleRemoteNetHighlight( net );
+
+    response.set_status( CPS_OK );
     return response;
 }

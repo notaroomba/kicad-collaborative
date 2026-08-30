@@ -21,37 +21,36 @@
 #pragma once
 
 #include <set>
+#include <vector>
 
 #include <dialogs/dialog_fields_table.h>
 #include <fields_view_controls_grid_data_model.h>
 #include <sch_reference_list.h>
 #include <schematic.h>
-#include <fields_data_model.h>
+#include <symbol_fields_data_model.h>
 
 wxDECLARE_EVENT( EDA_EVT_CLOSE_DIALOG_SYMBOL_FIELDS_TABLE, wxCommandEvent );
 
-class SCHEMATIC_SETTINGS;
 class SCH_EDIT_FRAME;
 class JOB_EXPORT_BOM;
+class TEMPLATES;
 
 
 class DIALOG_SYMBOL_FIELDS_TABLE : public DIALOG_FIELDS_TABLE, public SCHEMATIC_LISTENER
 {
 public:
-    DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* parent, JOB_EXPORT_BOM* aJob = nullptr );
+    DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* aParent, JOB_EXPORT_BOM* aJob = nullptr );
     ~DIALOG_SYMBOL_FIELDS_TABLE() override;
 
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
 
-    void ShowHideColumn( int aCol, bool aShow );
-
 private:
-    void SetupColumnProperties( int aCol );
-    void SetupAllColumnProperties();
-    void AddField( const wxString& displayName, const wxString& aCanonicalName, bool show,
-                   bool groupBy, bool addedByUser = false );
-    void setScope( FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE aScope );
+    wxGridCellEditor* createDatasheetEditor() override;
+    wxGridCellEditor* createFootprintEditor() override;
+
+    void setScope( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::SCOPE aScope );
+    void updateSelectionItems();
 
     /**
      * Construct the rows of m_fieldsCtrl and the columns of m_dataModel from a union of all
@@ -59,87 +58,31 @@ private:
      */
     void LoadFieldNames();
 
-    void OnViewControlsCellChanged( wxGridEvent& aEvent ) override;
-    void OnAddField( wxCommandEvent& event ) override;
-    void OnRemoveField( wxCommandEvent& event ) override;
-    void OnRenameField( wxCommandEvent& event ) override;
+    void OnTableSelectionChanged( const std::set<int>& aRows ) override;
 
-    void OnColSort( wxGridEvent& aEvent );
-    void OnColMove( wxGridEvent& aEvent );
-    void OnTableRangeSelected( wxGridRangeSelectEvent& aEvent );
+    void OnScope( wxCommandEvent& aEvent ) override;
+    void OnMenu( wxCommandEvent& aEvent ) override;
 
-    void OnFilterText( wxCommandEvent& aEvent ) override;
-    void OnScope( wxCommandEvent& event ) override;
-    void OnGroupSymbolsToggled( wxCommandEvent& event ) override;
-    void OnRegroupSymbols( wxCommandEvent& aEvent ) override;
-    void OnMenu( wxCommandEvent& event ) override;
-
-    void OnTableCellClick( wxGridEvent& event ) override;
-    void OnGridMouseMove( wxMouseEvent& aEvent );
-
-    void OnSidebarToggle( wxCommandEvent& event ) override;
-    void OnExport( wxCommandEvent& aEvent ) override;
     void OnSaveAndContinue( wxCommandEvent& aEvent ) override;
     void OnCancel( wxCommandEvent& aEvent ) override;
     void OnOk( wxCommandEvent& aEvent ) override;
     void OnClose( wxCloseEvent& aEvent ) override;
-
-    void OnOutputFileBrowseClicked( wxCommandEvent& event ) override;
-    void OnPageChanged( wxNotebookEvent& event ) override;
-    void OnPreviewRefresh( wxCommandEvent& event ) override;
-    void PreviewRefresh();
-
-    std::vector<BOM_PRESET> GetUserBomPresets() const;
-    void                    SetUserBomPresets( std::vector<BOM_PRESET>& aPresetList );
-    void                    ApplyBomPreset( const wxString& aPresetName );
-    void                    ApplyBomPreset( const BOM_PRESET& aPreset );
-
-    /// Returns a formatting configuration corresponding to the values in the UI controls
-    /// of the dialog.
-    BOM_FMT_PRESET              GetCurrentBomFmtSettings();
-    std::vector<BOM_FMT_PRESET> GetUserBomFmtPresets() const;
-    void                        SetUserBomFmtPresets( std::vector<BOM_FMT_PRESET>& aPresetList );
-    void                        ApplyBomFmtPreset( const wxString& aPresetName );
-    void                        ApplyBomFmtPreset( const BOM_FMT_PRESET& aPreset );
 
     // Schematic listener event handlers
     void OnSchItemsAdded( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem ) override;
     void OnSchItemsRemoved( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem ) override;
     void OnSchItemsChanged( SCHEMATIC& aSch, std::vector<SCH_ITEM*>& aSchItem ) override;
     void OnSchSheetChanged( SCHEMATIC& aSch ) override;
+    void OnSchSelectionChanged( SCHEMATIC& aSch ) override;
 
-    void EnableSelectionEvents();
-    void DisableSelectionEvents();
+    void rebuildRowsPreservingSelection();
+    void rebuildRowsPreservingSelection( const std::set<KIID_PATH>& aSavedSelection );
 
-    /**
-     * Saves the current grid selection as a set of symbol full paths for later restoration.
-     */
-    std::set<wxString> SaveGridSelection();
-
-    /**
-     * Restores the grid selection from a previously saved set of symbol full paths.
-     */
-    void RestoreGridSelection( const std::set<wxString>& aFullPaths );
+    FIELDS_TABLE_DATA_MODEL_BASE* getDataModel() const override { return m_dataModel; }
 
 private:
     SCH_REFERENCE_LIST getSymbolReferences( SCH_SYMBOL* aSymbol, SCH_REFERENCE_LIST& aCachedRefs );
     SCH_REFERENCE_LIST getSheetSymbolReferences( SCH_SHEET& aSheet );
-
-    void syncBomPresetSelection();
-    void rebuildBomPresetsWidget();
-    void updateBomPresetSelection( const wxString& aName );
-    void onBomPresetChanged( wxCommandEvent& aEvent );
-    void doApplyBomPreset( const BOM_PRESET& aPreset );
-    void loadDefaultBomPresets();
-
-    void syncBomFmtPresetSelection();
-    void rebuildBomFmtPresetsWidget();
-    void updateBomFmtPresetSelection( const wxString& aName );
-    void onBomFmtPresetChanged( wxCommandEvent& aEvent );
-    void doApplyBomFmtPreset( const BOM_FMT_PRESET& aPreset );
-    void loadDefaultBomFmtPresets();
-
-    void savePresetsToSchematic();
 
     void onAddVariant( wxCommandEvent& aEvent ) override;
     void onDeleteVariant( wxCommandEvent& aEvent ) override;
@@ -150,34 +93,16 @@ private:
 
     void updateVariantButtonStates();
 
-    wxString getSelectedVariant() const;
-
-    wxString resolveVariant() const;
+    wxString resolveVariant() const override;
+    bool     resolveTextVar( wxString* aToken ) const override;
 
 private:
-    std::map<wxString, BOM_PRESET>     m_bomPresets;
-    BOM_PRESET*                        m_currentBomPreset;
-    BOM_PRESET*                        m_lastSelectedBomPreset;
-    wxArrayString                      m_bomPresetMRU;
-
-    std::map<wxString, BOM_FMT_PRESET> m_bomFmtPresets;
-    BOM_FMT_PRESET*                    m_currentBomFmtPreset;
-    BOM_FMT_PRESET*                    m_lastSelectedBomFmtPreset;
-    wxArrayString                      m_bomFmtPresetMRU;
-
     SCH_EDIT_FRAME*                    m_parent;
 
-    // Index in the fields list control for each MANDATORY_FIELD type
-    std::map<FIELD_T, int>             m_mandatoryFieldListIndexes;
-
-    VIEW_CONTROLS_GRID_DATA_MODEL*     m_viewControlsDataModel;
-
     SCH_REFERENCE_LIST                 m_symbolsList;
-    FIELDS_EDITOR_GRID_DATA_MODEL*     m_dataModel;
+    SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL* m_dataModel = nullptr;
 
-    SCHEMATIC_SETTINGS&                m_schSettings;
-
-    JOB_EXPORT_BOM* m_job;
+    TEMPLATES&                         m_templateFieldNames;
 
     bool m_aborted = false;
 

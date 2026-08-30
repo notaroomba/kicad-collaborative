@@ -20,11 +20,13 @@
  */
 
 #include <wx/tokenzr.h>
+#include <api/api_utils.h>
+#include <api/common/commands/cross_probe_commands.pb.h>
+#include <api/cross_probe_client.h>
 #include <fmt.h>
 #include <kiface_base.h>
 #include <kiway.h>
 #include <kiway_mail.h>
-#include <eda_dde.h>
 #include <connection_graph.h>
 #include <sch_netchain.h>
 #include <sch_sheet.h>
@@ -39,6 +41,7 @@
 #include <tools/sch_actions.h>
 #include <tools/sch_editor_control.h>
 #include <advanced_config.h>
+#include <api/api_handler_sch.h>
 
 #include <pgm_base.h>
 #include <libraries/symbol_library_adapter.h>
@@ -322,9 +325,33 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
 }
 
 
+void SCH_EDIT_FRAME::HandleRemoteNetHighlight( const wxString& aNetName )
+{
+    if( auto sg = Schematic().ConnectionGraph()->FindFirstSubgraphByName( aNetName ) )
+        m_highlightedConn = sg->GetDriverConnection()->Name();
+    else
+        m_highlightedConn = wxEmptyString;
+
+    // If the incoming net belongs to a net chain, also turn on chain
+    // highlight so the schematic mirrors what the PCB editor is doing.
+    if( CONNECTION_GRAPH* graph = Schematic().ConnectionGraph() )
+    {
+        if( SCH_NETCHAIN* chain = graph->GetNetChainForNet( m_highlightedConn ) )
+            SetHighlightedNetChain( chain->GetName() );
+        else
+            SetHighlightedNetChain( wxEmptyString );
+    }
+
+    GetToolManager()->RunAction( SCH_ACTIONS::updateNetHighlighting );
+    RefreshNetNavigator();
+
+    SetStatusText( _( "Highlighted net:" ) + wxS( " " ) + UnescapeString( aNetName ) );
+}
+
+
 void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems, bool aForce )
 {
-    std::vector<wxString> parts;
+    kiapi::common::commands::SyncSelection sync;
 
     for( EDA_ITEM* item : aItems )
     {
@@ -333,19 +360,20 @@ void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems,
         case SCH_SYMBOL_T:
         {
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
-            wxString    ref = symbol->GetField( FIELD_T::REFERENCE )->GetText();
-
-            parts.push_back( wxT( "F" ) + EscapeString( ref, CTX_IPC ) );
+            kiapi::common::commands::SelectionSpec* spec = sync.add_items();
+            spec->mutable_footprint()->set_reference( symbol->GetField( FIELD_T::REFERENCE )->GetText().ToUTF8() );
             break;
         }
 
         case SCH_SHEET_T:
         {
             // For cross probing, we need the full path of the sheet, because
-            // we search by the footprint path prefix in the PCB editor
-            wxString full_path = GetCurrentSheet().PathAsString() + item->m_Uuid.AsString();
+            // we search by the footprint path prefix in the PCB editor.
+            KIID_PATH path = GetCurrentSheet().Path();
+            path.push_back( item->m_Uuid );
 
-            parts.push_back( wxT( "S" ) + full_path );
+            kiapi::common::commands::SelectionSpec* spec = sync.add_items();
+            kiapi::common::PackSheetPath( *spec->mutable_sheet_path(), path );
             break;
         }
 
@@ -361,8 +389,9 @@ void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems,
 
             for( const wxString& pad : ExpandStackedPinNotation( effective ) )
             {
-                parts.push_back( wxT( "P" ) + EscapeString( ref, CTX_IPC ) + wxT( "/" )
-                                 + EscapeString( pad, CTX_IPC ) );
+                kiapi::common::commands::SelectionSpec* spec = sync.add_items();
+                spec->mutable_pad()->set_reference( ref.ToUTF8() );
+                spec->mutable_pad()->set_number( pad.ToUTF8() );
             }
 
             break;
@@ -373,53 +402,40 @@ void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems,
         }
     }
 
-    if( parts.empty() )
+    if( sync.items_size() == 0 )
         return;
 
-    std::string command = "$SELECT: 0,";
-
-    for( wxString part : parts )
-    {
-        command += part;
-        command += ",";
-    }
-
-    command.pop_back();
+    sync.set_context( aForce ? commands::SyncSelectionContext::SSC_EXPLICIT
+                             : commands::SyncSelectionContext::SSC_IMPLICIT );
 
     if( Kiface().IsSingle() )
     {
-        SendCommand( MSG_TO_PCB, command );
+        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, sync );
     }
     else
     {
-        // Typically ExpressMail is going to be s-expression packets, but since
-        // we have existing interpreter of the selection packet on the other
-        // side in place, we use that here.
-        Kiway().ExpressMail( FRAME_PCB_EDITOR, aForce ? MAIL_SELECTION_FORCE : MAIL_SELECTION,
-                             command, this );
+        std::string payload;
+        kiapi::common::PackKiwayApiMessage( sync, payload );
+        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, payload, this );
     }
 }
 
 
 void SCH_EDIT_FRAME::SendCrossProbeNetName( const wxString& aNetName )
 {
-    // The command is a keyword followed by a quoted string.
+    kiapi::common::commands::HighlightNets message;
 
-    std::string packet = fmt::format( "$NET: \"{}\"", TO_UTF8( aNetName ) );
+    message.add_net_name( aNetName.ToUTF8() );
 
-    if( !packet.empty() )
+    if( Kiface().IsSingle() )
     {
-        if( Kiface().IsSingle() )
-        {
-            SendCommand( MSG_TO_PCB, packet );
-        }
-        else
-        {
-            // Typically ExpressMail is going to be s-expression packets, but since
-            // we have existing interpreter of the cross probe packet on the other
-            // side in place, we use that here.
-            Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
-        }
+        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, message );
+    }
+    else
+    {
+        std::string payload;
+        kiapi::common::PackKiwayApiMessage( message, payload );
+        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, payload, this );
     }
 }
 
@@ -441,438 +457,40 @@ void SCH_EDIT_FRAME::SetCrossProbeConnection( const SCH_CONNECTION* aConnection 
     if( aConnection->Members().empty() )
         return;
 
-    auto all_members = aConnection->AllMembers();
+    kiapi::common::commands::HighlightNets message;
 
-    wxString nets = all_members[0]->Name();
+    auto all_members = aConnection->AllMembers();
 
     if( all_members.size() == 1 )
     {
-        SendCrossProbeNetName( nets );
+        SendCrossProbeNetName( all_members[0]->Name() );
         return;
     }
+
+    message.add_net_name( all_members[0]->Name().ToUTF8() );
 
     // TODO: This could be replaced by just sending the bus name once we have bus contents
     // included as part of the netlist sent from Eeschema to Pcbnew (and thus Pcbnew can
     // natively keep track of bus membership)
 
     for( size_t i = 1; i < all_members.size(); i++ )
-        nets << "," << all_members[i]->Name();
+        message.add_net_name( all_members[i]->Name().ToUTF8() );
 
-    std::string packet = fmt::format( "$NETS: \"{}\"", TO_UTF8( nets ) );
-
-    if( !packet.empty() )
+    if( Kiface().IsSingle() )
     {
-        if( Kiface().IsSingle() )
-            SendCommand( MSG_TO_PCB, packet );
-        else
-        {
-            // Typically ExpressMail is going to be s-expression packets, but since
-            // we have existing interpreter of the cross probe packet on the other
-            // side in place, we use that here.
-            Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
-        }
+        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, message );
+    }
+    else
+    {
+        std::string data = message.SerializeAsString();
+        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, data, this );
     }
 }
 
 
 void SCH_EDIT_FRAME::SendCrossProbeClearHighlight()
 {
-    std::string packet = "$CLEAR\n";
-
-    if( Kiface().IsSingle() )
-    {
-        SendCommand( MSG_TO_PCB, packet );
-    }
-    else
-    {
-        // Typically ExpressMail is going to be s-expression packets, but since
-        // we have existing interpreter of the cross probe packet on the other
-        // side in place, we use that here.
-        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, packet, this );
-    }
-}
-
-
-bool findSymbolsAndPins( const SCH_SHEET_LIST& aSchematicSheetList, const SCH_SHEET_PATH& aSheetPath,
-                         std::unordered_map<wxString, std::vector<SCH_REFERENCE>>&             aSyncSymMap,
-                         std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>>& aSyncPinMap,
-                         const wxString& aVariantName = wxEmptyString, bool aRecursive = false )
-{
-    if( aRecursive )
-    {
-        // Iterate over children
-        for( const SCH_SHEET_PATH& candidate : aSchematicSheetList )
-        {
-            if( candidate == aSheetPath || !candidate.IsContainedWithin( aSheetPath ) )
-                continue;
-
-            findSymbolsAndPins( aSchematicSheetList, candidate, aSyncSymMap, aSyncPinMap, aVariantName, aRecursive );
-        }
-    }
-
-    SCH_REFERENCE_LIST references;
-
-    aSheetPath.GetSymbols( references, SYMBOL_FILTER_NON_POWER, true );
-
-    for( unsigned ii = 0; ii < references.GetCount(); ii++ )
-    {
-        SCH_REFERENCE& schRef = references[ii];
-
-        if( schRef.IsSplitNeeded() )
-            schRef.Split();
-
-        SCH_SYMBOL* symbol = schRef.GetSymbol();
-        wxString    refNum = schRef.GetRefNumber();
-        wxString    fullRef = schRef.GetRef() + refNum;
-
-        // Skip power symbols
-        if( fullRef.StartsWith( wxS( "#" ) ) )
-            continue;
-
-        // Unannotated symbols are not supported
-        if( refNum.compare( wxS( "?" ) ) == 0 )
-            continue;
-
-        // Look for whole footprint
-        auto symMatchIt = aSyncSymMap.find( fullRef );
-
-        if( symMatchIt != aSyncSymMap.end() )
-        {
-            symMatchIt->second.emplace_back( schRef );
-
-            // Whole footprint was selected, no need to select pins
-            continue;
-        }
-
-        // Look for pins
-        auto symPinMatchIt = aSyncPinMap.find( fullRef );
-
-        if( symPinMatchIt != aSyncPinMap.end() )
-        {
-            std::unordered_map<wxString, SCH_PIN*>& pinMap = symPinMatchIt->second;
-            std::vector<SCH_PIN*>                   pinsOnSheet = symbol->GetPins( &aSheetPath );
-
-            for( SCH_PIN* pin : pinsOnSheet )
-            {
-                int pinUnit = pin->GetLibPin()->GetUnit();
-
-                if( pinUnit > 0 && pinUnit != schRef.GetUnit() )
-                    continue;
-
-                // Reverse-map the requested pad back to the owning pin (issue #2282).  A pin may
-                // resolve to several pads via the map; match the first that pcbnew asked for.
-                for( const wxString& pad :
-                     ExpandStackedPinNotation( pin->GetEffectivePadNumber( aSheetPath, aVariantName ) ) )
-                {
-                    auto pinIt = pinMap.find( pad );
-
-                    if( pinIt != pinMap.end() )
-                    {
-                        pinIt->second = pin;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-
-bool sheetContainsOnlyWantedItems(
-        const SCH_SHEET_LIST& aSchematicSheetList, const SCH_SHEET_PATH& aSheetPath,
-        std::unordered_map<wxString, std::vector<SCH_REFERENCE>>&             aSyncSymMap,
-        std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>>& aSyncPinMap,
-        std::unordered_map<SCH_SHEET_PATH, bool>&                             aCache )
-{
-    auto cacheIt = aCache.find( aSheetPath );
-
-    if( cacheIt != aCache.end() )
-        return cacheIt->second;
-
-    // Iterate over children
-    for( const SCH_SHEET_PATH& candidate : aSchematicSheetList )
-    {
-        if( candidate == aSheetPath || !candidate.IsContainedWithin( aSheetPath ) )
-            continue;
-
-        bool childRet = sheetContainsOnlyWantedItems( aSchematicSheetList, candidate, aSyncSymMap,
-                                                      aSyncPinMap, aCache );
-
-        if( !childRet )
-        {
-            aCache.emplace( aSheetPath, false );
-            return false;
-        }
-    }
-
-    SCH_REFERENCE_LIST references;
-    aSheetPath.GetSymbols( references, SYMBOL_FILTER_NON_POWER, true );
-
-    if( references.GetCount() == 0 )    // Empty sheet, obviously do not contain wanted items
-    {
-        aCache.emplace( aSheetPath, false );
-        return false;
-    }
-
-    for( unsigned ii = 0; ii < references.GetCount(); ii++ )
-    {
-        SCH_REFERENCE& schRef = references[ii];
-
-        if( schRef.IsSplitNeeded() )
-            schRef.Split();
-
-        wxString refNum = schRef.GetRefNumber();
-        wxString fullRef = schRef.GetRef() + refNum;
-
-        // Skip power symbols
-        if( fullRef.StartsWith( wxS( "#" ) ) )
-            continue;
-
-        // Unannotated symbols are not supported
-        if( refNum.compare( wxS( "?" ) ) == 0 )
-            continue;
-
-        if( aSyncSymMap.find( fullRef ) == aSyncSymMap.end() )
-        {
-            aCache.emplace( aSheetPath, false );
-            return false; // Some symbol is not wanted.
-        }
-
-        if( aSyncPinMap.find( fullRef ) != aSyncPinMap.end() )
-        {
-            aCache.emplace( aSheetPath, false );
-            return false; // Looking for specific pins, so can't be mapped
-        }
-    }
-
-    aCache.emplace( aSheetPath, true );
-    return true;
-}
-
-
-std::optional<std::tuple<SCH_SHEET_PATH, SCH_ITEM*, std::vector<SCH_ITEM*>>>
-findItemsFromSyncSelection( const SCHEMATIC& aSchematic, const std::string aSyncStr,
-                            bool aFocusOnFirst )
-{
-    wxArrayString syncArray = wxStringTokenize( aSyncStr, wxS( "," ) );
-
-    std::unordered_map<wxString, std::vector<SCH_REFERENCE>>             syncSymMap;
-    std::unordered_map<wxString, std::unordered_map<wxString, SCH_PIN*>> syncPinMap;
-    std::unordered_map<SCH_SHEET_PATH, double>                           symScores;
-    std::unordered_map<SCH_SHEET_PATH, bool>                             fullyWantedCache;
-
-    std::optional<wxString>                                    focusSymbol;
-    std::optional<std::pair<wxString, wxString>>               focusPin;
-    std::unordered_map<SCH_SHEET_PATH, std::vector<SCH_ITEM*>> focusItemResults;
-
-    const SCH_SHEET_LIST allSheetsList = aSchematic.Hierarchy();
-
-    // In orderedSheets, the current sheet comes first.
-    std::vector<SCH_SHEET_PATH> orderedSheets;
-    orderedSheets.reserve( allSheetsList.size() );
-    orderedSheets.push_back( aSchematic.CurrentSheet() );
-
-    for( const SCH_SHEET_PATH& sheetPath : allSheetsList )
-    {
-        if( sheetPath != aSchematic.CurrentSheet() )
-            orderedSheets.push_back( sheetPath );
-    }
-
-    // Init sync maps from the sync string
-    for( size_t i = 0; i < syncArray.size(); i++ )
-    {
-        wxString syncEntry = syncArray[i];
-
-        if( syncEntry.empty() )
-            continue;
-
-        wxString syncData = syncEntry.substr( 1 );
-
-        switch( syncEntry.GetChar( 0 ).GetValue() )
-        {
-        case 'F': // Select by footprint: F<Reference>
-        {
-            wxString symRef = UnescapeString( syncData );
-
-            if( aFocusOnFirst && ( i == 0 ) )
-                focusSymbol = symRef;
-
-            syncSymMap[symRef] = std::vector<SCH_REFERENCE>();
-            break;
-        }
-
-        case 'P': // Select by pad: P<Footprint reference>/<Pad number>
-        {
-            wxString symRef = UnescapeString( syncData.BeforeFirst( '/' ) );
-            wxString padNum = UnescapeString( syncData.AfterFirst( '/' ) );
-
-            if( aFocusOnFirst && ( i == 0 ) )
-                focusPin = std::make_pair( symRef, padNum );
-
-            syncPinMap[symRef][padNum] = nullptr;
-            break;
-        }
-
-        default:
-            break;
-        }
-    }
-
-    // Lambda definitions
-    auto flattenSyncMaps =
-            [&syncSymMap, &syncPinMap]() -> std::vector<SCH_ITEM*>
-            {
-                std::vector<SCH_ITEM*> allVec;
-
-                for( const auto& [symRef, symbols] : syncSymMap )
-                {
-                    for( const SCH_REFERENCE& ref : symbols )
-                        allVec.push_back( ref.GetSymbol() );
-                }
-
-                for( const auto& [symRef, pinMap] : syncPinMap )
-                {
-                    for( const auto& [padNum, pin] : pinMap )
-                    {
-                        if( pin )
-                            allVec.push_back( pin );
-                    }
-                }
-
-                return allVec;
-            };
-
-    auto clearSyncMaps =
-            [&syncSymMap, &syncPinMap]()
-            {
-                for( auto& [symRef, symbols] : syncSymMap )
-                    symbols.clear();
-
-                for( auto& [reference, pins] : syncPinMap )
-                {
-                    for( auto& [number, pin] : pins )
-                        pin = nullptr;
-                }
-            };
-
-    auto syncMapsValuesEmpty =
-            [&syncSymMap, &syncPinMap]() -> bool
-            {
-                for( const auto& [symRef, symbols] : syncSymMap )
-                {
-                    if( symbols.size() > 0 )
-                        return false;
-                }
-
-                for( const auto& [symRef, pins] : syncPinMap )
-                {
-                    for( const auto& [padNum, pin] : pins )
-                    {
-                        if( pin )
-                            return false;
-                    }
-                }
-
-                return true;
-            };
-
-    auto checkFocusItems =
-            [&]( const SCH_SHEET_PATH& aSheet )
-            {
-                if( focusSymbol )
-                {
-                    auto findIt = syncSymMap.find( *focusSymbol );
-
-                    if( findIt != syncSymMap.end() )
-                    {
-                        if( findIt->second.size() > 0 )
-                            focusItemResults[aSheet].push_back( findIt->second.front().GetSymbol() );
-                    }
-                }
-                else if( focusPin )
-                {
-                    auto findIt = syncPinMap.find( focusPin->first );
-
-                    if( findIt != syncPinMap.end() )
-                    {
-                        if( findIt->second[focusPin->second] )
-                            focusItemResults[aSheet].push_back( findIt->second[focusPin->second] );
-                    }
-                }
-            };
-
-    auto makeRetForSheet =
-            [&]( const SCH_SHEET_PATH& aSheet, SCH_ITEM* aFocusItem )
-            {
-                clearSyncMaps();
-
-                // Fill sync maps
-                findSymbolsAndPins( allSheetsList, aSheet, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
-                std::vector<SCH_ITEM*> itemsVector = flattenSyncMaps();
-
-                // Add fully wanted sheets to vector
-                for( SCH_ITEM* item : aSheet.LastScreen()->Items().OfType( SCH_SHEET_T ) )
-                {
-                    KIID_PATH kiidPath = aSheet.Path();
-                    kiidPath.push_back( item->m_Uuid );
-
-                    std::optional<SCH_SHEET_PATH> subsheetPath =
-                            allSheetsList.GetSheetPathByKIIDPath( kiidPath );
-
-                    if( !subsheetPath )
-                        continue;
-
-                    if( sheetContainsOnlyWantedItems( allSheetsList, *subsheetPath, syncSymMap,
-                                                      syncPinMap, fullyWantedCache ) )
-                    {
-                        itemsVector.push_back( item );
-                    }
-                }
-
-                return std::make_tuple( aSheet, aFocusItem, itemsVector );
-            };
-
-    if( aFocusOnFirst )
-    {
-        for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
-        {
-            clearSyncMaps();
-
-            findSymbolsAndPins( allSheetsList, sheetPath, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
-
-            checkFocusItems( sheetPath );
-        }
-
-        if( focusItemResults.size() > 0 )
-        {
-            for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
-            {
-                const std::vector<SCH_ITEM*>& items = focusItemResults[sheetPath];
-
-                if( !items.empty() )
-                    return makeRetForSheet( sheetPath, items.front() );
-            }
-        }
-    }
-    else
-    {
-        for( const SCH_SHEET_PATH& sheetPath : orderedSheets )
-        {
-            clearSyncMaps();
-
-            findSymbolsAndPins( allSheetsList, sheetPath, syncSymMap, syncPinMap, aSchematic.GetCurrentVariant() );
-
-            if( !syncMapsValuesEmpty() )
-            {
-                // Something found on sheet
-                return makeRetForSheet( sheetPath, nullptr );
-            }
-        }
-    }
-
-    return std::nullopt;
+    SendCrossProbeNetName( wxEmptyString );
 }
 
 
@@ -984,74 +602,13 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
         break;
     }
 
-    case MAIL_CROSS_PROBE:
-        ExecuteRemoteCommand( payload.c_str() );
-        break;
-
+    // Handled as API commands
     case MAIL_SELECTION:
-        if( !eeconfig()->m_CrossProbing.on_selection )
-            break;
-
-        KI_FALLTHROUGH;
-
-    case MAIL_SELECTION_FORCE:
-    {
-        // $SELECT: 0,<spec1>,<spec2>,<spec3>
-        // Try to select specified items.
-
-        // $SELECT: 1,<spec1>,<spec2>,<spec3>
-        // Select and focus on <spec1> item, select other specified items that are on the
-        // same sheet.
-
-        std::string prefix = "$SELECT: ";
-
-        std::string paramStr = payload.substr( prefix.size() );
-
-        // Empty/broken command: we need at least 2 chars for sync string.
-        if( paramStr.size() < 2 )
-            break;
-
-        std::string syncStr = paramStr.substr( 2 );
-
-        bool focusOnFirst = ( paramStr[0] == '1' );
-
-        std::optional<std::tuple<SCH_SHEET_PATH, SCH_ITEM*, std::vector<SCH_ITEM*>>> findRet =
-                findItemsFromSyncSelection( Schematic(), syncStr, focusOnFirst );
-
-        if( findRet )
-        {
-            auto& [sheetPath, focusItem, items] = *findRet;
-
-            m_syncingPcbToSchSelection = true; // recursion guard
-
-            GetToolManager()->GetTool<SCH_SELECTION_TOOL>()->SyncSelection( sheetPath, focusItem,
-                                                                            items );
-
-            m_syncingPcbToSchSelection = false;
-
-            if( eeconfig()->m_CrossProbing.flash_selection )
-            {
-                wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): flash enabled, items=%zu", items.size() );
-                if( items.empty() )
-                {
-                    wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): nothing to flash" );
-                }
-                else
-                {
-                    std::vector<SCH_ITEM*> itemPtrs;
-                    std::copy( items.begin(), items.end(), std::back_inserter( itemPtrs ) );
-
-                    StartCrossProbeFlash( itemPtrs );
-                }
-            }
-            else
-            {
-                wxLogTrace( traceCrossProbeFlash, "MAIL_SELECTION(_FORCE): flash disabled" );
-            }
-        }
+    case MAIL_CROSS_PROBE:
+        if( ApiRequest request; request.ParseFromString( payload.c_str() ) )
+            m_apiHandler->Handle( request );
 
         break;
-    }
 
     case MAIL_SCH_GET_NETLIST:
     {
@@ -1192,10 +749,7 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
         if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
         {
             SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-            wxString errors = adapter->GetLibraryLoadErrors();
-
-            if( !errors.IsEmpty() )
-                statusBar->AddWarningMessages( "load", errors );
+            statusBar->AddWarningMessages( "load", adapter->GetLibraryLoadErrors() );
         }
 
         break;

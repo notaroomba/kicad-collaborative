@@ -20,26 +20,24 @@
  */
 
 #include "render_3d_opengl.h"
+#include "../../3d_canvas/eda_3d_canvas.h"
 #include "../3d_placeholder_utils.h"
+#include <3d_viewer_id.h>
 #include <board.h>
 #include <footprint.h>
-#include <layer_range.h>
 #include <pcb_track.h>
-#include "../../3d_math.h"
 #include "convert_basic_shapes_to_polygon.h"
 #include <lset.h>
-#include <trigo.h>
 #include <project.h>
 #include <core/profile.h>        // To use GetRunningMicroSecs or another profiling utility
 #include <footprint_library_adapter.h>
-#include <eda_3d_viewer_frame.h>
 #include <project_pcb.h>
 #include <geometry/shape_poly_set.h>
+#include <thread_pool.h>
 
 
-void RENDER_3D_OPENGL::addObjectTriangles( const FILLED_CIRCLE_2D* aCircle,
-                                           TRIANGLE_DISPLAY_LIST* aDstLayer, float aZtop,
-                                           float aZbot )
+void RENDER_3D_OPENGL::addObjectTriangles( const FILLED_CIRCLE_2D*                aCircle,
+                                           std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, float aZtop, float aZbot )
 {
     const SFVEC2F& center = aCircle->GetCenter();
     const float radius = aCircle->GetRadius() * 2.0f; // Double because the render triangle
@@ -67,9 +65,8 @@ void RENDER_3D_OPENGL::addObjectTriangles( const FILLED_CIRCLE_2D* aCircle,
 }
 
 
-void RENDER_3D_OPENGL::addObjectTriangles( const POLYGON_4PT_2D* aPoly,
-                                           TRIANGLE_DISPLAY_LIST* aDstLayer,
-                                           float aZtop, float aZbot )
+void RENDER_3D_OPENGL::addObjectTriangles( const POLYGON_4PT_2D*                  aPoly,
+                                           std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, float aZtop, float aZbot )
 {
     const SFVEC2F& v0 = aPoly->GetV0();
     const SFVEC2F& v1 = aPoly->GetV1();
@@ -115,7 +112,7 @@ void RENDER_3D_OPENGL::generateRing( const SFVEC2F& aCenter, float aInnerRadius,
 }
 
 
-void RENDER_3D_OPENGL::addObjectTriangles( const RING_2D* aRing, TRIANGLE_DISPLAY_LIST* aDstLayer,
+void RENDER_3D_OPENGL::addObjectTriangles( const RING_2D* aRing, std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer,
                                            float aZtop, float aZbot )
 {
     const SFVEC2F& center = aRing->GetCenter();
@@ -149,7 +146,7 @@ void RENDER_3D_OPENGL::addObjectTriangles( const RING_2D* aRing, TRIANGLE_DISPLA
 }
 
 
-void RENDER_3D_OPENGL::addObjectTriangles( const TRIANGLE_2D* aTri, TRIANGLE_DISPLAY_LIST* aDstLayer,
+void RENDER_3D_OPENGL::addObjectTriangles( const TRIANGLE_2D* aTri, std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer,
                                            float aZtop, float aZbot )
 {
     const SFVEC2F& v1 = aTri->GetP1();
@@ -160,9 +157,8 @@ void RENDER_3D_OPENGL::addObjectTriangles( const TRIANGLE_2D* aTri, TRIANGLE_DIS
 }
 
 
-void RENDER_3D_OPENGL::addObjectTriangles( const ROUND_SEGMENT_2D* aSeg,
-                                           TRIANGLE_DISPLAY_LIST* aDstLayer,
-                                           float aZtop, float aZbot )
+void RENDER_3D_OPENGL::addObjectTriangles( const ROUND_SEGMENT_2D*                aSeg,
+                                           std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, float aZtop, float aZbot )
 {
     const SFVEC2F& leftStart   = aSeg->GetLeftStar();
     const SFVEC2F& leftEnd     = aSeg->GetLeftEnd();
@@ -245,15 +241,15 @@ void RENDER_3D_OPENGL::addObjectTriangles( const ROUND_SEGMENT_2D* aSeg,
 }
 
 
-OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateHoles( const LIST_OBJECT2D& aListHolesObject2d,
-                                                     const SHAPE_POLY_SET& aPoly, float aZtop, float aZbot,
-                                                     bool aInvertFaces, const BVH_CONTAINER_2D* aThroughHoles )
+std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> RENDER_3D_OPENGL::generateHoles( const LIST_OBJECT2D&  aListHolesObject2d,
+                                                                              const SHAPE_POLY_SET& aPoly, float aZtop,
+                                                                              float aZbot, bool aInvertFaces,
+                                                                              const BVH_CONTAINER_2D* aThroughHoles )
 {
     if( aListHolesObject2d.size() == 0 )
         return nullptr;
 
-    OPENGL_RENDER_LIST*    ret = nullptr;
-    TRIANGLE_DISPLAY_LIST* layerTriangles = new TRIANGLE_DISPLAY_LIST( aListHolesObject2d.size() * 2 );
+    auto layerTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( aListHolesObject2d.size() * 2 );
 
     // Convert the list of objects(filled circles) to triangle layer structure
     for( const OBJECT_2D* object2d : aListHolesObject2d )
@@ -282,17 +278,13 @@ OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateHoles( const LIST_OBJECT2D& aListH
                                              aThroughHoles );
     }
 
-    ret = new OPENGL_RENDER_LIST( *layerTriangles, m_circleTexture, aZbot, aZtop );
-
-    delete layerTriangles;
-
-    return ret;
+    return std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangles, m_circleTexture, aZbot, aZtop );
 }
 
 
-OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateLayerList( const BVH_CONTAINER_2D* aContainer,
-                                                         const SHAPE_POLY_SET* aPolyList, PCB_LAYER_ID aLayer,
-                                                         const BVH_CONTAINER_2D* aThroughHoles )
+std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED>
+RENDER_3D_OPENGL::generateLayerList( const BVH_CONTAINER_2D* aContainer, const SHAPE_POLY_SET* aPolyList,
+                                     PCB_LAYER_ID aLayer, const BVH_CONTAINER_2D* aThroughHoles )
 {
     if( aContainer == nullptr )
         return nullptr;
@@ -310,10 +302,10 @@ OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateLayerList( const BVH_CONTAINER_2D*
     // Calculate an estimation for the nr of triangles based on the nr of objects
     unsigned int nrTrianglesEstimation = listObject2d.size() * 8;
 
-    TRIANGLE_DISPLAY_LIST* layerTriangles = new TRIANGLE_DISPLAY_LIST( nrTrianglesEstimation );
+    auto layerTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( nrTrianglesEstimation );
 
     // store in a list so it will be latter deleted
-    m_triangles.push_back( layerTriangles );
+    appendRenderTriangleList( layerTriangles );
 
     // Load the 2D (X,Y axis) component of shapes
     for( const OBJECT_2D* object2d : listObject2d )
@@ -353,31 +345,32 @@ OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateLayerList( const BVH_CONTAINER_2D*
     }
 
     // Create display list
-    return new OPENGL_RENDER_LIST( *layerTriangles, m_circleTexture, zBot, zTop );
+    return std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangles, m_circleTexture, zBot, zTop );
 }
 
 
-OPENGL_RENDER_LIST* RENDER_3D_OPENGL::generateEmptyLayerList( PCB_LAYER_ID aLayer )
+std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> RENDER_3D_OPENGL::generateEmptyLayerList( PCB_LAYER_ID aLayer )
 {
     float layer_z_bot = 0.0f;
     float layer_z_top = 0.0f;
 
     getLayerZPos( aLayer, layer_z_top, layer_z_bot );
 
-    TRIANGLE_DISPLAY_LIST* layerTriangles = new TRIANGLE_DISPLAY_LIST( 1 );
+    auto layerTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( 1 );
 
     // store in a list so it will be latter deleted
-    m_triangles.push_back( layerTriangles );
+    appendRenderTriangleList( layerTriangles );
 
-    return new OPENGL_RENDER_LIST( *layerTriangles, m_circleTexture, layer_z_bot, layer_z_top );
+    return std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangles, m_circleTexture, layer_z_bot, layer_z_top );
 }
 
 
-OPENGL_RENDER_LIST* RENDER_3D_OPENGL::createBoard( const SHAPE_POLY_SET& aBoardPoly,
-                                                   const BVH_CONTAINER_2D* aThroughHoles )
+std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> RENDER_3D_OPENGL::createBoard( const SHAPE_POLY_SET&   aBoardPoly,
+                                                                            const BVH_CONTAINER_2D* aThroughHoles,
+                                                                            bool                    aTransparent )
 {
-    OPENGL_RENDER_LIST* dispLists = nullptr;
-    CONTAINER_2D boardContainer;
+    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> dispLists;
+    CONTAINER_2D                                 boardContainer;
 
     ConvertPolygonToTriangles( aBoardPoly, boardContainer, m_boardAdapter.BiuTo3dUnits(),
                                (const BOARD_ITEM &)*m_boardAdapter.GetBoard() );
@@ -391,8 +384,7 @@ OPENGL_RENDER_LIST* RENDER_3D_OPENGL::createBoard( const SHAPE_POLY_SET& aBoardP
         const float layer_z_top = 1.0f;
         const float layer_z_bot = 0.0f;
 
-        TRIANGLE_DISPLAY_LIST* layerTriangles =
-                new TRIANGLE_DISPLAY_LIST( listBoardObject2d.size() );
+        auto layerTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( listBoardObject2d.size() );
 
         // Convert the list of objects(triangles) to triangle layer structure
         for( const OBJECT_2D* itemOnLayer : listBoardObject2d )
@@ -416,11 +408,9 @@ OPENGL_RENDER_LIST* RENDER_3D_OPENGL::createBoard( const SHAPE_POLY_SET& aBoardP
                                                  m_boardAdapter.BiuTo3dUnits(), false,
                                                  aThroughHoles );
 
-            dispLists = new OPENGL_RENDER_LIST( *layerTriangles, m_circleTexture,
-                                                layer_z_top, layer_z_top );
+            dispLists = std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangles, m_circleTexture, layer_z_top,
+                                                                       layer_z_top, aTransparent );
         }
-
-        delete layerTriangles;
     }
 
     return dispLists;
@@ -456,7 +446,7 @@ void RENDER_3D_OPENGL::backfillPostMachine()
     };
 
     // We'll accumulate all plug geometry into a single triangle list
-    TRIANGLE_DISPLAY_LIST* plugTriangles = new TRIANGLE_DISPLAY_LIST( 1024 );
+    std::shared_ptr<TRIANGLE_DISPLAY_LIST> plugTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( 1024 );
 
     // Process vias for backdrill and post-machining plugs
     for( const PCB_TRACK* track : m_boardAdapter.GetBoard()->Tracks() )
@@ -669,16 +659,12 @@ void RENDER_3D_OPENGL::backfillPostMachine()
         || plugTriangles->m_layer_middle_contours_quads->GetVertexSize() > 0 )
     {
         // Store the triangles for later cleanup
-        m_triangles.push_back( plugTriangles );
+        appendRenderTriangleList( plugTriangles );
 
         // Create a render list for the plugs using the same Z range as the board
         // This will be scaled and drawn alongside m_boardWithHoles in renderBoardBody()
-        m_postMachinePlugs = new OPENGL_RENDER_LIST( *plugTriangles, m_circleTexture,
-                                                     boardZTop, boardZTop );
-    }
-    else
-    {
-        delete plugTriangles;
+        assignRenderPtr( m_postMachinePlugs,
+                         std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( plugTriangles, m_circleTexture, boardZTop, boardZTop ) );
     }
 }
 
@@ -740,7 +726,7 @@ void RENDER_3D_OPENGL::renderExtrudedBodies()
         if( triList.empty() )
             continue;
 
-        TRIANGLE_DISPLAY_LIST* layerTri = new TRIANGLE_DISPLAY_LIST( triList.size() );
+        std::shared_ptr<TRIANGLE_DISPLAY_LIST> layerTri = std::make_shared<TRIANGLE_DISPLAY_LIST>( triList.size() );
 
         for( const OBJECT_2D* obj : triList )
         {
@@ -750,10 +736,11 @@ void RENDER_3D_OPENGL::renderExtrudedBodies()
 
         layerTri->AddToMiddleContours( outline, zBot, zTop, biuTo3d, false );
 
-        OPENGL_RENDER_LIST* renderList = new OPENGL_RENDER_LIST( *layerTri, m_circleTexture, zTop, zBot );
+        std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> renderList =
+                std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTri, m_circleTexture, zTop, zBot );
 
-        m_triangles.push_back( layerTri );
-        m_extrudedBodyLists[fp] = renderList;
+        appendRenderTriangleList( layerTri );
+        assignRenderMap( m_extrudedBodyLists, fp, renderList );
 
         // Create metallic pin extrusions for THT pads
         // Start from opposite board side to standoff height
@@ -787,7 +774,7 @@ void RENDER_3D_OPENGL::renderExtrudedBodies()
 
                 if( !pinTriList.empty() )
                 {
-                    TRIANGLE_DISPLAY_LIST* pinLayerTri = new TRIANGLE_DISPLAY_LIST( pinTriList.size() );
+                    auto pinLayerTri = std::make_shared<TRIANGLE_DISPLAY_LIST>( pinTriList.size() );
 
                     for( const OBJECT_2D* obj : pinTriList )
                     {
@@ -798,11 +785,12 @@ void RENDER_3D_OPENGL::renderExtrudedBodies()
 
                     pinLayerTri->AddToMiddleContours( pinPoly, pinZBot, pinZTop, biuTo3d, false );
 
-                    OPENGL_RENDER_LIST* pinRenderList =
-                            new OPENGL_RENDER_LIST( *pinLayerTri, m_circleTexture, pinZTop, pinZBot );
+                    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> pinRenderList =
+                            std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( pinLayerTri, m_circleTexture, pinZTop,
+                                                                           pinZBot );
 
-                    m_triangles.push_back( pinLayerTri );
-                    m_extrudedPadLists[fp] = pinRenderList;
+                    appendRenderTriangleList( pinLayerTri );
+                    assignRenderMap( m_extrudedPadLists, fp, pinRenderList );
                 }
             }
         }
@@ -810,27 +798,69 @@ void RENDER_3D_OPENGL::renderExtrudedBodies()
 }
 
 
-void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningReporter )
+void RENDER_3D_OPENGL::reload()
 {
     m_reloadRequested = false;
+
+    // Ensure previous reload worker is finished before freeing/rebuilding render data.
+    StopBgWorker();
+
+    // Drop hover BVH before layers are destroyed; LAYER_ITEM points into those OBJECT_2Ds.
+    if( m_canvas )
+        m_canvas->InvalidateRaytracingHitTesting();
 
     freeAllLists();
     createPlaceholderModel();
 
     OBJECT_2D_STATS::Instance().ResetStats();
 
-    int64_t stats_startReloadTime = GetRunningMicroSecs();
-
-    m_boardAdapter.InitSettings( aStatusReporter, aWarningReporter );
+    m_boardAdapter.InitSettings( m_activityReporter, m_warningReporter );
 
     SFVEC3F camera_pos = m_boardAdapter.GetBoardCenter();
     m_camera.SetBoardLookAtPos( camera_pos );
 
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Load OpenGL: board" ) );
+    // Create basic Board without holes
+    assignRenderPtr( m_board, createBoard( m_boardAdapter.GetBoardPoly(), nullptr ) );
 
-    // Create Board
-    m_board = createBoard( m_boardAdapter.GetBoardPoly(), &m_boardAdapter.GetTH_IDs() );
+    startBgWorker();
+}
+
+
+void RENDER_3D_OPENGL::sendRefreshView()
+{
+    if( m_canvas )
+        wxQueueEvent( m_canvas, new wxCommandEvent( wxEVT_REFRESH_CUSTOM_COMMAND, ID_CUSTOM_EVENT_1 ) );
+}
+
+
+void RENDER_3D_OPENGL::bgWorker( std::stop_token aStop )
+{
+    int64_t stats_startReloadTime = GetRunningMicroSecs();
+
+    if( aStop.stop_requested() )
+        return;
+
+    // Ensure hover BVH is gone before destroyLayers() inside CreateLayers.
+    if( m_canvas )
+        m_canvas->InvalidateRaytracingHitTesting();
+
+    m_boardAdapter.CreateLayers( m_activityReporter, aStop );
+
+    if( aStop.stop_requested() )
+        return;
+
+    sendRefreshView();
+
+    if( m_activityReporter )
+        m_activityReporter->Report( _( "Load OpenGL: board" ) );
+
+    // Create Board with TH
+    assignRenderPtr( m_board, createBoard( m_boardAdapter.GetBoardPoly(), &m_boardAdapter.GetTH_IDs() ) );
+
+    if( aStop.stop_requested() )
+        return;
+
+    sendRefreshView();
 
     m_antiBoardPolys.RemoveAllContours();
     m_antiBoardPolys.NewOutline();
@@ -841,7 +871,11 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
     m_antiBoardPolys.Outline( 0 ).SetClosed( true );
 
     m_antiBoardPolys.BooleanSubtract( m_boardAdapter.GetBoardPoly() );
-    m_antiBoard = createBoard( m_antiBoardPolys );
+
+    assignRenderPtr( m_antiBoard, createBoard( m_antiBoardPolys, nullptr, true ) );
+
+    if( aStop.stop_requested() )
+        return;
 
     SHAPE_POLY_SET board_poly_with_holes = m_boardAdapter.GetBoardPoly().CloneDropTriangulation();
     board_poly_with_holes.BooleanSubtract( m_boardAdapter.GetTH_ODPolys() );
@@ -866,18 +900,22 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
     if( m_boardAdapter.GetTertiarydrillPolys().OutlineCount() > 0 )
         board_poly_with_holes.BooleanSubtract( m_boardAdapter.GetTertiarydrillPolys() );
 
+    if( aStop.stop_requested() )
+        return;
 
-    m_boardWithHoles = createBoard( board_poly_with_holes, &m_boardAdapter.GetTH_IDs() );
+    assignRenderPtr( m_boardWithHoles, createBoard( board_poly_with_holes, &m_boardAdapter.GetTH_IDs() ) );
 
     // Create plugs for backdrilled and post-machined areas
     backfillPostMachine();
 
-    if( m_antiBoard )
-        m_antiBoard->SetItIsTransparent( true );
+    if( aStop.stop_requested() )
+        return;
+
+    sendRefreshView();
 
     // Create Through Holes and vias
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Load OpenGL: holes and vias" ) );
+    if( m_activityReporter )
+        m_activityReporter->Report( _( "Load OpenGL: holes and vias" ) );
 
     SHAPE_POLY_SET outerPolyTHT = m_boardAdapter.GetTH_ODPolys().CloneDropTriangulation();
 
@@ -887,17 +925,16 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
 
     outerPolyTHT.BooleanIntersection( m_boardAdapter.GetBoardPoly() );
 
-    m_outerThroughHoles = generateHoles( m_boardAdapter.GetTH_ODs().GetList(), outerPolyTHT,
-                                         1.0f, 0.0f, false, &m_boardAdapter.GetTH_IDs() );
+    assignRenderPtr( m_outerThroughHoles, generateHoles( m_boardAdapter.GetTH_ODs().GetList(), outerPolyTHT, 1.0f, 0.0f,
+                                                         false, &m_boardAdapter.GetTH_IDs() ) );
 
-    m_outerViaThroughHoles = generateHoles( m_boardAdapter.GetViaTH_ODs().GetList(),
-                                            m_boardAdapter.GetViaTH_ODPolys(), 1.0f, 0.0f, false );
+    assignRenderPtr( m_outerViaThroughHoles, generateHoles( m_boardAdapter.GetViaTH_ODs().GetList(),
+                                                             m_boardAdapter.GetViaTH_ODPolys(), 1.0f, 0.0f, false ) );
 
     if( m_boardAdapter.m_Cfg->m_Render.clip_silk_on_via_annuli )
     {
-        m_outerThroughHoleRings = generateHoles( m_boardAdapter.GetViaAnnuli().GetList(),
-                                                 m_boardAdapter.GetViaAnnuliPolys(),
-                                                 1.0f, 0.0f, false );
+        assignRenderPtr( m_outerThroughHoleRings, generateHoles( m_boardAdapter.GetViaAnnuli().GetList(),
+                                                                  m_boardAdapter.GetViaAnnuliPolys(), 1.0f, 0.0f, false ) );
     }
 
     const MAP_POLY& innerMapHoles = m_boardAdapter.GetHoleIdPolysMap();
@@ -916,25 +953,30 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
         {
             getLayerZPos( layer, layer_z_top, layer_z_bot );
 
-            m_outerLayerHoles[layer] = generateHoles( map_holes.at( layer )->GetList(), *poly,
-                                                      layer_z_top, layer_z_bot, false );
+            assignRenderMap( m_outerLayerHoles, layer,
+                             generateHoles( map_holes.at( layer )->GetList(), *poly, layer_z_top, layer_z_bot, false ) );
         }
 
         for( const auto& [ layer, poly ] : innerMapHoles )
         {
             getLayerZPos( layer, layer_z_top, layer_z_bot );
 
-            m_innerLayerHoles[layer] = generateHoles( map_holes.at( layer )->GetList(), *poly,
-                                                      layer_z_top, layer_z_bot, false );
+            assignRenderMap( m_innerLayerHoles, layer,
+                             generateHoles( map_holes.at( layer )->GetList(), *poly, layer_z_top, layer_z_bot, false ) );
         }
     }
 
     // Generate vertical cylinders of vias and pads (copper)
     generateViasAndPads();
 
+    if( aStop.stop_requested() )
+        return;
+
+    sendRefreshView();
+
     // Add layers maps
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Load OpenGL: layers" ) );
+    if( m_activityReporter )
+        m_activityReporter->Report( _( "Load OpenGL: layers" ) );
 
     std::bitset<LAYER_3D_END> visibilityFlags = m_boardAdapter.GetVisibleLayers();
     const MAP_POLY&           map_poly = m_boardAdapter.GetPolyMap();
@@ -945,10 +987,10 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
         if( !m_boardAdapter.Is3dLayerEnabled( layer, visibilityFlags ) )
             continue;
 
-        if( aStatusReporter )
+        if( m_activityReporter )
         {
             msg = m_boardAdapter.GetBoard()->GetLayerName( layer );
-            aStatusReporter->Report( wxString::Format( _( "Load OpenGL layer %s" ), msg ) );
+            m_activityReporter->Report( wxString::Format( _( "Load OpenGL layer %s" ), msg ) );
         }
 
         SHAPE_POLY_SET polyListSubtracted;
@@ -1001,11 +1043,19 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
             }
         }
 
-        OPENGL_RENDER_LIST* oglList = generateLayerList( container2d, polyList, layer,
-                                                         &m_boardAdapter.GetTH_IDs() );
+        if( aStop.stop_requested() )
+            return;
+
+        std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> oglList =
+                generateLayerList( container2d, polyList, layer, &m_boardAdapter.GetTH_IDs() );
 
         if( oglList != nullptr )
-            m_layers[layer] = oglList;
+            assignRenderMap( m_layers, layer, oglList );
+
+        if( aStop.stop_requested() )
+            return;
+
+        sendRefreshView();
     }
 
     if( m_boardAdapter.m_Cfg->m_Render.DifferentiatePlatedCopper() )
@@ -1023,12 +1073,12 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
             poly.BooleanSubtract( m_boardAdapter.GetFrontCountersinkPolys() );
             poly.BooleanSubtract( m_boardAdapter.GetTertiarydrillPolys() );
 
-            m_platedPadsFront = generateLayerList( m_boardAdapter.GetPlatedPadsFront(), &poly,
-                                                   F_Cu );
+            assignRenderPtr( m_platedPadsFront,
+                             generateLayerList( m_boardAdapter.GetPlatedPadsFront(), &poly, F_Cu ) );
 
             // An entry for F_Cu must exist in m_layers or we'll never look at m_platedPadsFront
             if( m_layers.count( F_Cu ) == 0 )
-                m_layers[F_Cu] = generateEmptyLayerList( F_Cu );
+                assignRenderMap( m_layers, F_Cu, generateEmptyLayerList( F_Cu ) );
         }
 
         if( backPlatedCopperPolys )
@@ -1041,44 +1091,103 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
             poly.BooleanSubtract( m_boardAdapter.GetBackCountersinkPolys() );
             poly.BooleanSubtract( m_boardAdapter.GetBackdrillPolys() );
 
-            m_platedPadsBack = generateLayerList( m_boardAdapter.GetPlatedPadsBack(), &poly, B_Cu );
+            assignRenderPtr( m_platedPadsBack,
+                             generateLayerList( m_boardAdapter.GetPlatedPadsBack(), &poly, B_Cu ) );
 
             // An entry for B_Cu must exist in m_layers or we'll never look at m_platedPadsBack
             if( m_layers.count( B_Cu ) == 0 )
-                m_layers[B_Cu] = generateEmptyLayerList( B_Cu );
+                assignRenderMap( m_layers, B_Cu, generateEmptyLayerList( B_Cu ) );
         }
     }
 
     if( m_boardAdapter.m_Cfg->m_Render.show_off_board_silk )
     {
         if( const BVH_CONTAINER_2D* padsFront = m_boardAdapter.GetOffboardPadsFront() )
-            m_offboardPadsFront = generateLayerList( padsFront, nullptr, F_Cu );
+            assignRenderPtr( m_offboardPadsFront, generateLayerList( padsFront, nullptr, F_Cu ) );
 
         if( const BVH_CONTAINER_2D* padsBack = m_boardAdapter.GetOffboardPadsBack() )
-            m_offboardPadsBack = generateLayerList( padsBack, nullptr, B_Cu );
+            assignRenderPtr( m_offboardPadsBack, generateLayerList( padsBack, nullptr, B_Cu ) );
     }
 
-    // Load 3D models
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Loading 3D models..." ) );
+    if( aStop.stop_requested() )
+        return;
 
-    load3dModels( aStatusReporter );
+    sendRefreshView();
+
+    // Load 3D models
+    if( m_activityReporter )
+        m_activityReporter->Report( _( "Loading 3D models..." ) );
+
+    load3dModels( aStop );
 
     renderExtrudedBodies();
 
-    if( aStatusReporter )
+    if( aStop.stop_requested() )
+        return;
+
+    sendRefreshView();
+
+    // OpenGL draws the board on the GPU, but hover/picking still uses the auxiliary
+    // raytracing renderer (IntersectBoardItem). That path keeps its own BVH
+    // (m_accelerator), which is not updated by the OpenGL scene build above.
+    // Rebuild it here on the same worker thread once board layers are ready.
+    if( !aStop.stop_requested() && m_canvas )
+        m_canvas->ReloadRaytracingForHitTesting( aStop );
+
+    if( aStop.stop_requested() )
+        return;
+
+    if( m_activityReporter )
     {
         // Calculation time in seconds
         double calculation_time = (double)( GetRunningMicroSecs() - stats_startReloadTime) / 1e6;
 
-        aStatusReporter->Report( wxString::Format( _( "Reload time %.3f s" ), calculation_time ) );
+        m_activityReporter->Report( wxString::Format( _( "Load completed in %.3f s" ), calculation_time ) );
     }
 }
 
 
-void RENDER_3D_OPENGL::addTopAndBottomTriangles( TRIANGLE_DISPLAY_LIST* aDst, const SFVEC2F& v0,
-                                                 const SFVEC2F& v1, const SFVEC2F& v2, float top,
-                                                 float bot )
+void RENDER_3D_OPENGL::startBgWorker()
+{
+    wxLogTrace( m_logTrace, wxT( "RENDER_3D_OPENGL::startBgWorker" ) );
+
+    m_bgWorkerThread = std::jthread(
+            [this]( std::stop_token aStopToken )
+            {
+                // Avoid lag in main (UI) thread
+                BS::this_thread::set_os_thread_priority( BS::os_thread_priority::below_normal );
+
+                bgWorker( aStopToken );
+            } );
+}
+
+
+void RENDER_3D_OPENGL::StopBgWorker()
+{
+    wxLogTrace( m_logTrace, wxT( "RENDER_3D_OPENGL::StopBgWorker" ) );
+
+    if( m_bgWorkerThread.joinable() )
+    {
+        if( m_activityReporter )
+            m_activityReporter->Report( _( "Stopping background load..." ) );
+
+        m_bgWorkerThread.request_stop();
+        m_bgWorkerThread.join();
+    }
+}
+
+
+void RENDER_3D_OPENGL::JoinBgWorker()
+{
+    wxLogTrace( m_logTrace, wxT( "RENDER_3D_OPENGL::JoinBgWorker" ) );
+
+    if( m_bgWorkerThread.joinable() )
+        m_bgWorkerThread.join();
+}
+
+
+void RENDER_3D_OPENGL::addTopAndBottomTriangles( std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDst, const SFVEC2F& v0,
+                                                 const SFVEC2F& v1, const SFVEC2F& v2, float top, float bot )
 {
     aDst->m_layer_bot_triangles->AddTriangle( SFVEC3F( v0.x, v0.y, bot ),
                                               SFVEC3F( v1.x, v1.y, bot ),
@@ -1104,10 +1213,9 @@ void RENDER_3D_OPENGL::getLayerZPos( PCB_LAYER_ID aLayer, float& aOutZtop, float
 }
 
 
-void RENDER_3D_OPENGL::generateCylinder( const SFVEC2F& aCenter, float aInnerRadius,
-                                         float aOuterRadius, float aZtop, float aZbot,
-                                         unsigned int aNr_sides_per_circle,
-                                         TRIANGLE_DISPLAY_LIST* aDstLayer )
+void RENDER_3D_OPENGL::generateCylinder( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius, float aZtop,
+                                         float aZbot, unsigned int aNr_sides_per_circle,
+                                         std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer )
 {
     std::vector< SFVEC2F > innerContour;
     std::vector< SFVEC2F > outerContour;
@@ -1138,10 +1246,9 @@ void RENDER_3D_OPENGL::generateCylinder( const SFVEC2F& aCenter, float aInnerRad
 }
 
 
-void RENDER_3D_OPENGL::generateInvCone( const SFVEC2F& aCenter, float aInnerRadius,
-                                        float aOuterRadius, float aZtop, float aZbot,
-                                        unsigned int aNr_sides_per_circle,
-                                        TRIANGLE_DISPLAY_LIST* aDstLayer, EDA_ANGLE aAngle )
+void RENDER_3D_OPENGL::generateInvCone( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius, float aZtop,
+                                        float aZbot, unsigned int aNr_sides_per_circle,
+                                        std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, EDA_ANGLE aAngle )
 {
     // For a countersink cone:
     // - The outer contour goes from aZbot to aZtop (full height)
@@ -1201,9 +1308,8 @@ void RENDER_3D_OPENGL::generateInvCone( const SFVEC2F& aCenter, float aInnerRadi
 }
 
 
-void RENDER_3D_OPENGL::generateDisk( const SFVEC2F& aCenter, float aRadius, float aZ,
-                                     unsigned int aNr_sides_per_circle, TRIANGLE_DISPLAY_LIST* aDstLayer,
-                                     bool aTop )
+void RENDER_3D_OPENGL::generateDisk( const SFVEC2F& aCenter, float aRadius, float aZ, unsigned int aNr_sides_per_circle,
+                                     std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, bool aTop )
 {
     const float delta = 2.0f * glm::pi<float>() / (float) aNr_sides_per_circle;
 
@@ -1225,9 +1331,9 @@ void RENDER_3D_OPENGL::generateDisk( const SFVEC2F& aCenter, float aRadius, floa
 }
 
 
-void RENDER_3D_OPENGL::generateDimple( const SFVEC2F& aCenter, float aRadius, float aZ,
-                                       float aDepth, unsigned int aNr_sides_per_circle,
-                                       TRIANGLE_DISPLAY_LIST* aDstLayer, bool aTop )
+void RENDER_3D_OPENGL::generateDimple( const SFVEC2F& aCenter, float aRadius, float aZ, float aDepth,
+                                       unsigned int                           aNr_sides_per_circle,
+                                       std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, bool aTop )
 {
     const float delta = 2.0f * glm::pi<float>() / (float) aNr_sides_per_circle;
     const SFVEC3F c( aCenter.x, aCenter.y, aTop ? aZ - aDepth : aZ + aDepth );
@@ -1249,7 +1355,7 @@ void RENDER_3D_OPENGL::generateDimple( const SFVEC2F& aCenter, float aRadius, fl
 }
 
 
-bool RENDER_3D_OPENGL::appendPostMachiningGeometry( TRIANGLE_DISPLAY_LIST* aDstLayer,
+bool RENDER_3D_OPENGL::appendPostMachiningGeometry( std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer,
                                                     const SFVEC2F& aHoleCenter,
                                                     PAD_DRILL_POST_MACHINING_MODE aMode,
                                                     int aSizeIU,
@@ -1356,7 +1462,7 @@ void RENDER_3D_OPENGL::generateViaBarrels( float aPlatingThickness3d, float aUni
     unsigned int averageSegCount = m_boardAdapter.GetCircleSegmentCount( averageDiameter );
     unsigned int trianglesEstimate = averageSegCount * 8 * m_boardAdapter.GetViaCount();
 
-    TRIANGLE_DISPLAY_LIST* layerTriangleVIA = new TRIANGLE_DISPLAY_LIST( trianglesEstimate );
+    std::shared_ptr<TRIANGLE_DISPLAY_LIST> layerTriangleVIA = std::make_shared<TRIANGLE_DISPLAY_LIST>( trianglesEstimate );
 
     for( const PCB_TRACK* track : m_boardAdapter.GetBoard()->Tracks() )
     {
@@ -1514,9 +1620,8 @@ void RENDER_3D_OPENGL::generateViaBarrels( float aPlatingThickness3d, float aUni
         }
     }
 
-    m_microviaHoles = new OPENGL_RENDER_LIST( *layerTriangleVIA, 0, 0.0f, 0.0f );
-
-    delete layerTriangleVIA;
+    assignRenderPtr( m_microviaHoles,
+                     std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangleVIA, 0, 0.0f, 0.0f ) );
 }
 
 
@@ -1530,9 +1635,14 @@ void RENDER_3D_OPENGL::generatePlatedHoleShells( int aPlatingThickness, float aU
 
     SHAPE_POLY_SET tht_outer_holes_poly; // Stores the outer poly of the copper holes
     SHAPE_POLY_SET tht_inner_holes_poly; // Stores the inner poly of the copper holes
+    // Same as ***_holes_poly but for vias that are capped
+    SHAPE_POLY_SET capped_outer_vias_poly;
+    SHAPE_POLY_SET capped_inner_vias_poly;
 
     tht_outer_holes_poly.RemoveAllContours();
     tht_inner_holes_poly.RemoveAllContours();
+    capped_outer_vias_poly.RemoveAllContours();
+    capped_inner_vias_poly.RemoveAllContours();
 
     for( const PCB_TRACK* track : m_boardAdapter.GetBoard()->Tracks() )
     {
@@ -1543,12 +1653,13 @@ void RENDER_3D_OPENGL::generatePlatedHoleShells( int aPlatingThickness, float aU
 
         if( via->GetViaType() == VIATYPE::THROUGH )
         {
-            TransformCircleToPolygon( tht_outer_holes_poly, via->GetPosition(),
-                                      via->GetDrill() / 2 + aPlatingThickness,
-                                      via->GetMaxError(), ERROR_INSIDE );
+            const bool capped = via->GetCappingMode() == CAPPING_MODE::CAPPED;
 
-            TransformCircleToPolygon( tht_inner_holes_poly, via->GetPosition(), via->GetDrill() / 2,
-                                      via->GetMaxError(), ERROR_INSIDE );
+            TransformCircleToPolygon( capped ? capped_outer_vias_poly : tht_outer_holes_poly, via->GetPosition(),
+                                      via->GetDrill() / 2 + aPlatingThickness, via->GetMaxError(), ERROR_INSIDE );
+
+            TransformCircleToPolygon( capped ? capped_inner_vias_poly : tht_inner_holes_poly, via->GetPosition(),
+                                      via->GetDrill() / 2, via->GetMaxError(), ERROR_INSIDE );
         }
     }
 
@@ -1570,8 +1681,10 @@ void RENDER_3D_OPENGL::generatePlatedHoleShells( int aPlatingThickness, float aU
     }
 
     tht_outer_holes_poly.BooleanSubtract( tht_inner_holes_poly );
-
     tht_outer_holes_poly.BooleanSubtract( m_antiBoardPolys );
+
+    tht_outer_holes_poly.BooleanAdd( capped_outer_vias_poly );
+    tht_inner_holes_poly.BooleanAdd( capped_inner_vias_poly );
 
     CONTAINER_2D holesContainer;
 
@@ -1587,7 +1700,7 @@ void RENDER_3D_OPENGL::generatePlatedHoleShells( int aPlatingThickness, float aU
         getLayerZPos( F_Cu, layer_z_top, dummy );
         getLayerZPos( B_Cu, dummy, layer_z_bot );
 
-        TRIANGLE_DISPLAY_LIST* layerTriangles = new TRIANGLE_DISPLAY_LIST( holes2D.size() );
+        std::shared_ptr<TRIANGLE_DISPLAY_LIST> layerTriangles = std::make_shared<TRIANGLE_DISPLAY_LIST>( holes2D.size() );
 
         for( const OBJECT_2D* itemOnLayer : holes2D )
         {
@@ -1612,11 +1725,10 @@ void RENDER_3D_OPENGL::generatePlatedHoleShells( int aPlatingThickness, float aU
                                                  layer_z_bot, layer_z_top,
                                                  aUnitScale, false );
 
-            m_padHoles = new OPENGL_RENDER_LIST( *layerTriangles, m_circleTexture,
-                                                 layer_z_top, layer_z_top );
+            assignRenderPtr( m_padHoles,
+                             std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( layerTriangles, m_circleTexture, layer_z_top,
+                                                                            layer_z_top ) );
         }
-
-        delete layerTriangles;
     }
 }
 
@@ -1626,8 +1738,8 @@ void RENDER_3D_OPENGL::generateViaCovers( float aPlatingThickness3d, float aUnit
     if( !m_boardAdapter.GetBoard() || m_boardAdapter.GetViaCount() <= 0 )
         return;
 
-    TRIANGLE_DISPLAY_LIST* frontCover = new TRIANGLE_DISPLAY_LIST( m_boardAdapter.GetViaCount() );
-    TRIANGLE_DISPLAY_LIST* backCover = new TRIANGLE_DISPLAY_LIST( m_boardAdapter.GetViaCount() );
+    std::shared_ptr<TRIANGLE_DISPLAY_LIST> frontCover = std::make_shared<TRIANGLE_DISPLAY_LIST>( m_boardAdapter.GetViaCount() );
+    std::shared_ptr<TRIANGLE_DISPLAY_LIST> backCover = std::make_shared<TRIANGLE_DISPLAY_LIST>( m_boardAdapter.GetViaCount() );
 
     for( const PCB_TRACK* track : m_boardAdapter.GetBoard()->Tracks() )
     {
@@ -1690,13 +1802,12 @@ void RENDER_3D_OPENGL::generateViaCovers( float aPlatingThickness3d, float aUnit
     }
 
     if( frontCover->m_layer_top_triangles->GetVertexSize() > 0 )
-        m_viaFrontCover = new OPENGL_RENDER_LIST( *frontCover, 0, 0.0f, 0.0f );
+        assignRenderPtr( m_viaFrontCover,
+                         std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( frontCover, 0, 0.0f, 0.0f ) );
 
     if( backCover->m_layer_bot_triangles->GetVertexSize() > 0 )
-        m_viaBackCover = new OPENGL_RENDER_LIST( *backCover, 0, 0.0f, 0.0f );
-
-    delete frontCover;
-    delete backCover;
+        assignRenderPtr( m_viaBackCover,
+                         std::make_shared<OPENGL_RENDER_LIST_DEFERRED>( backCover, 0, 0.0f, 0.0f ) );
 }
 
 
@@ -1720,20 +1831,11 @@ void RENDER_3D_OPENGL::Load3dModelsIfNeeded()
     if( m_3dModelMap.size() > 0 )
         return;
 
-    if( wxFrame* frame = dynamic_cast<wxFrame*>( m_canvas->GetParent() ) )
-    {
-        STATUSBAR_REPORTER activityReporter( frame->GetStatusBar(),
-                                             (int) EDA_3D_VIEWER_STATUSBAR::ACTIVITY );
-        load3dModels( &activityReporter );
-    }
-    else
-    {
-        load3dModels( nullptr );
-    }
+    load3dModels();
 }
 
 
-void RENDER_3D_OPENGL::load3dModels( REPORTER* aStatusReporter )
+void RENDER_3D_OPENGL::load3dModels( std::stop_token aStop )
 {
     if( !m_boardAdapter.GetBoard() )
         return;
@@ -1781,13 +1883,12 @@ void RENDER_3D_OPENGL::load3dModels( REPORTER* aStatusReporter )
         {
             if( fp_model.m_Show && !fp_model.m_Filename.empty() )
             {
-                if( aStatusReporter )
+                if( m_activityReporter )
                 {
                     // Display the short filename of the 3D fp_model loaded:
                     // (the full name is usually too long to be displayed)
                     wxFileName fn( fp_model.m_Filename );
-                    aStatusReporter->Report( wxString::Format( _( "Loading %s..." ),
-                                                               fn.GetFullName() ) );
+                    m_activityReporter->Report( wxString::Format( _( "Loading %s..." ), fn.GetFullName() ) );
                 }
 
                 // Check if the fp_model is not present in our cache map
@@ -1806,12 +1907,17 @@ void RENDER_3D_OPENGL::load3dModels( REPORTER* aStatusReporter )
                     if( modelPtr )
                     {
                         MATERIAL_MODE materialMode = m_boardAdapter.m_Cfg->m_Render.material_mode;
-                        MODEL_3D*     model        = new MODEL_3D( *modelPtr, materialMode );
+                        auto          model = std::make_shared<MODEL_3D_DEFERRED>( *modelPtr, materialMode );
 
-                        m_3dModelMap[ fp_model.m_Filename ] = model;
+                        assignRenderMap( m_3dModelMap, fp_model.m_Filename, model );
                     }
                 }
             }
+
+            if( aStop.stop_requested() )
+                return;
         }
+
+        sendRefreshView();
     }
 }

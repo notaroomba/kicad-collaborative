@@ -44,6 +44,21 @@ KICOMMON_API void to_json( nlohmann::json& j, const BOM_FIELD& f );
 KICOMMON_API void from_json( const nlohmann::json& j, BOM_FIELD& f );
 
 
+enum class BOM_FILTER_SCOPE
+{
+    REFERENCE,
+    VISIBLE,
+    ALL
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM( BOM_FILTER_SCOPE,
+                              {
+                                      { BOM_FILTER_SCOPE::REFERENCE, "reference" },
+                                      { BOM_FILTER_SCOPE::VISIBLE, "visible" },
+                                      { BOM_FILTER_SCOPE::ALL, "all" },
+                              } )
+
+
 // A complete preset defining a BOM "View" with a list of all the fields to show,
 // group by, order, filtering settings, etc.
 struct KICOMMON_API BOM_PRESET
@@ -54,6 +69,7 @@ struct KICOMMON_API BOM_PRESET
     wxString               sortField;
     bool                   sortAsc = true;
     wxString               filterString;
+    BOM_FILTER_SCOPE       filterScope = BOM_FILTER_SCOPE::REFERENCE;
     bool                   groupSymbols = false;
     bool                   excludeDNP = false;
     bool                   includeExcludedFromBOM = false;
@@ -96,6 +112,21 @@ struct KICOMMON_API BOM_FMT_PRESET
 
     static std::vector<BOM_FMT_PRESET> BuiltInPresets();
 };
+
+
+struct KICOMMON_API FIELDS_TABLE_BOM_SETTINGS
+{
+    wxString m_BomExportFileName;
+
+    /// List of stored BOM presets
+    BOM_PRESET              m_BomSettings;
+    std::vector<BOM_PRESET> m_BomPresets;
+
+    /// List of stored BOM format presets
+    BOM_FMT_PRESET              m_BomFmtSettings;
+    std::vector<BOM_FMT_PRESET> m_BomFmtPresets;
+};
+
 
 KICOMMON_API bool operator!=( const BOM_FMT_PRESET& lhs, const BOM_FMT_PRESET& rhs );
 KICOMMON_API bool operator<( const BOM_FMT_PRESET& lhs, const BOM_FMT_PRESET& rhs );

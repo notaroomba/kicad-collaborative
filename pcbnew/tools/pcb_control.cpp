@@ -298,22 +298,18 @@ void PCB_CONTROL::unfilledZoneCheck()
 
     if( unfilledZones )
     {
-        WX_INFOBAR*      infobar = m_frame->GetInfoBar();
-        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, _( "Don't show again" ), wxEmptyString );
+        WX_INFOBAR* infobar = m_frame->GetInfoBar();
 
-        button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+        infobar->RemoveAllButtons();
+        infobar->AddLink( _( "Don't show again" ),
                 [&]( wxHyperlinkEvent& aEvent )
                 {
                     Pgm().GetCommonSettings()->m_DoNotShowAgain.zone_fill_warning = true;
                     m_frame->GetInfoBar()->Dismiss();
-                } ) );
-
-        infobar->RemoveAllButtons();
-        infobar->AddButton( button );
+                } );
 
         wxString msg;
-        msg.Printf( _( "Not all zones are filled. Use Edit > Fill All Zones (%s) "
-                       "if you wish to see all fills." ),
+        msg.Printf( _( "Not all zones are filled. Use Edit > Fill All Zones (%s) if you wish to see all fills." ),
                     KeyNameFromKeyCode( PCB_ACTIONS::zoneFillAll.GetHotKey() ) );
 
         infobar->ShowMessageFor( msg, 5000, wxICON_WARNING );
@@ -1418,12 +1414,7 @@ int PCB_CONTROL::AppendDesignBlock( const TOOL_EVENT& aEvent )
     std::unique_ptr<DESIGN_BLOCK> designBlock( designBlockPane->GetDesignBlock( selectedLibId, true, true ) );
 
     if( !designBlock )
-    {
-        wxString msg;
-        msg.Printf( _( "Could not find design block %s." ), selectedLibId.GetUniStringLibId() );
-        editFrame->ShowInfoBarError( msg, true );
         return 1;
-    }
 
     if( designBlock->GetBoardFile().IsEmpty() || !wxFileName::FileExists( designBlock->GetBoardFile() ) )
     {
@@ -1561,17 +1552,15 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
     auto applyOneGroup = [&]( PCB_GROUP* group, wxString& outErr ) -> bool
     {
         DESIGN_BLOCK_PANE*            pane = editFrame->GetDesignBlockPane();
-        std::unique_ptr<DESIGN_BLOCK> designBlock( pane->GetDesignBlock( group->GetDesignBlockLibId(), true, true ) );
+        std::unique_ptr<DESIGN_BLOCK> designBlock(
+                pane->GetDesignBlock( group->GetDesignBlockLibId(), true, false, &outErr ) );
 
         if( !designBlock )
-        {
-            outErr = _( "design block is not in the loaded libraries" );
             return false;
-        }
 
         if( designBlock->GetBoardFile().IsEmpty() )
         {
-            outErr = _( "design block has no saved PCB layout" );
+            outErr = _( "the design block has no saved board layout" );
             return false;
         }
 
@@ -1602,7 +1591,7 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
         if( !pi || AppendBoard( *pi, designBlock->GetBoardFile(), designBlock.get(), &tempCommit, true ) != 0 )
         {
             clearFlags();
-            outErr = _( "could not load the design block's layout" );
+            outErr = _( "the design block's board file could not be read" );
             return false;
         }
 
@@ -1629,7 +1618,7 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
         {
             tempCommit.Revert();
             clearFlags();
-            outErr = _( "design block contains no items to apply" );
+            outErr = _( "the design block's board layout is empty" );
             return false;
         }
 
@@ -1649,6 +1638,7 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
         }
 
         dbRA.m_zone = new ZONE( brd );
+        dbRA.m_zone->SetZoneName( group->GetDesignBlockLibId().GetUniStringLibId() );
         dbRA.m_zone->SetIsRuleArea( true );
         dbRA.m_zone->SetLayerSet( LSET::AllCuMask() );
         dbRA.m_zone->SetPlacementAreaEnabled( true );
@@ -1679,13 +1669,12 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
             tempCommit.Revert();
             clearFlags();
             delete dbRA.m_zone;
-            outErr = _( "group is empty" );
+            outErr = _( "the group has no items" );
             return false;
         }
 
         destRA.m_zone = new ZONE( brd );
-        destRA.m_zone->SetZoneName( wxString::Format( wxT( "design-block-dest-%s" ),
-                                                      group->GetDesignBlockLibId().GetUniStringLibId() ) );
+        destRA.m_zone->SetZoneName( group->GetName().IsEmpty() ? _( "(unnamed group)" ) : group->GetName() );
         destRA.m_zone->SetIsRuleArea( true );
         destRA.m_zone->SetLayerSet( LSET::AllCuMask() );
         destRA.m_zone->SetPlacementAreaEnabled( true );
@@ -1731,7 +1720,7 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
 
         if( result != 0 )
         {
-            outErr = repeatErr.IsEmpty() ? _( "layout copy failed" ) : repeatErr;
+            outErr = repeatErr.IsEmpty() ? _( "the layout could not be copied onto the group" ) : repeatErr;
             return false;
         }
 
@@ -1813,7 +1802,10 @@ int PCB_CONTROL::ApplyDesignBlockLayout( const TOOL_EVENT& aEvent )
             for( const Failure& f : failures )
             {
                 wxString name = f.group->GetName().IsEmpty() ? _( "(unnamed group)" ) : f.group->GetName();
-                html << wxString::Format( wxT( "<li><b>%s</b>: %s</li>" ), name, f.reason );
+                wxString reason = f.reason;
+
+                reason.Replace( wxT( "\n" ), wxT( "<br>" ) );
+                html << wxString::Format( wxT( "<li><b>%s</b>: %s</li>" ), name, reason );
             }
 
             html << wxT( "</ul>" );
@@ -1853,12 +1845,7 @@ int PCB_CONTROL::PlaceLinkedDesignBlock( const TOOL_EVENT& aEvent )
                                                                                 true, true ) );
 
     if( !designBlock )
-    {
-        wxString msg;
-        msg.Printf( _( "Could not find design block %s." ), group->GetDesignBlockLibId().GetUniStringLibId() );
-        m_frame->GetInfoBar()->ShowMessageFor( msg, 5000, wxICON_WARNING );
         return 1;
-    }
 
     if( designBlock->GetBoardFile().IsEmpty() )
     {
@@ -1909,12 +1896,7 @@ int PCB_CONTROL::SaveToLinkedDesignBlock( const TOOL_EVENT& aEvent )
                                                                                 true, true ) );
 
     if( !designBlock )
-    {
-        wxString msg;
-        msg.Printf( _( "Could not find design block %s." ), group->GetDesignBlockLibId().GetUniStringLibId() );
-        m_frame->GetInfoBar()->ShowMessageFor( msg, 5000, wxICON_WARNING );
         return 1;
-    }
 
     editFrame->GetDesignBlockPane()->SelectLibId( group->GetDesignBlockLibId() );
 
@@ -2252,10 +2234,11 @@ int PCB_CONTROL::AppendBoard( PCB_IO& pi, const wxString& fileName, DESIGN_BLOCK
 
     if( brd->GetCopperLayerCount() != initialCopperLayerCount )
     {
-        editFrame->GetInfoBar()->ShowMessageFor(
-                wxString::Format( _( "Board changed from %d to %d copper layers, stackup updated." ),
-                                  initialCopperLayerCount, brd->GetCopperLayerCount() ),
-                6000, wxICON_INFORMATION );
+        WX_INFOBAR* infobar = editFrame->GetInfoBar();
+        wxString    msg = wxString::Format( _( "Board changed from %d to %d copper layers, stackup updated." ),
+                                            initialCopperLayerCount,
+                                            brd->GetCopperLayerCount() );
+        infobar->ShowMessageFor( msg, 6000, wxICON_INFORMATION );
     }
 
     int ret = 0;
@@ -2659,41 +2642,41 @@ int PCB_CONTROL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
             {
                 // Show "Type: N" for homogeneous selections
                 wxString typeName = selection.Front()->GetFriendlyName();
-                msgItems.emplace_back( typeName,
-                                       wxString::Format( wxT( "%d" ), selection.GetSize() ) );
+                msgItems.emplace_back( typeName, wxString::Format( wxT( "%d" ), selection.GetSize() ) );
 
                 // For pads, show common properties
                 if( commonType == PCB_PAD_T )
                 {
-                    std::set<wxString> layers;
+                    std::set<wxString>  layers;
                     std::set<PAD_SHAPE> shapes;
                     std::set<VECTOR2I>  sizes;
 
                     for( EDA_ITEM* item : selection )
                     {
                         PAD* pad = static_cast<PAD*>( item );
+
                         layers.insert( pad->LayerMaskDescribe() );
-                        shapes.insert( pad->GetShape( PADSTACK::ALL_LAYERS ) );
-                        sizes.insert( pad->GetSize( PADSTACK::ALL_LAYERS ) );
+
+                        pad->Padstack().ForEachUniqueLayer(
+                                [&]( PCB_LAYER_ID aLayer )
+                                {
+                                    shapes.insert( pad->GetShape( aLayer ) );
+                                    sizes.insert( pad->GetSize( aLayer ) );
+                                } );
                     }
 
                     if( layers.size() == 1 )
                         msgItems.emplace_back( _( "Layer" ), *layers.begin() );
 
                     if( shapes.size() == 1 )
-                    {
-                        PAD* firstPad = static_cast<PAD*>( selection.Front() );
-                        msgItems.emplace_back( _( "Pad Shape" ),
-                                               firstPad->ShowPadShape( PADSTACK::ALL_LAYERS ) );
-                    }
+                        msgItems.emplace_back( _( "Pad Shape" ), PAD::ShowPadShape( *shapes.begin() ) );
 
                     if( sizes.size() == 1 )
                     {
-                        VECTOR2I size = *sizes.begin();
                         msgItems.emplace_back( _( "Pad Size" ),
-                            wxString::Format( wxT( "%s x %s" ),
-                                              m_frame->MessageTextFromValue( size.x ),
-                                              m_frame->MessageTextFromValue( size.y ) ) );
+                                               wxString::Format( wxT( "%s x %s" ),
+                                                                 m_frame->MessageTextFromValue( sizes.begin()->x ),
+                                                                 m_frame->MessageTextFromValue( sizes.begin()->y ) ) );
                     }
                 }
             }
@@ -2723,8 +2706,7 @@ int PCB_CONTROL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
                 }
 
                 msgItems.emplace_back( _( "Selected Items" ),
-                                       wxString::Format( wxT( "%d (%s)" ),
-                                                         selection.GetSize(), breakdown ) );
+                                       wxString::Format( wxT( "%d (%s)" ), selection.GetSize(), breakdown ) );
             }
 
             if( m_isBoardEditor )

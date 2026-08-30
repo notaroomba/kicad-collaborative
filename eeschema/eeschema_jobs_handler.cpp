@@ -84,7 +84,7 @@
 #include <netlist_exporter_pads.h>
 #include <netlist_exporter_allegro.h>
 
-#include <fields_data_model.h>
+#include <symbol_fields_data_model.h>
 
 #include <dialogs/dialog_export_netlist.h>
 #include <dialogs/dialog_plot_schematic.h>
@@ -264,14 +264,10 @@ void EESCHEMA_JOBS_HANDLER::InitRenderSettings( SCH_RENDER_SETTINGS* aRenderSett
 
     auto loadSheet = [&]( const wxString& path ) -> bool
     {
-        wxString          msg;
-        FILENAME_RESOLVER resolve;
-        resolve.SetProject( &aSch->Project() );
-        resolve.SetProgramBase( &Pgm() );
+        wxString msg;
 
-        wxString absolutePath = resolve.ResolvePath( path, wxGetCwd(), { aSch->GetEmbeddedFiles() } );
-
-        if( !DS_DATA_MODEL::GetTheInstance().LoadDrawingSheet( absolutePath, &msg ) )
+        if( !DS_DATA_MODEL::GetTheInstance().LoadFromName( path, wxGetCwd(), &aSch->Project(),
+                                                           { aSch->GetEmbeddedFiles() }, &msg ) )
         {
             m_reporter->Report( wxString::Format( _( "Error loading drawing sheet '%s'." ), path ) + wxS( "\n" ) + msg
                                         + wxS( "\n" ),
@@ -622,18 +618,21 @@ int EESCHEMA_JOBS_HANDLER::JobExportBom( JOB* aJob )
         m_reporter->Report( _( "Warning: duplicate sheet names.\n" ), RPT_SEVERITY_WARNING );
 
     // Build our data model
-    FIELDS_EDITOR_GRID_DATA_MODEL dataModel( referenceList, nullptr );
+    SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL dataModel( referenceList );
     dataModel.SetCurrentVariant( currentVariant );
 
     // Mandatory fields first
     for( FIELD_T fieldId : MANDATORY_FIELDS )
-        dataModel.AddColumn( GetCanonicalFieldName( fieldId ), GetDefaultFieldName( fieldId, DO_TRANSLATE ), false );
+        dataModel.AddColumn( GetDefaultFieldName( fieldId, UNTRANSLATED ),
+                             GetDefaultFieldName( fieldId, TRANSLATED ), false );
 
     // Generated/virtual fields (e.g. ${QUANTITY}, ${ITEM_NUMBER}) present only in the fields table
-    dataModel.AddColumn( FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE,
-                         GetGeneratedFieldDisplayName( FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE ), false );
-    dataModel.AddColumn( FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE,
-                         GetGeneratedFieldDisplayName( FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE ), false );
+    dataModel.AddColumn( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE,
+                         GetGeneratedFieldDisplayName( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::QUANTITY_VARIABLE ),
+                         false );
+    dataModel.AddColumn( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE,
+                         GetGeneratedFieldDisplayName( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL::ITEM_NUMBER_VARIABLE ),
+                         false );
 
     // Attribute fields (boolean flags on symbols)
     dataModel.AddColumn( wxS( "${DNP}" ), GetGeneratedFieldDisplayName( wxS( "${DNP}" ) ), false );
@@ -662,7 +661,8 @@ int EESCHEMA_JOBS_HANDLER::JobExportBom( JOB* aJob )
         dataModel.AddColumn( fieldName, GetGeneratedFieldDisplayName( fieldName ), true );
 
     // Add any templateFieldNames which aren't already present in the userFieldNames
-    for( const TEMPLATE_FIELDNAME& templateFieldname : sch->Settings().m_TemplateFieldNames.GetTemplateFieldNames() )
+    for( const TEMPLATE_FIELDNAME& templateFieldname :
+         sch->Project().GetProjectFile().m_TemplateFieldNames.GetResolvedTemplateFieldNames() )
     {
         if( userFieldNames.count( templateFieldname.m_Name ) == 0 )
         {
@@ -806,6 +806,7 @@ int EESCHEMA_JOBS_HANDLER::JobExportBom( JOB* aJob )
         preset.sortAsc = aBomJob->m_sortAsc;
         preset.sortField = normalizeFieldName( aBomJob->m_sortField );
         preset.filterString = aBomJob->m_filterString;
+        preset.filterScope = aBomJob->m_filterScope;
         preset.groupSymbols = aBomJob->m_groupSymbols;
         preset.excludeDNP = aBomJob->m_excludeDNP;
     }
@@ -1312,7 +1313,7 @@ int EESCHEMA_JOBS_HANDLER::JobSymUpgrade( JOB* aJob )
     }
     else
     {
-        if( !SCH_IO_MGR::ConvertLibrary( nullptr, fn.GetAbsolutePath(), upgradeJob->m_outputLibraryPath ) )
+        if( !SCH_IO_MGR::ConvertLibrary( nullptr, fn.GetAbsolutePath(), upgradeJob->m_outputLibraryPath, m_reporter ) )
         {
             m_reporter->Report( ( "Unable to convert library\n" ), RPT_SEVERITY_ERROR );
             return CLI::EXIT_CODES::ERR_UNKNOWN;

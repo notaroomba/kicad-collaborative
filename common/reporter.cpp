@@ -77,6 +77,12 @@ REPORTER& REPORTER::Report( const char* aText, SEVERITY aSeverity )
 }
 
 
+REPORTER& REPORTER::Report( const KI_ERROR& aError )
+{
+    return Report( aError.AsString(), aError.GetSeverity() );
+}
+
+
 REPORTER& WX_TEXT_CTRL_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
 {
     REPORTER::Report( aText, aSeverity );
@@ -102,7 +108,7 @@ REPORTER& SYNC_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
 {
     std::lock_guard lock( m_mutex );
 
-    m_reporter.Report( aText, aSeverity );
+    m_reporter->Report( aText, aSeverity );
     return *this;
 }
 
@@ -111,7 +117,7 @@ REPORTER& SYNC_REPORTER::ReportTail( const wxString& aText, SEVERITY aSeverity )
 {
     std::lock_guard lock( m_mutex );
 
-    m_reporter.ReportTail( aText, aSeverity );
+    m_reporter->ReportTail( aText, aSeverity );
     return *this;
 }
 
@@ -120,7 +126,7 @@ REPORTER& SYNC_REPORTER::ReportHead( const wxString& aText, SEVERITY aSeverity )
 {
     std::lock_guard lock( m_mutex );
 
-    m_reporter.ReportHead( aText, aSeverity );
+    m_reporter->ReportHead( aText, aSeverity );
     return *this;
 }
 
@@ -129,7 +135,23 @@ void SYNC_REPORTER::Clear()
 {
     std::lock_guard lock( m_mutex );
 
-    m_reporter.Clear();
+    m_reporter->Clear();
+}
+
+
+void SYNC_REPORTER::Finalize()
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter->Finalize();
+}
+
+
+void SYNC_REPORTER::SetNullReporter()
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter = &NULL_REPORTER::GetInstance();
 }
 
 
@@ -137,7 +159,7 @@ bool SYNC_REPORTER::HasMessage() const
 {
     std::lock_guard lock( m_mutex );
 
-    return m_reporter.HasMessage();
+    return m_reporter->HasMessage();
 }
 
 
@@ -145,7 +167,7 @@ bool SYNC_REPORTER::HasMessageOfSeverity( int aSeverityMask ) const
 {
     std::lock_guard lock( m_mutex );
 
-    return m_reporter.HasMessageOfSeverity( aSeverityMask );
+    return m_reporter->HasMessageOfSeverity( aSeverityMask );
 }
 
 
@@ -153,7 +175,7 @@ EDA_UNITS SYNC_REPORTER::GetUnits() const
 {
     std::lock_guard lock( m_mutex );
 
-    return m_reporter.GetUnits();
+    return m_reporter->GetUnits();
 }
 
 
@@ -368,12 +390,25 @@ REPORTER& STATUSBAR_REPORTER::Report( const wxString& aText, SEVERITY aSeverity 
 {
     REPORTER::Report( aText, aSeverity );
 
-    // KiCad status bars give most fields a fixed width, so ellipsize to fit rather than let a
-    // long message (e.g. an archive entry path) be clipped mid-character.
-    if( KISTATUSBAR* kiStatusBar = dynamic_cast<KISTATUSBAR*>( m_statusBar ) )
-        kiStatusBar->SetEllipsedTextField( aText, m_position );
-    else if( m_statusBar )
-        m_statusBar->SetStatusText( aText, m_position );
+    if( m_statusBar )
+    {
+        wxStatusBar* statusBar = m_statusBar;
+        int          position = m_position;
+
+        if( wxIsMainThread() )
+        {
+            // The message will be ellipsized automatically
+            statusBar->SetStatusText( aText, position );
+        }
+        else
+        {
+            statusBar->CallAfter(
+                    [statusBar, position, aText]()
+                    {
+                        statusBar->SetStatusText( aText, position );
+                    } );
+        }
+    }
 
     return *this;
 }
@@ -398,26 +433,37 @@ REPORTER& STATUSBAR_WARNING_REPORTER::Report( const wxString& aText, SEVERITY aS
     if( !statusBar || aText.IsEmpty() )
         return *this;
 
-    std::vector<LOAD_MESSAGE> messages;
+    std::vector<KI_ERROR> messages;
     wxStringTokenizer tokenizer( aText, wxS( "\n" ), wxTOKEN_STRTOK );
     SEVERITY severity = aSeverity == RPT_SEVERITY_UNDEFINED ? RPT_SEVERITY_WARNING : aSeverity;
 
     while( tokenizer.HasMoreTokens() )
     {
-        LOAD_MESSAGE message;
-        message.message = tokenizer.GetNextToken();
-        message.severity = severity;
+        KI_ERROR message;
+        message.SetTitle( tokenizer.GetNextToken() );
+        message.SetSeverity( severity );
         messages.emplace_back( std::move( message ) );
     }
 
     if( messages.empty() )
     {
-        LOAD_MESSAGE message;
-        message.message = aText;
-        message.severity = severity;
+        KI_ERROR message;
+        message.SetTitle( aText );
+        message.SetSeverity( severity );
         messages.emplace_back( std::move( message ) );
     }
 
     statusBar->AddWarningMessages( m_impl->m_source, messages );
+    return *this;
+}
+
+
+REPORTER& STATUSBAR_WARNING_REPORTER::Report( const KI_ERROR& aError )
+{
+    REPORTER::Report( aError.AsString(), aError.GetSeverity() );
+
+    if( KISTATUSBAR* statusBar = m_impl ? m_impl->GetStatusBar() : nullptr )
+        statusBar->AddWarningMessages( m_impl->m_source, { aError } );
+
     return *this;
 }

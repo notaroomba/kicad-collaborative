@@ -99,14 +99,34 @@ public:
         {
             PCB_TABLE* table = new PCB_TABLE( &m_board, pcbIUScale.mmToIU( 0.1 ) );
 
-            table->SetColCount( 2 );
+            const int colWidths[2] = { pcbIUScale.mmToIU( 20.0 ), pcbIUScale.mmToIU( 30.0 ) };
+            const int rowHeights[2] = { pcbIUScale.mmToIU( 5.0 ), pcbIUScale.mmToIU( 7.0 ) };
 
-            for( int ii = 0; ii < 4; ++ii )
+            table->SetColCount( 2 );
+            table->SetColWidth( 0, colWidths[0] );
+            table->SetColWidth( 1, colWidths[1] );
+            table->SetRowHeight( 0, rowHeights[0] );
+            table->SetRowHeight( 1, rowHeights[1] );
+
+            int y = 0;
+
+            for( int row = 0; row < 2; ++row )
             {
-                PCB_TABLECELL* cell = new PCB_TABLECELL( &m_board );
-                cell->SetRectangleHeight( 0 );
-                cell->SetRectangleWidth( 0 );
-                table->InsertCell( ii, cell );
+                int x = 0;
+
+                for( int col = 0; col < 2; ++col )
+                {
+                    PCB_TABLECELL* cell = new PCB_TABLECELL( &m_board );
+                    cell->SetRectangleHeight( 0 );
+                    cell->SetRectangleWidth( 0 );
+                    cell->SetStart( VECTOR2I( x, y ) );
+                    cell->SetEnd( VECTOR2I( x + colWidths[col], y + rowHeights[row] ) );
+                    table->AddCell( cell );
+
+                    x += colWidths[col];
+                }
+
+                y += rowHeights[row];
             }
 
             return table;
@@ -346,6 +366,223 @@ BOOST_AUTO_TEST_CASE( FlipUpDown )
 }
 
 
+// Two columns and two rows, built at the origin and then turned. Each cell carries its grid
+// position as text so a test can say where it ended up.
+static PCB_TABLE* makeTable( BOARD& aBoard, const int aColWidths[2], const int aRowHeights[2], double aDegrees )
+{
+    PCB_TABLE* table = new PCB_TABLE( &aBoard, pcbIUScale.mmToIU( 0.1 ) );
+
+    table->SetLayer( F_SilkS );
+    table->SetColCount( 2 );
+
+    for( int ii = 0; ii < 2; ++ii )
+    {
+        table->SetColWidth( ii, aColWidths[ii] );
+        table->SetRowHeight( ii, aRowHeights[ii] );
+    }
+
+    int y = 0;
+
+    for( int row = 0; row < 2; ++row )
+    {
+        int x = 0;
+
+        for( int col = 0; col < 2; ++col )
+        {
+            PCB_TABLECELL* cell = new PCB_TABLECELL( &aBoard );
+            cell->SetStart( VECTOR2I( x, y ) );
+            cell->SetEnd( VECTOR2I( x + aColWidths[col], y + aRowHeights[row] ) );
+            cell->SetText( wxString::Format( wxT( "%c%d" ), 'A' + col, row + 1 ) );
+            table->AddCell( cell );
+
+            x += aColWidths[col];
+        }
+
+        y += aRowHeights[row];
+    }
+
+    table->Normalize();
+    aBoard.Add( table );
+
+    if( aDegrees != 0.0 )
+        table->Rotate( table->GetPosition(), EDA_ANGLE( aDegrees, DEGREES_T ) );
+
+    return table;
+}
+
+
+// Flipping a cell turns its text 180 degrees, and the grid is laid out in the frame the cells
+// read in. A top to bottom flip that renumbers its rows as well undoes that turn and swaps the
+// columns instead.
+BOOST_AUTO_TEST_CASE( TableFlipSwapsTheChosenAxis )
+{
+    const int cols[2] = { pcbIUScale.mmToIU( 10.0 ), pcbIUScale.mmToIU( 10.0 ) };
+    const int rows[2] = { pcbIUScale.mmToIU( 4.0 ), pcbIUScale.mmToIU( 4.0 ) };
+
+    // Which cell sits in a corner, found by where it ended up rather than by its index.
+    auto textAt = []( PCB_TABLE* aTable, bool aRight, bool aBottom )
+    {
+        BOX2I box;
+
+        for( PCB_TABLECELL* cell : aTable->GetCells() )
+        {
+            box.Merge( cell->GetStart() );
+            box.Merge( cell->GetEnd() );
+        }
+
+        VECTOR2I mid = box.GetCenter();
+
+        for( PCB_TABLECELL* cell : aTable->GetCells() )
+        {
+            VECTOR2I centre = ( cell->GetStart() + cell->GetEnd() ) / 2;
+
+            if( ( centre.x > mid.x ) == aRight && ( centre.y > mid.y ) == aBottom )
+                return cell->GetText();
+        }
+
+        return wxString();
+    };
+
+    BOOST_TEST_CONTEXT( "left/right" )
+    {
+        PCB_TABLE* table = makeTable( m_board, cols, rows, 0.0 );
+
+        table->Flip( VECTOR2I( 0, 0 ), FLIP_DIRECTION::LEFT_RIGHT );
+
+        BOOST_CHECK_EQUAL( textAt( table, false, false ), wxString( wxT( "B1" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, true, false ), wxString( wxT( "A1" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, false, true ), wxString( wxT( "B2" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, true, true ), wxString( wxT( "A2" ) ) );
+    }
+
+    BOOST_TEST_CONTEXT( "top/bottom" )
+    {
+        PCB_TABLE* table = makeTable( m_board, cols, rows, 0.0 );
+
+        table->Flip( VECTOR2I( 0, 0 ), FLIP_DIRECTION::TOP_BOTTOM );
+
+        BOOST_CHECK_EQUAL( textAt( table, false, false ), wxString( wxT( "A2" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, true, false ), wxString( wxT( "B2" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, false, true ), wxString( wxT( "A1" ) ) );
+        BOOST_CHECK_EQUAL( textAt( table, true, true ), wxString( wxT( "B1" ) ) );
+    }
+}
+
+
+// The table's box is used for hit testing and for working out where a flip should land it, so
+// it has to cover every cell and not just the two on one diagonal.
+BOOST_AUTO_TEST_CASE( TableBoundingBoxCoversEveryCell )
+{
+    const int cols[2] = { pcbIUScale.mmToIU( 10.0 ), pcbIUScale.mmToIU( 30.0 ) };
+    const int rows[2] = { pcbIUScale.mmToIU( 4.0 ), pcbIUScale.mmToIU( 12.0 ) };
+
+    for( double degrees : { 0.0, 30.0, 45.0, 90.0 } )
+    {
+        BOOST_TEST_CONTEXT( "turned " << degrees )
+        {
+            PCB_TABLE* table = makeTable( m_board, cols, rows, degrees );
+            BOX2I      box = table->GetBoundingBox();
+
+            for( PCB_TABLECELL* cell : table->GetCells() )
+            {
+                BOOST_CHECK_MESSAGE(
+                        box.Contains( cell->GetBoundingBox() ),
+                        "cell ( " << cell->GetBoundingBox().GetLeft() << ", " << cell->GetBoundingBox().GetTop()
+                                  << " ) to ( " << cell->GetBoundingBox().GetRight() << ", "
+                                  << cell->GetBoundingBox().GetBottom() << " ) sticks out of the table box ( "
+                                  << box.GetLeft() << ", " << box.GetTop() << " ) to ( " << box.GetRight() << ", "
+                                  << box.GetBottom() << " )" );
+            }
+        }
+    }
+}
+
+
+// A turned text box keeps its rectangle square to the board and carries the turn in its text
+// angle. Its box is what clicking and selection are judged against, so it has to cover the
+// corners the box is actually drawn with.
+BOOST_AUTO_TEST_CASE( TextBoxBoundingBoxFollowsItsRotation )
+{
+    for( double degrees : { 0.0, 30.0, 45.0, 90.0 } )
+    {
+        BOOST_TEST_CONTEXT( "turned " << degrees )
+        {
+            PCB_TEXTBOX* box = new PCB_TEXTBOX( &m_board );
+
+            box->SetLayer( F_SilkS );
+            box->SetStart( VECTOR2I( 0, 0 ) );
+            box->SetEnd( VECTOR2I( pcbIUScale.mmToIU( 40.0 ), pcbIUScale.mmToIU( 8.0 ) ) );
+            box->SetTextAngle( EDA_ANGLE( degrees, DEGREES_T ) );
+            m_board.Add( box );
+
+            BOX2I bbox = box->GetBoundingBox();
+
+            for( const VECTOR2I& corner : box->GetCorners() )
+            {
+                BOOST_CHECK_MESSAGE( bbox.Contains( corner ),
+                                     "corner ( " << corner.x << ", " << corner.y << " ) is outside the box ( "
+                                                 << bbox.GetLeft() << ", " << bbox.GetTop() << " ) to ( "
+                                                 << bbox.GetRight() << ", " << bbox.GetBottom() << " )" );
+            }
+        }
+    }
+}
+
+
+// A flip mirrors an item about a board axis, which tilts it the way PCB_TEXTBOX::Mirror already
+// states: 180 minus the angle across a vertical axis, minus the angle across a horizontal one.
+// A table has to follow that too. Reading direction is free, because a table at one angle is the
+// same picture as one at that angle plus 180 with its cells reordered, so compare the lines.
+BOOST_AUTO_TEST_CASE( TableFlipTiltsTheWayEverythingElseDoes )
+{
+    const int cols[2] = { pcbIUScale.mmToIU( 10.0 ), pcbIUScale.mmToIU( 30.0 ) };
+    const int rows[2] = { pcbIUScale.mmToIU( 4.0 ), pcbIUScale.mmToIU( 12.0 ) };
+
+    const VECTOR2I point( pcbIUScale.mmToIU( 100.0 ), pcbIUScale.mmToIU( 50.0 ) );
+
+    auto sameLine = []( const EDA_ANGLE& aFirst, const EDA_ANGLE& aSecond )
+    {
+        double apart = std::fmod( std::abs( aFirst.AsDegrees() - aSecond.AsDegrees() ), 180.0 );
+        return apart < 0.01 || apart > 179.99;
+    };
+
+    for( double degrees : { 30.0, 45.0 } )
+    {
+        for( FLIP_DIRECTION dir : { FLIP_DIRECTION::LEFT_RIGHT, FLIP_DIRECTION::TOP_BOTTOM } )
+        {
+            BOOST_TEST_CONTEXT( "turned " << degrees
+                                          << ( dir == FLIP_DIRECTION::LEFT_RIGHT ? " left/right" : " top/bottom" ) )
+            {
+                PCB_TABLE* table = makeTable( m_board, cols, rows, degrees );
+                EDA_ANGLE  tilt( degrees, DEGREES_T );
+                EDA_ANGLE  reflected = dir == FLIP_DIRECTION::LEFT_RIGHT ? ANGLE_180 - tilt : -tilt;
+
+                std::vector<VECTOR2I> before;
+
+                for( PCB_TABLECELL* cell : table->GetCells() )
+                    before.push_back( cell->GetStart() );
+
+                table->Flip( point, dir );
+
+                BOOST_CHECK_MESSAGE( sameLine( table->GetCell( 0, 0 )->GetTextAngle(), reflected ),
+                                     "table came back at " << table->GetCell( 0, 0 )->GetTextAngle().AsDegrees()
+                                                           << " degrees, expected " << reflected.AsDegrees() );
+
+                // Flipping back about the same point has to undo it exactly.
+                table->Flip( point, dir );
+
+                for( size_t ii = 0; ii < before.size(); ++ii )
+                {
+                    BOOST_CHECK_MESSAGE( ( table->GetCells()[ii]->GetStart() - before[ii] ).EuclideanNorm()
+                                                 <= pcbIUScale.mmToIU( 0.001 ),
+                                         "cell " << ii << " did not come back" );
+                }
+            }
+        }
+    }
+}
+
+
 /**
  * Regression test for issue #23234:
  * Changing padstack mode to Custom on a flipped footprint's pad and pressing OK caused an
@@ -361,6 +598,7 @@ BOOST_AUTO_TEST_CASE( Issue23234_CustomPadstackFlip )
 
     // Set up a circular SMD pad on F_Cu (NORMAL padstack mode)
     pad.SetAttribute( PAD_ATTRIB::SMD );
+    pad.SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad.SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
     pad.SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 500000, 500000 ) );
     LSET smd_layers;
@@ -412,7 +650,7 @@ BOOST_AUTO_TEST_CASE( Issue24696_SwapItemDataKeepsGroupMembership )
 
 // Partial hardening for the BOARD::RecordDRCExclusions crash family (Sentry KICAD-YT2,
 // KICAD-YTA).  A PCB_MARKER may legitimately carry a null RC_ITEM (its ctor and dtor both guard
-// the member), but SerializeToString() dereferences it unconditionally, so recording exclusions
+// the member), but DRC_EXCLUSION::FromMarker() dereferences it unconditionally, so recording exclusions
 // during a project save or window close faulted on such a marker.
 BOOST_AUTO_TEST_CASE( RecordDRCExclusionsSkipsMarkerWithoutRCItem )
 {

@@ -89,17 +89,15 @@ void SCH_EDIT_FRAME::LoadDrawingSheet()
     // If empty, or not existing, the default drawing sheet is loaded.
 
     SCHEMATIC_SETTINGS& settings = Schematic().Settings();
-    FILENAME_RESOLVER resolver;
-    resolver.SetProject( &Prj() );
-    resolver.SetProgramBase( &Pgm() );
 
-    wxString filename = resolver.ResolvePath( settings.m_SchDrawingSheetFileName,
-                                              Prj().GetProjectPath(),
-                                              { Schematic().GetEmbeddedFiles() } );
     wxString msg;
 
-    if( !DS_DATA_MODEL::GetTheInstance().LoadDrawingSheet( filename, &msg ) )
+    if( !DS_DATA_MODEL::GetTheInstance().LoadFromName( settings.m_SchDrawingSheetFileName,
+                                                       Prj().GetProjectPath(), &Prj(),
+                                                       { Schematic().GetEmbeddedFiles() }, &msg ) )
+    {
         ShowInfoBarError( msg, true );
+    }
 }
 
 

@@ -22,6 +22,7 @@
 
 #include <initializer_list>
 
+#include <kicommon.h>
 #include <wx/string.h>
 
 class OUTPUTFORMATTER;
@@ -63,9 +64,12 @@ enum class FIELD_T : int
 #define SHEET_MANDATORY_FIELDS { FIELD_T::SHEET_NAME,        \
                                  FIELD_T::SHEET_FILENAME }
 
-// A helper to call GetDefaultFieldName with or without translation.
 // Translation should be used only to display field names in dialogs
-#define DO_TRANSLATE true
+enum TRANSLATION
+{
+    UNTRANSLATED,
+    TRANSLATED
+};
 
 
 /**
@@ -73,17 +77,10 @@ enum class FIELD_T : int
  *
  * These field names are not modifiable but template field names are.
  *
- * @param aTranslateForHI If true, return the translated field name,
- * else get the canonical name (defualt). Translation is intended only for dialogs
+ * @param aTranslation determines whether the field name is translated for display in dialogs.
  */
-wxString GetDefaultFieldName( FIELD_T aFieldId, bool aTranslateForHI );
-wxString GetUserFieldName( int aFieldNdx, bool aTranslateForHI );
-
-
-inline wxString GetCanonicalFieldName( FIELD_T aFieldType )
-{
-    return GetDefaultFieldName( aFieldType, !DO_TRANSLATE );
-}
+KICOMMON_API wxString GetDefaultFieldName( FIELD_T aFieldId, TRANSLATION aTranslation );
+KICOMMON_API wxString GetUserFieldName( int aFieldNdx, TRANSLATION aTranslation );
 
 
 /**
@@ -91,22 +88,23 @@ inline wxString GetCanonicalFieldName( FIELD_T aFieldType )
  * name uniqueness within a given parent (symbol, sheet, or global label).
  *
  * Mandatory field names in the supplied set are matched case-insensitively because the
- * s-expression parser folds case variants onto the canonical mandatory field on load.
+ * s-expression parser folds case variants onto the mandatory field with the matching
+ * untranslated name on load.
  * User-defined field names retain their original case in storage, so two user fields that
  * differ only in case (e.g. "Manufacturer" vs "MANUFACTURER") are considered distinct.
  *
  * Pass MANDATORY_FIELDS for symbol contexts, SHEET_MANDATORY_FIELDS for sheets, or
- * GLOBALLABEL_MANDATORY_FIELDS for global labels.  Each parent has its own canonical
- * folding domain in the parser.
+ * GLOBALLABEL_MANDATORY_FIELDS for global labels.  Each parent has its own set of untranslated
+ * mandatory field names used for case-insensitive matching in the parser.
  */
-bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs,
-                              std::initializer_list<FIELD_T> aMandatoryFields );
+KICOMMON_API bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs,
+                                           std::initializer_list<FIELD_T> aMandatoryFields );
 
 
 /**
  * Convenience overload defaulting to symbol mandatory fields.
  */
-bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs );
+KICOMMON_API bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs );
 
 
 /**
@@ -114,7 +112,7 @@ bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs );
  *
  * Template fieldnames are wanted field names for use in the symbol property editors.
  */
-struct TEMPLATE_FIELDNAME
+struct KICOMMON_API TEMPLATE_FIELDNAME
 {
     TEMPLATE_FIELDNAME() :
             m_Visible( false ),
@@ -161,9 +159,15 @@ struct TEMPLATE_FIELDNAME
 };
 
 
-class TEMPLATES
+class KICOMMON_API TEMPLATES
 {
 public:
+    enum class SCOPE
+    {
+        PROJECT,
+        GLOBAL
+    };
+
     TEMPLATES() :
             m_resolvedDirty( true )
     { }
@@ -171,7 +175,7 @@ public:
     /**
      * Serialize this object out as text into the given #OUTPUTFORMATTER.
      */
-    void Format( OUTPUTFORMATTER* out, bool aGlobal ) const ;
+    void Format( OUTPUTFORMATTER* out, SCOPE aScope ) const;
 
     /**
      * Insert or append a wanted symbol field name into the field names template.
@@ -181,29 +185,29 @@ public:
      *
      * @param aFieldName is a full description of the wanted field, and it must not match
      *                   any of the default field names.
-     * @param aGlobal indicates whether to add to the global or project table.
+     * @param aScope indicates whether to add to the global or project table.
      */
-    void AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, bool aGlobal );
+    void AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, SCOPE aScope );
 
     /**
      * Add a serialized list of template field names.
      */
-    void AddTemplateFieldNames( const wxString& aSerializedFieldNames );
+    void AddTemplateFieldNames( const wxString& aSerializedFieldNames, SCOPE aScope );
 
     /**
-     * Delete the entire contents.
+     * Delete the contents of a scope.
      */
-    void DeleteAllFieldNameTemplates( bool aGlobal );
+    void DeleteFieldNameTemplates( SCOPE aScope );
 
     /**
-     * Return a template field name list for read only access.
+     * Return the resolved project and global template field name list for read only access.
      */
-    const std::vector<TEMPLATE_FIELDNAME>& GetTemplateFieldNames();
+    const std::vector<TEMPLATE_FIELDNAME>& GetResolvedTemplateFieldNames();
 
     /**
      * Return a specific list (global or project) for read only access.
      */
-    const std::vector<TEMPLATE_FIELDNAME>& GetTemplateFieldNames( bool aGlobal );
+    const std::vector<TEMPLATE_FIELDNAME>& GetTemplateFieldNames( SCOPE aScope );
 
     /**
      * Search for \a aName in the template field name list.
@@ -216,7 +220,7 @@ public:
 protected:
     void resolveTemplates();
 
-    void parse( TEMPLATE_FIELDNAMES_LEXER* in, bool aGlobal );
+    void parse( TEMPLATE_FIELDNAMES_LEXER* in, SCOPE aScope );
 
 private:
     std::vector<TEMPLATE_FIELDNAME> m_globals;

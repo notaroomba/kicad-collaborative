@@ -234,7 +234,9 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
                             .AddAction( PCB_ACTIONS::tuneDiffPair )
                             .AddAction( PCB_ACTIONS::tuneSkew ) )
               .AppendAction( PCB_ACTIONS::showDiffPhaseSkew )
-              .AppendAction( PCB_ACTIONS::drawVia )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Via tools" ) )
+                            .AddAction( PCB_ACTIONS::drawVia )
+                            .AddAction( PCB_ACTIONS::drawViaStitchArea ) )
               .AppendAction( PCB_ACTIONS::drawZone )
               .WithContextMenu(
                   []( TOOL_MANAGER* aMgr ) -> std::unique_ptr<ACTION_MENU>
@@ -373,7 +375,8 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
         else
             config.AppendAction( PCB_ACTIONS::importNetlist );
 
-        config.AppendAction( PCB_ACTIONS::runDRC );
+        config.AppendAction( PCB_ACTIONS::runDRC )
+              .AppendAction( PCB_ACTIONS::editFootprintFields );
 
         config.AppendSeparator();
         config.AppendAction( PCB_ACTIONS::showEeschema );
@@ -536,6 +539,7 @@ void PCB_EDIT_FRAME::UpdateVariantSelectionCtrl()
 void PCB_EDIT_FRAME::SetCurrentVariant( const wxString& aVariantName )
 {
     GetBoard()->SetCurrentVariant( aVariantName );
+    UpdateVariantSelectionCtrl();
 
     if( PCB_DRAW_PANEL_GAL* canvas = dynamic_cast<PCB_DRAW_PANEL_GAL*>( GetCanvas() ) )
     {

@@ -788,6 +788,27 @@ wxString SCH_PIN::GetEffectivePadNumber( const SCH_SHEET_PATH& aSheet, const wxS
         return pinNumber;
     }
 
+    // A stacked pin like [A1,A12] names several pads. Match on those.
+    if( aFootprintPadNumbers )
+    {
+        bool                  valid = false;
+        std::vector<wxString> logicalNumbers = ExpandStackedPinNotation( pinNumber, &valid );
+
+        if( valid )
+        {
+            for( const wxString& logicalNumber : logicalNumbers )
+            {
+                if( aFootprintPadNumbers->count( logicalNumber ) )
+                {
+                    if( aState )
+                        *aState = PAD_RESOLUTION::IDENTITY;
+
+                    return pinNumber;
+                }
+            }
+        }
+    }
+
     // 3. UNMAPPED, or assumed identity when no footprint is available (the painter path).
     if( aState )
         *aState = aFootprintPadNumbers ? PAD_RESOLUTION::UNMAPPED : PAD_RESOLUTION::IDENTITY;
@@ -1954,8 +1975,7 @@ int SCH_PIN::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
 {
     // Ignore the UUID here
     // And the position, which we'll do after the number.
-    int retv = SCH_ITEM::compare( aOther, aCompareFlags | SCH_ITEM::COMPARE_FLAGS::EQUALITY
-                                                  | SCH_ITEM::COMPARE_FLAGS::SKIP_TST_POS );
+    int retv = SCH_ITEM::compare( aOther, aCompareFlags & ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::POSITION ) );
 
     if( retv )
         return retv;

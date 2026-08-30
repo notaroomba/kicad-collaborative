@@ -29,7 +29,7 @@ BOOST_AUTO_TEST_SUITE( TemplateFieldNames )
 
 /**
  * Mandatory field names collide with any case variant (the s-expression parser folds case
- * variants of mandatory fields onto the canonical mandatory field).
+ * variants onto the mandatory field with the matching untranslated name).
  */
 BOOST_AUTO_TEST_CASE( MandatoryFieldsAreCaseInsensitive )
 {
@@ -77,7 +77,7 @@ BOOST_AUTO_TEST_CASE( DifferentUserNamesDoNotMatch )
 
 
 /**
- * A user field whose name only superficially resembles a mandatory canonical name is not
+ * A user field whose name only superficially resembles an untranslated mandatory name is not
  * treated as a duplicate of an unrelated user field.
  */
 BOOST_AUTO_TEST_CASE( MandatoryNameDoesNotPullInUnrelatedNames )
@@ -136,7 +136,7 @@ BOOST_AUTO_TEST_CASE( EmptyMandatorySetIsAlwaysCaseSensitive )
 
 static bool hasTemplate( TEMPLATES& aTemplates, const wxString& aName )
 {
-    for( const TEMPLATE_FIELDNAME& tfn : aTemplates.GetTemplateFieldNames() )
+    for( const TEMPLATE_FIELDNAME& tfn : aTemplates.GetResolvedTemplateFieldNames() )
     {
         if( tfn.m_Name == aName )
             return true;
@@ -147,16 +147,16 @@ static bool hasTemplate( TEMPLATES& aTemplates, const wxString& aName )
 
 
 /**
- * A field-name template that only differs in case from a mandatory canonical field (e.g.
- * "VALUE" vs "Value") must be rejected, because the s-expression parser folds it onto the
- * mandatory field and it can never exist as a distinct user field.  See issue #24021.
+ * A field-name template that only differs in case from an untranslated mandatory field name
+ * (e.g. "VALUE" vs "Value") must be rejected, because the s-expression parser folds it onto
+ * the mandatory field and it can never exist as a distinct user field.  See issue #24021.
  */
 BOOST_AUTO_TEST_CASE( TemplateRejectsMandatoryCaseVariant )
 {
     TEMPLATES templates;
 
-    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "VALUE" ) ), false );
-    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "reference" ) ), false );
+    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "VALUE" ) ), TEMPLATES::SCOPE::PROJECT );
+    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "reference" ) ), TEMPLATES::SCOPE::PROJECT );
 
     BOOST_CHECK( !hasTemplate( templates, wxS( "VALUE" ) ) );
     BOOST_CHECK( !hasTemplate( templates, wxS( "reference" ) ) );
@@ -171,12 +171,12 @@ BOOST_AUTO_TEST_CASE( TemplateKeepsUserCaseVariantsDistinct )
 {
     TEMPLATES templates;
 
-    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "Manufacturer" ) ), false );
-    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "MANUFACTURER" ) ), false );
+    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "Manufacturer" ) ), TEMPLATES::SCOPE::PROJECT );
+    templates.AddTemplateFieldName( TEMPLATE_FIELDNAME( wxS( "MANUFACTURER" ) ), TEMPLATES::SCOPE::PROJECT );
 
     BOOST_CHECK( hasTemplate( templates, wxS( "Manufacturer" ) ) );
     BOOST_CHECK( hasTemplate( templates, wxS( "MANUFACTURER" ) ) );
-    BOOST_CHECK_EQUAL( templates.GetTemplateFieldNames().size(), 2 );
+    BOOST_CHECK_EQUAL( templates.GetResolvedTemplateFieldNames().size(), 2 );
 }
 
 

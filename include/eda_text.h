@@ -37,6 +37,11 @@ class SHAPE_COMPOUND;
 class SHAPE_POLY_SET;
 struct EDA_IU_SCALE;
 
+namespace kiapi::common::types
+{
+    class Text;
+}
+
 
 struct EDA_TEXT_RENDER_CACHE_DATA
 {
@@ -101,6 +106,9 @@ public:
 
     void Serialize( google::protobuf::Any &aContainer, const EDA_IU_SCALE& aScale ) const;
     bool Deserialize( const google::protobuf::Any &aContainer, const EDA_IU_SCALE& aScale );
+
+    void Serialize( kiapi::common::types::Text& aOutput, const EDA_IU_SCALE& aScale ) const;
+    bool Deserialize( const kiapi::common::types::Text& aInput, const EDA_IU_SCALE& aScale );
 
     /**
      * Return the string associated with the text object.
@@ -204,6 +212,14 @@ public:
     void SetBoldFlag( bool aBold );
     bool IsBold() const                         { return m_attributes.m_Bold; }
 
+    /**
+     * Migrate a pre-v11 bold stroke text so its stored thickness holds the base (non-bold)
+     * width. Older files baked the bolded pen size into the stroke width; Bold is now a
+     * render-time multiplier, so divide it back out. No-op for auto width, non-bold text, or
+     * outline fonts (where thickness is not the weight mechanism).
+     */
+    void MigrateLegacyBoldStrokeWidth();
+
     virtual void SetVisible( bool aVisible );
     virtual bool IsVisible() const              { return m_visible; }
 
@@ -268,6 +284,7 @@ public:
     KIFONT::FONT* GetFont() const               { return m_attributes.m_Font; }
 
     void SetUnresolvedFontName( const wxString& aFontName ) { m_unresolvedFontName = aFontName; }
+    wxString GetUnresolvedFontName() const { return m_unresolvedFontName; }
     bool ResolveFont( const std::vector<wxString>* aEmbeddedFonts );
 
     wxString GetFontName() const;
@@ -468,6 +485,12 @@ protected:
                              const COLOR4D& aColor, const wxString& aText, const VECTOR2I& aPos );
 
     bool containsURL() const;
+
+    /**
+     * Return true if this text is (or, while a font resolution is still pending, is
+     * named as) a stroke font, as opposed to an outline font.
+     */
+    bool isStrokeFont() const;
 
 protected:
     /**

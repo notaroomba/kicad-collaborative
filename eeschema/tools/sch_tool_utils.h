@@ -39,6 +39,15 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem );
 wxString GetSelectedItemsAsText( const SELECTION& aSel );
 
 /**
+ * Return the given items with the members of any group added, recursively.
+ *
+ * Anchor logic needs this. A group has no connection points, and its position is its
+ * bounding box centre, which is rarely on grid.
+ */
+std::vector<SCH_ITEM*> FlattenGroups( const EDA_ITEMS& aItems );
+std::vector<SCH_ITEM*> FlattenGroups( const std::deque<EDA_ITEM*>& aItems );
+
+/**
  * Get a list of unplaced (i.e. not in schamtic) unit numbers for a symbol.
  */
 std::set<int> GetUnplacedUnitsForSymbol( const SCH_SYMBOL& aSym );
@@ -122,3 +131,15 @@ wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName );
  * exists on aScreen.
  */
 wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName );
+
+/**
+ * Discard the instance data a paste dragged in from somewhere else, keyed by path rather than
+ * project name since that field is empty in files written before KiCad 7.
+ *
+ * @warning Only call this when cleaning up after a paste; it can clobber symbol instances for
+ *          schematics shared across projects otherwise.
+ *
+ * @param aSymbol    is the pasted symbol whose instances are reconciled.
+ * @param aSchematic is the schematic the paste target belongs to.
+ */
+void PrunePastedSymbolInstances( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSchematic );

@@ -27,6 +27,7 @@
 #include <base_units.h>
 #include <core/typeinfo.h>
 #include <lib_id.h>
+#include <api/common/envelope.pb.h>
 #include <api/common/types/base_types.pb.h>
 #include <layer_ids.h>
 #include <geometry/shape_line_chain.h>
@@ -34,7 +35,10 @@
 #include <math/vector3.h>
 #include <gal/color4d.h>
 
+class LINE_ENDING;
 class SHAPE_LINE_CHAIN;
+class STROKE_PARAMS;
+class TEXT_ATTRIBUTES;
 class KIID_PATH;
 class PROJECT;
 
@@ -91,7 +95,32 @@ KICOMMON_API void PackSheetPath( types::SheetPath& aOutput, const KIID_PATH& aIn
 
 KICOMMON_API KIID_PATH UnpackSheetPath( const types::SheetPath& aInput );
 
+KICOMMON_API void PackStroke( kiapi::common::types::StrokeAttributes& aOutput, const STROKE_PARAMS& aInput,
+                              const EDA_IU_SCALE& aScale = pcbIUScale );
+
+KICOMMON_API void UnpackStroke( STROKE_PARAMS& aOutput, const kiapi::common::types::StrokeAttributes& aInput,
+                                const EDA_IU_SCALE& aScale = pcbIUScale );
+
+KICOMMON_API void PackLineEnding( kiapi::common::types::LineEnding& aOutput, const LINE_ENDING& aInput,
+                                  const EDA_IU_SCALE& aScale = pcbIUScale );
+
+KICOMMON_API LINE_ENDING UnpackLineEnding( const kiapi::common::types::LineEnding& aInput,
+                                           const EDA_IU_SCALE& aScale = pcbIUScale );
+
 KICOMMON_API void PackProject( types::ProjectSpecifier& aOutput, const PROJECT& aInput );
+
+extern const KICOMMON_API std::string KiwayClientName;
+extern const KICOMMON_API std::string StandaloneCrossProbeClientName;
+
+KICOMMON_API bool PackKiwayApiMessage( const google::protobuf::Message& aMessage, std::string& aBytes );
+
+// Not KICOMMON_API: depends on font stuff in GAL for now
+void PackTextAttributes( kiapi::common::types::TextAttributes& aOutput, const TEXT_ATTRIBUTES& aInput,
+                         const EDA_IU_SCALE& aScale = pcbIUScale );
+
+// Not KICOMMON_API: depends on font stuff in GAL for now
+void UnpackTextAttributes( TEXT_ATTRIBUTES& aOutput, const kiapi::common::types::TextAttributes& aInput,
+                           const EDA_IU_SCALE& aScale = pcbIUScale );
 
 } // namespace kiapi::common
 

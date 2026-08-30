@@ -20,6 +20,10 @@
 #ifndef PCB_NET_INSPECTOR_PANEL_DATA_MODEL
 #define PCB_NET_INSPECTOR_PANEL_DATA_MODEL
 
+#include "widgets/pcb_net_inspector_panel.h"
+
+#include <wx/settings.h>
+
 #include <eda_pattern_match.h>
 #include <string_utils.h>
 #include <board.h>
@@ -1040,6 +1044,25 @@ protected:
         }
     }
 
+    bool GetAttr( const wxDataViewItem& aItem, unsigned int aCol, wxDataViewItemAttr& aAttr ) const override
+    {
+        if( !aItem.IsOk() || aCol >= m_parent.m_columns.size() )
+            return false;
+
+        const LIST_ITEM& item = *static_cast<const LIST_ITEM*>( aItem.GetID() );
+
+        if( const auto zeroValued = isZeroValued( item, aCol ); zeroValued.has_value() )
+        {
+            if( zeroValued.value() )
+            {
+                aAttr.SetColour( wxSystemSettings::GetColour( wxSYS_COLOUR_GRAYTEXT ) );
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     static int compareUInt( int64_t aValue1, int64_t aValue2, bool aAsc )
     {
         if( aAsc )
@@ -1051,6 +1074,15 @@ protected:
     int Compare( const wxDataViewItem& aItem1, const wxDataViewItem& aItem2, unsigned int aCol,
                  bool aAsc ) const override
     {
+        const auto compareNetNames =
+                [&]( const LIST_ITEM& i1, const LIST_ITEM& i2)
+                {
+                    const wxString& s1 = i1.GetNetName();
+                    const wxString& s2 = i2.GetNetName();
+
+                    return aAsc ? ValueStringCompare( s1, s2 ) : ValueStringCompare( s2, s1 );
+                };
+
         const LIST_ITEM& i1 = *static_cast<const LIST_ITEM*>( aItem1.GetID() );
         const LIST_ITEM& i2 = *static_cast<const LIST_ITEM*>( aItem2.GetID() );
 
@@ -1062,10 +1094,7 @@ protected:
 
         if( aCol == COLUMN_NAME )
         {
-            const wxString& s1 = i1.GetNetName();
-            const wxString& s2 = i2.GetNetName();
-
-            int res = aAsc ? ValueStringCompare( s1, s2 ) : ValueStringCompare( s2, s1 );
+            int res = compareNetNames( i1, i2 );
 
             if( res != 0 )
                 return res;
@@ -1161,7 +1190,18 @@ protected:
             }
         }
 
-        // when the item values compare equal resort to pointer comparison.
+        // When the item values compare equal, fall back to net name order so the sort is stable
+        // across rebuilds, and also in a sensible order for the user to find entries when sorting
+        // on other columns.
+        {
+            int res = compareNetNames( i1, i2 );
+
+            if( res != 0 )
+                return res;
+        }
+
+        // If the entries are STILL equal (how?), fall back to the pointer value, but this won't be
+        // stable across rebuilds as it is based on a heap allocation.
         wxUIntPtr id1 = wxPtrToUInt( aItem1.GetID() );
         wxUIntPtr id2 = wxPtrToUInt( aItem2.GetID() );
 
@@ -1244,6 +1284,92 @@ private:
     std::map<wxString, LIST_ITEM*> m_custom_group_map;
 
     bool m_show_time_domain_details{ false };
+
+    /**
+     * @return True if the cell contians a value that is "zero-ish" and should be
+     *        displayed in de-emphasized text, false if it is non-zero, or std::nullopt if
+     *        the column is not a field with a meaningful zero value
+     *        (e.g. name, netclass, etc.)
+     */
+    std::optional<bool> isZeroValued( const LIST_ITEM& aItem, unsigned int aCol ) const
+    {
+        switch( aCol )
+        {
+        case COLUMN_PAD_COUNT:
+            return aItem.GetPadCount() == 0;
+        case COLUMN_VIA_COUNT:
+            return aItem.GetViaCount() == 0;
+        default:
+            break;
+        }
+
+        // Always-length columns
+        switch( aCol )
+        {
+        case COLUMN_UNROUTED_LENGTH:
+            return aItem.GetUnroutedLength() == 0;
+        default:
+            break;
+        }
+
+        if( !m_show_time_domain_details )
+        {
+            // In length-mode, these are the lengths
+            switch( aCol )
+            {
+            case COLUMN_TOTAL_LENGTH:
+                return aItem.GetTotalLength() == 0;
+            case COLUMN_NET_CHAIN_LENGTH:
+                return aItem.GetNetChainLength() == 0;
+            case COLUMN_VIA_LENGTH:
+                return aItem.GetViaLength() == 0;
+            case COLUMN_BOARD_LENGTH:
+                return aItem.GetBoardWireLength() == 0;
+            case COLUMN_PAD_DIE_LENGTH:
+                return aItem.GetPadDieLength() == 0;
+            case COLUMN_UNROUTED_LENGTH:
+                return aItem.GetUnroutedLength() == 0;
+            default:
+                break;
+            }
+
+            // Lengths per-layer
+            if( aCol > COLUMN_LAST_STATIC_COL && aCol < m_parent.m_columns.size() )
+            {
+                const PCB_LAYER_ID layer = m_parent.m_columns[aCol].layer;
+                return aItem.GetLayerWireLength( layer ) == 0;
+            }
+        }
+        else
+        {
+            // In time-domain mode, these are the delays
+            switch( aCol )
+            {
+            case COLUMN_TOTAL_LENGTH:
+                return aItem.GetTotalDelay() == 0;
+            case COLUMN_NET_CHAIN_LENGTH:
+                return aItem.GetNetChainDelay() == 0;
+            case COLUMN_VIA_LENGTH:
+                return aItem.GetViaDelay() == 0;
+            case COLUMN_BOARD_LENGTH:
+                return aItem.GetBoardWireDelay() == 0;
+            case COLUMN_PAD_DIE_LENGTH:
+                return aItem.GetPadDieDelay() == 0;
+            default:
+                break;
+            }
+
+            // Delays per-layer
+            if( aCol > COLUMN_LAST_STATIC_COL && aCol < m_parent.m_columns.size() )
+            {
+                const PCB_LAYER_ID layer = m_parent.m_columns[aCol].layer;
+                return aItem.GetLayerWireDelay( layer ) == 0;
+            }
+        }
+
+        // Not a zero-able field
+        return std::nullopt;
+    }
 };
 
 #endif

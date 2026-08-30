@@ -24,6 +24,7 @@ endif()
 
 # Utility/debugging/profiling programs
 add_subdirectory( common_tools )
+add_subdirectory( eeschema_tools )
 add_subdirectory( pcbnew_tools )
 add_subdirectory( drc_benchmark )
 
@@ -34,4 +35,3 @@ endif()
 if( KICAD_BUILD_PNS_DEBUG_TOOL )
     add_subdirectory( pns )
 endif()
-

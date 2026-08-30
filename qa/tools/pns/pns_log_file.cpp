@@ -30,6 +30,7 @@
 #include "pns_arc.h"
 
 #include <router/pns_segment.h>
+#include <router/pns_hole.h>
 
 #include <board_design_settings.h>
 
@@ -282,6 +283,23 @@ std::unique_ptr<PNS::ITEM> PNS_LOG_FILE::parseItem( const nlohmann::json& aJSON 
         via->SetDrill( aJSON.at("drill").get<int>() );
         return std::move(via);
     }
+    else if ( kind == wxT( "hole" ) )
+    {
+        auto parsedShape = parseShape( aJSON.at("shape") );
+
+        if( !parsedShape )
+            return nullptr;
+
+        if( parsedShape->Type() == SH_CIRCLE )
+        {
+            auto shape = static_cast<const SHAPE_CIRCLE*>( parsedShape.get() );
+            std::unique_ptr<PNS::HOLE> hole( new PNS::HOLE( parsedShape->Clone() ) );
+            parseCommonPnsProps( aJSON, hole.get() );
+            hole->SetCenter( shape->GetCenter() );
+            hole->SetRadius( shape->GetRadius() );
+            return std::move( hole );
+        }
+    }
 
     return nullptr;
 }
@@ -301,10 +319,13 @@ std::unique_ptr<PNS::ITEM> PNS_LOG_FILE::parseLegacyItemFromString( wxStringToke
 
 bool comparePnsItems( const PNS::ITEM* a , const PNS::ITEM* b )
 {
+    if( !a || !b )
+        return false;
+
     if( a->Kind() != b->Kind() )
         return false;
 
-    if( a->Net() != b->Net() )
+    if( a->Kind() != PNS::ITEM::HOLE_T && a->Net() != b->Net() )
         return false;
 
     if( a->Layers() != b->Layers() )
@@ -337,6 +358,26 @@ bool comparePnsItems( const PNS::ITEM* a , const PNS::ITEM* b )
         if( sa->Width() != sb->Width() )
             return false;
     }
+    else if( a->Kind() == PNS::ITEM::HOLE_T )
+    {
+        const PNS::HOLE* ha = static_cast<const PNS::HOLE*>( a );
+        const PNS::HOLE* hb = static_cast<const PNS::HOLE*>( b );
+
+        if( ha->Radius() != hb->Radius() )
+            return false;
+
+        const SHAPE* sa = ha->Shape( -1 );
+        const SHAPE* sb = hb->Shape( -1 );
+
+        if( sa && sb && sa->Type() == SH_CIRCLE && sb->Type() == SH_CIRCLE )
+        {
+            const SHAPE_CIRCLE* ca = static_cast<const SHAPE_CIRCLE*>( sa );
+            const SHAPE_CIRCLE* cb = static_cast<const SHAPE_CIRCLE*>( sb );
+
+            if( ca->GetCenter() != cb->GetCenter() )
+                return false;
+        }
+    }
 
     return true;
 }
@@ -357,10 +398,10 @@ const std::set<PNS::ITEM*> deduplicate( const std::vector<PNS::ITEM*>& items )
                 isDuplicate = true;
                 break;
             }
-
-            if( !isDuplicate )
-                rv.insert( item );
         }
+
+        if( !isDuplicate )
+            rv.insert( item );
     }
 
     return rv;
@@ -370,9 +411,6 @@ const std::set<PNS::ITEM*> deduplicate( const std::vector<PNS::ITEM*>& items )
 bool PNS_LOG_FILE::COMMIT_STATE::Compare( const PNS_LOG_FILE::COMMIT_STATE& aOther )
 {
     COMMIT_STATE check( aOther );
-
-    //printf("pre-compare: %d/%d\n", check.m_addedItems.size(), check.m_removedIds.size() );
-    //printf("pre-compare (log): %d/%d\n", m_addedItems.size(), m_removedIds.size() );
 
     for( const KIID& uuid : m_removedIds )
     {
@@ -387,17 +425,21 @@ bool PNS_LOG_FILE::COMMIT_STATE::Compare( const PNS_LOG_FILE::COMMIT_STATE& aOth
 
     for( PNS::ITEM* item : addedItems )
     {
+        bool matched = false;
+
         for( PNS::ITEM* chk : chkAddedItems )
         {
             if( comparePnsItems( item, chk ) )
             {
                 chkAddedItems.erase( chk );
+                matched = true;
                 break;
             }
         }
-    }
 
-    //printf("post-compare: %d/%d\n", chkAddedItems.size(), check.m_removedIds.size() );
+        if( !matched )
+            return false;
+    }
 
     if( chkAddedItems.empty() && check.m_removedIds.empty() )
         return true;
@@ -450,6 +492,12 @@ bool PNS_LOG_FILE::Load( const wxFileName& logFileName, REPORTER* aRpt, const wx
     if( !boardFileName.IsEmpty() )
     {
         fname_dump = boardFileName;
+    }
+
+    if( !fname_dump.IsFileReadable() )
+    {
+        aRpt->Report( wxT( "Could not load board file" ), RPT_SEVERITY_ERROR );
+        return false;
     }
 
     wxFileName fname_project( logFileName );
@@ -579,7 +627,9 @@ bool PNS_LOG_FILE::loadJsonLog( const wxString& aFilename, REPORTER* aRpt, bool 
         for( const nlohmann::json& addedItem : logJson.at( "addedItems" ) )
         {
             m_parsed_items.push_back( std::move( parseItem( addedItem ) ) );
-            m_commitState.m_addedItems.push_back( m_parsed_items.back().get() );
+
+            if( m_parsed_items.back() )
+                m_commitState.m_addedItems.push_back( m_parsed_items.back().get() );
         }
 
         for( const nlohmann::json& addedItem : logJson.at( "removedItems" ) )
@@ -644,7 +694,9 @@ bool PNS_LOG_FILE::loadLegacyLog( const wxString& aFilename, REPORTER* aRpt )
             else if( cmd == wxT( "added" ) )
             {
                 m_parsed_items.push_back( std::move( parseLegacyItemFromString( tokens ) ) );
-                m_commitState.m_addedItems.push_back( m_parsed_items.back().get() );
+
+                if( m_parsed_items.back() )
+                    m_commitState.m_addedItems.push_back( m_parsed_items.back().get() );
             }
             else if( cmd == wxT( "removed" ) )
             {

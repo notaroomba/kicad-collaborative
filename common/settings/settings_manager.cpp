@@ -24,7 +24,6 @@
 #include <wx/debug.h>
 #include <wx/dir.h>
 #include <wx/filename.h>
-#include <wx/snglinst.h>
 #include <wx/stdpaths.h>
 #include <wx/utils.h>
 
@@ -45,6 +44,7 @@
 #include <project/project_archiver.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
+#include <reporter.h>
 #include <settings/color_settings.h>
 #include <settings/common_settings.h>
 #include <settings/json_settings_internals.h>
@@ -1017,12 +1017,11 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( m_projects.count( fullPath ) )
         return true;
 
-    LOCKFILE lockFile( fullPath );
+    // A passive load only inspects the lock rather than taking it
+    LOCKFILE lockFile = aSetActive ? LOCKFILE( fullPath ) : LOCKFILE::Inspect( fullPath );
 
     if( !lockFile.Valid() )
-    {
         wxLogTrace( traceSettings, wxT( "Project %s is locked; opening read-only" ), fullPath );
-    }
 
     // No MDI yet
     if( aSetActive && !m_projects.empty() )
@@ -1092,13 +1091,10 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
 
     bool success = loadProjectFile( *project );
 
-    if( success )
-    {
-        project->SetReadOnly( !lockFile.Valid() || project->GetProjectFile().IsReadOnly() );
+    project->SetReadOnly( !lockFile.Valid() || project->GetProjectFile().IsReadOnly() );
 
-        if( lockFile && aSetActive )
-            project->SetProjectLock( new LOCKFILE( std::move( lockFile ) ) );
-    }
+    if( lockFile.Valid() && aSetActive )
+        project->SetProjectLock( new LOCKFILE( std::move( lockFile ) ) );
 
     m_projects_list.push_back( std::move( project ) );
     m_projects[fullPath] = m_projects_list.back().get();
@@ -1232,6 +1228,26 @@ bool SETTINGS_MANAGER::IsProjectOpenNotDummy() const
 {
     return m_projects.size() > 1 || ( m_projects.size() == 1
                                           && !m_projects.begin()->second->GetProjectFullName().IsEmpty() );
+}
+
+
+void SETTINGS_MANAGER::SyncGlobalFieldNameTemplatesToProjects()
+{
+    // We don't technically support multiple projects, but hit them all for when we do
+    for( const auto& projectFileEntry : m_project_files )
+    {
+        PROJECT_FILE* projectFile = projectFileEntry.second;
+
+        projectFile->m_TemplateFieldNames.DeleteFieldNameTemplates( TEMPLATES::SCOPE::GLOBAL );
+
+        for( const TEMPLATE_FIELDNAME& fieldName :
+             m_common_settings->m_FieldNameTemplates.GetTemplateFieldNames(
+                     TEMPLATES::SCOPE::GLOBAL ) )
+        {
+            projectFile->m_TemplateFieldNames.AddTemplateFieldName(
+                    fieldName, TEMPLATES::SCOPE::GLOBAL );
+        }
+    }
 }
 
 
@@ -1370,7 +1386,11 @@ bool SETTINGS_MANAGER::loadProjectFile( PROJECT& aProject )
 
     wxString path( fullFn.GetPath() );
 
-    return file->LoadFromFile( path );
+    bool success = file->LoadFromFile( path );
+
+    SyncGlobalFieldNameTemplatesToProjects();
+
+    return success;
 }
 
 
@@ -1570,7 +1590,7 @@ bool SETTINGS_MANAGER::BackupProject( REPORTER& aReporter, wxFileName& aTarget )
 
     wxLogTrace( traceSettings, wxT( "Backing up project to %s" ), aTarget.GetPath() );
 
-    return PROJECT_ARCHIVER::Archive( Prj().GetProjectPath(), aTarget.GetFullPath(), aReporter );
+    return PROJECT_ARCHIVER::Archive( Prj().GetProjectPath(), aTarget.GetFullPath(), aReporter, false );
 }
 
 
@@ -1726,19 +1746,29 @@ bool SETTINGS_MANAGER::TriggerBackupIfNeeded( REPORTER& aReporter ) const
         }
     }
 
-    // Step 2: Stay under the total size limit
+    // Step 2: Stay under the total size limit.  files[0] is the archive just written and is
+    // never pruned; a retention limit trims history and must not leave the project with none
     if( settings.limit_total_size > 0 )
     {
-        wxULongLong totalSize = 0;
+        const wxULongLong limit( settings.limit_total_size );
+        wxULongLong       totalSize = 0;
 
         for( const wxString& file : files )
             totalSize += wxFileName::GetSize( file );
 
-        while( !files.empty() && totalSize > static_cast<wxULongLong>( settings.limit_total_size ) )
+        while( files.size() > 1 && totalSize > limit )
         {
             totalSize -= wxFileName::GetSize( files.back() );
             wxRemoveFile( files.back() );
             files.pop_back();
+        }
+
+        if( totalSize > limit )
+        {
+            aReporter.Report( _( "One backup of this project is larger than the total backup size "
+                                 "limit.  KiCad kept the new backup; increase the limit in "
+                                 "Preferences." ),
+                              RPT_SEVERITY_WARNING );
         }
     }
 

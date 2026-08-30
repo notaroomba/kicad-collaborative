@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -32,6 +33,13 @@
 #include <sch_io/sch_io.h>
 #include <sch_io/sch_io_mgr.h>
 #include <wildcards_and_files_ext.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <unordered_set>
 
 class LIBRARY_MANAGER_ADAPTER;
 
@@ -46,20 +54,23 @@ class SCH_IO_HTTP_LIB : public SCH_IO
 {
 public:
     SCH_IO_HTTP_LIB();
-    ~SCH_IO_HTTP_LIB() override = default;
+    ~SCH_IO_HTTP_LIB() override { stopBackgroundRefresh(); }
 
     const IO_BASE::IO_FILE_DESC GetLibraryDesc() const override
     {
         return IO_BASE::IO_FILE_DESC( _HKI( "KiCad HTTP library files" ), { FILEEXT::HTTPLibraryFileExtension } );
     }
 
-    int GetModifyHash() const override { return 0; }
+    int GetModifyHash() const override { return m_modifyHash; }
 
     void EnumerateSymbolLib( wxArrayString& aSymbolNameList, const wxString& aLibraryPath,
                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     void EnumerateSymbolLib( std::vector<LIB_SYMBOL*>& aSymbolList, const wxString& aLibraryPath,
                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+
+    void CheckLibrary( const wxString& aLibraryPath,
+                       const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     LIB_SYMBOL* LoadSymbol( const wxString& aLibraryPath, const wxString& aAliasName,
                             const std::map<std::string, UTF8>* aProperties = nullptr ) override;
@@ -83,6 +94,21 @@ public:
 
     HTTP_LIB_SETTINGS* Settings() const { return m_settings.get(); }
 
+    using CONNECTION_BUILDER = std::function<std::unique_ptr<HTTP_LIB_CONNECTION>( const HTTP_LIB_SOURCE& )>;
+
+    void SetConnectionBuilder( CONNECTION_BUILDER aFactory )
+    {
+        m_connectionFactory = std::move( aFactory );
+    }
+
+    using SOURCE_PATCHER = std::function<void( HTTP_LIB_SOURCE& )>;
+
+    /// Allows updating a source after initial load; used for QA testing
+    void SetSourcePatcher( SOURCE_PATCHER aOverride )
+    {
+        m_sourcePatcher = std::move( aOverride );
+    }
+
     void SaveSymbol( const wxString& aLibraryPath, const LIB_SYMBOL* aSymbol,
                      const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
@@ -95,18 +121,28 @@ private:
 
     void connect();
 
-    void syncCache();
-
-    void syncCache( const HTTP_LIB_CATEGORY& category );
-
-    /// Refresh the cached parts for a category if it has never been cached or has expired.
-    void syncCacheIfStale( const HTTP_LIB_CATEGORY& category );
-
     LIB_SYMBOL* loadSymbolFromPart( const wxString& aLibraryPath, const wxString& aSymbolName,
-                                    const HTTP_LIB_CATEGORY& aCategory, const HTTP_LIB_PART& aPart );
+                                    const HTTP_LIB_CATEGORY& aCategory, const HTTP_LIB_PART& aPart,
+                                    std::set<wxString>& aCustomFields );
+
+    void cacheLib( const wxString& aLibraryPath );
+
+    size_t computeSignature( const std::map<std::string, HTTP_LIB_CATEGORY>& aCategoryData ) const;
+
+    void materializeCache( const wxString& aLibraryPath,
+                           const std::map<std::string, HTTP_LIB_CATEGORY>& aCategoryData );
+
+    void startBackgroundRefresh();
+    void stopBackgroundRefresh();
+    void backgroundRefreshWorker();
 
 private:
     SYMBOL_LIBRARY_ADAPTER*              m_adapter;
+
+    /// Allows replacing actual HTTP connection for QA tests
+    CONNECTION_BUILDER                   m_connectionFactory;
+
+    SOURCE_PATCHER                       m_sourcePatcher;
 
     /// Generally will be null if no valid connection is established
     std::unique_ptr<HTTP_LIB_CONNECTION> m_conn;
@@ -114,6 +150,7 @@ private:
     std::set<wxString>                   m_customFields;
     std::set<wxString>                   m_defaultShownFields;
     wxString                             m_lastError;
+    wxString                             m_libraryPath;
 
     wxString symbol_field = "symbol";
     wxString footprint_field = "footprint";
@@ -123,6 +160,27 @@ private:
     wxString datasheet_field = "datasheet";
     wxString reference_field = "reference";
 
-    //     category.id       category
-    std::map<std::string, HTTP_LIB_CATEGORY> m_cachedCategories;
+    std::map<wxString, std::unique_ptr<LIB_SYMBOL>> m_symbolCache;
+
+    /// Symbol name -> (part id, category id); used for the SelectOne fallback in LoadSymbol.
+    std::map<wxString, std::pair<std::string, std::string>> m_partIdMap;
+
+    std::atomic<bool> m_cachePopulated{ false };
+    size_t m_cacheSignature = 0;
+    int m_modifyHash = 0;
+
+    /// Protects m_symbolCache, m_partIdMap, and m_customFields.
+    std::shared_mutex m_cacheMutex;
+
+    /// Serializes loadSymbolFromPart calls
+    std::mutex m_symbolLoadMutex;
+
+    std::thread             m_refreshThread;
+    std::atomic<bool>       m_refreshRunning{ false };
+    std::condition_variable m_refreshCV;
+    std::mutex              m_refreshMutex;
+
+    bool m_inCacheLib = false;
+
+    std::unordered_set<wxString> m_inProgressLoads;
 };

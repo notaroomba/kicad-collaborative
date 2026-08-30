@@ -70,10 +70,10 @@ SCH_SHEET::SCH_SHEET( EDA_ITEM* aParent, const VECTOR2I& aPos, VECTOR2I aSize ) 
     m_fieldsAutoplaced = AUTOPLACE_AUTO;
 
     m_fields.emplace_back( this, FIELD_T::SHEET_NAME,
-                           GetDefaultFieldName( FIELD_T::SHEET_NAME, DO_TRANSLATE ) );
+                           GetDefaultFieldName( FIELD_T::SHEET_NAME, TRANSLATED ) );
 
     m_fields.emplace_back( this, FIELD_T::SHEET_FILENAME,
-                           GetDefaultFieldName( FIELD_T::SHEET_FILENAME, DO_TRANSLATE ) );
+                           GetDefaultFieldName( FIELD_T::SHEET_FILENAME, TRANSLATED ) );
 
     AutoplaceFields( nullptr, m_fieldsAutoplaced );
 }
@@ -91,6 +91,7 @@ void SCH_SHEET::Serialize( google::protobuf::Any& aContainer ) const
     PackVector2( *sheet.mutable_position(), GetPosition(), schIUScale );
     PackVector2( *sheet.mutable_size(), GetSize(), schIUScale );
     sheet.set_locked( IsLocked() ? LockedState::LS_LOCKED : LockedState::LS_UNLOCKED );
+    sheet.set_fields_autoplaced( GetFieldsAutoplaced() != AUTOPLACE_NONE );
     sheet.set_exclude_from_sim( GetExcludedFromSim() );
     sheet.set_exclude_from_bom( GetExcludedFromBOM() );
     sheet.set_exclude_from_board( GetExcludedFromBoard() );
@@ -110,28 +111,19 @@ void SCH_SHEET::Serialize( google::protobuf::Any& aContainer ) const
     if( GetBackgroundColor() != COLOR4D::UNSPECIFIED )
         PackColor( *fill->mutable_color(), GetBackgroundColor() );
 
-    google::protobuf::Any any;
-
-    GetField( FIELD_T::SHEET_NAME )->Serialize( any );
-    any.UnpackTo( sheet.mutable_name_field() );
-
-    GetField( FIELD_T::SHEET_FILENAME )->Serialize( any );
-    any.UnpackTo( sheet.mutable_filename_field() );
+    GetField( FIELD_T::SHEET_NAME )->Serialize( *sheet.mutable_name_field(), schIUScale );
+    GetField( FIELD_T::SHEET_FILENAME )->Serialize( *sheet.mutable_filename_field(), schIUScale );
 
     for( const SCH_FIELD& field : GetFields() )
     {
         if( field.IsMandatory() )
             continue;
 
-        field.Serialize( any );
-        any.UnpackTo( sheet.add_user_fields() );
+        field.Serialize( *sheet.add_user_fields(), schIUScale );
     }
 
     for( const SCH_SHEET_PIN* pin : GetPins() )
-    {
-        pin->Serialize( any );
-        any.UnpackTo( sheet.add_pins() );
-    }
+        pin->Serialize( *sheet.add_pins(), schIUScale );
 
     aContainer.PackFrom( sheet );
 }
@@ -152,6 +144,7 @@ bool SCH_SHEET::Deserialize( const google::protobuf::Any& aContainer )
     SetPosition( UnpackVector2( sheet.position(), schIUScale ) );
     SetSize( UnpackVector2( sheet.size(), schIUScale ) );
     SetLocked( sheet.locked() == LockedState::LS_LOCKED );
+    SetFieldsAutoplaced( sheet.fields_autoplaced() ? AUTOPLACE_AUTO : AUTOPLACE_NONE );
     SetExcludedFromSim( sheet.exclude_from_sim() );
     SetExcludedFromBOM( sheet.exclude_from_bom() );
     SetExcludedFromBoard( sheet.exclude_from_board() );
@@ -173,32 +166,24 @@ bool SCH_SHEET::Deserialize( const google::protobuf::Any& aContainer )
 
     m_fields.clear();
     m_fields.emplace_back( this, FIELD_T::SHEET_NAME,
-                           GetDefaultFieldName( FIELD_T::SHEET_NAME, DO_TRANSLATE ) );
+                           GetDefaultFieldName( FIELD_T::SHEET_NAME, TRANSLATED ) );
     m_fields.emplace_back( this, FIELD_T::SHEET_FILENAME,
-                           GetDefaultFieldName( FIELD_T::SHEET_FILENAME, DO_TRANSLATE ) );
+                           GetDefaultFieldName( FIELD_T::SHEET_FILENAME, TRANSLATED ) );
 
-    google::protobuf::Any any;
-
-    any.PackFrom( sheet.name_field() );
-    GetField( FIELD_T::SHEET_NAME )->Deserialize( any );
-
-    any.PackFrom( sheet.filename_field() );
-    GetField( FIELD_T::SHEET_FILENAME )->Deserialize( any );
+    GetField( FIELD_T::SHEET_NAME )->Deserialize( sheet.name_field(), schIUScale );
+    GetField( FIELD_T::SHEET_FILENAME )->Deserialize( sheet.filename_field(), schIUScale );
 
     for( const auto& field : sheet.user_fields() )
     {
         m_fields.emplace_back( this, FIELD_T::SHEET_USER );
-
-        any.PackFrom( field );
-        m_fields.back().Deserialize( any );
+        m_fields.back().Deserialize( field, schIUScale );
     }
 
     for( const auto& pinProto : sheet.pins() )
     {
         auto pin = std::make_unique<SCH_SHEET_PIN>( this );
-        any.PackFrom( pinProto );
 
-        if( !pin->Deserialize( any ) )
+        if( !pin->Deserialize( pinProto, schIUScale ) )
             return false;
 
         AddPin( pin.release() );
@@ -292,6 +277,14 @@ void SCH_SHEET::SetScreen( SCH_SCREEN* aScreen )
 }
 
 
+void SCH_SHEET::SyncUuidToScreen()
+{
+    wxCHECK_RET( m_screen, wxS( "Cannot sync a sheet UUID without a screen" ) );
+
+    const_cast<KIID&>( m_Uuid ) = m_screen->GetUuid();
+}
+
+
 int SCH_SHEET::GetScreenCount() const
 {
     if( m_screen == nullptr )
@@ -329,7 +322,7 @@ void SCH_SHEET::GetContextualTextVars( wxArrayString* aVars ) const
     for( const SCH_FIELD& field : m_fields )
     {
         if( field.IsMandatory() )
-            add( field.GetCanonicalName().Upper() );
+            add( field.GetUntranslatedName().Upper() );
         else
             add( field.GetName() );
     }
@@ -377,7 +370,7 @@ bool SCH_SHEET::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, in
 
     for( const SCH_FIELD& field : m_fields )
     {
-        wxString fieldName = field.IsMandatory() ? field.GetCanonicalName().Upper()
+        wxString fieldName = field.IsMandatory() ? field.GetUntranslatedName().Upper()
                                                  : field.GetName();
 
         if( token->IsSameAs( fieldName ) )
@@ -417,7 +410,7 @@ bool SCH_SHEET::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, in
         *token = wxEmptyString;
 
         if( aPath->GetExcludedFromBOM( variant ) || this->ResolveExcludedFromBOM( aPath, variant ) )
-            *token = _( "Excluded from BOM" );
+            *token = wxS( "Excluded from BOM" );
 
         return true;
     }
@@ -426,7 +419,7 @@ bool SCH_SHEET::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, in
         *token = wxEmptyString;
 
         if( aPath->GetExcludedFromBoard( variant ) || this->ResolveExcludedFromBoard( aPath, variant ) )
-            *token = _( "Excluded from board" );
+            *token = wxS( "Excluded from board" );
 
         return true;
     }
@@ -435,7 +428,7 @@ bool SCH_SHEET::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, in
         *token = wxEmptyString;
 
         if( aPath->GetExcludedFromSim( variant ) || this->ResolveExcludedFromSim( aPath, variant ) )
-            *token = _( "Excluded from simulation" );
+            *token = wxS( "Excluded from simulation" );
 
         return true;
     }
@@ -444,7 +437,7 @@ bool SCH_SHEET::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, in
         *token = wxEmptyString;
 
         if( aPath->GetDNP( variant ) || this->ResolveDNP( aPath, variant ) )
-            *token = _( "DNP" );
+            *token = wxS( "DNP" );
 
         return true;
     }
@@ -480,7 +473,6 @@ void SCH_SHEET::swapData( SCH_ITEM* aItem )
     std::swap( m_pos, sheet->m_pos );
     std::swap( m_size, sheet->m_size );
     m_fields.swap( sheet->m_fields );
-    std::swap( m_fieldsAutoplaced, sheet->m_fieldsAutoplaced );
     m_pins.swap( sheet->m_pins );
 
     // Update parent pointers after swapping.
@@ -1161,7 +1153,17 @@ std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> SCH_SHEET::GetNoConnects() const
 {
     std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> noConnects;
 
-    if( SCH_SCREEN* screen = dynamic_cast<SCH_SCREEN*>( GetParent() ) )
+    SCH_SCREEN* screen = dynamic_cast<SCH_SCREEN*>( GetParent() );
+
+    // A top level sheet is parented to the root sheet rather than to the root screen, so reach
+    // the screen that holds this sheet through the parent sheet instead
+    if( !screen )
+    {
+        if( SCH_SHEET* parentSheet = dynamic_cast<SCH_SHEET*>( GetParent() ) )
+            screen = parentSheet->GetScreen();
+    }
+
+    if( screen )
     {
         for( SCH_SHEET_PIN* sheetPin : m_pins )
         {
@@ -2250,7 +2252,7 @@ static struct SCH_SHEET_DESC
         propMgr.InheritsAfter( TYPE_HASH( SCH_SHEET ), TYPE_HASH( SCH_ITEM ) );
 
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, wxString>( _HKI( "Sheet Name" ),
-                             &SCH_SHEET::SetName, &SCH_SHEET::GetName ) )
+                    &SCH_SHEET::SetName, &SCH_SHEET::GetName ) )
                 .SetValidator( []( const wxAny&& aValue, EDA_ITEM* ) -> VALIDATOR_RESULT
                                 {
                                     wxString value;
@@ -2267,14 +2269,13 @@ static struct SCH_SHEET_DESC
                                 } );
 
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, int>( _HKI( "Border Width" ),
-                             &SCH_SHEET::SetBorderWidth, &SCH_SHEET::GetBorderWidth,
-                             PROPERTY_DISPLAY::PT_SIZE ) );
+                    &SCH_SHEET::SetBorderWidth, &SCH_SHEET::GetBorderWidth, PROPERTY_DISPLAY::PT_SIZE ) );
 
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, COLOR4D>( _HKI( "Border Color" ),
-                             &SCH_SHEET::SetBorderColor, &SCH_SHEET::GetBorderColor ) );
+                    &SCH_SHEET::SetBorderColor, &SCH_SHEET::GetBorderColor ) );
 
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, COLOR4D>( _HKI( "Background Color" ),
-                             &SCH_SHEET::SetBackgroundColor, &SCH_SHEET::GetBackgroundColor ) );
+                    &SCH_SHEET::SetBackgroundColor, &SCH_SHEET::GetBackgroundColor ) );
 
         const wxString groupAttributes = _HKI( "Attributes" );
 
@@ -2284,10 +2285,8 @@ static struct SCH_SHEET_DESC
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, bool>( _HKI( "Exclude From Simulation" ),
                     &SCH_SHEET::SetExcludedFromSimProp, &SCH_SHEET::GetExcludedFromSimProp ),
                     groupAttributes );
-        propMgr.AddProperty(
-                new PROPERTY<SCH_SHEET, bool>( _HKI( "Exclude From Bill of Materials" ),
-                                               &SCH_SHEET::SetExcludedFromBOMProp,
-                                               &SCH_SHEET::GetExcludedFromBOMProp ),
+        propMgr.AddProperty( new PROPERTY<SCH_SHEET, bool>( _HKI( "Exclude From Bill of Materials" ),
+                    &SCH_SHEET::SetExcludedFromBOMProp, &SCH_SHEET::GetExcludedFromBOMProp ),
                 groupAttributes );
         propMgr.AddProperty( new PROPERTY<SCH_SHEET, bool>( _HKI( "Do not Populate" ),
                     &SCH_SHEET::SetDNPProp, &SCH_SHEET::GetDNPProp ),

@@ -23,11 +23,13 @@
 #include <widgets/footprint_wizard_properties_panel.h>
 
 #include <footprint_wizard.h>
+#include <geometry/eda_angle.h>
 #include <footprint_wizard_frame.h>
 #include <properties/pg_editors.h>
 #include <properties/pg_properties.h>
 #include <widgets/ui_common.h>
 
+#include <wx/regex.h>
 #include <wx/stattext.h>
 
 
@@ -175,7 +177,20 @@ wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( WIZARD_PARAME
         ret = new PGPROPERTY_BOOL();
         break;
 
-    // TODO(JE) consider supporting enum properties
+    case kiapi::common::types::WPDT_ENUM:
+    {
+        if( auto param = dynamic_cast<const WIZARD_ENUM_PARAMETER*>( aParam ) )
+        {
+            wxPGChoices pgChoices;
+
+            for( size_t i = 0; i < param->choices.size(); ++i )
+                pgChoices.Add( wxGetTranslation( param->choices[i].second ), static_cast<int>( i ) );
+
+            ret = new wxEnumProperty( wxPG_LABEL, wxPG_LABEL, pgChoices );
+        }
+
+        break;
+    }
 
     case kiapi::common::types::WPDT_UNKNOWN:
     default:
@@ -197,6 +212,8 @@ wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( WIZARD_PARAME
             ret->SetValue( bp->value );
         else if( auto sp = dynamic_cast<const WIZARD_STRING_PARAMETER*>( aParam ) )
             ret->SetValue( sp->value );
+        else if( auto ep = dynamic_cast<const WIZARD_ENUM_PARAMETER*>( aParam ) )
+            ret->SetValue( ep->value );
     }
 
     return ret;
@@ -206,6 +223,122 @@ wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( WIZARD_PARAME
 WIZARD_PARAMETER* FOOTPRINT_WIZARD_PROPERTIES_PANEL::getParamFromEvent( const wxPropertyGridEvent& aEvent )
 {
     return static_cast<WIZARD_PARAMETER*>( aEvent.GetProperty()->GetClientData() );
+}
+
+
+wxString FOOTPRINT_WIZARD_PROPERTIES_PANEL::formatConstraintValue( const WIZARD_PARAMETER* aParam, int aValue ) const
+{
+    switch( aParam->type )
+    {
+    case kiapi::common::types::WPDT_DISTANCE:
+        return m_frame->MessageTextFromValue( aValue, true, EDA_DATA_TYPE::DISTANCE );
+
+    case kiapi::common::types::WPDT_AREA:
+        return m_frame->MessageTextFromValue( aValue, true, EDA_DATA_TYPE::AREA );
+
+    case kiapi::common::types::WPDT_TIME:
+        return m_frame->MessageTextFromValue( aValue, true, EDA_DATA_TYPE::TIME );
+
+    default:
+        return wxString::Format( wxS( "%d" ), aValue );
+    }
+}
+
+
+wxString FOOTPRINT_WIZARD_PROPERTIES_PANEL::formatConstraintValue( const WIZARD_PARAMETER* aParam, double aValue ) const
+{
+    switch( aParam->type )
+    {
+    case kiapi::common::types::WPDT_ANGLE:
+        return m_frame->MessageTextFromValue( EDA_ANGLE( aValue, DEGREES_T ) );
+
+    default:
+        return wxString::Format( wxS( "%.3f" ), aValue );
+    }
+}
+
+
+void FOOTPRINT_WIZARD_PROPERTIES_PANEL::valueChanging( wxPropertyGridEvent& aEvent )
+{
+    if( m_SuppressGridChangeEvents )
+        return;
+
+    WIZARD_PARAMETER* param = getParamFromEvent( aEvent );
+    wxCHECK( param, /* void */ );
+
+    wxAny newValue = aEvent.GetPropertyValue();
+
+    if( WIZARD_INT_PARAMETER* ip = dynamic_cast<WIZARD_INT_PARAMETER*>( param ) )
+    {
+        int value = newValue.As<int>();
+
+        if( ip->min && value < *ip->min )
+        {
+            m_frame->SetBuildMessage( wxString::Format( _( "%s must be at least %s." ),
+                                                        wxGetTranslation( ip->name ),
+                                                        formatConstraintValue( ip, *ip->min ) ) );
+            aEvent.Veto();
+            return;
+        }
+
+        if( ip->max && value > *ip->max )
+        {
+            m_frame->SetBuildMessage( wxString::Format( _( "%s must be at most %s." ),
+                                                        wxGetTranslation( ip->name ),
+                                                        formatConstraintValue( ip, *ip->max ) ) );
+            aEvent.Veto();
+            return;
+        }
+
+        if( ip->multiple && ( value % *ip->multiple ) != 0 )
+        {
+            m_frame->SetBuildMessage( wxString::Format( _( "%s must be a multiple of %s." ),
+                                                        wxGetTranslation( ip->name ),
+                                                        formatConstraintValue( ip, *ip->multiple ) ) );
+            aEvent.Veto();
+            return;
+        }
+    }
+    else if( WIZARD_REAL_PARAMETER* rp = dynamic_cast<WIZARD_REAL_PARAMETER*>( param ) )
+    {
+        double value = newValue.As<double>();
+
+        if( rp->min && value < *rp->min )
+        {
+            m_frame->SetBuildMessage( wxString::Format( _( "%s must be at least %s." ),
+                                                        wxGetTranslation( rp->name ),
+                                                        formatConstraintValue( rp, *rp->min ) ) );
+            aEvent.Veto();
+            return;
+        }
+
+        if( rp->max && value > *rp->max )
+        {
+            m_frame->SetBuildMessage( wxString::Format( _( "%s must be at most %s." ),
+                                                        wxGetTranslation( rp->name ),
+                                                        formatConstraintValue( rp, *rp->max ) ) );
+            aEvent.Veto();
+            return;
+        }
+    }
+    else if( WIZARD_STRING_PARAMETER* sp = dynamic_cast<WIZARD_STRING_PARAMETER*>( param ) )
+    {
+        if( sp->validation_regex )
+        {
+            if( wxRegEx re( *sp->validation_regex, wxRE_ADVANCED ); re.IsValid() )
+            {
+                if( wxString value = newValue.As<wxString>(); !re.Matches( value ) )
+                {
+                    m_frame->SetBuildMessage( wxString::Format( _( "%s does not match the required format '%s'." ),
+                                                                wxGetTranslation( sp->name ), *sp->validation_regex ) );
+                    aEvent.Veto();
+                    return;
+                }
+            }
+        }
+    }
+
+    aEvent.Skip();
 }
 
 
@@ -231,6 +364,10 @@ void FOOTPRINT_WIZARD_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEven
     else if( WIZARD_STRING_PARAMETER* sp = dynamic_cast<WIZARD_STRING_PARAMETER*>( param ) )
     {
         sp->value = newValue.As<wxString>();
+    }
+    else if( WIZARD_ENUM_PARAMETER* ep = dynamic_cast<WIZARD_ENUM_PARAMETER*>( param ) )
+    {
+        ep->value = newValue.As<int>();
     }
 
     m_frame->OnWizardParametersChanged();

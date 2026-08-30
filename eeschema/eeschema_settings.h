@@ -66,7 +66,7 @@ public:
         wxString default_font;
         bool show_hidden_pins;
         bool show_hidden_fields;
-        bool     show_remapped_pin_numbers;
+        bool show_remapped_pin_numbers;
         bool show_directive_labels;
         bool mark_sim_exclusions;
         bool show_erc_warnings;
@@ -161,7 +161,6 @@ public:
         COLOR4D             default_sheet_border_color;
         COLOR4D             default_sheet_background_color;
         POWER_SYMBOLS       new_power_symbols;
-        wxString            field_names;
         int                 line_mode;
         ARC_EDIT_MODE       arc_edit_mode;
         int                 repeat_label_increment;
@@ -190,6 +189,7 @@ public:
         int  highlight_thickness;
         bool draw_selected_children;
         bool fill_shapes;
+        bool select_pin_selects_symbol;
         bool highlight_netclass_colors;
         int    highlight_netclass_colors_thickness;
         double highlight_netclass_colors_alpha;
@@ -228,16 +228,6 @@ public:
     {
         wxString selected_plugin;
         std::vector<BOM_PLUGIN_SETTINGS> plugins;
-    };
-
-    struct PANEL_SYMBOL_FIELDS_TABLE
-    {
-        std::map<std::string, int> field_widths;
-        wxString                   export_filename;
-        int                        selection_mode;
-        int                        sash_pos;
-        bool                       sidebar_collapsed;
-        int                        variant_sash_pos;
     };
 
     struct PANEL_LIB_VIEW
@@ -320,6 +310,7 @@ protected:
 
 private:
     bool migrateBomSettings();
+    bool migrateFieldNameTemplates();
 
     nlohmann::json bomSettingsToJson() const;
 
@@ -343,7 +334,7 @@ public:
     PANEL_ANNOTATE            m_AnnotatePanel;
     PANEL_BOM                 m_BomPanel;
 
-    PANEL_SYMBOL_FIELDS_TABLE m_FieldEditorPanel;
+    FIELDS_TABLE_SETTINGS     m_FieldEditorPanel;
     PANEL_LIB_VIEW            m_LibViewPanel;
     PANEL_NETLIST             m_NetlistPanel;
     PANEL_SYM_CHOOSER         m_SymChooserPanel;

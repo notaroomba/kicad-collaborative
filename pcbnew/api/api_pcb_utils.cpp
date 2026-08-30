@@ -20,7 +20,11 @@
 
 #include <api/api_pcb_utils.h>
 #include <api/api_enums.h>
+#include <api/board/board.pb.h>
+#include <api/api_utils.h>
 #include <board.h>
+#include <embedded_files.h>
+#include <teardrop/teardrop_parameters.h>
 #include <board_item_container.h>
 #include <footprint.h>
 #include <lset.h>
@@ -31,10 +35,12 @@
 #include <pcb_griditem.h>
 #include <pcb_reference_image.h>
 #include <pcb_shape.h>
+#include <pcb_point.h>
 #include <pcb_track.h>
 #include <pcb_field.h>
 #include <pcb_text.h>
 #include <pcb_textbox.h>
+#include <pcb_table.h>
 #include <pcb_dimension.h>
 #include <zone.h>
 
@@ -48,7 +54,18 @@ std::unique_ptr<BOARD_ITEM> CreateItemForType( KICAD_T aType, BOARD_ITEM_CONTAIN
     case PCB_VIA_T:     return std::make_unique<PCB_VIA>( aContainer );
     case PCB_TEXT_T:    return std::make_unique<PCB_TEXT>( aContainer );
     case PCB_TEXTBOX_T: return std::make_unique<PCB_TEXTBOX>( aContainer );
+    case PCB_TABLE_T:   return std::make_unique<PCB_TABLE>( aContainer );
+    case PCB_TABLECELL_T:
+    {
+        PCB_TABLE* table = dynamic_cast<PCB_TABLE*>( aContainer );
+
+        if( !table )
+            return nullptr;
+
+        return std::make_unique<PCB_TABLECELL>( aContainer );
+    }
     case PCB_SHAPE_T:   return std::make_unique<PCB_SHAPE>( aContainer );
+    case PCB_POINT_T:   return std::make_unique<PCB_POINT>( aContainer );
     case PCB_BARCODE_T: return std::make_unique<PCB_BARCODE>( aContainer );
     case PCB_ZONE_T:    return std::make_unique<ZONE>( aContainer );
     case PCB_GROUP_T:   return std::make_unique<PCB_GROUP>( aContainer );
@@ -122,6 +139,140 @@ LSET UnpackLayerSet( const google::protobuf::RepeatedField<int>& aProtoLayerSet 
     }
 
     return set;
+}
+
+
+void PackBoardStackup( const BOARD& aBoard, BoardStackup& aOut )
+{
+    aBoard.GetStackupOrDefault().Serialize( aOut );
+
+    for( BoardStackupLayer& layer : *aOut.mutable_layers() )
+    {
+        if( layer.type() == BoardStackupLayerType::BSLT_DIELECTRIC )
+            continue;
+
+        PCB_LAYER_ID id = FromProtoEnum<PCB_LAYER_ID>( layer.layer() );
+
+        layer.set_user_name( aBoard.GetLayerName( id ) );
+    }
+}
+
+
+void PackTeardropSettings( types::PadTeardropSettings& aOutput, const TEARDROP_PARAMETERS& aParams )
+{
+    aOutput.set_mode( aParams.m_Enabled ? types::PadTeardropMode::PTM_ENABLED : types::PadTeardropMode::PTM_DISABLED );
+    aOutput.set_curved_edges( aParams.m_CurvedEdges );
+    aOutput.set_allow_multiple_track_segments( aParams.m_AllowUseTwoTracks );
+    aOutput.set_prefer_zone_connection( !aParams.m_TdOnPadsInZones );
+    aOutput.mutable_max_length()->set_value_nm( aParams.m_TdMaxLen );
+    aOutput.mutable_max_width()->set_value_nm( aParams.m_TdMaxWidth );
+    aOutput.set_best_length_ratio( aParams.m_BestLengthRatio );
+    aOutput.set_best_width_ratio( aParams.m_BestWidthRatio );
+    aOutput.set_max_track_width_ratio( aParams.m_WidthtoSizeFilterRatio );
+}
+
+
+void UnpackTeardropSettings( TEARDROP_PARAMETERS& aOutput, const types::PadTeardropSettings& aProto )
+{
+    aOutput.m_Enabled = ( aProto.mode() == types::PadTeardropMode::PTM_ENABLED );
+    aOutput.m_CurvedEdges = aProto.curved_edges();
+    aOutput.m_AllowUseTwoTracks = aProto.allow_multiple_track_segments();
+    aOutput.m_TdOnPadsInZones = !aProto.prefer_zone_connection();
+    aOutput.m_TdMaxLen = aProto.max_length().value_nm();
+    aOutput.m_TdMaxWidth = aProto.max_width().value_nm();
+    aOutput.m_BestLengthRatio = aProto.best_length_ratio();
+    aOutput.m_BestWidthRatio = aProto.best_width_ratio();
+    aOutput.m_WidthtoSizeFilterRatio = aProto.max_track_width_ratio();
+}
+
+
+void PackZoneLayerOverrides( google::protobuf::RepeatedPtrField<types::ZoneLayerOverrideEntry>* aOutput,
+                             const std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE>& aInput )
+{
+    aOutput->Clear();
+
+    for( const auto& [layer, overrideVal] : aInput )
+    {
+        types::ZoneLayerOverride protoOverride = types::ZLO_NONE;
+
+        switch( overrideVal )
+        {
+        case ZLO_FORCE_FLASHED:             protoOverride = types::ZLO_FORCE_FLASHED;              break;
+        case ZLO_FORCE_NO_ZONE_CONNECTION:  protoOverride = types::ZLO_FORCE_NO_ZONE_CONNECTION;   break;
+        default: break;
+        }
+
+        if( protoOverride != types::ZLO_NONE )
+        {
+            types::ZoneLayerOverrideEntry* entry = aOutput->Add();
+            entry->set_layer( ToProtoEnum<PCB_LAYER_ID, types::BoardLayer>( layer ) );
+            entry->set_override( protoOverride );
+        }
+    }
+}
+
+
+void UnpackZoneLayerOverrides( std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE>& aOutput,
+                               const google::protobuf::RepeatedPtrField<types::ZoneLayerOverrideEntry>& aInput )
+{
+    for( const types::ZoneLayerOverrideEntry& entry : aInput )
+    {
+        ZONE_LAYER_OVERRIDE overrideVal = ZLO_NONE;
+
+        switch( entry.override() )
+        {
+        case types::ZLO_FORCE_FLASHED:             overrideVal = ZLO_FORCE_FLASHED;            break;
+        case types::ZLO_FORCE_NO_ZONE_CONNECTION:  overrideVal = ZLO_FORCE_NO_ZONE_CONNECTION; break;
+        default: break;
+        }
+
+        aOutput[FromProtoEnum<PCB_LAYER_ID>( entry.layer() )] = overrideVal;
+    }
+}
+
+
+void PackEmbeddedFiles( common::types::EmbeddedFiles& aOutput, const EMBEDDED_FILES& aFiles )
+{
+    for( const auto& [name, file] : aFiles.EmbeddedFileMap() )
+    {
+        if( file->compressedEncodedData.empty() )
+            continue;
+
+        common::types::EmbeddedFile* proto = aOutput.add_files();
+        proto->set_name( name.ToUTF8() );
+        proto->set_type(
+                ToProtoEnum<EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE, common::types::EmbeddedFileType>( file->type ) );
+        proto->set_data( file->compressedEncodedData );
+        proto->set_data_hash( file->data_hash );
+    }
+}
+
+
+bool UnpackEmbeddedFiles( EMBEDDED_FILES& aOutput, const common::types::EmbeddedFiles& aProto )
+{
+    EMBEDDED_FILES files;
+
+    for( const common::types::EmbeddedFile& protoFile : aProto.files() )
+    {
+        auto file = std::make_shared<EMBEDDED_FILES::EMBEDDED_FILE>();
+        file->name = wxString::FromUTF8( protoFile.name() );
+        file->type = FromProtoEnum<EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE>( protoFile.type() );
+        file->compressedEncodedData = protoFile.data();
+        file->data_hash = protoFile.data_hash();
+
+        if( EMBEDDED_FILES::DecompressAndDecode( *file ) != EMBEDDED_FILES::RETURN_CODE::OK )
+            return false;
+
+        if( !file->Validate() )
+            return false;
+
+        files.AddFile( file );
+    }
+
+    aOutput.ClearEmbeddedFiles();
+    aOutput = files;
+
+    return true;
 }
 
 }   // namespace kiapi::board

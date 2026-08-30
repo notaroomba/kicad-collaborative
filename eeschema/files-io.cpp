@@ -29,16 +29,16 @@
 #include <dialog_migrate_buses.h>
 #include <dialog_symbol_remap.h>
 #include <dialog_import_choose_project.h>
+#include <embedded_files.h>
 #include <eeschema_settings.h>
 #include <id.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
 #include <kiplatform/ui.h>
+#include <libraries/legacy_cache_reconcile.h>
 #include <libraries/legacy_symbol_library.h>
 #include <libraries/symbol_library_adapter.h>
 #include <local_history.h>
-#include <sch_symbol.h>
-#include <set>
 #include <lockfile.h>
 #include <pgm_base.h>
 #include <core/profile.h>
@@ -584,55 +584,12 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                             (*table)->Save();
                         }
 
-                        std::vector<wxString> cacheSymbols = adapter->GetSymbolNames( nickname );
-                        std::set<wxString> cacheSymbolSet( cacheSymbols.begin(), cacheSymbols.end() );
+                        std::vector<KI_ERROR> libErrors;
 
-                        if( !cacheSymbolSet.empty() )
-                        {
-                            std::vector<wxString> loadedLibs;
+                        ReconcileLegacyCacheSymbols( *adapter, nickname, schematic, libErrors );
 
-                            for( const wxString& libName : adapter->GetLibraryNames() )
-                            {
-                                if( libName == nickname )
-                                    continue;
-
-                                std::optional<LIB_STATUS> status = adapter->GetLibraryStatus( libName );
-
-                                if( status && status->load_status == LOAD_STATUS::LOADED )
-                                    loadedLibs.push_back( libName );
-                            }
-
-                            for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
-                            {
-                                for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
-                                {
-                                    SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
-                                    LIB_ID newId = symbol->GetLibId();
-                                    UTF8 fullLibName = newId.Format();
-
-                                    if( cacheSymbolSet.count( fullLibName.wx_str() ) )
-                                    {
-                                        bool alreadyExists = false;
-
-                                        for( const wxString& libName : loadedLibs )
-                                        {
-                                            if( adapter->LoadSymbol( libName, fullLibName.wx_str() ) )
-                                            {
-                                                alreadyExists = true;
-                                                break;
-                                            }
-                                        }
-
-                                        if( !alreadyExists )
-                                        {
-                                            newId.SetLibNickname( nickname );
-                                            newId.SetLibItemName( fullLibName );
-                                            symbol->SetLibId( newId );
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+                            statusBar->AddWarningMessages( "load", libErrors );
                     }
                 }
 
@@ -965,7 +922,7 @@ void SCH_EDIT_FRAME::OnImportProject()
                      + fileFiltersStr;
 
     wxFileDialog dlg( this, _( "Import Schematic" ), path, wxEmptyString, fileFiltersStr,
-                      wxFD_OPEN | wxFD_FILE_MUST_EXIST ); // TODO
+                      wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
     FILEDLG_IMPORT_NON_KICAD importOptions( eeconfig()->m_System.show_import_issues );
     dlg.SetCustomizeHook( importOptions );
@@ -1145,6 +1102,11 @@ bool PrepareSaveAsFiles( SCHEMATIC& aSchematic, SCH_SCREENS& aScreens,
         wxCHECK2( screen, continue );
 
         if( screen == aSchematic.RootScreen() )
+            continue;
+
+        // The virtual root's screen only holds the top-level sheets and has no file of its own
+        // A destination here would be a nameless path that callers turn into a stray ".kicad_sch"
+        if( screen == aSchematic.Root().GetScreen() )
             continue;
 
         wxFileName src = screen->GetFileName();
@@ -1520,13 +1482,10 @@ bool SCH_EDIT_FRAME::SaveProject( bool aSaveAs )
         Kiway().LocalHistory().RemoveAutosaveFiles( Prj().GetProjectPath(), savedSheetPaths );
     }
 
-    if( !Kiface().IsSingle() )
-    {
-        WX_STRING_REPORTER backupReporter;
+    WX_STRING_REPORTER backupReporter;
 
-        if( !GetSettingsManager()->TriggerBackupIfNeeded( backupReporter ) )
-            SetStatusText( backupReporter.GetMessages(), 0 );
-    }
+    if( !Kiface().IsSingle() )
+        GetSettingsManager()->TriggerBackupIfNeeded( backupReporter );
 
     // Restore the virtual page numbers that were modified during save. When saving, screens are
     // assigned page number 1 (single use) or 0 (multiple uses) for serialization purposes.
@@ -1547,6 +1506,12 @@ bool SCH_EDIT_FRAME::SaveProject( bool aSaveAs )
 
     if( m_infoBar->GetMessageType() == WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE )
         m_infoBar->Dismiss();
+
+    if( backupReporter.HasMessage() )
+    {
+        wxString backupMsg = backupReporter.GetMessages();
+        m_infoBar->ShowMessageFor( backupMsg.Trim(), 10000, wxICON_WARNING );
+    }
 
     return success;
 }
@@ -1648,11 +1613,27 @@ bool SCH_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
                     errorReporter.ShowModal();
                 }
 
-                // Non-KiCad schematics do not use a drawing-sheet (or if they do, it works
-                // differently to KiCad), so set it to an empty one.
-                DS_DATA_MODEL& drawingSheet = DS_DATA_MODEL::GetTheInstance();
-                drawingSheet.SetEmptyLayout();
-                BASE_SCREEN::m_DrawingSheetFileName = "empty.kicad_wks";
+                const wxString drawingSheetName = Schematic().Settings().m_SchDrawingSheetFileName;
+                const wxString embeddedPrefix = wxS( "kicad-embed://" );
+                const EMBEDDED_FILES::EMBEDDED_FILE* embeddedWorksheet = nullptr;
+
+                if( drawingSheetName.StartsWith( embeddedPrefix ) )
+                {
+                    embeddedWorksheet = Schematic().GetEmbeddedFiles()->GetEmbeddedFile(
+                            drawingSheetName.Mid( embeddedPrefix.length() ) );
+                }
+
+                if( !embeddedWorksheet
+                    || embeddedWorksheet->type != EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE::WORKSHEET )
+                {
+                    DS_DATA_MODEL::GetTheInstance().SetEmptyLayout();
+                    BASE_SCREEN::m_DrawingSheetFileName = DS_DATA_MODEL::EmptyLayoutName();
+                }
+                else
+                {
+                    BASE_SCREEN::m_DrawingSheetFileName = Schematic().Settings().m_SchDrawingSheetFileName;
+                    LoadDrawingSheet();
+                }
 
                 newfilename.SetPath( Prj().GetProjectPath() );
                 newfilename.SetName( Prj().GetProjectName() );

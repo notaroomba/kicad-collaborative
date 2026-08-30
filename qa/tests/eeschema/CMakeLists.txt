@@ -50,6 +50,7 @@ set( QA_EESCHEMA_SRCS
     # Base internal units (1=100nm) testing.
     test_sch_biu.cpp
     test_diff_canvas_context.cpp
+    test_mathplot_layers.cpp
     test_smith_chart_math.cpp
 
     # Shared between programs, but dependent on the BIU
@@ -61,6 +62,9 @@ set( QA_EESCHEMA_SRCS
     sch_io/database/test_sch_io_database_cycle.cpp
     sch_io/pads/test_pads_sch_parser.cpp
     sch_io/pads/test_pads_sch_import.cpp
+    sch_io/pads/test_pads_sch_binary_reader.cpp
+    sch_io/pads/test_pads_sch_binary_parser.cpp
+    sch_io/pads/test_pads_sch_sdb.cpp
     sch_io/geda/test_geda_sch_import.cpp
     sch_io/diptrace/test_diptrace_sch_import.cpp
     sch_io/pcad/test_pcad_sch_import.cpp
@@ -107,6 +111,7 @@ set( QA_EESCHEMA_SRCS
     test_issue20173_paste_subsheet.cpp
     test_issue21401_paste_pin_numbers.cpp
     test_issue21798_bus_sheet_copy.cpp
+    test_issue21821_sheet_copy_refs.cpp
     test_issue22286_pin_alternate.cpp
     test_issue22620_group_annotation.cpp
     test_issue24335_group_move_ancestor.cpp
@@ -117,9 +122,11 @@ set( QA_EESCHEMA_SRCS
     test_issue23058_jumper_pin_groups.cpp
     test_issue23143_junction_midpoint.cpp
     test_issue23403_shared_subsheet_screen.cpp
+    test_issue24870_top_level_sheet_delete.cpp
     test_issue22576_subsheet_standalone.cpp
     test_issue22694_global_hier_label.cpp
     test_issue24044_expression_net_names.cpp
+    test_issue24134_bus_fork_at_entry.cpp
     test_issue23719_global_label_chain.cpp
     test_issue24107_multiunit_grouping.cpp
     test_issue24072_symbol_arc_edit_mode.cpp
@@ -131,9 +138,12 @@ set( QA_EESCHEMA_SRCS
     test_issue24915_job_variant_fields.cpp
     test_issue24943_variant_unit_sync.cpp
     test_issue25119_bom_netlist_variant.cpp
+    test_issue25198_multi_top_level_plot.cpp
     test_issue24961_group_promotion.cpp
     test_issue24663_sheet_dnp_fields.cpp
     test_issue25112_shared_sheet_field_scope.cpp
+    test_issue25209_derived_body_styles.cpp
+    test_issue25280_pin_sync_units.cpp
     test_issue24360_root_sheetname.cpp
     test_unique_sheet_name.cpp
     test_unique_group_name.cpp
@@ -143,6 +153,9 @@ set( QA_EESCHEMA_SRCS
     test_issue24297_http_migrate.cpp
     test_issue24477_http_network_loss.cpp
     test_issue23023_http_fields.cpp
+    test_http_lib_connection.cpp
+    test_http_lib_plugin.cpp
+    http_lib_fake_server.cpp
     test_issue24403_directive_label_i18n.cpp
     test_issue24606_derived_symbol_fields.cpp
     test_issue23687_sim_value_field.cpp
@@ -177,6 +190,7 @@ set( QA_EESCHEMA_SRCS
     test_legacy_power_symbols.cpp
     test_history_autosave_legacy.cpp
     test_sch_api_enums.cpp
+    test_sch_api_handler.cpp
     test_sch_api_hittest.cpp
     test_sch_api_proto.cpp
     test_sch_commit.cpp
@@ -188,7 +202,6 @@ set( QA_EESCHEMA_SRCS
     test_pin_map_instance_override.cpp
     test_pin_map_resolver.cpp
     test_pin_map_erc.cpp
-    test_pin_map_api.cpp
     test_pin_map_netlist.cpp
     test_sch_netclass.cpp
     test_sch_pin.cpp
@@ -208,6 +221,7 @@ set( QA_EESCHEMA_SRCS
     test_flat_hierarchy.cpp
     test_multi_top_level_sheets.cpp
     test_save_load_schematic.cpp
+    test_sch_line_ending_io.cpp
     test_sch_ellipse_roundtrip.cpp
     test_project_name_instances.cpp
     test_legacy_load.cpp
@@ -219,6 +233,7 @@ set( QA_EESCHEMA_SRCS
     test_stacked_pin_conversion.cpp
     test_pin_stacked_layout.cpp
     test_pin_text_overlap.cpp
+    test_pin_number_default_style_clearance.cpp
     test_remote_symbol_download_security.cpp
     test_remote_symbol_import.cpp
     test_remote_symbol_load_from_payload.cpp

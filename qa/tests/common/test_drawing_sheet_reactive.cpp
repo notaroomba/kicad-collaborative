@@ -80,19 +80,21 @@ BOOST_AUTO_TEST_CASE( AttachRegistersProxyAsDependent )
     PAGE_INFO    page;
     TITLE_BLOCK  tb;
 
-    DS_PROXY_VIEW_ITEM proxy( unityScale, &page, nullptr, &tb, nullptr );
-
     TEXT_VAR_TRACKER tracker;
-    proxy.AttachToTracker( &tracker );
 
-    // The proxy should be registered as a dependent on every title-block key
-    // its template references.
-    BOOST_CHECK(
-            tracker.Index().DependentCount(
-                    TEXT_VAR_REF_KEY::FromToken( wxT( "REVISION" ) ) ) > 0u );
-    BOOST_CHECK(
-            tracker.Index().DependentCount(
-                    TEXT_VAR_REF_KEY::FromToken( wxT( "TITLE" ) ) ) > 0u );
+    {
+        DS_PROXY_VIEW_ITEM proxy( unityScale, &page, nullptr, &tb, nullptr );
+        proxy.AttachToTracker( &tracker );
+
+        // The proxy should be registered as a dependent on every title-block key
+        // its template references.
+        BOOST_CHECK(
+                tracker.Index().DependentCount(
+                        TEXT_VAR_REF_KEY::FromToken( wxT( "REVISION" ) ) ) > 0u );
+        BOOST_CHECK(
+                tracker.Index().DependentCount(
+                        TEXT_VAR_REF_KEY::FromToken( wxT( "TITLE" ) ) ) > 0u );
+    }
 }
 
 
@@ -101,24 +103,27 @@ BOOST_AUTO_TEST_CASE( InvalidationReachesProxyViaListener )
     PAGE_INFO    page;
     TITLE_BLOCK  tb;
 
-    DS_PROXY_VIEW_ITEM proxy( unityScale, &page, nullptr, &tb, nullptr );
     TEXT_VAR_TRACKER   tracker;
-    proxy.AttachToTracker( &tracker );
 
-    // Frames install a long-lived listener that routes invalidations to the
-    // current drawing sheet proxy. Verify the dispatch semantics with a
-    // minimal listener.
-    EDA_ITEM* seenDep = nullptr;
-    (void) tracker.AddInvalidateListener(
-            [&]( EDA_ITEM* dep, const TEXT_VAR_REF_KEY& )
-            {
-                if( dep == &proxy )
-                    seenDep = dep;
-            } );
+    {
+        DS_PROXY_VIEW_ITEM proxy( unityScale, &page, nullptr, &tb, nullptr );
+        proxy.AttachToTracker( &tracker );
 
-    tracker.InvalidateKey( TEXT_VAR_REF_KEY::FromToken( wxT( "REVISION" ) ) );
+        // Frames install a long-lived listener that routes invalidations to the
+        // current drawing sheet proxy. Verify the dispatch semantics with a
+        // minimal listener.
+        EDA_ITEM* seenDep = nullptr;
+        (void) tracker.AddInvalidateListener(
+                [&]( EDA_ITEM* dep, const TEXT_VAR_REF_KEY& )
+                {
+                    if( dep == &proxy )
+                        seenDep = dep;
+                } );
 
-    BOOST_CHECK_EQUAL( seenDep, &proxy );
+        tracker.InvalidateKey( TEXT_VAR_REF_KEY::FromToken( wxT( "REVISION" ) ) );
+
+        BOOST_CHECK_EQUAL( seenDep, &proxy );
+    }
 }
 
 
@@ -195,6 +200,47 @@ BOOST_AUTO_TEST_CASE( RepeatedTextKeepsAllInstancesWithNegativeStep )
 }
 
 
+static int repeatCountAtY( double aY )
+{
+    DS_DATA_MODEL& model = DS_DATA_MODEL::GetTheInstance();
+    model.ClearList();
+
+    DS_DATA_ITEM_TEXT* text = new DS_DATA_ITEM_TEXT( wxT( "1" ) );
+    text->SetStart( 25.0, aY, LT_CORNER );
+    text->m_RepeatCount = 100;
+    text->m_IncrementLabel = 1;
+    text->m_IncrementVector = VECTOR2D( 50.0, 0.0 );
+    model.Append( text );
+
+    PAGE_INFO   page;
+    TITLE_BLOCK tb;
+
+    DS_DRAW_ITEM_LIST drawList( unityScale );
+    drawList.BuildDrawItemsList( page, tb );
+
+    int count = 0;
+
+    for( DS_DRAW_ITEM_BASE* item = drawList.GetFirst(); item; item = drawList.GetNext() )
+    {
+        if( item->Type() == WSG_TEXT_T )
+            count++;
+    }
+
+    return count;
+}
+
+
+BOOST_AUTO_TEST_CASE( RepeatedTextAnchoredInPageMarginKeepsItsRepeats )
+{
+    int insideCount = repeatCountAtY( 1.0 );
+
+    BOOST_REQUIRE_GT( insideCount, 1 );
+
+    // A run anchored in the page margin must not lose its repeats. See #24309.
+    BOOST_CHECK_EQUAL( repeatCountAtY( -2.5 ), insideCount );
+}
+
+
 static std::vector<wxString> repeatTexts( const wxString& aBase, int aCount, int aLabelStep )
 {
     DS_DATA_MODEL& model = DS_DATA_MODEL::GetTheInstance();
@@ -236,6 +282,24 @@ BOOST_AUTO_TEST_CASE( RepeatedLabelStepsLettersAndNumbersCleanly )
     const std::vector<wxString> numbers = repeatTexts( wxT( "19" ), 3, 1 );
     const std::vector<wxString> expNumbers = { wxT( "19" ), wxT( "20" ), wxT( "21" ) };
     BOOST_CHECK_EQUAL_COLLECTIONS( numbers.begin(), numbers.end(), expNumbers.begin(), expNumbers.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RepeatedLabelStepsPastNonAsciiCharacters, *boost::unit_test::timeout( 30 ) )
+{
+    // A non-ASCII character in the label used to hang the incrementer, so the draw list never
+    // finished building (#25299). U+3042 is hiragana A, U+FF11 a full-width one
+    const std::vector<wxString> mixed = repeatTexts( wxString( L"1あ" ), 3, 1 );
+    const std::vector<wxString> expMixed = { wxString( L"1あ" ), wxString( L"2あ" ),
+                                             wxString( L"3あ" ) };
+    BOOST_CHECK_EQUAL_COLLECTIONS( mixed.begin(), mixed.end(), expMixed.begin(), expMixed.end() );
+
+    // Full-width digits have no ASCII part to step, so every copy keeps the base label
+    const std::vector<wxString> fullWidth = repeatTexts( wxString( L"１" ), 3, 1 );
+    const std::vector<wxString> expFullWidth = { wxString( L"１" ), wxString( L"１" ),
+                                                 wxString( L"１" ) };
+    BOOST_CHECK_EQUAL_COLLECTIONS( fullWidth.begin(), fullWidth.end(), expFullWidth.begin(),
+                                   expFullWidth.end() );
 }
 
 

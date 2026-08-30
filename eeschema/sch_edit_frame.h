@@ -215,6 +215,8 @@ public:
      */
     void ExecuteRemoteCommand( const char* cmdline ) override;
 
+    void HandleRemoteNetHighlight( const wxString& aNetName );
+
     void KiwayMailIn( KIWAY_MAIL_EVENT& aEvent ) override;
 
     /**
@@ -834,6 +836,7 @@ public:
 
     void FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll = true ) override;
 
+    void SetSyncingSelection( bool aSet ) { m_syncingPcbToSchSelection = aSet; }
     bool IsSyncingSelection() { return m_syncingPcbToSchSelection; }
 
     /**
@@ -844,7 +847,7 @@ public:
      * @param aSymbol is the new symbol data.
      * @param aSchematicSymbolUUID refers to the schematic symbol to update.
      */
-    void SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol, const KIID& aSchematicSymbolUUID );
+    bool SaveSymbolToSchematic( const LIB_SYMBOL& aSymbol, const KIID& aSchematicSymbolUUID );
 
     /**
      * Update the schematic's page reference map for all global labels, and refresh the labels
@@ -943,6 +946,8 @@ public:
     }
 
     void ClearToolbarControl( int aId ) override;
+
+    void StartCrossProbeFlash( const std::vector<SCH_ITEM*>& aItems );
 
     DECLARE_EVENT_TABLE()
 
@@ -1074,7 +1079,6 @@ private:
 
     void CaptureHierarchyPaneSize();
 
-    void StartCrossProbeFlash( const std::vector<SCH_ITEM*>& aItems );
     void OnCrossProbeFlashTimer( wxTimerEvent& aEvent );
 
 private:

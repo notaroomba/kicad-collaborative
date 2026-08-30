@@ -34,7 +34,6 @@ class KIWAY;
 class PROJECT;
 class PROJECT_FILE;
 class REPORTER;
-class wxSingleInstanceChecker;
 class wxFileName;
 class LOCKFILE;
 
@@ -356,6 +355,11 @@ public:
      * @return a list of open projects.
      */
     std::vector<wxString> GetOpenProjects() const;
+
+    /**
+     * Synchronize the global field name templates into every loaded project.
+     */
+    void SyncGlobalFieldNameTemplatesToProjects();
 
     /**
      * Save a loaded project.

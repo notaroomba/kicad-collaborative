@@ -52,6 +52,8 @@
 #include <confirm.h>
 #include <footprint.h>
 #include <footprint_utils.h>
+#include <footprint_library_adapter.h>
+#include <project_pcb.h>
 #include <lset.h>
 #include <trace_helpers.h>
 #include <pcbnew_id.h>
@@ -60,6 +62,7 @@
 #include <footprint_edit_frame.h>
 #include <dialog_find.h>
 #include <dialogs/dialog_find_by_properties.h>
+#include <dialogs/dialog_footprint_fields_table.h>
 #include <dialog_footprint_properties.h>
 #include <dialogs/dialog_exchange_footprints.h>
 #include <dialogs/dialog_migrate_3d_models.h>
@@ -79,6 +82,7 @@
 #include <wildcards_and_files_ext.h>
 #include <functional>
 #include <pcb_barcode.h>
+#include <pcb_griditem.h>
 #include <pcb_painter.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
@@ -104,6 +108,7 @@
 #include <tools/pcb_group_tool.h>
 #include <tools/generator_tool.h>
 #include <tools/diff_phase_skew_tool.h>
+#include <generators/via_stitch_tool.h>
 #include <tools/drc_tool.h>
 #include <tools/drc_rule_editor_tool.h>
 #include <tools/global_edit_tool.h>
@@ -153,6 +158,8 @@
 #include <richio.h>
 
 using namespace std::placeholders;
+
+wxDEFINE_EVENT( EDA_EVT_PCB_LAST_SCH_SHEET_CHANGED, wxCommandEvent );
 
 
 #define INSPECT_DRC_ERROR_DIALOG_NAME   wxT( "InspectDrcErrorDialog" )
@@ -209,6 +216,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_inspectConstraintsDlg( nullptr ),
         m_footprintDiffDlg( nullptr ),
         m_boardSetupDlg( nullptr ),
+        m_footprintFieldsTableDialog( nullptr ),
         m_designBlocksPane( nullptr ),
         m_importProperties( nullptr ),
         m_eventCounterTimer( nullptr )
@@ -309,14 +317,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // Secondary infobar stacked above the main one.  Load-time notices (such as
     // the WRL -> STEP migration prompt) belong here so they aren't clobbered by
     // the main infobar's read-only warnings, DRC rule errors, etc.
-#if defined( __WXOSX_MAC__ )
-    m_loadNoticeInfoBar = new WX_INFOBAR( GetToolCanvas() );
-#else
-    m_loadNoticeInfoBar = new WX_INFOBAR( this, &m_auimgr );
-    m_auimgr.AddPane( m_loadNoticeInfoBar,
-                      EDA_PANE().InfoBar().Name( wxS( "LoadNoticeInfoBar" ) ).Top().Layer( 1 )
-                              .Row( 1 ) );
-#endif
+    m_loadNoticeInfoBar = new WX_INFOBAR( GetToolCanvas(), wxID_ANY, true );
 
     unsigned int auiFlags = wxAUI_MGR_DEFAULT;
 #if !defined( _WIN32 )
@@ -430,16 +431,6 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // The selection filter doesn't need to grow in the vertical direction when docked
     m_auimgr.GetPane( "SelectionFilter" ).dock_proportion = 0;
     FinishAUIInitialization();
-
-    // FinishAUIInitialization only hides the primary "InfoBar" pane; the
-    // stacked load-notice bar has to be hidden explicitly.
-#if !defined( __WXOSX_MAC__ )
-    if( wxAuiPaneInfo& pane = m_auimgr.GetPane( wxS( "LoadNoticeInfoBar" ) ); pane.IsOk() )
-    {
-        pane.Hide();
-        m_auimgr.Update();
-    }
-#endif
 
     if( aui_cfg.right_panel_width > 0 )
     {
@@ -625,6 +616,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     DragAcceptFiles( true );
 
     Bind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs, this );
+    Bind( EDA_EVT_CLOSE_DIALOG_FOOTPRINT_FIELDS_TABLE, &PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog, this );
 }
 
 
@@ -1061,6 +1053,7 @@ void PCB_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new PCB_GROUP_TOOL );
     m_toolManager->RegisterTool( new CONSTRAINT_EDIT_TOOL );
     m_toolManager->RegisterTool( new GENERATOR_TOOL );
+    m_toolManager->RegisterTool( new VIA_STITCH_TOOL );
     m_toolManager->RegisterTool( new PROPERTIES_TOOL );
     m_toolManager->RegisterTool( new MULTICHANNEL_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
@@ -1628,6 +1621,9 @@ bool PCB_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
         }
     }
 
+    if( !CloseFootprintFieldsTableDialog() )
+        return false;
+
     if( IsContentModified() )
     {
         wxFileName fileName = GetBoard()->GetFileName();
@@ -1681,6 +1677,7 @@ void PCB_EDIT_FRAME::doCloseWindow()
 
     // Clean up mode-less dialogs.
     Unbind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs, this );
+    Unbind( EDA_EVT_CLOSE_DIALOG_FOOTPRINT_FIELDS_TABLE, &PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog, this );
 
     wxWindow* drcDlg = wxWindow::FindWindowByName( DIALOG_DRC_WINDOW_NAME );
 
@@ -1726,6 +1723,12 @@ void PCB_EDIT_FRAME::doCloseWindow()
     {
         m_footprintDiffDlg->Destroy();
         m_footprintDiffDlg = nullptr;
+    }
+
+    if( m_footprintFieldsTableDialog )
+    {
+        m_footprintFieldsTableDialog->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
     }
 
     // Delete the auto save file if it exists.  Only sweep when the board was actually dirtied in this session;
@@ -2102,21 +2105,18 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
         // STEP sibling.  Leaves ambiguous cases for the infobar below.
         DIALOG_MIGRATE_3D_MODELS::AutoMigrateByFilename( this );
 
-        const int unresolved = DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this );
-
-        if( unresolved > 0 )
+        if( int unresolved = DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this ) )
         {
-            wxString msg = wxString::Format( wxPLURAL( "%d WRL 3D model could not be matched "
-                                                       "to an equivalent STEP model.",
-                                                       "%d WRL 3D models could not be matched "
-                                                       "to equivalent STEP models.",
-                                                       unresolved ),
-                                             unresolved );
+            wxString msg = _( "WRL 3D model could not be matched to equivalent STEP model." );
 
-            wxHyperlinkCtrl* link = new wxHyperlinkCtrl( m_loadNoticeInfoBar, wxID_ANY,
-                                                         _( "Show options" ), wxEmptyString );
+            if( unresolved > 1 )
+            {
+                msg = wxString::Format( _( "%d WRL 3D models could not be matched to equivalent STEP models." ),
+                                        unresolved );
+            }
 
-            link->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& )>(
+            m_loadNoticeInfoBar->RemoveAllButtons();
+            m_loadNoticeInfoBar->AddLink( _( "Show options" ),
                     [this]( wxHyperlinkEvent& )
                     {
                         DIALOG_MIGRATE_3D_MODELS dlg( this );
@@ -2126,10 +2126,7 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
                         // otherwise leave it so the user can try again.
                         if( DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this ) == 0 )
                             m_loadNoticeInfoBar->Dismiss();
-                    } ) );
-
-            m_loadNoticeInfoBar->RemoveAllButtons();
-            m_loadNoticeInfoBar->AddButton( link );
+                    } );
             m_loadNoticeInfoBar->AddCloseButton();
             m_loadNoticeInfoBar->ShowMessageFor( msg, 10000, wxICON_INFORMATION );
         }
@@ -2282,6 +2279,9 @@ void PCB_EDIT_FRAME::OnModify()
 
 void PCB_EDIT_FRAME::HardRedraw()
 {
+    // The libraries were read once and then cached. A refresh is where they need to be refreshed
+    PROJECT_PCB::FootprintLibAdapter( &Prj() )->RefreshChangedLibraries();
+
     Update3DView( true, true );
 
     std::shared_ptr<CONNECTIVITY_DATA> connectivity = GetBoard()->GetConnectivity();
@@ -2392,7 +2392,7 @@ void PCB_EDIT_FRAME::ShowFindDialog()
 
     PCB_SELECTION& selection = m_toolManager->GetTool<PCB_SELECTION_TOOL>()->GetSelection();
 
-    if( selection.Size() == 1 )
+    if( selection.Size() == 1 && selection.Front() != m_findDialog->GetItem() )
     {
         EDA_ITEM* front = selection.Front();
 
@@ -2675,16 +2675,12 @@ void PCB_EDIT_FRAME::CommonSettingsChanged( int aFlags )
     }
     catch( PARSE_ERROR& )
     {
-        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, _( "Edit design rules" ), wxEmptyString );
-
-        button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+        infobar->RemoveAllButtons();
+        infobar->AddLink( _( "Edit design rules" ),
                 [&]( wxHyperlinkEvent& aEvent )
                 {
                     ShowBoardSetupDialog( _( "Custom Rules" ) );
-                } ) );
-
-        infobar->RemoveAllButtons();
-        infobar->AddButton( button );
+                } );
         infobar->AddCloseButton();
         infobar->ShowMessage( _( "Could not compile custom design rules." ), wxICON_ERROR,
                               WX_INFOBAR::MESSAGE_TYPE::DRC_RULES_ERROR );
@@ -2902,6 +2898,25 @@ DIALOG_BOOK_REPORTER* PCB_EDIT_FRAME::GetFootprintDiffDialog()
 }
 
 
+DIALOG_FOOTPRINT_FIELDS_TABLE* PCB_EDIT_FRAME::GetFootprintFieldsTableDialog()
+{
+    if( !m_footprintFieldsTableDialog )
+    {
+        auto* dlg = new DIALOG_FOOTPRINT_FIELDS_TABLE( this );
+
+        if( dlg->WasAborted() )
+        {
+            dlg->Destroy();
+            return nullptr;
+        }
+
+        m_footprintFieldsTableDialog = dlg;
+    }
+
+    return m_footprintFieldsTableDialog;
+}
+
+
 void PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent )
 {
     if( m_inspectDrcErrorDlg && aEvent.GetString() == INSPECT_DRC_ERROR_DIALOG_NAME )
@@ -2942,6 +2957,36 @@ void PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent 
 
         m_footprintDiffDlg->Destroy();
         m_footprintDiffDlg = nullptr;
+    }
+}
+
+
+bool PCB_EDIT_FRAME::CloseFootprintFieldsTableDialog()
+{
+    if( !m_footprintFieldsTableDialog )
+        return true;
+
+    DIALOG_FOOTPRINT_FIELDS_TABLE* dlg = m_footprintFieldsTableDialog;
+
+    if( !dlg->Close( false ) )
+        return false;
+
+    if( m_footprintFieldsTableDialog == dlg )
+    {
+        dlg->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
+    }
+
+    return true;
+}
+
+
+void PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog( wxCommandEvent& aEvent )
+{
+    if( m_footprintFieldsTableDialog )
+    {
+        m_footprintFieldsTableDialog->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
     }
 }
 
@@ -3037,6 +3082,10 @@ void PCB_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
 
     case PCB_SHAPE_T:
         ShowGraphicItemPropertiesDialog( static_cast<PCB_SHAPE*>( aItem ) );
+        break;
+
+    case PCB_GRIDITEM_T:
+        ShowGridItemPropertiesDialog( static_cast<PCB_GRIDITEM*>( aItem ) );
         break;
 
     case PCB_ZONE_T:

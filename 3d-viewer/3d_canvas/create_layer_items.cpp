@@ -228,9 +228,12 @@ void BOARD_ADAPTER::destroyLayers()
 }
 
 
-void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
+void BOARD_ADAPTER::createLayers( std::shared_ptr<REPORTER> aStatusReporter, std::stop_token aStop )
 {
     destroyLayers();
+
+    if( aStop.stop_requested() )
+        return;
 
     // Build Copper layers
     // Based on:
@@ -329,6 +332,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
         m_offboardPadsBack = new BVH_CONTAINER_2D;
     }
 
+    if( aStop.stop_requested() )
+        return;
+
     if( aStatusReporter )
         aStatusReporter->Report( _( "Create tracks and vias" ) );
 
@@ -353,6 +359,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             createTrackWithMargin( track, layerContainer, layer );
         }
     }
+
+    if( aStop.stop_requested() )
+        return;
 
     // Create VIAS and THTs objects and add it to holes containers
     for( PCB_LAYER_ID layer : layer_ids )
@@ -387,6 +396,8 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 const float    hole_inner_radius = static_cast<float>( holediameter / 2.0f );
                 const float    ring_radius       = static_cast<float>( viasize / 2.0f );
 
+                const bool capped = via->GetCappingMode() == CAPPING_MODE::CAPPED;
+
                 const SFVEC2F via_center( via->GetStart().x * m_biuTo3Dunits,
                                           -via->GetStart().y * m_biuTo3Dunits );
 
@@ -403,8 +414,11 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 else if( layer == layer_ids[0] ) // it only adds once the THT holes
                 {
                     // Add through hole object
-                    m_TH_ODs.Add( new FILLED_CIRCLE_2D( via_center, hole_inner_radius + thickness, *track ) );
-                    m_viaTH_ODs.Add( new FILLED_CIRCLE_2D( via_center, hole_inner_radius + thickness, *track ) );
+                    if( !capped || !( IsFrontLayer( layer ) || IsBackLayer( layer ) ) )
+                    {
+                        m_TH_ODs.Add( new FILLED_CIRCLE_2D( via_center, hole_inner_radius + thickness, *track ) );
+                        m_viaTH_ODs.Add( new FILLED_CIRCLE_2D( via_center, hole_inner_radius + thickness, *track ) );
+                    }
 
                     if( cfg.clip_silk_on_via_annuli && ring_radius > 0.0 )
                         m_viaAnnuli.Add( new FILLED_CIRCLE_2D( via_center, ring_radius, *track ) );
@@ -511,6 +525,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                                                 ERROR_INSIDE );
             }
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     // Create VIAS and THTs objects and add it to holes containers
@@ -708,6 +725,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                     }
                 }
             }
+
+            if( aStop.stop_requested() )
+                return;
         }
     }
 
@@ -739,6 +759,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             }
         }
     }
+
+    if( aStop.stop_requested() )
+        return;
 
     // Add holes of footprints
     for( FOOTPRINT* footprint : m_board->Footprints() )
@@ -864,6 +887,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     if( m_holeCount )
@@ -990,6 +1016,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     // Add footprints copper items (pads, shapes and text) to containers
@@ -1025,6 +1054,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 transformFPTextToPolySet( fp, layer, visibilityFlags, *layerPoly, fp->GetMaxError(), ERROR_INSIDE );
                 transformFPShapesToPolySet( fp, layer, *layerPoly, fp->GetMaxError(), ERROR_INSIDE );
             }
+
+            if( aStop.stop_requested() )
+                return;
         }
     }
 
@@ -1191,7 +1223,13 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
+
+    if( aStop.stop_requested() )
+        return;
 
     if( cfg.show_zones )
     {
@@ -1215,6 +1253,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                     zone->TransformShapeToPolygon( *copperPolys, layer, 0, zone->GetMaxError(), ERROR_INSIDE );
                 }
             }
+
+            if( aStop.stop_requested() )
+                return;
         }
 
         // Add zones objects
@@ -1265,6 +1306,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
     }
     // End Build Copper layers
+
+    if( aStop.stop_requested() )
+        return;
 
     // This will make a union of all added contours
     m_TH_ODPolys.Simplify();
@@ -1378,6 +1422,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
         enabledFlags.set( LAYER_3D_SOLDERMASK_TOP );
         enabledFlags.set( LAYER_3D_SOLDERMASK_BOTTOM );
     }
+
+    if( aStop.stop_requested() )
+        return;
 
     for( PCB_LAYER_ID layer : techLayerList )
     {
@@ -1496,6 +1543,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             }
         }
 
+        if( aStop.stop_requested() )
+            return;
+
         // Add item contours.  We need these if we're building vertical walls or if this is a
         // mask layer and we're differentiating copper from plated copper.
         if( ( cfg.engine == RENDER_ENGINE::OPENGL && cfg.opengl_copper_thickness )
@@ -1574,6 +1624,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
 
+            if( aStop.stop_requested() )
+                return;
+
             // NON-TENTED VIAS
             if( ( layer == F_Mask || layer == B_Mask ) )
             {
@@ -1602,6 +1655,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
 
+            if( aStop.stop_requested() )
+                return;
+
             // FOOTPRINT CHILDREN
             for( FOOTPRINT* footprint : m_board->Footprints() )
             {
@@ -1628,6 +1684,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 transformFPShapesToPolySet( footprint, layer, *layerPoly, footprint->GetMaxError(), ERROR_INSIDE );
             }
 
+            if( aStop.stop_requested() )
+                return;
+
             if( cfg.show_zones || layer == F_Mask || layer == B_Mask )
             {
                 for( ZONE* zone : m_board->Zones() )
@@ -1637,11 +1696,20 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
                 }
             }
 
+            if( aStop.stop_requested() )
+                return;
+
             // This will make a union of all added contours
             layerPoly->Simplify();
+
+            if( aStop.stop_requested() )
+                return;
         }
     }
     // End Build Tech layers
+
+    if( aStop.stop_requested() )
+        return;
 
     // If we're rendering off-board silk, also render pads of footprints which are entirely
     // outside the board outline.  This makes off-board footprints more visually recognizable.
@@ -1664,8 +1732,10 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
         m_offboardPadsBack->BuildBVH();
     }
 
-    // Simplify layer polygons
+    if( aStop.stop_requested() )
+        return;
 
+    // Simplify layer polygons
     if( aStatusReporter )
         aStatusReporter->Report( _( "Simplifying copper layer polygons" ) );
 
@@ -1697,6 +1767,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
 
         m_platedPadsFront->BuildBVH();
         m_platedPadsBack->BuildBVH();
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     if( cfg.opengl_copper_thickness && cfg.engine == RENDER_ENGINE::OPENGL )
@@ -1759,6 +1832,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             while( threadsFinished < parallelThreadCount )
                 std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     // Simplify holes polygon contours
@@ -1778,6 +1854,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
             polyLayer = m_layerHoleIdPolys[layer];
             polyLayer->Simplify();
         }
+
+        if( aStop.stop_requested() )
+            return;
     }
 
     // Build BVH (Bounding volume hierarchy) for holes and vias
@@ -1789,6 +1868,9 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
     m_TH_ODs.BuildBVH();
     m_viaAnnuli.BuildBVH();
 
+    if( aStop.stop_requested() )
+        return;
+
     m_frontCounterboreCutouts.BuildBVH();
     m_backCounterboreCutouts.BuildBVH();
     m_frontCountersinkCutouts.BuildBVH();
@@ -1796,11 +1878,17 @@ void BOARD_ADAPTER::createLayers( REPORTER* aStatusReporter )
     m_backdrillCutouts.BuildBVH();
     m_tertiarydrillCutouts.BuildBVH();
 
+    if( aStop.stop_requested() )
+        return;
+
     if( !m_layerHoleMap.empty() )
     {
         for( std::pair<const PCB_LAYER_ID, BVH_CONTAINER_2D*>& hole : m_layerHoleMap )
             hole.second->BuildBVH();
     }
+
+    if( aStop.stop_requested() )
+        return;
 
     // We only need the Solder mask to initialize the BVH
     // because..?

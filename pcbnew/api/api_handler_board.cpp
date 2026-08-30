@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <set>
 #include <magic_enum.hpp>
 
 #include <common.h>
@@ -32,8 +33,12 @@
 #include <kicad_clipboard.h>
 #include <pad.h>
 #include <pcb_base_edit_frame.h>
+#include <pcb_field.h>
 #include <pcb_group.h>
 #include <pcb_track.h>
+#include <pcb_table.h>
+#include <pcb_tablecell.h>
+
 #include <layer_ids.h>
 #include <project.h>
 #include <tool/tool_manager.h>
@@ -45,6 +50,7 @@
 
 using namespace kiapi::common::commands;
 using types::CommandStatus;
+
 using types::DocumentType;
 using types::ItemRequestStatus;
 
@@ -80,6 +86,7 @@ API_HANDLER_BOARD::API_HANDLER_BOARD( std::shared_ptr<BOARD_CONTEXT> aContext,
             &API_HANDLER_BOARD::handleExpandTextVariables );
 
     registerHandler<InteractiveMoveItems, Empty>( &API_HANDLER_BOARD::handleInteractiveMoveItems );
+    registerHandler<FlipItems, FlipItemsResponse>( &API_HANDLER_BOARD::handleFlipItems );
 
     registerHandler<SaveDocumentToString, SavedDocumentResponse>(
             &API_HANDLER_BOARD::handleSaveDocumentToString );
@@ -196,6 +203,14 @@ void API_HANDLER_BOARD::deleteItemsInternal( std::map<KIID, ItemDeletionStatus>&
     {
         if( BOARD_ITEM* item = board->ResolveItem( pair.first, true ) )
         {
+            // A footprint without its mandatory fields is not a state the editor can load or
+            // render; the const field accessors return nullptr and callers dereference them
+            if( item->Type() == PCB_FIELD_T && static_cast<PCB_FIELD*>( item )->IsMandatory() )
+            {
+                aItemsToDelete[pair.first] = ItemDeletionStatus::IDS_IMMUTABLE;
+                continue;
+            }
+
             validatedItems.push_back( item );
             aItemsToDelete[pair.first] = ItemDeletionStatus::IDS_OK;
         }
@@ -364,20 +379,40 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_BOARD::handleCreateUpdateItemsInte
 
         if( aCreate )
         {
-            if( item->Type() == PCB_FOOTPRINT_T )
+            if( item->Type() == PCB_TABLECELL_T )
             {
-                // Ensure children have unique identifiers; in case the API client created this new
-                // footprint by cloning an existing one and only changing the parent UUID.
-                item->RunOnChildren(
-                        []( BOARD_ITEM* aChild )
-                        {
-                            aChild->ResetUuid();
-                        },
-                        RECURSE );
-            }
+                PCB_TABLE* table = dynamic_cast<PCB_TABLE*>( container );
 
-            item->Serialize( newItem );
-            commit->Add( item.release() );
+                if( !table )
+                {
+                    status.set_code( ItemStatusCode::ISC_INVALID_DATA );
+                    status.set_error_message( "a table cell must target a table container" );
+                    aItemHandler( status, anyItem );
+                    continue;
+                }
+
+                PCB_TABLECELL* cell = static_cast<PCB_TABLECELL*>( item.release() );
+                commit->Modify( table );
+                table->AddCell( cell );
+                cell->Serialize( newItem );
+            }
+            else
+            {
+                if( item->Type() == PCB_FOOTPRINT_T || item->Type() == PCB_TABLE_T )
+                {
+                    // Ensure children have unique identifiers; in case the API client created
+                    // this new item by cloning an existing one and only changing the parent UUID.
+                    item->RunOnChildren(
+                            []( BOARD_ITEM* aChild )
+                            {
+                                aChild->ResetUuid();
+                            },
+                            RECURSE );
+                }
+
+                item->Serialize( newItem );
+                commit->Add( item.release() );
+            }
         }
         else
         {
@@ -654,24 +689,9 @@ HANDLER_RESULT<BoardStackupResponse> API_HANDLER_BOARD::handleGetStackup(
     if( !documentValidation )
         return tl::unexpected( documentValidation.error() );
 
-    BoardStackupResponse  response;
-    google::protobuf::Any any;
+    BoardStackupResponse response;
 
-    board()->GetStackupOrDefault().Serialize( any );
-
-    any.UnpackTo( response.mutable_stackup() );
-
-    // User-settable layer names are not stored in BOARD_STACKUP at the moment
-    for( board::BoardStackupLayer& layer : *response.mutable_stackup()->mutable_layers() )
-    {
-        if( layer.type() == board::BoardStackupLayerType::BSLT_DIELECTRIC )
-            continue;
-
-        PCB_LAYER_ID id = FromProtoEnum<PCB_LAYER_ID>( layer.layer() );
-        wxCHECK2( id != UNDEFINED_LAYER, continue );
-
-        layer.set_user_name( board()->GetLayerName( id ) );
-    }
+    board::PackBoardStackup( *board(), *response.mutable_stackup() );
 
     return response;
 }
@@ -959,6 +979,116 @@ HANDLER_RESULT<Empty> API_HANDLER_BOARD::handleInteractiveMoveItems(
     mgr->PostAPIAction( PCB_ACTIONS::move, commit );
 
     return Empty();
+}
+
+
+HANDLER_RESULT<FlipItemsResponse> API_HANDLER_BOARD::handleFlipItems(
+        const HANDLER_CONTEXT<FlipItems>& aCtx )
+{
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
+
+    auto containerResult = validateItemHeaderDocument( aCtx.Request.header() );
+
+    if( !containerResult && containerResult.error().status() == ApiStatusCode::AS_UNHANDLED )
+    {
+        // No message needed for AS_UNHANDLED; this is an internal flag for the API server
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_UNHANDLED );
+        return tl::unexpected( e );
+    }
+    else if( !containerResult )
+    {
+        return tl::unexpected( containerResult.error() );
+    }
+
+    FLIP_DIRECTION flipDirection = FromProtoEnum<FLIP_DIRECTION, BoardFlipDirection>(
+            aCtx.Request.direction() );
+
+    FlipItemsResponse response;
+    response.mutable_header()->CopyFrom( aCtx.Request.header() );
+
+    BOARD_COMMIT* commit = static_cast<BOARD_COMMIT*>( getCurrentCommit( aCtx.ClientName ) );
+
+    bool anyModified = false;
+
+    for( const types::KIID& id : aCtx.Request.items() )
+    {
+        ItemFlipResult* result = response.add_flipped_items();
+
+        std::optional<BOARD_ITEM*> optItem = getItemById( KIID( id.value() ) );
+
+        if( !optItem )
+        {
+            result->mutable_status()->set_code( ItemStatusCode::ISC_NONEXISTENT );
+            result->mutable_status()->set_error_message(
+                    fmt::format( "an item with UUID {} does not exist", id.value() ) );
+            continue;
+        }
+
+        BOARD_ITEM* boardItem = *optItem;
+
+        static const std::set<KICAD_T> flippableTypes = {
+            PCB_FOOTPRINT_T,
+            PCB_PAD_T,
+            PCB_SHAPE_T,
+            PCB_REFERENCE_IMAGE_T,
+            PCB_FIELD_T,
+            PCB_GENERATOR_T,
+            PCB_TEXT_T,
+            PCB_TEXTBOX_T,
+            PCB_TABLE_T,
+            PCB_TRACE_T,
+            PCB_VIA_T,
+            PCB_ARC_T,
+            PCB_ZONE_T,
+            PCB_GROUP_T,
+            PCB_BARCODE_T,
+            PCB_GRIDITEM_T,
+            PCB_MARKER_T,
+            PCB_POINT_T,
+            PCB_TARGET_T,
+            PCB_DIM_ALIGNED_T,
+            PCB_DIM_LEADER_T,
+            PCB_DIM_CENTER_T,
+            PCB_DIM_RADIAL_T,
+            PCB_DIM_ORTHOGONAL_T,
+        };
+
+        KICAD_T itemType = boardItem->Type();
+
+        if( !flippableTypes.contains( itemType ) )
+        {
+            result->mutable_status()->set_code( ItemStatusCode::ISC_INVALID_TYPE );
+            result->mutable_status()->set_error_message(
+                    fmt::format( "items of type {} cannot be flipped",
+                                 magic_enum::enum_name( itemType ) ) );
+            continue;
+        }
+
+        commit->Modify( boardItem, nullptr, RECURSE_MODE::RECURSE );
+        boardItem->Flip( boardItem->GetPosition(), flipDirection );
+        boardItem->Normalize();
+
+        // Maybe this should be in FOOTPRINT::Normalize?
+        if( boardItem->Type() == PCB_FOOTPRINT_T )
+            static_cast<FOOTPRINT*>( boardItem )->InvalidateComponentClassCache();
+
+        anyModified = true;
+
+        google::protobuf::Any itemBuf;
+        boardItem->Serialize( itemBuf );
+        *result->mutable_item() = std::move( itemBuf );
+
+        result->mutable_status()->set_code( ItemStatusCode::ISC_OK );
+    }
+
+    response.set_status( ItemRequestStatus::IRS_OK );
+
+    if( anyModified && !m_activeClients.count( aCtx.ClientName ) )
+        pushCurrentCommit( aCtx.ClientName, _( "Flipped items via API" ) );
+
+    return response;
 }
 
 

@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <magic_enum.hpp>
 #include <pcb_dimension.h>
 #include <pcb_track.h>
 #include <algorithm>
@@ -34,7 +35,7 @@
 #include <project/project_file.h>
 #include <advanced_config.h>
 
-const int bdsSchemaVersion = 2;
+const int bdsSchemaVersion = 3;
 
 
 BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
@@ -214,6 +215,10 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_ZoneKeepExternalFillets = false;
     m_UseHeightForLengthCalcs = true;
 
+    m_BomExportFileName = wxS( "${PROJECTNAME}.csv" );
+    m_BomSettings = BOM_PRESET::DefaultEditing();
+    m_BomFmtSettings = BOM_FMT_PRESET::CSV();
+
     // Global mask margins:
     m_SolderMaskExpansion = pcbIUScale.mmToIU( DEFAULT_SOLDERMASK_EXPANSION );
     m_SolderMaskMinWidth = pcbIUScale.mmToIU( DEFAULT_SOLDERMASK_MIN_WIDTH );
@@ -260,6 +265,18 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     // project.  Going forward, the import feature will just import from other board files (since
     // we could have multi-board projects in the future anyway) so this functionality is dropped.
 
+    m_params.emplace_back( new PARAM<wxString>( "bom_export_filename",
+            &m_BomExportFileName, "${PROJECTNAME}.csv" ) );
+
+    m_params.emplace_back( new PARAM<BOM_PRESET>( "bom_settings",
+            &m_BomSettings, BOM_PRESET::DefaultEditing() ) );
+    m_params.emplace_back( new PARAM_LIST<BOM_PRESET>( "bom_presets",
+            &m_BomPresets, {} ) );
+
+    m_params.emplace_back( new PARAM<BOM_FMT_PRESET>( "bom_fmt_settings",
+            &m_BomFmtSettings, BOM_FMT_PRESET::CSV() ) );
+    m_params.emplace_back( new PARAM_LIST<BOM_FMT_PRESET>( "bom_fmt_presets",
+            &m_BomFmtPresets, {} ) );
 
     m_params.emplace_back( new PARAM<bool>( "rules.use_height_for_length_calcs",
             &m_UseHeightForLengthCalcs, true ) );
@@ -379,8 +396,8 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
             {
                 nlohmann::json js = nlohmann::json::array();
 
-                for( const wxString& entry : m_DrcExclusions )
-                    js.push_back( { entry, m_DrcExclusionComments[ entry ] } );
+                for( const DRC_EXCLUSION& exclusion : m_DrcExclusions )
+                    js.push_back( exclusion );
 
                 return js;
             },
@@ -393,15 +410,12 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
 
                 for( const nlohmann::json& entry : aObj )
                 {
-                    if( entry.is_array() )
+                    if( entry.is_object() )
                     {
-                        wxString serialized = entry[0].get<wxString>();
-                        m_DrcExclusions.insert( serialized );
-                        m_DrcExclusionComments[ serialized ] = entry[1].get<wxString>();
-                    }
-                    else if( entry.is_string() )
-                    {
-                        m_DrcExclusions.insert( entry.get<wxString>() );
+                        DRC_EXCLUSION exclusion = entry.get<DRC_EXCLUSION>();
+
+                        if( !exclusion.GetSortKey().empty() )
+                            m_DrcExclusions.insert( exclusion );
                     }
                 }
             },
@@ -947,13 +961,15 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
             "defaults.zones.corner_smoothing",
             [&]() -> int
             {
-                return m_defaultZoneSettings.GetCornerSmoothingType();
+                return static_cast<int>( m_defaultZoneSettings.GetCornerSmoothingType() );
             },
             [&]( int aVal )
             {
-                m_defaultZoneSettings.SetCornerSmoothingType( aVal );
+                m_defaultZoneSettings.SetCornerSmoothingType(
+                        magic_enum::enum_cast<ZONE_SETTINGS::CORNER_SMOOTHING>( aVal ).value_or(
+                                ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING ) );
             },
-            ZONE_SETTINGS::SMOOTHING_NONE ) );
+            static_cast<int>( ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING ) ) );
 
     m_params.emplace_back( new PARAM_LAMBDA<double>(
             "defaults.zones.corner_radius",
@@ -1007,13 +1023,13 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
             },
             [&]( const nlohmann::json& aJson )
             {
-                if( aJson.contains( "width" ) && aJson.contains( "height" )
-                        && aJson.contains( "drill" ) )
+                if( aJson.contains( "width" ) && aJson.contains( "height" ) && aJson.contains( "drill" ) )
                 {
                     VECTOR2I sz;
                     sz.x = pcbIUScale.mmToIU( aJson["width"].get<double>() );
                     sz.y = pcbIUScale.mmToIU( aJson["height"].get<double>() );
 
+                    m_Pad_Master->SetPadstackMode( PADSTACK::MODE::NORMAL );
                     m_Pad_Master->SetSize( PADSTACK::ALL_LAYERS, sz );
 
                     int drill = pcbIUScale.mmToIU( aJson["drill"].get<double>() );
@@ -1032,6 +1048,7 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
 
     m_params.emplace_back( new PARAM<bool>( "zones_allow_external_fillets",
             &m_ZoneKeepExternalFillets, false ) );
+
 
     registerMigration( 0, 1, std::bind( &BOARD_DESIGN_SETTINGS::migrateSchema0to1, this ) );
 
@@ -1065,6 +1082,8 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
 
                 return true;
             } );
+
+    registerMigration( 2, 3, std::bind( &BOARD_DESIGN_SETTINGS::migrateSchema2to3, this ) );
 }
 
 
@@ -1121,7 +1140,6 @@ void BOARD_DESIGN_SETTINGS::initFromOther( const BOARD_DESIGN_SETTINGS& aOther )
     m_MinSilkTextThickness        = aOther.m_MinSilkTextThickness;
     m_DRCSeverities               = aOther.m_DRCSeverities;
     m_DrcExclusions               = aOther.m_DrcExclusions;
-    m_DrcExclusionComments        = aOther.m_DrcExclusionComments;
     m_ZoneKeepExternalFillets     = aOther.m_ZoneKeepExternalFillets;
     m_MaxError                    = aOther.m_MaxError;
     m_SolderMaskExpansion         = aOther.m_SolderMaskExpansion;
@@ -1169,6 +1187,11 @@ void BOARD_DESIGN_SETTINGS::initFromOther( const BOARD_DESIGN_SETTINGS& aOther )
     m_gridOrigin               = aOther.m_gridOrigin;
     m_HasStackup               = aOther.m_HasStackup;
     m_UseHeightForLengthCalcs  = aOther.m_UseHeightForLengthCalcs;
+    m_BomExportFileName        = aOther.m_BomExportFileName;
+    m_BomSettings              = aOther.m_BomSettings;
+    m_BomPresets               = aOther.m_BomPresets;
+    m_BomFmtSettings           = aOther.m_BomFmtSettings;
+    m_BomFmtPresets            = aOther.m_BomFmtPresets;
 
     m_trackWidthIndex     = aOther.m_trackWidthIndex;
     m_viaSizeIndex        = aOther.m_viaSizeIndex;
@@ -1222,7 +1245,6 @@ bool BOARD_DESIGN_SETTINGS::operator==( const BOARD_DESIGN_SETTINGS& aOther ) co
     if( m_MinSilkTextThickness   != aOther.m_MinSilkTextThickness ) return false;
     if( m_DRCSeverities          != aOther.m_DRCSeverities ) return false;
     if( m_DrcExclusions          != aOther.m_DrcExclusions ) return false;
-    if( m_DrcExclusionComments   != aOther.m_DrcExclusionComments ) return false;
     if( m_ZoneKeepExternalFillets     != aOther.m_ZoneKeepExternalFillets ) return false;
     if( m_MaxError                    != aOther.m_MaxError ) return false;
     if( m_SolderMaskExpansion         != aOther.m_SolderMaskExpansion ) return false;
@@ -1274,6 +1296,11 @@ bool BOARD_DESIGN_SETTINGS::operator==( const BOARD_DESIGN_SETTINGS& aOther ) co
     if( m_gridOrigin               != aOther.m_gridOrigin ) return false;
     if( m_HasStackup               != aOther.m_HasStackup ) return false;
     if( m_UseHeightForLengthCalcs  != aOther.m_UseHeightForLengthCalcs ) return false;
+    if( m_BomExportFileName        != aOther.m_BomExportFileName ) return false;
+    if( m_BomSettings              != aOther.m_BomSettings ) return false;
+    if( m_BomPresets               != aOther.m_BomPresets ) return false;
+    if( m_BomFmtSettings           != aOther.m_BomFmtSettings ) return false;
+    if( m_BomFmtPresets            != aOther.m_BomFmtPresets ) return false;
     if( m_trackWidthIndex          != aOther.m_trackWidthIndex ) return false;
     if( m_viaSizeIndex             != aOther.m_viaSizeIndex ) return false;
     if( m_diffPairIndex            != aOther.m_diffPairIndex ) return false;
@@ -1349,6 +1376,47 @@ bool BOARD_DESIGN_SETTINGS::migrateSchema0to1()
     precision += extraDigits;
 
     Set( precision_ptr, precision );
+
+    return true;
+}
+
+
+bool BOARD_DESIGN_SETTINGS::migrateSchema2to3()
+{
+    // Schema 2 to 3: convert DRC exclusions from legacy pipe-delimited strings to ProtoJSON
+    std::optional<nlohmann::json> opt = Get<nlohmann::json>( "drc_exclusions" );
+
+    if( !opt )
+        return true;
+
+    nlohmann::json migrated = nlohmann::json::array();
+
+    for( const nlohmann::json& entry : *opt )
+    {
+        if( entry.is_object() )
+        {
+            migrated.push_back( entry );
+        }
+        else if( entry.is_array() && entry.size() > 0 )
+        {
+            wxString markerData = entry[0].get<wxString>();
+            wxString comment    = entry.size() > 1 ? entry[1].get<wxString>() : wxString();
+
+            DRC_EXCLUSION ex = DRC_EXCLUSION::FromLegacyStrings( markerData, comment );
+
+            if( !ex.GetSortKey().empty() )
+                migrated.push_back( ex );
+        }
+        else if( entry.is_string() )
+        {
+            DRC_EXCLUSION ex = DRC_EXCLUSION::FromLegacyStrings( entry.get<wxString>(), wxString() );
+
+            if( !ex.GetSortKey().empty() )
+                migrated.push_back( ex );
+        }
+    }
+
+    Set( "drc_exclusions", migrated );
 
     return true;
 }
@@ -1918,6 +1986,7 @@ bool BOARD_DESIGN_SETTINGS::GetTextUpright( PCB_LAYER_ID aLayer ) const
 
 void BOARD_DESIGN_SETTINGS::SetDefaultMasterPad()
 {
+    m_Pad_Master->SetPadstackMode( PADSTACK::MODE::NORMAL );
     m_Pad_Master->SetSizeX( pcbIUScale.mmToIU( DEFAULT_PAD_WIDTH_MM ) );
     m_Pad_Master->SetSizeY( pcbIUScale.mmToIU( DEFAULT_PAD_HEIGTH_MM ) );
     m_Pad_Master->SetDrillShape( PAD_DRILL_SHAPE::CIRCLE );

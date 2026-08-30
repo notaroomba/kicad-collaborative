@@ -82,8 +82,18 @@ tl::expected<bool, ApiResponseStatus> API_HANDLER_FOOTPRINT::validateDocumentInt
     }
 
     LIB_ID target_fp = footprintContext()->GetLoadedFPID();
+
+    if( !target_fp.IsValid() )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "no footprint is currently open" );
+        return tl::unexpected( e );
+    }
+
     std::string actual_lib  = target_fp.GetUniStringLibNickname().ToStdString();                                                                            
     std::string actual_name = target_fp.GetUniStringLibItemName().ToStdString();
+
     if( 0 != aDocument.lib_id().library_nickname().compare( actual_lib ) )
     {
         ApiResponseStatus e;
@@ -350,6 +360,7 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
         case PCB_TEXT_T:
         case PCB_TEXTBOX_T:
         case PCB_BARCODE_T:
+        case PCB_TABLE_T:
         {
             handledAnything = true;
             bool inserted = false;
@@ -365,6 +376,31 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
 
             if( inserted )
                 typesInserted.insert( type );
+
+            break;
+        }
+
+        case PCB_TABLECELL_T:
+        {
+            handledAnything = true;
+            bool inserted = false;
+
+            for( BOARD_ITEM* item : footprint->GraphicalItems() )
+            {
+                if( item->Type() != PCB_TABLE_T )
+                    continue;
+
+                item->RunOnChildren(
+                        [&]( BOARD_ITEM* child )
+                        {
+                            items.emplace_back( child );
+                            inserted = true;
+                        },
+                        RECURSE_MODE::NO_RECURSE );
+            }
+
+            if( inserted )
+                typesInserted.insert( PCB_TABLECELL_T );
 
             break;
         }

@@ -91,7 +91,6 @@ mpLayer::mpLayer() :
         m_type( mpLAYER_UNDEF )
 {
     SetPen( (wxPen&) *wxBLACK_PEN );
-    SetFont( (wxFont&) *wxNORMAL_FONT );
     m_continuous = false;   // Default
     m_showName = true;      // Default
     m_visible = true;
@@ -249,7 +248,7 @@ void mpInfoLegend::Plot( wxDC& dc, mpWindow& w )
         }
 
         dc.SetBrush( m_brush );
-        dc.SetFont( m_font );
+        dc.SetFont( GetPlotFont() );
 
         const int baseWidth = mpLEGEND_MARGIN * 2 + mpLEGEND_LINEWIDTH;
         int       textX = baseWidth, textY = mpLEGEND_MARGIN;
@@ -283,6 +282,10 @@ void mpInfoLegend::Plot( wxDC& dc, mpWindow& w )
             textY += mpLEGEND_MARGIN;
             m_dim.height = textY;
             dc.DrawRectangle( m_dim.x, m_dim.y, m_dim.width, m_dim.height );
+
+            // Set explicitly: other layers (e.g. plot cursors) leave their own text colour on
+            // the DC, which would otherwise leak into the legend's labels.
+            dc.SetTextForeground( w.GetForegroundColour() );
 
             for( unsigned int p2 = 0; p2 < w.CountAllLayers(); p2++ )
             {
@@ -364,7 +367,7 @@ void mpFX::Plot( wxDC& dc, mpWindow& w )
 
         if( !m_name.IsEmpty() && m_showName )
         {
-            dc.SetFont( m_font );
+            dc.SetFont( GetPlotFont() );
 
             wxCoord tx, ty;
             dc.GetTextExtent( m_name, &tx, &ty );
@@ -430,7 +433,7 @@ void mpFY::Plot( wxDC& dc, mpWindow& w )
 
         if( !m_name.IsEmpty() && m_showName )
         {
-            dc.SetFont( m_font );
+            dc.SetFont( GetPlotFont() );
 
             wxCoord tx, ty;
             dc.GetTextExtent( m_name, &tx, &ty );
@@ -745,7 +748,7 @@ void mpFXY::Plot( wxDC& dc, mpWindow& w )
 
     if( !m_name.IsEmpty() && m_showName )
     {
-        dc.SetFont( m_font );
+        dc.SetFont( GetPlotFont() );
 
         wxCoord tx, ty;
         dc.GetTextExtent( m_name, &tx, &ty );
@@ -1118,7 +1121,6 @@ IMPLEMENT_DYNAMIC_CLASS( mpScaleXLog, mpScaleXBase )
 mpScaleXBase::mpScaleXBase( const wxString& name, int flags, bool ticks, unsigned int type )
 {
     SetName( name );
-    SetFont( (wxFont&) *wxSMALL_FONT );
     SetPen( (wxPen&) *wxGREY_PEN );
     m_flags = flags;
     m_ticks = ticks;
@@ -1150,7 +1152,7 @@ void mpScaleXBase::Plot( wxDC& dc, mpWindow& w )
     if( m_visible )
     {
         dc.SetPen( m_pen );
-        dc.SetFont( m_font );
+        dc.SetFont( GetPlotFont() );
         int orgy = 0;
 
         const int extend = w.GetScrX();    ///2;
@@ -1294,7 +1296,6 @@ IMPLEMENT_DYNAMIC_CLASS( mpScaleY, mpLayer )
 mpScaleY::mpScaleY( const wxString& name, int flags, bool ticks )
 {
     SetName( name );
-    SetFont( (wxFont&) *wxSMALL_FONT );
     SetPen( (wxPen&) *wxGREY_PEN );
     m_flags = flags;
     m_ticks = ticks;
@@ -1314,7 +1315,7 @@ void mpScaleY::Plot( wxDC& dc, mpWindow& w )
     if( m_visible )
     {
         dc.SetPen( m_pen );
-        dc.SetFont( m_font );
+        dc.SetFont( GetPlotFont() );
 
         int orgx = 0;
 
@@ -1832,7 +1833,12 @@ void mpWindow::Fit( double xMin, double xMax, double yMin, double yMax, const wx
     // The caller wanting to print should perform another Fit() afterwards to restore this
     // object's state.
     if( !isPrinting )
+    {
         UpdateAll();
+
+        if( ( directions & wxHORIZONTAL ) != 0 )
+            OnXViewChanged();
+    }
 }
 
 
@@ -1893,6 +1899,8 @@ bool mpWindow::SetXView( double pos, double desiredMax, double desiredMin )
     m_desiredXmax   = desiredMax;
     m_desiredXmin   = desiredMin;
     AdjustLimitedView( wxHORIZONTAL );
+
+    OnXViewChanged();
 
     return true;
 }
@@ -2305,6 +2313,9 @@ void mpWindow::DoZoom( const wxPoint& centerPoint, double zoomFactor, wxOrientat
     }
 
     UpdateAll();
+
+    if( horizontally )
+        OnXViewChanged();
 }
 
 

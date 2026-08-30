@@ -42,7 +42,7 @@ if( APPLE )
     set( EXTRA_PYTEST_ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=${CAIRO_LIB_BASE}" )
 
 elseif ( MSVC )
-    set( EXTRA_PYTEST_ENVIRONMENT "FONTCONFIG_PATH=${CMAKE_SOURCE_DIR}/qa/resources/windows/fonts/" )
+    set( EXTRA_PYTEST_ENVIRONMENT "FONTCONFIG_PATH=${CMAKE_SOURCE_DIR}/qa/resources/windows/fonts/;PYTHONUTF8=1;PYTHONIOENCODING=utf-8" )
 endif()
 
 # Use pytest-xdist for parallel CLI test execution when available
@@ -73,3 +73,8 @@ set_tests_properties( qa_cli
 )
 
 setup_qa_env( qa_cli )
+
+# Target to install python dependencies for QA via pip
+add_custom_target( qa_python_deps
+        COMMAND ${PYTHON_EXECUTABLE} -m ensurepip
+        COMMAND ${PYTHON_EXECUTABLE} -m pip install -r ${CMAKE_CURRENT_SOURCE_DIR}/requirements.txt )

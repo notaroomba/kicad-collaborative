@@ -24,6 +24,7 @@
 #define __BOX2_H
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 
@@ -351,13 +352,11 @@ public:
 
         topLeft.x = std::max( me.m_Pos.x, rect.m_Pos.x );
 
-        bottomRight.x = std::min( size_type( me.m_Pos.x ) + me.m_Size.x,
-                                  size_type( rect.m_Pos.x ) + rect.m_Size.x );
+        bottomRight.x = std::min( me.GetRight(), rect.GetRight() );
 
         topLeft.y = std::max( me.m_Pos.y, rect.m_Pos.y );
 
-        bottomRight.y = std::min( size_type( me.m_Pos.y ) + me.m_Size.y,
-                                  size_type( rect.m_Pos.y ) + rect.m_Size.y );
+        bottomRight.y = std::min( me.GetBottom(), rect.GetBottom() );
 
         if( topLeft.x < bottomRight.x && topLeft.y < bottomRight.y )
             return BOX2<Vec>( topLeft, SizeVec( bottomRight ) - topLeft );
@@ -792,7 +791,12 @@ public:
 
     ecoord_type Distance( const Vec& aP ) const
     {
-        return sqrt( SquaredDistance( aP ) );
+        const double dist = std::sqrt( static_cast<double>( SquaredDistance( aP ) ) );
+
+        if constexpr( std::is_floating_point<ecoord_type>() )
+            return static_cast<ecoord_type>( dist );
+        else
+            return KiROUND<double, ecoord_type>( dist );
     }
 
     /**
@@ -838,7 +842,12 @@ public:
      */
     ecoord_type Distance( const BOX2<Vec>& aBox ) const
     {
-        return sqrt( SquaredDistance( aBox ) );
+        const double dist = std::sqrt( static_cast<double>( SquaredDistance( aBox ) ) );
+
+        if constexpr( std::is_floating_point<ecoord_type>() )
+            return static_cast<ecoord_type>( dist );
+        else
+            return KiROUND<double, ecoord_type>( dist );
     }
 
     /**

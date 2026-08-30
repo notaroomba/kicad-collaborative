@@ -370,18 +370,36 @@ const VECTOR2D CalcArcCenter( const VECTOR2D& aStart, const VECTOR2D& aEnd,
 
 const VECTOR2D CalcArcCenter( const VECTOR2D& aStart, const VECTOR2D& aMid, const VECTOR2D& aEnd )
 {
-    // If the three input points are clustered within a 10 IU bounding box, no
-    // meaningful circumcircle exists so return the centroid
-    constexpr double kCoincidentRadius = 5.0;
+    // No unique circumcircle exists if any two of the three points coincide
+    // Bbox below catches all three; pairwise checks below catch just one pair
+    constexpr double kClusterExtent = 5.0;
+
+    // A pair separated by more than integer rounding is a real, if small, arc.  This is not the
+    // cluster extent above: three points inside a 5 IU box are all noise, but two points 4 IU
+    // apart with a distant third still span a healthy triangle
+    constexpr double kCoincidentRadius        = 2.0;
+    constexpr double kCoincidentRadiusSquared = kCoincidentRadius * kCoincidentRadius;
 
     auto [minX, maxX] = std::minmax( { aStart.x, aMid.x, aEnd.x } );
     auto [minY, maxY] = std::minmax( { aStart.y, aMid.y, aEnd.y } );
 
-    if( maxX - minX < kCoincidentRadius && maxY - minY < kCoincidentRadius )
+    if( maxX - minX < kClusterExtent && maxY - minY < kClusterExtent )
     {
         return VECTOR2D( ( aStart.x + aMid.x + aEnd.x ) / 3.0,
                         ( aStart.y + aMid.y + aEnd.y ) / 3.0 );
     }
+
+    auto coincident = []( const VECTOR2D& a, const VECTOR2D& b )
+                      {
+                          return ( a - b ).SquaredEuclideanNorm() < kCoincidentRadiusSquared;
+                      };
+
+    // Two distinct points fall back to the chord midpoint, same as the diameter-arc paths below
+    if( coincident( aStart, aMid ) || coincident( aMid, aEnd ) )
+        return VECTOR2D( ( aStart.x + aEnd.x ) / 2.0, ( aStart.y + aEnd.y ) / 2.0 );
+
+    if( coincident( aStart, aEnd ) )
+        return VECTOR2D( ( aStart.x + aMid.x ) / 2.0, ( aStart.y + aMid.y ) / 2.0 );
 
     VECTOR2D center;
 

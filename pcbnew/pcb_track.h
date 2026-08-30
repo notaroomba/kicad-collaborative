@@ -469,6 +469,8 @@ public:
     const BOX2I GetBoundingBox() const override;
     const BOX2I GetBoundingBox( PCB_LAYER_ID aLayer ) const;
 
+    void SetPadstackMode( PADSTACK::MODE aMode ) { m_padStack.SetMode( aMode ); }
+
     void SetWidth( int aWidth ) override;
     int GetWidth() const override;
 
@@ -851,6 +853,6 @@ private:
 
     bool         m_isFree;                   ///< "Free" vias don't get their nets auto-updated
 
-    std::mutex                                  m_zoneLayerOverridesMutex;
+    mutable std::mutex                          m_zoneLayerOverridesMutex;
     std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE> m_zoneLayerOverrides;
 };
