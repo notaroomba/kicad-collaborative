@@ -87,6 +87,17 @@ def main():
     os.makedirs(fw_dir, exist_ok=True)
     fw_ref = "@executable_path/../Frameworks/"
 
+    # The dev bundle ships no SharedSupport/schemas; the Plugin and Content
+    # Manager errors at startup without pcm.v*.schema.json.  The build tree
+    # collects every schema the app looks up into <build>/schemas.
+    schemas_src = os.path.join(build_dir, "schemas")
+    if os.path.isdir(schemas_src):
+        shutil.copytree(
+            schemas_src,
+            os.path.join(contents, "SharedSupport", "schemas"),
+            dirs_exist_ok=True,
+        )
+
     # Every Mach-O we ship: executables, kifaces, plugins, frameworks.
     def shipped_machos():
         for root, _dirs, files in os.walk(contents):
