@@ -22,32 +22,38 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          # UCRT64, not MINGW64: newer MSYS2 packages (nng among them) are
+          # no longer built for the legacy msvcrt environment.  The package
+          # set mirrors MSYS2's own mingw-w64-kicad PKGBUILD.
+          msystem: UCRT64
           update: true
           install: >-
             git
             zip
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-boost
-            mingw-w64-x86_64-cairo
-            mingw-w64-x86_64-curl-winssl
-            mingw-w64-x86_64-glew
-            mingw-w64-x86_64-glm
-            mingw-w64-x86_64-harfbuzz
-            mingw-w64-x86_64-libgit2
-            mingw-w64-x86_64-ngspice
-            mingw-w64-x86_64-nng
-            mingw-w64-x86_64-opencascade
-            mingw-w64-x86_64-protobuf
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-swig
-            mingw-w64-x86_64-unixodbc
-            mingw-w64-x86_64-wxwidgets3.2-msw
-            mingw-w64-x86_64-zstd
-            mingw-w64-x86_64-nsis
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-abseil-cpp
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-freeglut
+            mingw-w64-ucrt-x86_64-glew
+            mingw-w64-ucrt-x86_64-glm
+            mingw-w64-ucrt-x86_64-libgit2
+            mingw-w64-ucrt-x86_64-ngspice
+            mingw-w64-ucrt-x86_64-nng
+            mingw-w64-ucrt-x86_64-opencascade
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-protobuf
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-swig
+            mingw-w64-ucrt-x86_64-wxwidgets3.2-msw
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-zstd
+            mingw-w64-ucrt-x86_64-nsis
 
       - name: Require WebSocket-capable curl
         # The collaboration client talks WebSockets through libcurl; a build
@@ -89,7 +95,7 @@ jobs:
             copied=0
             for f in stage/bin/*.exe stage/bin/*.dll; do
               [ -f "$f" ] || continue
-              for dep in $(ldd "$f" | awk '/\/mingw64\//{print $3}'); do
+              for dep in $(ldd "$f" | awk '/\/ucrt64\//{print $3}'); do
                 base=$(basename "$dep")
                 if [ ! -f "stage/bin/$base" ]; then
                   cp "$dep" stage/bin/
