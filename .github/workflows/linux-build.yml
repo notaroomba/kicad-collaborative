@@ -19,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build ccache pkg-config \
-            libwxgtk3.2-dev libglew-dev libglm-dev libcairo2-dev libpixman-1-dev \
+            libwxgtk3.2-dev libwxgtk-webview3.2-dev libglew-dev libglm-dev libcairo2-dev libpixman-1-dev \
             libboost-all-dev libgit2-dev libngspice0-dev ngspice-dev \
             libocct-modeling-algorithms-dev libocct-modeling-data-dev \
             libocct-data-exchange-dev libocct-visualization-dev \
