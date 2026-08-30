@@ -1,0 +1,92 @@
+name: linux-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache pkg-config \
+            libwxgtk3.2-dev libglew-dev libglm-dev libcairo2-dev libpixman-1-dev \
+            libboost-all-dev libgit2-dev libngspice0-dev ngspice-dev \
+            libocct-modeling-algorithms-dev libocct-modeling-data-dev \
+            libocct-data-exchange-dev libocct-visualization-dev \
+            libocct-foundation-dev libocct-ocaf-dev \
+            protobuf-compiler libprotobuf-dev libzstd-dev unixodbc-dev \
+            libgtk-3-dev libsecret-1-dev libnng-dev python3 \
+            libssl-dev zlib1g-dev gettext
+
+      - name: Build WebSocket-capable curl
+        # Ubuntu's curl predates enabled-by-default WebSockets, and the
+        # collaboration client needs them; build and bundle our own.
+        run: |
+          CURL_VER=8.14.1
+          curl -sSLO https://curl.se/download/curl-$CURL_VER.tar.gz
+          tar xf curl-$CURL_VER.tar.gz
+          cd curl-$CURL_VER
+          ./configure --prefix=/opt/collab-curl --with-openssl --enable-websockets \
+            --disable-manual --without-libpsl > /dev/null
+          make -j$(nproc) > /dev/null
+          sudo make install > /dev/null
+          /opt/collab-curl/bin/curl-config --protocols | grep -qiE "^WSS?$"
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_INSTALL_PREFIX=/usr
+          -DCURL_INCLUDE_DIR=/opt/collab-curl/include
+          -DCURL_LIBRARY=/opt/collab-curl/lib/libcurl.so
+          -DKICAD_BUILD_I18N=OFF
+          -DKICAD_BUILD_QA_TESTS=OFF
+          -DKICAD_UPDATE_CHECK=OFF
+          -DKICAD_USE_PCH=ON
+          -DKICAD_INSTALL_DEMOS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package tarball
+        run: |
+          VERSION=$(tr -d '[:space:]' < packaging/VERSION)
+          DESTDIR=$PWD/pkgroot cmake --install build > /dev/null
+          # Bundle the WebSocket curl beside the binaries; the launcher
+          # prefers it via LD_LIBRARY_PATH.
+          mkdir -p pkgroot/usr/lib/kicad-collab
+          cp -a /opt/collab-curl/lib/libcurl.so* pkgroot/usr/lib/kicad-collab/
+          cat > pkgroot/usr/bin/kicad-collaborative << 'EOF'
+          #!/bin/sh
+          here=$(dirname "$(readlink -f "$0")")
+          export LD_LIBRARY_PATH="$here/../lib/kicad-collab${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$here/kicad" "$@"
+          EOF
+          chmod +x pkgroot/usr/bin/kicad-collaborative
+          tar -C pkgroot -czf KiCad-Collaborative-$VERSION-linux-x64.tar.gz usr
+          ls -la KiCad-Collaborative-$VERSION-linux-x64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kicad-collaborative-linux
+          path: KiCad-Collaborative-*-linux-x64.tar.gz
+          if-no-files-found: error
