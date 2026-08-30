@@ -290,6 +290,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if( MINGW )
+    # libstdc++ 16 includes windows.h from <thread>, leaking winapi macros
+    # (LoadLibrary, GetClassInfo, ...) into nearly every TU, where they
+    # mangle KiCad/wx method names.  The wrapper header in this directory
+    # shadows windows.h and undoes those macros after each real inclusion.
+    include_directories( BEFORE SYSTEM ${CMAKE_SOURCE_DIR}/cmake/mingw-winundef )
+endif()
+
 # Xcode older than 26 gates std::jthread / std::stop_token behind the
 # experimental library. Enable it for C++20.
 if( APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
