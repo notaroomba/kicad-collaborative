@@ -1,0 +1,114 @@
+name: windows-installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths:
+      - "packaging/windows/**"
+      - ".github/workflows/windows-installer.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 340
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-ccache
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-cairo
+            mingw-w64-x86_64-curl-winssl
+            mingw-w64-x86_64-glew
+            mingw-w64-x86_64-glm
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-libgit2
+            mingw-w64-x86_64-ngspice
+            mingw-w64-x86_64-nng
+            mingw-w64-x86_64-opencascade
+            mingw-w64-x86_64-protobuf
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-swig
+            mingw-w64-x86_64-unixodbc
+            mingw-w64-x86_64-wxwidgets3.2-msw
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-nsis
+
+      - name: Require WebSocket-capable curl
+        # The collaboration client talks WebSockets through libcurl; a build
+        # against a curl without WS support connects to nothing, silently.
+        run: curl-config --protocols | grep -qiE "^WSS?$" || { echo "MSYS2 curl lacks WebSocket support"; exit 1; }
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_INSTALL_PREFIX=$PWD/stage
+          -DKICAD_BUILD_QA_TESTS=OFF
+          -DKICAD_UPDATE_CHECK=OFF
+          -DKICAD_USE_PCH=ON
+          -DKICAD_INSTALL_DEMOS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Install to staging
+        run: cmake --install build
+
+      - name: Bundle runtime DLLs
+        # Recursively copy every MinGW DLL the shipped binaries load, so the
+        # installer works on a machine without MSYS2.
+        run: |
+          set -e
+          copied=1
+          while [ $copied -eq 1 ]; do
+            copied=0
+            for f in stage/bin/*.exe stage/bin/*.dll; do
+              [ -f "$f" ] || continue
+              for dep in $(ldd "$f" | awk '/\/mingw64\//{print $3}'); do
+                base=$(basename "$dep")
+                if [ ! -f "stage/bin/$base" ]; then
+                  cp "$dep" stage/bin/
+                  copied=1
+                fi
+              done
+            done
+          done
+          ls stage/bin/*.dll | wc -l
+
+      - name: Build installer
+        run: |
+          VERSION=$(grep -m1 "KICAD_SEMANTIC_VERSION \"" cmake/KiCadVersion.cmake | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" || echo 10.99)
+          makensis -DVERSION="$VERSION" -DSTAGEDIR="$(cygpath -w $PWD/stage)" packaging/windows/installer.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kicad-collaborative-windows-installer
+          path: |
+            packaging/windows/KiCad-Collaborative-*-windows-x64.exe
+            KiCad-Collaborative-*-windows-x64.exe
+          if-no-files-found: error
