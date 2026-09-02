@@ -85,7 +85,9 @@ function navigate(path, replace) {
 window.addEventListener("popstate", route);
 function route() {
   const m = location.pathname.match(/^\/p\/([0-9a-f-]{36})(?:\/edit|\/live)?\/?$/i);
-  if (m) openEditor(m[1]); else showHome();
+  if (m) { openEditor(m[1]); return; }
+  if (location.pathname.startsWith("/gallery")) state.homeTab = "explore";
+  showHome();
 }
 
 // ---------- session ----------

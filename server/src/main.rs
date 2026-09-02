@@ -147,8 +147,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/comments/{id}",
             axum::routing::patch(http::update_comment).delete(http::delete_comment),
         )
-        .route("/gallery", get(pages::gallery_page))
-        .route("/p/{id}", get(pages::project_page))
+        .route("/gallery", get(pages::app_page))
+        .route("/gallery-legacy", get(pages::gallery_page))
+        .route("/p/{id}", get(pages::app_page))
+        .route("/p/{id}/about", get(pages::project_page))
         .route("/p/{id}/live", get(pages::app_page))
         .route("/p/{id}/live-legacy", get(pages::live_page))
         .route("/api/projects/{id}/archive", get(http::download_archive))
