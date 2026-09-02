@@ -232,7 +232,8 @@ async function openEditor(id) {
     setConn("err", "no board"); return;
   }
   await loadBase(true);
-  fitView();
+  lastStageW = stage.clientWidth;
+  requestAnimationFrame(fitView);
   api(`/api/projects/${id}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
   loadComments();
   loadHistory();
@@ -286,11 +287,24 @@ function renderLayers() {
   }));
 }
 
+let objFilter = "";
+function fpName(fp) { return (fp.lib || "?").split(":").pop(); }
 function renderObjects() {
-  const byLib = {};
-  for (const fp of items) { const k = (fp.lib || "?").split(":")[0]; byLib[k] = (byLib[k] || 0) + 1; }
-  $("#objects").innerHTML = `<div class="layer"><span>Footprints</span><span class="cnt">${items.length}</span></div>` +
-    Object.entries(byLib).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `<div class="layer" style="padding-left:18px"><span class="muted">${esc(k)}</span><span class="cnt">${n}</span></div>`).join("");
+  const el = $("#objects");
+  const q = objFilter.toLowerCase();
+  const list = items.filter((fp) => !q || fpName(fp).toLowerCase().includes(q))
+    .sort((a, b) => fpName(a).localeCompare(fpName(b)));
+  if (!el.dataset.ready) {
+    el.innerHTML = `<input id="objSearch" placeholder="Filter footprints…" style="width:100%;margin-bottom:6px;background:var(--canvas);border:1px solid var(--line);border-radius:4px;padding:4px 6px;color:var(--text)"><div id="objList"></div>`;
+    el.dataset.ready = "1";
+    $("#objSearch").oninput = (ev) => { objFilter = ev.target.value; renderObjects(); };
+  }
+  $("#objList").innerHTML = `<div class="layer"><span class="muted">Footprints</span><span class="cnt">${list.length}/${items.length}</span></div>` +
+    list.slice(0, 300).map((fp) => `<div class="layer" data-fp="${esc(fp.id)}" style="cursor:pointer;padding-left:14px${selected && selected.id === fp.id ? ";background:var(--panel-2)" : ""}"><span>${esc(fpName(fp))}</span><span class="cnt">${Math.round(fp.rot || 0)}°</span></div>`).join("");
+  $$("[data-fp]", el).forEach((row) => row.onclick = () => {
+    const fp = items.find((f) => f.id === row.dataset.fp); if (!fp) return;
+    selected = fp; drawSelection(); renderProps(); centerOn(fp.x / 1e6, fp.y / 1e6); renderObjects();
+  });
 }
 
 // ---- view transform ----
@@ -299,12 +313,29 @@ function applyView() {
   $("#sbZoom").textContent = Math.round(zoom * 100) + "%";
   drawComments(); drawSelection();
 }
+function contentBoxMm() {
+  // Union of the board outline and copper: what a person means by "the board".
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+  for (const hex of ["D0D2CD", "C83434", "4D7FC4"]) {
+    for (const el of (layers[hex] || { nodes: [] }).nodes) {
+      if (typeof el.getBBox !== "function") continue;
+      let b; try { b = el.getBBox(); } catch { continue; }
+      if (!b.width && !b.height) continue;
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height); n++;
+    }
+  }
+  if (!n || x1 - x0 < 1 || y1 - y0 < 1) return [vb[0], vb[1], vb[2], vb[3]];
+  return [x0, y0, x1 - x0, y1 - y0];
+}
 function fitView() {
   const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (!sw || !sh) { requestAnimationFrame(fitView); return; }
   world.style.width = sw + "px";
-  const wh = sw * vb[3] / vb[2];
-  zoom = Math.min(sw / sw, sh / wh) * 0.96;
-  panX = (sw - sw * zoom) / 2; panY = (sh - wh * zoom) / 2;
+  const ppm = sw / vb[2];                       // px per mm at zoom 1
+  const [bx, by, bw, bh] = contentBoxMm();
+  zoom = Math.min(40, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * 0.85));
+  panX = sw / 2 - ((bx - vb[0]) + bw / 2) * ppm * zoom;
+  panY = sh / 2 - ((by - vb[1]) + bh / 2) * ppm * zoom;
   applyView();
 }
 function zoomBy(factor, cx, cy) {
@@ -319,7 +350,14 @@ stage.addEventListener("wheel", (ev) => {
   const r = stage.getBoundingClientRect();
   zoomBy(Math.pow(1.0018, -ev.deltaY), ev.clientX - r.left, ev.clientY - r.top);
 }, { passive: false });
-new ResizeObserver(() => { if (state.view === "editor") applyView(); }).observe(stage);
+let lastStageW = 0;
+new ResizeObserver(() => {
+  if (state.view !== "editor") return;
+  const sw = stage.clientWidth;
+  if (sw && lastStageW && sw !== lastStageW) { const r = sw / lastStageW; panX *= r; panY *= r; world.style.width = sw + "px"; }
+  if (sw) lastStageW = sw;
+  applyView();
+}).observe(stage);
 
 function worldMm(ev) {
   const r = world.getBoundingClientRect();
@@ -384,8 +422,8 @@ stage.addEventListener("pointerdown", (ev) => {
   if (tool === "comment") { placeComment(ev); return; }
   const [x, y] = worldMm(ev);
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
-  if (!best) { selected = null; drawSelection(); renderProps(); return; }
-  selected = best; drawSelection(); renderProps();
+  if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
+  selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
   drag = { fp: best, startMm: [x, y], curMm: [x, y], moved: false };
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();

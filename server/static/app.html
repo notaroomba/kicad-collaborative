@@ -111,6 +111,8 @@
              background: var(--panel); border-bottom: 1px solid var(--line); }
   #toolbar .name { font-weight: 600; margin-right: 8px; }
   #toolbar .tsep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+  #hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+  @media (max-width: 1250px) { #hint { display: none; } }
   .tb { background: none; border: 1px solid transparent; border-radius: 4px; padding: 3px 6px; color: var(--text);
         display: inline-flex; align-items: center; gap: 6px; height: 26px; }
   .tb:hover { background: var(--panel-2); }
@@ -141,7 +143,7 @@
           grid-template-rows: 30px 1fr; min-height: 0; }
   #dockTabs { display: flex; border-bottom: 1px solid var(--line); }
   #dockTabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
-                     color: var(--muted); padding: 0; font-size: 12px; }
+                     color: var(--muted); padding: 0; font-size: 11px; white-space: nowrap; overflow: hidden; }
   #dockTabs button.active { color: var(--text); border-bottom-color: var(--accent); }
   #dockTabs button .n { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 4px;
                         border-radius: 999px; background: var(--panel-2); font-size: 10px; }
@@ -227,7 +229,7 @@
         <button data-act="zoomout">Zoom out <kbd>−</kbd></button>
         <button data-act="fit">Zoom to fit <kbd>F</kbd></button>
         <div class="sep"></div>
-        <button data-act="tab-appearance">Appearance</button>
+        <button data-act="tab-appearance">Layers</button>
         <button data-act="tab-props">Properties</button>
         <button data-act="tab-peers">Collaborators</button>
         <button data-act="tab-comments">Comments</button>
@@ -290,8 +292,8 @@
     </div>
     <aside id="dock">
       <div id="dockTabs">
-        <button data-tab="appearance" class="active">Appearance</button>
-        <button data-tab="props">Properties</button>
+        <button data-tab="appearance" class="active">Layers</button>
+        <button data-tab="props">Props</button>
         <button data-tab="peers">Peers<span class="n" id="peerN">0</span></button>
         <button data-tab="comments">Comments<span class="n" id="cmtN">0</span></button>
         <button data-tab="history">History</button>
