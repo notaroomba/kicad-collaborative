@@ -115,7 +115,7 @@ function showHome() {
 function projectCard(p, roleLabel) {
   const id = p.projectId;
   return `<div class="card" data-open="${id}">
-    <div class="thumb"><img loading="lazy" src="/api/projects/${id}/preview.svg" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'⬡'}))"></div>
+    <div class="thumb"><img loading="lazy" src="/api/projects/${id}/preview.svg" alt="" onload="this.classList.add('ready')" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ph',textContent:'⬡'}))"></div>
     <div class="body"><div class="name">${esc(p.name)}</div>
     <div class="meta"><span>${esc(p.ownerLogin)}</span><span>·</span><span>${ago(p.updatedAt)}</span>
     ${roleLabel ? `<span class="pill ${esc(roleLabel)}">${esc(roleLabel)}</span>` : ""}</div></div></div>`;
@@ -232,7 +232,6 @@ async function openEditor(id) {
     setConn("err", "no board"); return;
   }
   await loadBase(true);
-  lastStageW = stage.clientWidth;
   requestAnimationFrame(fitView);
   api(`/api/projects/${id}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
   loadComments();
@@ -336,6 +335,7 @@ function fitView() {
   zoom = Math.min(40, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * 0.85));
   panX = sw / 2 - ((bx - vb[0]) + bw / 2) * ppm * zoom;
   panY = sh / 2 - ((by - vb[1]) + bh / 2) * ppm * zoom;
+  lastStageW = sw;   // the resize observer must not rescale pans computed at this width
   applyView();
 }
 function zoomBy(factor, cx, cy) {
