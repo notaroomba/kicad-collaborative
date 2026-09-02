@@ -232,7 +232,7 @@ async function openEditor(id) {
     setConn("err", "no board"); return;
   }
   await loadBase(true);
-  requestAnimationFrame(fitView);
+  setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
   api(`/api/projects/${id}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
   loadComments();
   loadHistory();
@@ -328,7 +328,7 @@ function contentBoxMm() {
 }
 function fitView() {
   const sw = stage.clientWidth, sh = stage.clientHeight;
-  if (!sw || !sh) { requestAnimationFrame(fitView); return; }
+  if (!sw || !sh) { setTimeout(fitView, 100); return; }
   world.style.width = sw + "px";
   const ppm = sw / vb[2];                       // px per mm at zoom 1
   const [bx, by, bw, bh] = contentBoxMm();

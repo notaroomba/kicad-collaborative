@@ -95,21 +95,42 @@ pub async fn join_page(
     let url = format!("{}/j/{}", state.cfg.public_url, token);
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
+<title>Join {name} — KiCad Collaborative</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #1b1f23; color: #d9dee4;
+          font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }}
+  .card {{ width: min(560px, calc(100vw - 32px)); background: #23282d; border: 1px solid #3a4148; border-radius: 12px; padding: 28px 32px; }}
+  .brand {{ display: flex; align-items: center; gap: 8px; font-weight: 600; color: #8a949e; font-size: 12px; margin-bottom: 18px; }}
+  .logo {{ width: 16px; height: 16px; border-radius: 4px; background: #001023; position: relative; }}
+  .logo::before, .logo::after {{ content: ""; position: absolute; width: 5px; height: 5px; border-radius: 50%; }}
+  .logo::before {{ left: 2px; top: 2px; background: #C83434; }} .logo::after {{ right: 2px; bottom: 2px; background: #4D7FC4; }}
+  h1 {{ margin: 0 0 4px; font-size: 22px; }}
+  .muted {{ color: #8a949e; font-size: 13px; }}
+  .choices {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0 14px; }}
+  .choice {{ display: block; text-decoration: none; color: inherit; border: 1px solid #3a4148; border-radius: 10px; padding: 14px 16px; background: #2b3137; }}
+  .choice:hover {{ border-color: #5b9dd9; }}
+  .choice b {{ display: block; font-size: 15px; margin-bottom: 4px; }}
+  .choice.web {{ border-color: #5b9dd9; background: #5b9dd922; }}
+  .linkbox {{ display: flex; gap: 8px; margin-top: 8px; }}
+  .linkbox input {{ flex: 1; padding: 8px 10px; border-radius: 6px; border: 1px solid #3a4148; background: #001023; color: #d9dee4; font: 12px ui-monospace, monospace; }}
+  .btn {{ padding: 8px 14px; border-radius: 6px; border: 1px solid #3a4148; background: #2b3137; color: #d9dee4; font: inherit; cursor: pointer; text-decoration: none; }}
+  @media (max-width: 520px) {{ .choices {{ grid-template-columns: 1fr; }} }}
+</style></head><body>
 <div class="card">
+  <div class="brand"><span class="logo"></span>KiCad Collaborative</div>
   <h1>{name}</h1>
   <p class="muted">Shared by <b>{owner}</b> &middot; you'll join as <b>{role}</b></p>
-  <p style="margin-top:24px">
-    <a class="btn" href="kicad-collab://join/{token}">Open in KiCad</a>
-    <a class="btn secondary" href="/p/{pid}/edit">Open in browser</a>
-  </p>
-  <p class="muted">Nothing happened? Copy the link below and paste it into KiCad &rarr;
-     <b>File &rarr; Join Shared Project…</b></p>
-  <div class="linkbox">
-    <input id="lnk" readonly value="{url}">
-    <button type="button" class="btn secondary" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied!';">Copy</button>
+  <div class="choices">
+    <a class="choice web" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
+    <a class="choice" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">Full editing in the desktop app (installed separately).</span></a>
   </div>
   {signin}
+  <p class="muted">Desktop app didn't open? Paste this link into KiCad Collaborative &rarr; <b>File &rarr; Join Shared Project…</b></p>
+  <div class="linkbox">
+    <input id="lnk" readonly value="{url}">
+    <button type="button" class="btn" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied!';">Copy</button>
+  </div>
 </div></body></html>"#,
         name = esc(&project.name),
         owner = esc(&owner_login),
