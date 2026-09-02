@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use axum_extra::extract::cookie::CookieJar;
 
@@ -28,6 +29,21 @@ const STYLE: &str = r#"
                    background: transparent; color: inherit; }
 </style>
 "#;
+
+/// The single-page web app (home + online editor).  Client-side routed: the
+/// same shell serves `/`, `/app` and `/p/{id}/edit`.
+pub async fn app_page() -> Html<&'static str> {
+    Html(include_str!("../static/app.html"))
+}
+
+pub async fn app_js() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+         (header::CACHE_CONTROL, "no-cache")],
+        include_str!("../static/app.js"),
+    )
+        .into_response()
+}
 
 pub async fn index() -> Html<String> {
     Html(format!(

@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiCad Collaborative</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23001023'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23C83434'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%234D7FC4'/%3E%3Cpath d='M11 11 L21 21' stroke='%23F2EDA1' stroke-width='2.5'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #1b1f23;          /* app chrome */
+    --panel: #23282d;
+    --panel-2: #2b3137;
+    --line: #3a4148;
+    --text: #d9dee4;
+    --muted: #8a949e;
+    --accent: #5b9dd9;      /* KiCad-ish selection blue */
+    --hot: #ffb43a;         /* selection ring / highlights */
+    --danger: #e0563e;
+    --ok: #4cbf7a;
+    --canvas: #001023;      /* KiCad default board background */
+    --font: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 var(--font); overflow: hidden; }
+  a { color: var(--accent); text-decoration: none; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #454d55; border-radius: 6px; border: 2px solid var(--panel); }
+
+  #app { display: grid; grid-template-rows: 32px 1fr 24px; height: 100%; }
+
+  /* ---- menubar ---- */
+  #menubar { display: flex; align-items: center; gap: 2px; padding: 0 8px; background: var(--panel);
+             border-bottom: 1px solid var(--line); user-select: none; }
+  #menubar .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-right: 12px; }
+  #menubar .brand .logo { width: 18px; height: 18px; border-radius: 4px; background: var(--canvas);
+                          position: relative; }
+  #menubar .brand .logo::before, #menubar .brand .logo::after { content: ""; position: absolute; width: 5px;
+                          height: 5px; border-radius: 50%; }
+  #menubar .brand .logo::before { left: 3px; top: 3px; background: #C83434; }
+  #menubar .brand .logo::after { right: 3px; bottom: 3px; background: #4D7FC4; }
+  #menubar .brand .ver { font-weight: 400; color: var(--muted); font-size: 11px; }
+  .menu { position: relative; }
+  .menu > button { background: none; border: 0; padding: 4px 10px; border-radius: 4px; color: var(--text); }
+  .menu > button:hover, .menu.open > button { background: var(--panel-2); }
+  .menu .dd { display: none; position: absolute; top: 100%; left: 0; min-width: 220px; background: var(--panel-2);
+              border: 1px solid var(--line); border-radius: 6px; padding: 4px; z-index: 50;
+              box-shadow: 0 10px 30px #0008; }
+  .menu.open .dd { display: block; }
+  .dd button, .dd a { display: flex; justify-content: space-between; width: 100%; text-align: left;
+                      background: none; border: 0; padding: 6px 10px; border-radius: 4px; color: var(--text); }
+  .dd button:hover, .dd a:hover { background: var(--accent); color: white; }
+  .dd button:disabled { opacity: .4; cursor: default; }
+  .dd .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+  .dd kbd { font: 11px var(--mono); color: var(--muted); }
+  #menubar .spacer { flex: 1; }
+  #menubar .user { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  #menubar .user img { width: 20px; height: 20px; border-radius: 50%; }
+  .btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 5px 12px;
+         color: var(--text); }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+  .btn.danger { border-color: var(--danger); color: var(--danger); }
+  .btn.sm { padding: 3px 8px; font-size: 12px; }
+
+  /* ---- views ---- */
+  .view { display: none; min-height: 0; }
+  .view.active { display: grid; }
+
+  /* ---- home ---- */
+  #home { grid-template-columns: 220px 1fr; }
+  #home nav { background: var(--panel); border-right: 1px solid var(--line); padding: 12px 8px;
+              display: flex; flex-direction: column; gap: 2px; }
+  #home nav button { text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 5px;
+                     color: var(--text); display: flex; align-items: center; gap: 10px; }
+  #home nav button.active, #home nav button:hover { background: var(--panel-2); }
+  #home nav .sec { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+                   padding: 14px 10px 4px; }
+  #home main { overflow: auto; padding: 24px 32px; }
+  #home h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+  #home h2 { font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase;
+             letter-spacing: .08em; margin: 28px 0 12px; }
+  .lead { color: var(--muted); margin: 0 0 16px; max-width: 64ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+          cursor: pointer; transition: border-color .12s, transform .12s; }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card .thumb { aspect-ratio: 4 / 3; background: var(--canvas); display: grid; place-items: center;
+                 overflow: hidden; }
+  .card .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
+  .card .thumb .ph { color: #2f4b6b; font-size: 30px; }
+  .card .body { padding: 10px 12px; }
+  .card .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .meta { color: var(--muted); font-size: 12px; display: flex; gap: 8px; margin-top: 2px; }
+  .pill { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .pill.owner { border-color: var(--hot); color: var(--hot); }
+  .pill.editor { border-color: var(--ok); color: var(--ok); }
+  .empty { color: var(--muted); padding: 24px; border: 1px dashed var(--line); border-radius: 8px;
+           text-align: center; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input { flex: 1; background: var(--canvas); border: 1px solid var(--line); border-radius: 5px;
+               padding: 7px 10px; color: var(--text); }
+
+  /* ---- editor ---- */
+  #editor { grid-template-columns: 40px 1fr 300px; grid-template-rows: 34px 1fr; }
+  #toolbar { grid-column: 1 / 4; display: flex; align-items: center; gap: 4px; padding: 0 8px;
+             background: var(--panel); border-bottom: 1px solid var(--line); }
+  #toolbar .name { font-weight: 600; margin-right: 8px; }
+  #toolbar .tsep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
+  .tb { background: none; border: 1px solid transparent; border-radius: 4px; padding: 3px 6px; color: var(--text);
+        display: inline-flex; align-items: center; gap: 6px; height: 26px; }
+  .tb:hover { background: var(--panel-2); }
+  .tb.on { background: var(--panel-2); border-color: var(--accent); }
+  .tb svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
+            stroke-linecap: round; stroke-linejoin: round; }
+  #ltools { background: var(--panel); border-right: 1px solid var(--line); display: flex;
+            flex-direction: column; align-items: center; padding-top: 6px; gap: 4px; }
+  #ltools .tb { width: 30px; height: 30px; padding: 0; justify-content: center; }
+  #stage { position: relative; background: var(--canvas); overflow: hidden; touch-action: none;
+           cursor: crosshair; }
+  #stage.pan { cursor: grab; }
+  #stage.comment { cursor: cell; }
+  #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; }
+  #world svg#base { display: block; width: 100%; height: auto; }
+  #overlay { position: absolute; inset: 0; pointer-events: none; }
+  #cmtPanel { position: absolute; display: none; background: var(--panel-2); border: 1px solid var(--line);
+              border-radius: 8px; padding: 10px 12px; min-width: 260px; max-width: 340px;
+              box-shadow: 0 10px 30px #000a; font-size: 12px; z-index: 5; }
+  #cmtPanel .meta { color: var(--muted); font-size: 11px; }
+  #cmtPanel .cbody { margin: 2px 0 8px; white-space: pre-wrap; }
+  #cmtPanel textarea { width: 100%; background: var(--canvas); border: 1px solid var(--line);
+                       border-radius: 5px; color: var(--text); padding: 6px; }
+  #cmtPanel p { margin: 8px 0 0; display: flex; gap: 6px; }
+  #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel-2);
+                   border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: none; }
+  #dock { background: var(--panel); border-left: 1px solid var(--line); display: grid;
+          grid-template-rows: 30px 1fr; min-height: 0; }
+  #dockTabs { display: flex; border-bottom: 1px solid var(--line); }
+  #dockTabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
+                     color: var(--muted); padding: 0; font-size: 12px; }
+  #dockTabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  #dockTabs button .n { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 4px;
+                        border-radius: 999px; background: var(--panel-2); font-size: 10px; }
+  .pane { display: none; overflow: auto; padding: 10px; min-height: 0; }
+  .pane.active { display: block; }
+  .pane h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+             margin: 8px 0 6px; }
+  .layer { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; }
+  .layer:hover { background: var(--panel-2); }
+  .layer .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #0006; }
+  .layer input { margin: 0; accent-color: var(--accent); }
+  .layer .cnt { margin-left: auto; color: var(--muted); font: 11px var(--mono); }
+  .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; }
+  .kv label { color: var(--muted); }
+  .kv input { background: var(--canvas); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
+              color: var(--text); font-family: var(--mono); width: 100%; }
+  .kv .ro { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peer { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 4px; }
+  .peer:hover { background: var(--panel-2); }
+  .peer .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .peer .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .peer .me { color: var(--muted); font-size: 11px; }
+  .thread { padding: 8px; border-radius: 5px; border: 1px solid var(--line); margin-bottom: 8px; cursor: pointer; }
+  .thread:hover { border-color: var(--accent); }
+  .thread.resolved { opacity: .55; }
+  .thread .meta { color: var(--muted); font-size: 11px; display: flex; justify-content: space-between; }
+  .thread .body { margin-top: 3px; white-space: pre-wrap; }
+  .ckpt { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 4px; }
+  .ckpt:hover { background: var(--panel-2); }
+  .ckpt .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ckpt .when { color: var(--muted); font: 11px var(--mono); }
+  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .note { color: var(--muted); font-size: 12px; margin: 6px 0; }
+
+  /* ---- status bar ---- */
+  #statusbar { display: flex; align-items: center; gap: 16px; padding: 0 10px; background: var(--panel);
+               border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--muted); }
+  #statusbar .conn::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+                             background: var(--muted); margin-right: 6px; }
+  #statusbar .conn.live::before { background: var(--ok); }
+  #statusbar .conn.err::before { background: var(--danger); }
+  #statusbar .spacer { flex: 1; }
+
+  /* ---- toast & popover ---- */
+  #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: var(--panel-2);
+           border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; opacity: 0;
+           transition: opacity .2s; pointer-events: none; z-index: 100; }
+  #toast.show { opacity: 1; }
+  #popover { position: fixed; display: none; background: var(--panel-2); border: 1px solid var(--line);
+             border-radius: 8px; padding: 12px 14px; min-width: 320px; box-shadow: 0 10px 30px #000a;
+             z-index: 60; }
+  #popover h4 { margin: 0 0 8px; font-size: 13px; }
+  #popover input { width: 100%; background: var(--canvas); border: 1px solid var(--line); border-radius: 5px;
+                   padding: 6px 8px; color: var(--text); font-family: var(--mono); font-size: 12px; }
+  @media (max-width: 900px) {
+    #editor { grid-template-columns: 40px 1fr; }
+    #dock { display: none; }
+    #home { grid-template-columns: 1fr; }
+    #home nav { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="menubar">
+    <div class="brand"><span class="logo"></span>KiCad Collaborative <span class="ver">1.0</span></div>
+    <div class="menu" data-menu="file"><button>File</button>
+      <div class="dd">
+        <button data-act="home">Home <kbd>Esc</kbd></button>
+        <button data-act="share">Copy share link…</button>
+        <button data-act="checkpoint">Create checkpoint…</button>
+        <div class="sep"></div>
+        <button data-act="archive">Download project (.zip)</button>
+        <button data-act="clone">Clone to my account</button>
+        <div class="sep"></div>
+        <button data-act="kicad">Open in KiCad Collaborative…</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="view"><button>View</button>
+      <div class="dd">
+        <button data-act="zoomin">Zoom in <kbd>+</kbd></button>
+        <button data-act="zoomout">Zoom out <kbd>−</kbd></button>
+        <button data-act="fit">Zoom to fit <kbd>F</kbd></button>
+        <div class="sep"></div>
+        <button data-act="tab-appearance">Appearance</button>
+        <button data-act="tab-props">Properties</button>
+        <button data-act="tab-peers">Collaborators</button>
+        <button data-act="tab-comments">Comments</button>
+        <button data-act="tab-history">History</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="help"><button>Help</button>
+      <div class="dd">
+        <a href="https://github.com/notaroomba/kicad-collaborative/releases" target="_blank">Download desktop app ↗</a>
+        <a href="https://github.com/notaroomba/kicad-collaborative" target="_blank">Source on GitHub ↗</a>
+        <div class="sep"></div>
+        <button data-act="about">About</button>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="user" id="userBox"><a class="btn sm" id="signinBtn" href="/auth/github/login">Sign in with GitHub</a></div>
+  </div>
+
+  <!-- ===== Home ===== -->
+  <section id="home" class="view">
+    <nav>
+      <button data-nav="recent" class="active"><span>🕘</span> Recent projects</button>
+      <button data-nav="explore"><span>🌐</span> Explore</button>
+      <button data-nav="open"><span>🔗</span> Open a share link</button>
+      <div class="sec">Desktop</div>
+      <a class="btn" style="margin:0 2px" href="https://github.com/notaroomba/kicad-collaborative/releases" target="_blank">Get the app ↗</a>
+    </nav>
+    <main id="homeMain"></main>
+  </section>
+
+  <!-- ===== Editor ===== -->
+  <section id="editor" class="view">
+    <div id="toolbar">
+      <button class="tb" data-act="home" title="Back to projects"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <span class="name" id="projName">Project</span>
+      <span class="pill" id="roleChip">viewer</span>
+      <span class="tsep"></span>
+      <button class="tb" data-act="zoomin" title="Zoom in (+)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5M8 11h6M11 8v6"/></svg></button>
+      <button class="tb" data-act="zoomout" title="Zoom out (−)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5M8 11h6"/></svg></button>
+      <button class="tb" data-act="fit" title="Zoom to fit (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      <span class="tsep"></span>
+      <button class="tb" data-act="share" title="Copy share link"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/></svg> Share</button>
+      <button class="tb" data-act="checkpoint" title="Create a named checkpoint"><svg viewBox="0 0 24 24"><path d="M12 3v12M6 9l6 6 6-6M4 21h16"/></svg> Checkpoint</button>
+      <span style="flex:1"></span>
+      <span class="muted" id="hint">scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes</span>
+    </div>
+    <div id="ltools">
+      <button class="tb on" data-tool="select" title="Select / move (S)"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg></button>
+      <button class="tb" data-tool="pan" title="Pan (H)"><svg viewBox="0 0 24 24"><path d="M8 13V6a1.5 1.5 0 013 0v5M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8a5 5 0 01-10 0v-2a1.5 1.5 0 013 0"/></svg></button>
+      <button class="tb" data-tool="comment" title="Add comment (C)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
+      <button class="tb" data-tool="follow" title="Follow a collaborator"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg></button>
+    </div>
+    <div id="stage">
+      <div id="world">
+        <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
+        <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></svg>
+      </div>
+      <div id="cmtPanel"></div>
+      <div id="signinOverlay">Viewing as a guest. <a id="signinLink" href="/auth/github/login">Sign in</a> to edit, comment and see live cursors.</div>
+    </div>
+    <aside id="dock">
+      <div id="dockTabs">
+        <button data-tab="appearance" class="active">Appearance</button>
+        <button data-tab="props">Properties</button>
+        <button data-tab="peers">Peers<span class="n" id="peerN">0</span></button>
+        <button data-tab="comments">Comments<span class="n" id="cmtN">0</span></button>
+        <button data-tab="history">History</button>
+      </div>
+      <div class="pane active" data-pane="appearance"><h3>Layers</h3><div id="layers"></div><h3>Objects</h3><div id="objects"></div></div>
+      <div class="pane" data-pane="props"><div id="props"><p class="note">Select a footprint on the board to see its properties.</p></div></div>
+      <div class="pane" data-pane="peers"><div id="peers"></div></div>
+      <div class="pane" data-pane="comments"><div class="actions"><button class="btn sm" data-tool="comment">+ Add comment</button></div><div id="threads"></div></div>
+      <div class="pane" data-pane="history"><div class="actions"><button class="btn sm" data-act="checkpoint">+ Checkpoint…</button><button class="btn sm" data-act="refreshHistory">Refresh</button></div><div id="history"></div></div>
+    </aside>
+  </section>
+
+  <div id="statusbar">
+    <span class="conn" id="conn">offline</span>
+    <span id="sbProject"></span>
+    <span class="spacer"></span>
+    <span id="sbCursor">X 0.000  Y 0.000 mm</span>
+    <span id="sbZoom">100%</span>
+    <span id="sbEdits"></span>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="popover"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
