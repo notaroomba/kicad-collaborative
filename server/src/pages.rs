@@ -101,6 +101,7 @@ pub async fn join_page(
   <p class="muted">Shared by <b>{owner}</b> &middot; you'll join as <b>{role}</b></p>
   <p style="margin-top:24px">
     <a class="btn" href="kicad-collab://join/{token}">Open in KiCad</a>
+    <a class="btn secondary" href="/p/{pid}/edit">Open in browser</a>
   </p>
   <p class="muted">Nothing happened? Copy the link below and paste it into KiCad &rarr;
      <b>File &rarr; Join Shared Project…</b></p>
@@ -113,6 +114,7 @@ pub async fn join_page(
         name = esc(&project.name),
         owner = esc(&owner_login),
         role = esc(&link.role),
+        pid = link.project_id,
         token = esc(&token),
         url = esc(&url),
         signin = signin_html,

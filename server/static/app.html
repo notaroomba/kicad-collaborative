@@ -90,7 +90,13 @@
   .card:hover { border-color: var(--accent); transform: translateY(-1px); }
   .card .thumb { aspect-ratio: 4 / 3; background: var(--canvas); display: grid; place-items: center;
                  overflow: hidden; }
-  .card .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
+  .card .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 6px; opacity: 0; transition: opacity .25s; }
+  .card .thumb img.ready { opacity: 1; }
+  .card .thumb::before { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, #ffffff0a 50%, transparent 70%);
+                         background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  .card .thumb { position: relative; }
+  .card .thumb:has(img.ready)::before, .card .thumb:has(.ph)::before { display: none; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   .card .thumb .ph { color: #2f4b6b; font-size: 30px; }
   .card .body { padding: 10px 12px; }
   .card .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
