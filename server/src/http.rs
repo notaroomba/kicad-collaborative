@@ -362,6 +362,38 @@ pub async fn preview_svg(
 /// and position scraped from the latest board snapshot.  This is a read-only
 /// convenience for the browser — the authoritative document semantics still
 /// live entirely in the editors.
+/// Project summary for the web app: public projects for anyone, private
+/// ones for members.  Carries the docs so the client can join the board.
+pub async fn project_info(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    let viewer = auth::user_from_jar(&state, &jar).await;
+    let role = match &viewer {
+        Some(u) => persist::effective_role(&state.pool, u.id, id).await?,
+        None => None,
+    };
+    if !project.public && role.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let owner = persist::get_user(&state.pool, project.owner_id).await?;
+    let docs: Vec<_> = persist::project_documents(&state.pool, id)
+        .await?
+        .iter()
+        .map(|d| json!({ "docId": d.id, "path": d.path, "docType": d.doc_type }))
+        .collect();
+    Ok(Json(json!({
+        "projectId": project.id, "name": project.name, "description": project.description,
+        "public": project.public, "ownerId": project.owner_id,
+        "ownerLogin": owner.map(|o| o.login).unwrap_or_default(),
+        "role": role, "docs": docs,
+        "viewer": viewer.map(|u| json!({ "id": u.id, "login": u.login })),
+    }))
+    .into_response())
+}
+
 pub async fn board_items(
     State(state): State<AppState>,
     jar: axum_extra::extract::CookieJar,

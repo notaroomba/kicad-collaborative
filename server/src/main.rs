@@ -113,7 +113,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = Router::new()
-        .route("/", get(pages::index))
+        .route("/", get(pages::app_page))
+        .route("/app", get(pages::app_page))
+        .route("/p/{id}/edit", get(pages::app_page))
+        .route("/static/app.js", get(pages::app_js))
+        .route("/welcome", get(pages::index))
+        .route("/api/projects/{id}/info", get(http::project_info))
         .route("/healthz", get(http::healthz))
         .route("/j/{token}", get(pages::join_page))
         .route("/auth/github/login", get(auth::github_login))
