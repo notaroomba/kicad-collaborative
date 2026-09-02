@@ -228,7 +228,7 @@ async function openEditor(id) {
   $("#signinLink").href = `/auth/github/login?next=${encodeURIComponent(location.pathname)}`;
   $$("[data-act=share],[data-act=checkpoint],[data-tool=comment]").forEach((b) => { b.disabled = viewOnly && b.dataset.tool !== "comment" ? true : false; });
   world.style.width = stage.clientWidth + "px";
-  layers = {};
+  layers = {}; viewTouched = false;
   if (!board) {
     base.replaceChildren(); $("#layers").innerHTML = `<p class="note">This project has no board yet — only schematics. Open it in the desktop app.</p>`;
     setConn("err", "no board"); return;
@@ -341,6 +341,7 @@ function fitView() {
   applyView();
 }
 function zoomBy(factor, cx, cy) {
+  viewTouched = true;
   if (cx === undefined) { cx = stage.clientWidth / 2; cy = stage.clientHeight / 2; }
   const next = Math.min(40, Math.max(0.2, zoom * factor));
   panX = cx - (cx - panX) * (next / zoom);
@@ -352,11 +353,14 @@ stage.addEventListener("wheel", (ev) => {
   const r = stage.getBoundingClientRect();
   zoomBy(Math.pow(1.0018, -ev.deltaY), ev.clientX - r.left, ev.clientY - r.top);
 }, { passive: false });
-let lastStageW = 0;
+let lastStageW = 0, viewTouched = false;   // until the user pans/zooms, resizes just refit
 new ResizeObserver(() => {
   if (state.view !== "editor") return;
   const sw = stage.clientWidth;
-  if (sw && lastStageW && sw !== lastStageW) { const r = sw / lastStageW; panX *= r; panY *= r; world.style.width = sw + "px"; }
+  if (sw && lastStageW && sw !== lastStageW) {
+    if (!viewTouched && Object.keys(layers).length) { fitView(); return; }
+    const r = sw / lastStageW; panX *= r; panY *= r; world.style.width = sw + "px";
+  }
   if (sw) lastStageW = sw;
   applyView();
 }).observe(stage);
@@ -433,7 +437,7 @@ stage.addEventListener("pointerdown", (ev) => {
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
   $("#sbCursor").textContent = `X ${mm[0].toFixed(3)}  Y ${mm[1].toFixed(3)} mm`;
-  if (pan) { panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
+  if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
   if (!drag) { sendPresence(mm); return; }
   drag.curMm = mm;
   if (!drag.moved && Math.hypot(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1]) > 0.4) drag.moved = true;
