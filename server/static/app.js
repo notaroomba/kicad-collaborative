@@ -183,7 +183,7 @@ const stage = $("#stage"), world = $("#world"), base = $("#base"), overlay = $("
 const peersG = $("#peersG"), selG = $("#selG"), dragG = $("#dragG"), cmtG = $("#cmtG");
 const cmtPanel = $("#cmtPanel");
 
-let ws = null, retries = 0, canJoin = false, viewOnly = false;
+let ws = null, retries = 0, canJoin = false, viewOnly = false, myClientId = "";
 let vb = [0, 0, 297, 210];
 let items = [], selected = null, drag = null, pan = null;
 let zoom = 1, panX = 0, panY = 0;
@@ -715,7 +715,8 @@ function setConn(cls, text) { const c = $("#conn"); c.className = "conn " + cls;
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => ws.send(JSON.stringify({ type: "hello", proto: 1, token: "", clientId: "web-" + Math.random().toString(36).slice(2, 10), linkToken: null, client: "web" }));
+  ws.onopen = () => { myClientId = "web-" + Math.random().toString(36).slice(2, 10);
+    ws.send(JSON.stringify({ type: "hello", proto: 1, token: "", clientId: myClientId, linkToken: null, client: "web" })); };
   ws.onclose = () => {
     peersG.replaceChildren(); peerState = {}; renderPeers();
     const delay = Math.min(15000, 1000 * Math.pow(2, retries++));
@@ -726,7 +727,7 @@ function connect() {
     const msg = JSON.parse(ev.data);
     if (msg.type === "hello_ok") { retries = 0; ws.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
     if (msg.type === "doc_info") { peerState = {}; setConn("live", viewOnly ? "live · view-only" : "live"); renderPeers(); }
-    if (msg.type === "presence") { for (const [cid, e] of Object.entries(msg.peers || {})) { if (e === null) delete peerState[cid]; else peerState[cid] = e; }
+    if (msg.type === "presence") { for (const [cid, e] of Object.entries(msg.peers || {})) { if (cid === myClientId || cid.endsWith(":" + myClientId)) continue; if (e === null) delete peerState[cid]; else peerState[cid] = e; }
       drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
     if (msg.type === "peer_left" && msg.clientId) { delete peerState[msg.clientId]; drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
     if (msg.type === "error" && msg.code === "permission_denied") { viewOnly = true; drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here"); }
