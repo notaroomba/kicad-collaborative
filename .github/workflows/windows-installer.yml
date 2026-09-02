@@ -60,8 +60,8 @@ jobs:
         # against a curl without WS support connects to nothing, silently.
         run: curl-config --protocols | grep -qiE "^WSS?$" || { echo "MSYS2 curl lacks WebSocket support"; exit 1; }
 
-      - name: ccache
-        uses: actions/cache@v4
+      - name: ccache (restore)
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ccache
           key: ccache-windows-${{ github.sha }}
@@ -91,14 +91,23 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      # Save the cache right after the compile so a failure or timeout in a
+      # later step never throws the warm cache away.
+      - name: ccache (save)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ~/.cache/ccache
+          key: ccache-windows-${{ github.sha }}
+
       - name: Install to staging
         run: cmake --install build
 
       - name: Bundle runtime DLLs
-        # Copy every MinGW DLL the shipped binaries load, so the installer
-        # works on a machine without MSYS2.  Queue-based: each binary is
-        # inspected exactly once (a rescan-everything loop blew the job
-        # timeout on the slow runner ldd).
+        # Copy every MinGW DLL the shipped binaries import, so the installer
+        # works on a machine without MSYS2.  Static import scan via objdump:
+        # MSYS2's ldd EXECUTES the target, and kicad.exe then sits in its
+        # GUI forever.
         run: |
           set -e
           cd stage/bin
@@ -109,11 +118,10 @@ jobs:
             for f in $queue; do
               case " $seen " in *" $f "*) continue;; esac
               seen="$seen $f"
-              for dep in $(ldd "$f" 2>/dev/null | awk '/\/ucrt64\//{print $3}'); do
-                base=$(basename "$dep")
-                if [ ! -f "$base" ]; then
-                  cp "$dep" .
-                  next="$next $base"
+              for dll in $(objdump -p "$f" 2>/dev/null | awk '/DLL Name:/{print $3}'); do
+                if [ ! -f "$dll" ] && [ -f "/ucrt64/bin/$dll" ]; then
+                  cp "/ucrt64/bin/$dll" .
+                  next="$next $dll"
                 fi
               done
             done
