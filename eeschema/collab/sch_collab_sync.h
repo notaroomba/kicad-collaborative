@@ -204,6 +204,14 @@ private:
     ///< screen's file is not part of the shared project.
     wxString docIdForScreen( const SCH_SCREEN* aScreen ) const;
 
+    ///< Plot one sheet to SVG (the editor's own theme) for the web app; empty on failure.
+    std::string plotSheetPreviewSvg( SCH_SCREEN* aScreen );
+
+    ///< Plot every registered sheet and push the renders (UI thread plots, worker uploads).
+    void uploadSheetPreviews();
+
+    bool m_previewsPushed = false;   ///< first join already pushed renders
+
     SCH_SCREEN* screenForDocId( const wxString& aDocId ) const;
 
     ///< aScreen's file name relative to the project (forward slashes).

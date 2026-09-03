@@ -42,6 +42,8 @@
 #include <sch_edit_frame.h>
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_item.h>
+#include <sch_painter.h>
+#include <sch_plotter.h>
 #include <sch_screen.h>
 #include <sch_sheet.h>
 #include <sch_sheet_path.h>
@@ -52,7 +54,9 @@
 #include <tools/sch_selection_tool.h>
 #include <undo_redo_container.h>
 
+#include <reporter.h>
 #include <wx/app.h>
+#include <wx/ffile.h>
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/utils.h>
@@ -777,6 +781,12 @@ void SCH_COLLAB_SYNC::OnOpsTail( const nlohmann::json& aOpsMsg )
 
 void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 {
+    if( !m_previewsPushed )
+    {
+        m_previewsPushed = true;
+        wxTheApp->CallAfter( [this, alive = m_alive]() { if( *alive ) uploadSheetPreviews(); } );
+    }
+
     // v1: we do not hot-load the snapshot file; the local copy of the project is
     // assumed to match the server snapshot (true for the uploader and for fresh
     // archive joins).  The full stale-file resync flow is M5.
@@ -1131,8 +1141,109 @@ void SCH_COLLAB_SYNC::rollbackFromSnapshot( const wxString& aDocId,
 }
 
 
+namespace
+{
+/// SCH_PLOTTER keeps its per-sheet SVG plotter protected; previews need just that.
+class COLLAB_SCH_PLOTTER : public SCH_PLOTTER
+{
+public:
+    using SCH_PLOTTER::SCH_PLOTTER;
+    using SCH_PLOTTER::plotOneSheetSVG;
+};
+} // namespace
+
+
+std::string SCH_COLLAB_SYNC::plotSheetPreviewSvg( SCH_SCREEN* aScreen )
+{
+    if( !aScreen || !m_frame->GetRenderSettings() )
+        return std::string();
+
+    // The editor's own colors, so the web render looks like the sheet people see.
+    SCH_RENDER_SETTINGS renderSettings( *m_frame->GetRenderSettings() );
+
+    SCH_PLOT_OPTS opts;
+    opts.m_plotDrawingSheet = true;
+    opts.m_blackAndWhite = false;
+    opts.m_useBackgroundColor = true;
+
+    wxString tmp = wxFileName::CreateTempFileName( wxS( "collab-sch-preview" ) );
+    tmp += wxS( ".svg" );
+
+    COLLAB_SCH_PLOTTER plotter( m_frame );
+    std::string        svg;
+
+    if( plotter.plotOneSheetSVG( tmp, aScreen, &renderSettings, opts ) )
+    {
+        wxFFile file( tmp, wxS( "rb" ) );
+
+        if( file.IsOpened() )
+        {
+            svg.resize( file.Length() );
+            file.Read( svg.data(), svg.size() );
+        }
+    }
+
+    wxRemoveFile( tmp );
+
+    return svg;
+}
+
+
+void SCH_COLLAB_SYNC::uploadSheetPreviews()
+{
+    // Sheet renders ride along for the web app: plot every registered sheet
+    // on the UI thread (schematic access), upload on the worker — the server
+    // has no plotter of its own.
+    {
+        std::vector<std::tuple<std::string, long long, std::string>> previews;
+        std::set<const SCH_SCREEN*>                                  seen;
+
+        for( const SCH_SHEET_PATH& path : m_frame->Schematic().Hierarchy() )
+        {
+            SCH_SCREEN* scr = path.LastScreen();
+            wxString    id = scr ? docIdForScreen( scr ) : wxString();
+
+            if( id.IsEmpty() || !seen.insert( scr ).second )
+                continue;
+
+            if( previews.size() >= 24 )
+                break;
+
+            std::string svg = plotSheetPreviewSvg( scr );
+
+            if( !svg.empty() )
+                previews.emplace_back( id.ToStdString( wxConvUTF8 ), m_lastAppliedSeq[ id ], std::move( svg ) );
+        }
+
+        if( !previews.empty() )
+        {
+            std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+            std::string token =
+                    COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+
+            COLLAB_SESSION::Get().RunAsync(
+                    [server, token, previews]()
+                    {
+                        for( const auto& [docId, seq, svg] : previews )
+                        {
+                            for( bool fit : { true, false } )
+                            {
+                                COLLAB_REST::UploadPreview( wxString::FromUTF8( server ),
+                                                            wxString::FromUTF8( token ),
+                                                            wxString::FromUTF8( docId ), seq, fit,
+                                                            svg );
+                            }
+                        }
+                    } );
+        }
+    }
+}
+
+
 void SCH_COLLAB_SYNC::OnSnapshotRequest()
 {
+    uploadSheetPreviews();
+
     // The adapter interface does not forward the requested doc id, so serve the
     // request for the currently displayed document only.
     SCH_SCREEN* screen = m_frame->GetScreen();
