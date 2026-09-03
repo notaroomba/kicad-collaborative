@@ -127,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/desktop/token", post(auth::desktop_token))
         .route("/auth/desktop/confirm", post(auth::desktop_confirm))
         .route("/api/me", get(auth::me))
+        .route("/api/ws-ticket", get(auth::ws_ticket))
         .route("/api/projects", post(http::create_project).get(http::list_projects))
         .route(
             "/api/projects/{id}",
