@@ -301,19 +301,22 @@ async function openDoc(doc) {
   world.style.width = stage.clientWidth + "px";
   viewTouched = false;
   renderProps(); renderPeers(); renderThreads();
+  // Items and comments don't wait for the render download (a 3 MB sheet
+  // over a slow link must not hold the objects list hostage).
+  const docId = doc.docId;
+  const itemsReq = isSch()
+    ? api(`/api/docs/${docId}/items`).then((j) => { if (state.docId !== docId) return;
+        items = (j.symbols || []).map((sy) => ({ ...sy, x: Math.round(sy.x * IU), y: Math.round(sy.y * IU) }));
+        sheets = (j.sheets || []).map((sh) => ({ ...sh, x: sh.x * IU, y: sh.y * IU, w: sh.w * IU, h: sh.h * IU })); renderObjects(); })
+    : api(`/api/projects/${state.project.projectId}/board-items`).then((j) => { if (state.docId !== docId) return; items = j.footprints || []; renderObjects(); });
+  itemsReq.catch(() => {});
+  loadComments();
   const ok = await loadBase(true);
   if (!ok) {
     base.replaceChildren();
     $("#layers").innerHTML = `<p class="note">No render yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session (renders are pushed within a minute).</p>`;
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
-  if (isSch()) {
-    api(`/api/docs/${doc.docId}/items`).then((j) => { items = (j.symbols || []).map((sy) => ({ ...sy, x: Math.round(sy.x * IU), y: Math.round(sy.y * IU) }));
-      sheets = (j.sheets || []).map((sh) => ({ ...sh, x: sh.x * IU, y: sh.y * IU, w: sh.w * IU, h: sh.h * IU })); renderObjects(); }).catch(() => {});
-  } else {
-    api(`/api/projects/${state.project.projectId}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
-  }
-  loadComments();
   if (canJoin) connect();
   else setConn("", "guest preview");
 }
