@@ -523,6 +523,18 @@ pub async fn desktop_token(
     .into_response())
 }
 
+/// A short-lived token for authenticating a WebSocket.  The browser can't put
+/// its httpOnly session cookie into a hello frame, and cookies riding a WS
+/// upgrade are unreliable (SameSite, tracking protection, some proxies), so
+/// the page fetches this over a normal request (where the cookie is sent) and
+/// sends it in the hello frame like the desktop does.
+pub async fn ws_ticket(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Json<serde_json::Value> {
+    Json(json!({ "token": mint_jwt(&state, user.id, &user.login) }))
+}
+
 pub async fn me(AuthUser(user): AuthUser) -> Json<serde_json::Value> {
     Json(json!({
         "id": user.id,

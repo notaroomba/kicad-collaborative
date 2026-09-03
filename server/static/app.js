@@ -193,7 +193,7 @@ const stage = $("#stage"), world = $("#world"), base = $("#base"), overlay = $("
 const peersG = $("#peersG"), selG = $("#selG"), dragG = $("#dragG"), cmtG = $("#cmtG");
 const cmtPanel = $("#cmtPanel");
 
-let ws = null, retries = 0, canJoin = false, viewOnly = false, myClientId = "";
+let ws = null, retries = 0, canJoin = false, viewOnly = false, myClientId = "", wsToken = "";
 let IU = 1e6;                 // internal units per mm: 1e6 for boards (nm), 1e4 for schematics
 let vbPerMm = 1;              // SVG viewBox units per mm (board plots: 1; schematic plots differ)
 const mmW = () => vb[2] / vbPerMm, mmH = () => vb[3] / vbPerMm, mmX0 = () => vb[0] / vbPerMm, mmY0 = () => vb[1] / vbPerMm;
@@ -317,8 +317,8 @@ async function openDoc(doc) {
     $("#layers").innerHTML = `<p class="note">No render yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session (renders are pushed within a minute).</p>`;
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
-  if (canJoin) connect();
-  else setConn("", "guest preview");
+  if (canJoin) connect().catch(() => setConn("err", "connection failed"));
+  else setConn("", "sign in to collaborate");
 }
 
 // ---- board render (inline SVG so layers can be toggled) ----
@@ -840,20 +840,35 @@ function placeComment(ev) {
 
 // ---- websocket / presence / ops ----
 function setConn(cls, text) { const c = $("#conn"); c.className = "conn " + cls; c.textContent = text || (cls === "live" ? "live" : "offline"); }
-function connect() {
+async function connect() {
+  if (!state.me) { setConn("", "sign in to collaborate"); return; }
+  // A cookie riding the WS upgrade is unreliable (SameSite / tracking
+  // protection / proxies), so authenticate the socket with a token fetched
+  // over a normal request and sent in the hello frame, like the desktop.
+  try {
+    wsToken = (await api("/api/ws-ticket")).token || "";
+  } catch (e) {
+    setConn("err", "sign-in expired — reload to reconnect");
+    return;   // a bad ticket would just loop; wait for a reload/re-auth
+  }
+  if (state.view !== "editor") return;
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => { myClientId = "web-" + Math.random().toString(36).slice(2, 10);
-    ws.send(JSON.stringify({ type: "hello", proto: 1, token: "", clientId: myClientId, linkToken: null, client: "web" })); };
+    ws.send(JSON.stringify({ type: "hello", proto: 1, token: wsToken, clientId: myClientId, linkToken: null, client: "web" })); };
   ws.onclose = () => {
     peersG.replaceChildren(); peerState = {}; renderPeers();
     const delay = Math.min(15000, 1000 * Math.pow(2, retries++));
     setConn("err", `reconnecting in ${Math.round(delay / 1000)}s`);
-    setTimeout(() => { if (state.view === "editor") connect(); }, delay);
+    setTimeout(() => { if (state.view === "editor") connect().catch(() => {}); }, delay);
   };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "hello_ok") { retries = 0; ws.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
+    if (msg.type === "error" && msg.code === "auth_failed") {
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+      setConn("err", "sign-in expired — reload to reconnect");
+    }
     if (msg.type === "doc_info") { peerState = {}; setConn("live", viewOnly ? "live · view-only" : "live"); renderPeers(); }
     if (msg.type === "presence") { for (const [cid, e] of Object.entries(msg.peers || {})) { if (cid === myClientId || cid.endsWith(":" + myClientId)) continue; if (e === null) delete peerState[cid]; else peerState[cid] = e; }
       drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
