@@ -276,10 +276,12 @@ pub async fn preview_svg(
     let Some(kicad_cli) = state.cfg.kicad_cli.clone() else {
         // No renderer on this server: serve the latest client-pushed preview.
         let docs = persist::project_documents(&state.pool, id).await?;
+        // Board first; a schematic-only project shows its root sheet.
         let doc = docs
             .iter()
             .find(|d| d.doc_type == "kicad_pcb")
-            .ok_or_else(|| AppError::BadRequest("project has no board".into()))?;
+            .or_else(|| root_schematic(&docs))
+            .ok_or_else(|| AppError::BadRequest("project has no board or schematic".into()))?;
 
         let Some((_seq, svg)) = persist::get_preview(&state.pool, doc.id, q.fit.unwrap_or(true)).await? else {
             return Err(AppError::NotFound);
@@ -392,6 +394,166 @@ pub async fn project_info(
         "viewer": viewer.map(|u| json!({ "id": u.id, "login": u.login })),
     }))
     .into_response())
+}
+
+/// The root sheet of a project: the schematic whose file name matches the
+/// project, else the shortest path (a top-level sheet beats a nested one).
+fn root_schematic(docs: &[persist::Document]) -> Option<&persist::Document> {
+    let pro_stem = docs
+        .iter()
+        .find(|d| d.doc_type == "kicad_pro")
+        .and_then(|d| d.path.rsplit('/').next())
+        .and_then(|b| b.strip_suffix(".kicad_pro"))
+        .map(str::to_string);
+    let mut sheets: Vec<&persist::Document> = docs.iter().filter(|d| d.doc_type == "kicad_sch").collect();
+    if let Some(stem) = pro_stem {
+        if let Some(d) = sheets.iter().find(|d| d.path.rsplit('/').next() == Some(&format!("{stem}.kicad_sch"))) {
+            return Some(d);
+        }
+    }
+    sheets.sort_by_key(|d| (d.path.matches('/').count(), d.path.len()));
+    sheets.first().copied()
+}
+
+async fn doc_with_access(
+    state: &AppState,
+    jar: &axum_extra::extract::CookieJar,
+    doc_id: Uuid,
+) -> AppResult<persist::Document> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    let project = persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
+    if !project.public {
+        let user = auth::user_from_jar(state, jar).await.ok_or(AppError::Forbidden)?;
+        persist::effective_role(&state.pool, user.id, project.id).await?.ok_or(AppError::Forbidden)?;
+    }
+    Ok(doc)
+}
+
+/// Per-document preview (a board or one schematic sheet), client-pushed by
+/// the desktop editors.  Either fit variant serves when only one exists.
+pub async fn doc_preview_svg(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(doc_id): Path<Uuid>,
+    Query(q): Query<PreviewQuery>,
+) -> AppResult<Response> {
+    let doc = doc_with_access(&state, &jar, doc_id).await?;
+    let fit = q.fit.unwrap_or(true);
+    let preview = match persist::get_preview(&state.pool, doc.id, fit).await? {
+        Some(p) => Some(p),
+        None => persist::get_preview(&state.pool, doc.id, !fit).await?,
+    };
+    let Some((_seq, svg)) = preview else { return Err(AppError::NotFound) };
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=60"),
+        ],
+        svg,
+    )
+        .into_response())
+}
+
+/// Balanced-paren block starting at `start`; `None` if unbalanced.
+fn sexpr_block(text: &str, start: usize) -> Option<&str> {
+    let mut depth = 0i32;
+    for (off, ch) in text[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + off + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn quoted_after<'a>(block: &'a str, key: &str) -> Option<&'a str> {
+    block.find(key).and_then(|p| block[p + key.len()..].split('"').next())
+}
+
+fn nums_after(block: &str, key: &str) -> Vec<f64> {
+    match block.find(key) {
+        Some(p) => {
+            let rest = &block[p + key.len()..];
+            match rest.find(')') {
+                Some(close) => rest[..close].split_whitespace().filter_map(|n| n.parse().ok()).collect(),
+                None => Vec::new(),
+            }
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Schematic sheet contents for the web editor: placed symbols (with
+/// reference/value) and hierarchical sheets, scraped from the latest
+/// snapshot.  Coordinates are in millimetres as written in the file.
+pub async fn doc_items(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::CookieJar,
+    Path(doc_id): Path<Uuid>,
+) -> AppResult<Response> {
+    let doc = doc_with_access(&state, &jar, doc_id).await?;
+    if doc.doc_type != "kicad_sch" {
+        return Err(AppError::BadRequest("items are only scraped for schematic sheets".into()));
+    }
+    let (seq, content) =
+        persist::latest_snapshot(&state.pool, doc.id).await?.ok_or(AppError::NotFound)?;
+    let text = String::from_utf8_lossy(&content);
+
+    // Library definitions live in one big (lib_symbols ...) block; skip it.
+    let lib_span = text
+        .find("(lib_symbols")
+        .and_then(|p| sexpr_block(&text, p).map(|b| (p, p + b.len())));
+    let in_lib = |pos: usize| lib_span.is_some_and(|(a, b)| pos >= a && pos < b);
+
+    let mut symbols = Vec::new();
+    let mut sheets = Vec::new();
+    let mut idx = 0usize;
+    while let Some(rel) = text[idx..].find("(s") {
+        let start = idx + rel;
+        let rest = &text[start..];
+        let head = if rest.starts_with("(symbol") { "symbol" } else if rest.starts_with("(sheet") { "sheet" } else { "" };
+        if head.is_empty() || in_lib(start) {
+            idx = start + 2;
+            continue;
+        }
+        let Some(block) = sexpr_block(&text, start) else { break };
+        let body = block[1 + head.len()..].trim_start();
+        // Placed symbols open with (lib_id ...); sheets with (at ...).  Anything
+        // else (lib definitions, sheet_instances) is not ours.
+        if head == "symbol" && body.starts_with("(lib_id") {
+            let at = nums_after(block, "(at ");
+            symbols.push(json!({
+                "id": quoted_after(block, "(uuid \"").unwrap_or(""),
+                "lib": quoted_after(block, "(lib_id \"").unwrap_or(""),
+                "ref": quoted_after(block, "(property \"Reference\" \"").unwrap_or(""),
+                "value": quoted_after(block, "(property \"Value\" \"").unwrap_or(""),
+                "x": at.first().copied().unwrap_or(0.0),
+                "y": at.get(1).copied().unwrap_or(0.0),
+                "rot": at.get(2).copied().unwrap_or(0.0),
+            }));
+        } else if head == "sheet" && body.starts_with("(at") {
+            let at = nums_after(block, "(at ");
+            let size = nums_after(block, "(size ");
+            sheets.push(json!({
+                "id": quoted_after(block, "(uuid \"").unwrap_or(""),
+                "name": quoted_after(block, "(property \"Sheetname\" \"").unwrap_or(""),
+                "file": quoted_after(block, "(property \"Sheetfile\" \"").unwrap_or(""),
+                "x": at.first().copied().unwrap_or(0.0),
+                "y": at.get(1).copied().unwrap_or(0.0),
+                "w": size.first().copied().unwrap_or(0.0),
+                "h": size.get(1).copied().unwrap_or(0.0),
+            }));
+        }
+        idx = start + block.len();
+    }
+
+    Ok(Json(json!({ "seq": seq, "symbols": symbols, "sheets": sheets })).into_response())
 }
 
 pub async fn board_items(

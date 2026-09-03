@@ -136,6 +136,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}/preview.svg", get(http::preview_svg))
         .route("/api/projects/{id}/board-items", get(http::board_items))
         .route("/api/docs/{id}/preview", post(http::upload_preview))
+        .route("/api/docs/{id}/preview.svg", get(http::doc_preview_svg))
+        .route("/api/docs/{id}/items", get(http::doc_items))
         .route("/api/projects/{id}/docs", post(http::create_doc))
         .route("/api/docs/{id}/content", get(http::doc_content))
         .route("/api/projects/{id}/clone", post(http::clone_project))

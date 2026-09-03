@@ -15,6 +15,12 @@ const KICAD_LAYERS = {
   ECECEC: "Vias", "000000": "Background", FFFFFF: "Page",
 };
 
+const SCH_LAYERS = {
+  "00C000": "Wires", "0000FF": "Buses", "008080": "Labels & fields", "800000": "Symbol outlines & pins",
+  FFFFC2: "Symbol fills", "800080": "Sheets", "000000": "Text", "0000C0": "Junctions", C00000: "No-connects",
+  "600060": "Hierarchical labels", "808080": "Drawing sheet", FFFFFF: "Background", "222222": "Notes",
+};
+
 const state = {
   me: null,            // {id, login, name, avatarUrl}
   view: "home",
@@ -186,6 +192,11 @@ const peersG = $("#peersG"), selG = $("#selG"), dragG = $("#dragG"), cmtG = $("#
 const cmtPanel = $("#cmtPanel");
 
 let ws = null, retries = 0, canJoin = false, viewOnly = false, myClientId = "";
+let IU = 1e6;                 // internal units per mm: 1e6 for boards (nm), 1e4 for schematics
+let DOC_TYPE = "kicad_pcb";   // "kicad_pcb" | "kicad_sch"
+let ITEM_TYPE = "FOOTPRINT";  // op typeName for the movable items of this doc
+let sheets = [];              // hierarchical sheets on a schematic sheet
+const isSch = () => DOC_TYPE === "kicad_sch";
 let vb = [0, 0, 297, 210];
 let items = [], selected = null, drag = null, pan = null;
 let zoom = 1, panX = 0, panY = 0;
@@ -198,11 +209,8 @@ let renderTimer = 0, renderDirtySince = 0;
 let baseVersion = 0;
 
 function leaveEditor() {
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
-  clearInterval(renderTimer); renderTimer = 0;
-  items = []; selected = null; drag = null; peerState = {}; comments = []; followPeer = null;
-  peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
-  cmtPanel.style.display = "none";
+  leaveDoc();
+  state.doc = null; state.docId = null;
   setConn("offline", "");
 }
 
@@ -220,35 +228,100 @@ async function openEditor(id) {
   $("#roleChip").textContent = info.role || "guest";
   $("#roleChip").className = "pill " + (info.role || "");
   $("#sbProject").textContent = `${info.name} · ${info.ownerLogin}`;
-  const board = info.docs.find((d) => d.docType === "kicad_pcb");
-  state.docId = board ? board.docId : null;
+  state.docs = [];
   canJoin = !!state.me;
   viewOnly = !canJoin || info.role === "viewer" || !info.role;
   $("#signinOverlay").style.display = canJoin ? "none" : "block";
   $("#signinLink").href = `/auth/github/login?next=${encodeURIComponent(location.pathname)}`;
-  $$("[data-act=share],[data-act=checkpoint],[data-tool=comment]").forEach((b) => { b.disabled = viewOnly && b.dataset.tool !== "comment" ? true : false; });
-  world.style.width = stage.clientWidth + "px";
-  layers = {}; viewTouched = false;
-  if (!board) {
-    base.replaceChildren(); $("#layers").innerHTML = `<p class="note">This project has no board yet — only schematics. Open it in the desktop app.</p>`;
-    setConn("err", "no board"); return;
-  }
-  await loadBase(true);
-  setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
-  api(`/api/projects/${id}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
-  loadComments();
+  $$("[data-act=share],[data-act=checkpoint]").forEach((b) => { b.disabled = viewOnly; });
+  state.docs = info.docs.filter((d) => d.docType === "kicad_pcb" || d.docType === "kicad_sch")
+    .sort((a, b) => (a.docType === "kicad_pcb" ? 0 : 1) - (b.docType === "kicad_pcb" ? 0 : 1) || a.path.localeCompare(b.path));
+  renderDocSwitcher();
   loadHistory();
+  const wanted = new URLSearchParams(location.search).get("doc");
+  const doc = state.docs.find((d) => d.docId === wanted) || state.docs.find((d) => d.docType === "kicad_pcb") || rootSchematic() || null;
+  if (!doc) {
+    base.replaceChildren(); $("#layers").innerHTML = `<p class="note">This project has no board or schematic yet. Open it in the desktop app.</p>`;
+    setConn("err", "nothing to show"); return;
+  }
+  await openDoc(doc);
+}
+
+function rootSchematic() {
+  const sch = state.docs.filter((d) => d.docType === "kicad_sch");
+  const pro = state.project.docs.find((d) => d.docType === "kicad_pro");
+  const stem = pro && pro.path.split("/").pop().replace(/\.kicad_pro$/, "");
+  return sch.find((d) => d.path.split("/").pop() === stem + ".kicad_sch")
+    || sch.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0];
+}
+
+function enterSheet(file) {
+  const base = file.split("/").pop();
+  const cur = state.doc ? state.doc.path.split("/").slice(0, -1).join("/") : "";
+  const rel = cur ? `${cur}/${file}` : file;
+  const doc = state.docs.find((d) => d.docType === "kicad_sch" && (d.path === rel || d.path === file))
+    || state.docs.find((d) => d.docType === "kicad_sch" && d.path.split("/").pop() === base);
+  if (doc) openDoc(doc); else toast("That sheet isn't in the shared project yet");
+}
+
+function docLabel(d) { return d.docType === "kicad_pcb" ? "Board · " + d.path.split("/").pop() : "Sheet · " + d.path; }
+
+function renderDocSwitcher() {
+  const sel = $("#docSel");
+  sel.innerHTML = state.docs.map((d) => `<option value="${esc(d.docId)}">${esc(docLabel(d))}</option>`).join("");
+  sel.onchange = () => { const d = state.docs.find((x) => x.docId === sel.value); if (d) openDoc(d); };
+  sel.style.display = state.docs.length > 1 ? "" : "none";
+}
+
+function leaveDoc() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  clearInterval(renderTimer); renderTimer = 0;
+  items = []; sheets = []; selected = null; drag = null; peerState = {}; comments = []; followPeer = null; layers = {};
+  peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
+  cmtPanel.style.display = "none"; objFilter = "";
+  const objs = $("#objects"); objs.innerHTML = ""; delete objs.dataset.ready;
+}
+
+async function openDoc(doc) {
+  leaveDoc();
+  state.doc = doc; state.docId = doc.docId;
+  DOC_TYPE = doc.docType;
+  IU = isSch() ? 1e4 : 1e6;
+  ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";
+  $("#docSel").value = doc.docId;
+  const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
+  if (location.pathname + location.search !== url) history.replaceState(null, "", url);
+  $("#hint").textContent = isSch()
+    ? "scroll to zoom · right-drag to pan · click a symbol to select · drag to move · Del deletes · double-click a sheet to enter it"
+    : "scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes";
+  world.style.width = stage.clientWidth + "px";
+  viewTouched = false;
+  renderProps(); renderPeers(); renderThreads();
+  const ok = await loadBase(true);
+  if (!ok) {
+    base.replaceChildren();
+    $("#layers").innerHTML = `<p class="note">No render yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session (renders are pushed within a minute).</p>`;
+  }
+  setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
+  if (isSch()) {
+    api(`/api/docs/${doc.docId}/items`).then((j) => { items = (j.symbols || []).map((sy) => ({ ...sy, x: Math.round(sy.x * IU), y: Math.round(sy.y * IU) }));
+      sheets = (j.sheets || []).map((sh) => ({ ...sh, x: sh.x * IU, y: sh.y * IU, w: sh.w * IU, h: sh.h * IU })); renderObjects(); }).catch(() => {});
+  } else {
+    api(`/api/projects/${state.project.projectId}/board-items`).then((j) => { items = j.footprints || []; renderObjects(); }).catch(() => {});
+  }
+  loadComments();
   if (canJoin) connect();
   else setConn("", "guest preview");
-  renderPeers();
 }
 
 // ---- board render (inline SVG so layers can be toggled) ----
 async function loadBase(first) {
-  const id = state.project.projectId;
   let text;
-  try { text = await (await fetch(`/api/projects/${id}/preview.svg?fit=false&v=${Date.now()}`)).text(); }
-  catch { return false; }
+  try {
+    const r = await fetch(`/api/docs/${state.docId}/preview.svg?fit=false&v=${Date.now()}`);
+    if (!r.ok) return false;
+    text = await r.text();
+  } catch { return false; }
   if (!text.includes("<svg")) return false;
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const src = doc.documentElement;
@@ -270,7 +343,8 @@ function tagLayers(hidden) {
     if (!m || /fill:none/i.test(st)) m = st.match(/stroke:#([0-9A-Fa-f]{6})/);
     if (!m) continue;
     const hex = m[1].toUpperCase();
-    (layers[hex] ||= { name: KICAD_LAYERS[hex] || `#${hex}`, nodes: [], visible: !hidden.has(hex) }).nodes.push(el);
+    const names = isSch() ? SCH_LAYERS : KICAD_LAYERS;
+    (layers[hex] ||= { name: names[hex] || `#${hex}`, nodes: [], visible: !hidden.has(hex) }).nodes.push(el);
     el.dataset.layer = hex;
     if (hidden.has(hex)) el.style.display = "none";
   }
@@ -289,22 +363,25 @@ function renderLayers() {
 }
 
 let objFilter = "";
-function fpName(fp) { return (fp.lib || "?").split(":").pop(); }
+function fpName(fp) { return isSch() ? (fp.ref ? `${fp.ref}  ${fp.value || ""}`.trim() : (fp.lib || "?").split(":").pop()) : (fp.lib || "?").split(":").pop(); }
 function renderObjects() {
   const el = $("#objects");
   const q = objFilter.toLowerCase();
   const list = items.filter((fp) => !q || fpName(fp).toLowerCase().includes(q))
     .sort((a, b) => fpName(a).localeCompare(fpName(b)));
   if (!el.dataset.ready) {
-    el.innerHTML = `<input id="objSearch" placeholder="Filter footprints…" style="width:100%;margin-bottom:6px;background:var(--canvas);border:1px solid var(--line);border-radius:4px;padding:4px 6px;color:var(--text)"><div id="objList"></div>`;
+    el.innerHTML = `<input id="objSearch" placeholder="${isSch() ? "Filter symbols…" : "Filter footprints…"}" style="width:100%;margin-bottom:6px;background:var(--canvas);border:1px solid var(--line);border-radius:4px;padding:4px 6px;color:var(--text)"><div id="objList"></div>`;
     el.dataset.ready = "1";
     $("#objSearch").oninput = (ev) => { objFilter = ev.target.value; renderObjects(); };
   }
-  $("#objList").innerHTML = `<div class="layer"><span class="muted">Footprints</span><span class="cnt">${list.length}/${items.length}</span></div>` +
+  const sheetRows = isSch() && sheets.length ? `<div class="layer"><span class="muted">Sheets</span><span class="cnt">${sheets.length}</span></div>` +
+    sheets.map((sh) => `<div class="layer" data-sheet="${esc(sh.file)}" style="cursor:pointer;padding-left:14px"><span>${esc(sh.name || sh.file)}</span><span class="cnt">↗</span></div>`).join("") : "";
+  $("#objList").innerHTML = sheetRows + `<div class="layer"><span class="muted">${isSch() ? "Symbols" : "Footprints"}</span><span class="cnt">${list.length}/${items.length}</span></div>` +
     list.slice(0, 300).map((fp) => `<div class="layer" data-fp="${esc(fp.id)}" style="cursor:pointer;padding-left:14px${selected && selected.id === fp.id ? ";background:var(--panel-2)" : ""}"><span>${esc(fpName(fp))}</span><span class="cnt">${Math.round(fp.rot || 0)}°</span></div>`).join("");
+  $$("[data-sheet]", el).forEach((row) => row.onclick = () => enterSheet(row.dataset.sheet));
   $$("[data-fp]", el).forEach((row) => row.onclick = () => {
     const fp = items.find((f) => f.id === row.dataset.fp); if (!fp) return;
-    selected = fp; drawSelection(); renderProps(); centerOn(fp.x / 1e6, fp.y / 1e6); renderObjects();
+    selected = fp; drawSelection(); renderProps(); centerOn(fp.x / IU, fp.y / IU); renderObjects();
   });
 }
 
@@ -315,6 +392,7 @@ function applyView() {
   drawComments(); drawSelection();
 }
 function contentBoxMm() {
+  if (isSch()) return [vb[0], vb[1], vb[2], vb[3]];
   // Union of the board outline and copper: what a person means by "the board".
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
   for (const hex of ["D0D2CD", "C83434", "4D7FC4"]) {
@@ -375,7 +453,7 @@ function visibleRectNm() {
   if (wr.width <= 0) return null;
   const x = vb[0] + ((sr.left - wr.left) / wr.width) * vb[2], y = vb[1] + ((sr.top - wr.top) / wr.height) * vb[3];
   const w = (sr.width / wr.width) * vb[2], h = (sr.height / wr.height) * vb[3];
-  return [x, y, w, h].map((v) => Math.round(v * 1e6));
+  return [x, y, w, h].map((v) => Math.round(v * IU));
 }
 
 // ---- tools ----
@@ -405,7 +483,7 @@ function applyFollowWeb(peers) {
   const vp = (entry.state || {}).viewport;
   if (!vp || vp.length < 4 || vp[2] <= 0) return;
   const w = world.clientWidth || stage.clientWidth;
-  const xMm = vp[0] / 1e6, yMm = vp[1] / 1e6, wMm = vp[2] / 1e6;
+  const xMm = vp[0] / IU, yMm = vp[1] / IU, wMm = vp[2] / IU;
   zoom = Math.min(40, Math.max(0.2, (stage.clientWidth / w) * (vb[2] / wMm)));
   panX = -((xMm - vb[0]) / vb[2]) * w * zoom;
   panY = -((yMm - vb[1]) / vb[3]) * (w * vb[3] / vb[2]) * zoom;
@@ -418,6 +496,12 @@ function breakFollow() {
 
 // ---- pointer interaction ----
 stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
+stage.addEventListener("dblclick", (ev) => {
+  if (!isSch() || !sheets.length) return;
+  const [x, y] = worldMm(ev);
+  const sh = sheets.find((r) => x >= r.x / IU && x <= (r.x + r.w) / IU && y >= r.y / IU && y <= (r.y + r.h) / IU);
+  if (sh) enterSheet(sh.file);
+});
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay")) return;
   if (ev.button === 2 || ev.button === 1 || (ev.button === 0 && tool === "pan")) {
@@ -444,20 +528,20 @@ stage.addEventListener("pointermove", (ev) => {
   if (!drag.moved) return;
   drawDrag();
   const now = Date.now();
-  if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp([moveOp(drag.fp, Math.round(mm[0] * 1e6), Math.round(mm[1] * 1e6))]); }
+  if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp([moveOp(drag.fp, Math.round(mm[0] * IU), Math.round(mm[1] * IU))]); }
   const s = 4;
   const g = [[mm[0]-s, mm[1]-s, mm[0]+s, mm[1]-s], [mm[0]+s, mm[1]-s, mm[0]+s, mm[1]+s],
              [mm[0]+s, mm[1]+s, mm[0]-s, mm[1]+s], [mm[0]-s, mm[1]+s, mm[0]-s, mm[1]-s]]
-    .map((sg) => [...sg.map((v) => Math.round(v * 1e6)), 100000]);
+    .map((sg) => [...sg.map((v) => Math.round(v * IU)), 100000]);
   sendPresence(mm, g);
 });
 stage.addEventListener("pointerup", (ev) => {
   if (pan) { pan = null; return; }
   if (ev.button !== 0 || !drag) return;
   const fp = drag.fp, wasMoved = drag.moved;
-  const nx = Math.round(drag.curMm[0] * 1e6), ny = Math.round(drag.curMm[1] * 1e6);
+  const nx = Math.round(drag.curMm[0] * IU), ny = Math.round(drag.curMm[1] * IU);
   drag = null; dragG.replaceChildren();
-  sendPresence([nx / 1e6, ny / 1e6], []);
+  sendPresence([nx / IU, ny / IU], []);
   if (!wasMoved) return;
   if (nx !== fp.x || ny !== fp.y) sendOp([moveOp(fp, nx, ny)]);
   fp.x = nx; fp.y = ny; drawSelection(); renderProps();
@@ -475,29 +559,29 @@ document.addEventListener("keydown", (ev) => {
   if (k === "h" || k === "H") { setTool("pan"); return; }
   if (k === "c" || k === "C") { setTool("comment"); return; }
   if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
-  if (k === "r" || k === "R") rotateSelected();
+  if ((k === "r" || k === "R") && !isSch()) rotateSelected();
   if (k === "Delete" || k === "Backspace") deleteSelected();
 });
 
 function rotateSelected() {
   const before = selected.rot || 0, after = (before + 90) % 360;
-  sendOp([{ id: selected.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
+  sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [
     { name: "Orientation", before: { type: "double", v: before }, after: { type: "double", v: after } }] }]);
   selected.rot = after; drawSelection(); renderProps();
 }
 function deleteSelected() {
-  sendOp([{ id: selected.id, typeName: "FOOTPRINT", kind: "REMOVED", properties: [] }]);
+  sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "REMOVED", properties: [] }]);
   items = items.filter((f) => f.id !== selected.id);
   selected = null; drawSelection(); renderProps(); renderObjects(); toast("Deleted");
 }
 function moveOp(fp, nx, ny) {
-  return { id: fp.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [
+  return { id: fp.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [
     { name: "Position X", before: { type: "int", v: fp.x }, after: { type: "int", v: nx } },
     { name: "Position Y", before: { type: "int", v: fp.y }, after: { type: "int", v: ny } }] };
 }
 function nearestFootprint(x, y, radiusMm) {
   let best = null, bestD = radiusMm;
-  for (const fp of items) { const d = Math.hypot(fp.x / 1e6 - x, fp.y / 1e6 - y); if (d < bestD) { best = fp; bestD = d; } }
+  for (const fp of items) { const d = Math.hypot(fp.x / IU - x, fp.y / IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
 }
 
@@ -512,20 +596,20 @@ function svgText(x, y, size, color, text) {
 function drawSelection() {
   selG.replaceChildren();
   if (!selected) return;
-  const s = pxPerMm(), x = selected.x / 1e6, y = selected.y / 1e6;
+  const s = pxPerMm(), x = selected.x / IU, y = selected.y / IU;
   const ring = document.createElementNS(NS, "circle");
   ring.setAttribute("cx", x); ring.setAttribute("cy", y); ring.setAttribute("r", 10 / s);
   ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "#ffb43a");
   ring.setAttribute("stroke-width", 2.5 / s); ring.setAttribute("stroke-dasharray", `${5 / s} ${3 / s}`);
   selG.appendChild(ring);
-  selG.appendChild(svgText(x + 12 / s, y - 12 / s, 12 / s, "#ffb43a", `${selected.lib.split(":").pop()} (${Math.round(selected.rot || 0)}°)`));
+  selG.appendChild(svgText(x + 12 / s, y - 12 / s, 12 / s, "#ffb43a", isSch() ? fpName(selected) : `${selected.lib.split(":").pop()} (${Math.round(selected.rot || 0)}°)`));
 }
 function drawDrag() {
   dragG.replaceChildren();
   if (!drag) return;
   const s = pxPerMm(), [x, y] = drag.curMm;
   const line = document.createElementNS(NS, "line");
-  line.setAttribute("x1", drag.fp.x / 1e6); line.setAttribute("y1", drag.fp.y / 1e6);
+  line.setAttribute("x1", drag.fp.x / IU); line.setAttribute("y1", drag.fp.y / IU);
   line.setAttribute("x2", x); line.setAttribute("y2", y);
   line.setAttribute("stroke", "#ffb43a"); line.setAttribute("stroke-dasharray", `${4 / s} ${3 / s}`); line.setAttribute("stroke-width", 1.5 / s);
   dragG.appendChild(line);
@@ -533,11 +617,11 @@ function drawDrag() {
   dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 4 / s);
   dot.setAttribute("fill", "none"); dot.setAttribute("stroke", "#ffb43a"); dot.setAttribute("stroke-width", 1.5 / s);
   dragG.appendChild(dot);
-  dragG.appendChild(svgText(x + 6 / s, y - 6 / s, 12 / s, "#ffb43a", drag.fp.lib.split(":").pop()));
+  dragG.appendChild(svgText(x + 6 / s, y - 6 / s, 12 / s, "#ffb43a", isSch() ? fpName(drag.fp) : drag.fp.lib.split(":").pop()));
 }
 function drawPeers(peers) {
   peersG.replaceChildren();
-  const s = pxPerMm(), mm = (nm) => nm / 1e6;
+  const s = pxPerMm(), mm = (nm) => nm / IU;
   for (const [cid, p] of Object.entries(peers)) {
     const st = p.state || {}, color = (p.user && p.user.color) || "#4477ee", name = peerName(p);
     for (const g of st.ghost || []) {
@@ -576,16 +660,35 @@ function renderProps() {
   const el = $("#props");
   if (!selected) { el.innerHTML = `<p class="note">Select a footprint on the board to see its properties.</p>`; return; }
   const ro = viewOnly ? "disabled" : "";
+  if (isSch()) {
+    el.innerHTML = `<div class="kv">
+      <label>Reference</label><div class="ro">${esc(selected.ref || "")}</div>
+      <label>Value</label><div class="ro">${esc(selected.value || "")}</div>
+      <label>Symbol</label><div class="ro" title="${esc(selected.lib)}">${esc(selected.lib)}</div>
+      <label>X (mm)</label><input id="pX" type="number" step="0.01" value="${(selected.x / IU).toFixed(2)}" ${ro}>
+      <label>Y (mm)</label><input id="pY" type="number" step="0.01" value="${(selected.y / IU).toFixed(2)}" ${ro}>
+      <label>Rotation</label><div class="ro">${Math.round(selected.rot || 0)}°</div>
+      <label>UUID</label><div class="ro muted">${esc(selected.id)}</div></div>
+      <div class="actions"><button class="btn sm danger" id="pDelBtn" ${ro}>Delete</button></div>`;
+    if (viewOnly) return;
+    const commitPos = () => {
+      const nx = Math.round(parseFloat($("#pX").value) * IU), ny = Math.round(parseFloat($("#pY").value) * IU);
+      if (isNaN(nx) || isNaN(ny) || (nx === selected.x && ny === selected.y)) return;
+      sendOp([moveOp(selected, nx, ny)]); selected.x = nx; selected.y = ny; drawSelection();
+    };
+    $("#pX").onchange = commitPos; $("#pY").onchange = commitPos; $("#pDelBtn").onclick = deleteSelected;
+    return;
+  }
   el.innerHTML = `<div class="kv">
     <label>Footprint</label><div class="ro" title="${esc(selected.lib)}">${esc(selected.lib)}</div>
-    <label>X (mm)</label><input id="pX" type="number" step="0.01" value="${(selected.x / 1e6).toFixed(3)}" ${ro}>
-    <label>Y (mm)</label><input id="pY" type="number" step="0.01" value="${(selected.y / 1e6).toFixed(3)}" ${ro}>
+    <label>X (mm)</label><input id="pX" type="number" step="0.01" value="${(selected.x / IU).toFixed(3)}" ${ro}>
+    <label>Y (mm)</label><input id="pY" type="number" step="0.01" value="${(selected.y / IU).toFixed(3)}" ${ro}>
     <label>Rotation</label><input id="pRot" type="number" step="1" value="${Math.round(selected.rot || 0)}" ${ro}>
     <label>UUID</label><div class="ro muted">${esc(selected.id)}</div></div>
     <div class="actions"><button class="btn sm" id="pRotBtn" ${ro}>Rotate 90°</button><button class="btn sm danger" id="pDelBtn" ${ro}>Delete</button></div>`;
   if (viewOnly) return;
   const commitPos = () => {
-    const nx = Math.round(parseFloat($("#pX").value) * 1e6), ny = Math.round(parseFloat($("#pY").value) * 1e6);
+    const nx = Math.round(parseFloat($("#pX").value) * IU), ny = Math.round(parseFloat($("#pY").value) * IU);
     if (isNaN(nx) || isNaN(ny) || (nx === selected.x && ny === selected.y)) return;
     sendOp([moveOp(selected, nx, ny)]); selected.x = nx; selected.y = ny; drawSelection();
   };
@@ -593,7 +696,7 @@ function renderProps() {
   $("#pRot").onchange = () => {
     const after = ((parseFloat($("#pRot").value) % 360) + 360) % 360, before = selected.rot || 0;
     if (isNaN(after) || after === before) return;
-    sendOp([{ id: selected.id, typeName: "FOOTPRINT", kind: "MODIFIED", properties: [{ name: "Orientation", before: { type: "double", v: before }, after: { type: "double", v: after } }] }]);
+    sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [{ name: "Orientation", before: { type: "double", v: before }, after: { type: "double", v: after } }] }]);
     selected.rot = after; drawSelection();
   };
   $("#pRotBtn").onclick = rotateSelected; $("#pDelBtn").onclick = deleteSelected;
@@ -616,7 +719,7 @@ function renderThreads() {
       <div class="body">${esc(c.body)}</div>
       <div class="meta"><span>${comments.filter((x) => x.parentId === c.id).length} repl${comments.filter((x) => x.parentId === c.id).length === 1 ? "y" : "ies"}</span><span>${c.resolved ? "resolved" : ""}</span></div></div>`).join("")
     : `<p class="note">No comments yet. Use the comment tool to pin a note to the board.</p>`;
-  $$("[data-thread]").forEach((t) => t.onclick = () => { const c = comments.find((x) => x.id === +t.dataset.thread); if (c) { centerOn(c.x / 1e6, c.y / 1e6); showThread(c.id); } });
+  $$("[data-thread]").forEach((t) => t.onclick = () => { const c = comments.find((x) => x.id === +t.dataset.thread); if (c) { centerOn(c.x / IU, c.y / IU); showThread(c.id); } });
 }
 function centerOn(xMm, yMm) {
   const w = world.clientWidth, h = w * vb[3] / vb[2];
@@ -661,7 +764,7 @@ function drawComments() {
   const s = pxPerMm();
   for (const c of comments) {
     if (c.parentId) continue;
-    const x = c.x / 1e6, y = c.y / 1e6, r = 9 / s;
+    const x = c.x / IU, y = c.y / IU, r = 9 / s;
     const pin = document.createElementNS(NS, "g"); pin.setAttribute("cursor", "pointer");
     const bubble = document.createElementNS(NS, "circle");
     bubble.setAttribute("cx", x); bubble.setAttribute("cy", y); bubble.setAttribute("r", r);
@@ -679,8 +782,8 @@ function drawComments() {
 }
 function panelAt(xNm, yNm) {
   const wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-  const px = wr.left - sr.left + ((xNm / 1e6 - vb[0]) / vb[2]) * wr.width;
-  const py = wr.top - sr.top + ((yNm / 1e6 - vb[1]) / vb[3]) * wr.height;
+  const px = wr.left - sr.left + ((xNm / IU - vb[0]) / vb[2]) * wr.width;
+  const py = wr.top - sr.top + ((yNm / IU - vb[1]) / vb[3]) * wr.height;
   cmtPanel.style.left = Math.max(0, Math.min(px + 14, sr.width - 350)) + "px";
   cmtPanel.style.top = Math.max(0, Math.min(py - 10, sr.height - 160)) + "px";
   cmtPanel.style.display = "block";
@@ -704,7 +807,7 @@ function showThread(rootId) {
 }
 function placeComment(ev) {
   setTool("select");
-  const [x, y] = worldMm(ev), xNm = Math.round(x * 1e6), yNm = Math.round(y * 1e6);
+  const [x, y] = worldMm(ev), xNm = Math.round(x * IU), yNm = Math.round(y * IU);
   openThread = null;
   cmtPanel.innerHTML = `<div class="meta">New comment</div><textarea id="newText" rows="3" placeholder="Say something about this spot…"></textarea>
     <p><button class="btn sm primary" id="postBtn">Post</button><button class="btn sm" id="cancelBtn">Cancel</button></p>`;
@@ -745,7 +848,7 @@ function connect() {
 function bumpEdits() { $("#sbEdits").textContent = editsSeen ? `${editsSeen} edit${editsSeen === 1 ? "" : "s"}` : ""; }
 function noteRemoteOp(msg) {
   for (const c of msg.changes || []) {
-    if (c.typeName !== "FOOTPRINT") continue;
+    if (c.typeName !== ITEM_TYPE) continue;
     if (c.kind === "REMOVED") { items = items.filter((f) => f.id !== c.id); if (selected && selected.id === c.id) { selected = null; renderProps(); } continue; }
     const fp = items.find((f) => f.id === c.id);
     if (!fp || c.kind !== "MODIFIED") continue;
@@ -762,7 +865,7 @@ function sendPresence(mmPos, ghostSegs) {
   const now = Date.now();
   if (!ws || ws.readyState !== 1 || (now - lastPresence < 80 && !ghostSegs)) return;
   lastPresence = now;
-  const st = { cursor: [Math.round(mmPos[0] * 1e6), Math.round(mmPos[1] * 1e6)] };
+  const st = { cursor: [Math.round(mmPos[0] * IU), Math.round(mmPos[1] * IU)] };
   const vp = visibleRectNm(); if (vp) st.viewport = vp;
   if (ghostSegs) st.ghost = ghostSegs;
   ws.send(JSON.stringify({ type: "presence", docId: state.docId, state: st }));
