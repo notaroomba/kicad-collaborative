@@ -16,9 +16,11 @@ const KICAD_LAYERS = {
 };
 
 const SCH_LAYERS = {
-  "00C000": "Wires", "0000FF": "Buses", "008080": "Labels & fields", "800000": "Symbol outlines & pins",
-  FFFFC2: "Symbol fills", "800080": "Sheets", "000000": "Text", "0000C0": "Junctions", C00000: "No-connects",
-  "600060": "Hierarchical labels", "808080": "Drawing sheet", FFFFFF: "Background", "222222": "Notes",
+  "009600": "Wires", "0000C2": "Buses & no-connects", "000084": "Junctions", "840000": "Symbol outlines & pins",
+  A90000: "Pin numbers", "006464": "Pin names & fields", "840084": "Hierarchical labels", C80000: "Global labels",
+  "000000": "Text & local labels", "0F0F0F": "Notes", FFFFC2: "Symbol fills", F5F4EF: "Sheet background",
+  "808080": "Drawing sheet", "8A0000": "Sheet outlines", "00C000": "Wires", "0000FF": "Buses", "008080": "Fields",
+  "800000": "Symbol outlines", "800080": "Sheets", FFFFFF: "Background",
 };
 
 const state = {
@@ -193,6 +195,8 @@ const cmtPanel = $("#cmtPanel");
 
 let ws = null, retries = 0, canJoin = false, viewOnly = false, myClientId = "";
 let IU = 1e6;                 // internal units per mm: 1e6 for boards (nm), 1e4 for schematics
+let vbPerMm = 1;              // SVG viewBox units per mm (board plots: 1; schematic plots differ)
+const mmW = () => vb[2] / vbPerMm, mmH = () => vb[3] / vbPerMm, mmX0 = () => vb[0] / vbPerMm, mmY0 = () => vb[1] / vbPerMm;
 let DOC_TYPE = "kicad_pcb";   // "kicad_pcb" | "kicad_sch"
 let ITEM_TYPE = "FOOTPRINT";  // op typeName for the movable items of this doc
 let sheets = [];              // hierarchical sheets on a schematic sheet
@@ -327,6 +331,15 @@ async function loadBase(first) {
   const src = doc.documentElement;
   const vbs = src.getAttribute("viewBox");
   if (vbs) { vb = vbs.split(/\s+/).map(Number); base.setAttribute("viewBox", vbs); overlay.setAttribute("viewBox", vbs); }
+  // Physical width from the width attribute tells us what a viewBox unit is.
+  const wAttr = src.getAttribute("width") || "";
+  const wm = wAttr.match(/^([\d.]+)\s*(mm|cm|in|px)?$/);
+  if (wm && vb[2] > 0) {
+    const n = parseFloat(wm[1]), u = wm[2] || "px";
+    const widthMm = u === "mm" ? n : u === "cm" ? n * 10 : u === "in" ? n * 25.4 : n * 25.4 / 96;
+    vbPerMm = widthMm > 0 ? vb[2] / widthMm : 1;
+  } else vbPerMm = 1;
+  $("#ovRoot").setAttribute("transform", `scale(${vbPerMm})`);
   const hidden = new Set(Object.entries(layers).filter(([, l]) => !l.visible).map(([k]) => k));
   base.replaceChildren(...Array.from(src.childNodes).map((n) => document.importNode(n, true)));
   tagLayers(hidden);
@@ -392,7 +405,7 @@ function applyView() {
   drawComments(); drawSelection();
 }
 function contentBoxMm() {
-  if (isSch()) return [vb[0], vb[1], vb[2], vb[3]];
+  if (isSch()) return [mmX0(), mmY0(), mmW(), mmH()];
   // Union of the board outline and copper: what a person means by "the board".
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
   for (const hex of ["D0D2CD", "C83434", "4D7FC4"]) {
@@ -403,18 +416,18 @@ function contentBoxMm() {
       x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height); n++;
     }
   }
-  if (!n || x1 - x0 < 1 || y1 - y0 < 1) return [vb[0], vb[1], vb[2], vb[3]];
-  return [x0, y0, x1 - x0, y1 - y0];
+  if (!n || x1 - x0 < 1 || y1 - y0 < 1) return [mmX0(), mmY0(), mmW(), mmH()];
+  return [x0 / vbPerMm, y0 / vbPerMm, (x1 - x0) / vbPerMm, (y1 - y0) / vbPerMm];
 }
 function fitView() {
   const sw = stage.clientWidth, sh = stage.clientHeight;
   if (!sw || !sh) { setTimeout(fitView, 100); return; }
   world.style.width = sw + "px";
-  const ppm = sw / vb[2];                       // px per mm at zoom 1
+  const ppm = sw / mmW();                       // px per mm at zoom 1
   const [bx, by, bw, bh] = contentBoxMm();
-  zoom = Math.min(40, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * 0.85));
-  panX = sw / 2 - ((bx - vb[0]) + bw / 2) * ppm * zoom;
-  panY = sh / 2 - ((by - vb[1]) + bh / 2) * ppm * zoom;
+  zoom = Math.min(40, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * (isSch() ? 0.97 : 0.85)));
+  panX = sw / 2 - ((bx - mmX0()) + bw / 2) * ppm * zoom;
+  panY = sh / 2 - ((by - mmY0()) + bh / 2) * ppm * zoom;
   lastStageW = sw;   // the resize observer must not rescale pans computed at this width
   applyView();
 }
@@ -445,14 +458,14 @@ new ResizeObserver(() => {
 
 function worldMm(ev) {
   const r = world.getBoundingClientRect();
-  return [vb[0] + ((ev.clientX - r.left) / r.width) * vb[2], vb[1] + ((ev.clientY - r.top) / r.height) * vb[3]];
+  return [mmX0() + ((ev.clientX - r.left) / r.width) * mmW(), mmY0() + ((ev.clientY - r.top) / r.height) * mmH()];
 }
-function pxPerMm() { const r = world.getBoundingClientRect(); return r.width > 0 ? r.width / vb[2] : 4; }
+function pxPerMm() { const r = world.getBoundingClientRect(); return r.width > 0 ? r.width / mmW() : 4; }
 function visibleRectNm() {
   const wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
   if (wr.width <= 0) return null;
-  const x = vb[0] + ((sr.left - wr.left) / wr.width) * vb[2], y = vb[1] + ((sr.top - wr.top) / wr.height) * vb[3];
-  const w = (sr.width / wr.width) * vb[2], h = (sr.height / wr.height) * vb[3];
+  const x = mmX0() + ((sr.left - wr.left) / wr.width) * mmW(), y = mmY0() + ((sr.top - wr.top) / wr.height) * mmH();
+  const w = (sr.width / wr.width) * mmW(), h = (sr.height / wr.height) * mmH();
   return [x, y, w, h].map((v) => Math.round(v * IU));
 }
 
@@ -484,9 +497,9 @@ function applyFollowWeb(peers) {
   if (!vp || vp.length < 4 || vp[2] <= 0) return;
   const w = world.clientWidth || stage.clientWidth;
   const xMm = vp[0] / IU, yMm = vp[1] / IU, wMm = vp[2] / IU;
-  zoom = Math.min(40, Math.max(0.2, (stage.clientWidth / w) * (vb[2] / wMm)));
-  panX = -((xMm - vb[0]) / vb[2]) * w * zoom;
-  panY = -((yMm - vb[1]) / vb[3]) * (w * vb[3] / vb[2]) * zoom;
+  zoom = Math.min(40, Math.max(0.2, (stage.clientWidth / w) * (mmW() / wMm)));
+  panX = -((xMm - mmX0()) / mmW()) * w * zoom;
+  panY = -((yMm - mmY0()) / mmH()) * (w * mmH() / mmW()) * zoom;
   suppressBreakout = true; applyView(); suppressBreakout = false;
 }
 function breakFollow() {
@@ -722,9 +735,9 @@ function renderThreads() {
   $$("[data-thread]").forEach((t) => t.onclick = () => { const c = comments.find((x) => x.id === +t.dataset.thread); if (c) { centerOn(c.x / IU, c.y / IU); showThread(c.id); } });
 }
 function centerOn(xMm, yMm) {
-  const w = world.clientWidth, h = w * vb[3] / vb[2];
-  panX = stage.clientWidth / 2 - ((xMm - vb[0]) / vb[2]) * w * zoom;
-  panY = stage.clientHeight / 2 - ((yMm - vb[1]) / vb[3]) * h * zoom;
+  const w = world.clientWidth, h = w * mmH() / mmW();
+  panX = stage.clientWidth / 2 - ((xMm - mmX0()) / mmW()) * w * zoom;
+  panY = stage.clientHeight / 2 - ((yMm - mmY0()) / mmH()) * h * zoom;
   applyView();
 }
 async function loadHistory() {
@@ -782,8 +795,8 @@ function drawComments() {
 }
 function panelAt(xNm, yNm) {
   const wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-  const px = wr.left - sr.left + ((xNm / IU - vb[0]) / vb[2]) * wr.width;
-  const py = wr.top - sr.top + ((yNm / IU - vb[1]) / vb[3]) * wr.height;
+  const px = wr.left - sr.left + ((xNm / IU - mmX0()) / mmW()) * wr.width;
+  const py = wr.top - sr.top + ((yNm / IU - mmY0()) / mmH()) * wr.height;
   cmtPanel.style.left = Math.max(0, Math.min(px + 14, sr.width - 350)) + "px";
   cmtPanel.style.top = Math.max(0, Math.min(py - 10, sr.height - 160)) + "px";
   cmtPanel.style.display = "block";
