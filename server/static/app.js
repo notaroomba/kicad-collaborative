@@ -402,7 +402,10 @@ function renderObjects() {
 function applyView() {
   world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   $("#sbZoom").textContent = Math.round(zoom * 100) + "%";
-  drawComments(); drawSelection();
+  // Everything on the overlay is sized in screen pixels, so a zoom or fit
+  // must redraw peers too (they otherwise keep the previous scale until the
+  // next presence message).
+  drawComments(); drawSelection(); drawPeers(peerState);
 }
 function contentBoxMm() {
   if (isSch()) return [mmX0(), mmY0(), mmW(), mmH()];
