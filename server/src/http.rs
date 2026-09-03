@@ -472,10 +472,35 @@ fn sexpr_block(text: &str, start: usize) -> Option<&str> {
     None
 }
 
-fn quoted_after<'a>(block: &'a str, key: &str) -> Option<&'a str> {
-    block.find(key).and_then(|p| block[p + key.len()..].split('"').next())
+/// The next quoted string after optional whitespace, and what follows it.
+/// (Editors serialize with varying whitespace: `(property  "Reference"`.)
+fn next_quoted(rest: &str) -> Option<(&str, &str)> {
+    let t = rest.trim_start().strip_prefix('"')?;
+    let end = t.find('"')?;
+    Some((&t[..end], &t[end + 1..]))
 }
 
+/// The quoted string following `key` (e.g. `(uuid`), whitespace-tolerant.
+fn quoted_after<'a>(block: &'a str, key: &str) -> Option<&'a str> {
+    block.find(key).and_then(|p| next_quoted(&block[p + key.len()..]).map(|(v, _)| v))
+}
+
+/// The value of the `(property "<name>" "<value>" ...)` entry called `name`.
+fn prop_value<'a>(block: &'a str, name: &str) -> Option<&'a str> {
+    let mut idx = 0usize;
+    while let Some(rel) = block[idx..].find("(property") {
+        let p = idx + rel + "(property".len();
+        if let Some((n, rest)) = next_quoted(&block[p..]) {
+            if n == name {
+                return next_quoted(rest).map(|(v, _)| v);
+            }
+        }
+        idx = p;
+    }
+    None
+}
+
+/// Numbers inside the `(key n n n)` list, whitespace-tolerant.
 fn nums_after(block: &str, key: &str) -> Vec<f64> {
     match block.find(key) {
         Some(p) => {
@@ -527,23 +552,23 @@ pub async fn doc_items(
         // Placed symbols open with (lib_id ...); sheets with (at ...).  Anything
         // else (lib definitions, sheet_instances) is not ours.
         if head == "symbol" && body.starts_with("(lib_id") {
-            let at = nums_after(block, "(at ");
+            let at = nums_after(block, "(at");
             symbols.push(json!({
-                "id": quoted_after(block, "(uuid \"").unwrap_or(""),
-                "lib": quoted_after(block, "(lib_id \"").unwrap_or(""),
-                "ref": quoted_after(block, "(property \"Reference\" \"").unwrap_or(""),
-                "value": quoted_after(block, "(property \"Value\" \"").unwrap_or(""),
+                "id": quoted_after(block, "(uuid").unwrap_or(""),
+                "lib": quoted_after(block, "(lib_id").unwrap_or(""),
+                "ref": prop_value(block, "Reference").unwrap_or(""),
+                "value": prop_value(block, "Value").unwrap_or(""),
                 "x": at.first().copied().unwrap_or(0.0),
                 "y": at.get(1).copied().unwrap_or(0.0),
                 "rot": at.get(2).copied().unwrap_or(0.0),
             }));
         } else if head == "sheet" && body.starts_with("(at") {
-            let at = nums_after(block, "(at ");
-            let size = nums_after(block, "(size ");
+            let at = nums_after(block, "(at");
+            let size = nums_after(block, "(size");
             sheets.push(json!({
-                "id": quoted_after(block, "(uuid \"").unwrap_or(""),
-                "name": quoted_after(block, "(property \"Sheetname\" \"").unwrap_or(""),
-                "file": quoted_after(block, "(property \"Sheetfile\" \"").unwrap_or(""),
+                "id": quoted_after(block, "(uuid").unwrap_or(""),
+                "name": prop_value(block, "Sheetname").unwrap_or(""),
+                "file": prop_value(block, "Sheetfile").unwrap_or(""),
                 "x": at.first().copied().unwrap_or(0.0),
                 "y": at.get(1).copied().unwrap_or(0.0),
                 "w": size.first().copied().unwrap_or(0.0),
