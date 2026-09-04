@@ -560,10 +560,32 @@ pub struct DesktopAuthorizeQuery {
 
 pub async fn desktop_authorize(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     Query(q): Query<DesktopAuthorizeQuery>,
     jar: CookieJar,
 ) -> AppResult<Response> {
     let (client_id, _) = github_configured(&state)?;
+
+    // The GitHub callback + the state cookie must live on public_url.  Desktop
+    // apps still point at a non-canonical host (e.g. the old railway default),
+    // so broker the whole flow onto public_url — otherwise the cookie is set on
+    // the desktop's host and the callback on public_url can't match it
+    // ("oauth state mismatch").
+    let canonical = state.cfg.public_url.trim_end_matches('/');
+
+    if let Some(here) = request_origin(&headers) {
+        if here != canonical && is_allowed_origin(&state, &here) {
+            let qs = raw_query.unwrap_or_default();
+            let url = format!(
+                "{}/auth/desktop/authorize{}{}",
+                canonical,
+                if qs.is_empty() { "" } else { "?" },
+                qs
+            );
+            return Ok(Redirect::to(&url).into_response());
+        }
+    }
 
     if q.code_challenge_method != "S256" {
         return Err(AppError::BadRequest("code_challenge_method must be S256".into()));
