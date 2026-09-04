@@ -599,37 +599,48 @@ struct APP_KICAD : public wxApp
             return false;
         }
 
-        // A kicad-collab:// URL that launched us arrives via MacOpenURL before
-        // the frame exists; dispatch it now that OnPgmInit built the frame.
+        // A kicad-collab:// URL that launched us (via MacOpenURL before the
+        // frame existed, or an argv on Windows/Linux) is flushed now.
         if( !m_pendingCollabUrl.IsEmpty() )
-        {
-            wxString url = m_pendingCollabUrl;
-            m_pendingCollabUrl.Clear();
-            CallAfter( [this, url]() { dispatchCollabUrl( url ); } );
-        }
+            CallAfter( [this]() { flushPendingCollabUrl(); } );
 
         return true;
     }
 
 #ifdef __WXMAC__
     // The web "Open in KiCad" button uses the kicad-collab:// scheme; macOS
-    // delivers it here (declared in the bundle's CFBundleURLTypes).
+    // delivers it here (declared in the bundle's CFBundleURLTypes).  Stash and
+    // flush from the event loop: at delivery time the manager frame may not be
+    // the top window (an editor can be frontmost) or may not exist yet.
     void MacOpenURL( const wxString& aUrl ) override
     {
         if( !aUrl.StartsWith( wxS( "kicad-collab://" ) ) )
             return;
 
-        if( wxDynamicCast( GetTopWindow(), KICAD_MANAGER_FRAME ) )
-            dispatchCollabUrl( aUrl );
-        else
-            m_pendingCollabUrl = aUrl;   // launched by the URL; handle after OnInit
+        m_pendingCollabUrl = aUrl;
+        CallAfter( [this]() { flushPendingCollabUrl(); } );
     }
 #endif
 
-    void dispatchCollabUrl( const wxString& aUrl )
+    // Route a stashed kicad-collab:// link to the project manager.  The manager
+    // is not necessarily GetTopWindow() (an editor frame can be frontmost), so
+    // search all top-level windows for it.
+    void flushPendingCollabUrl()
     {
-        if( KICAD_MANAGER_FRAME* frame = wxDynamicCast( GetTopWindow(), KICAD_MANAGER_FRAME ) )
-            frame->HandleCollabJoinLink( aUrl );
+        if( m_pendingCollabUrl.IsEmpty() )
+            return;
+
+        for( wxWindow* win : wxTopLevelWindows )
+        {
+            if( KICAD_MANAGER_FRAME* frame = wxDynamicCast( win, KICAD_MANAGER_FRAME ) )
+            {
+                wxString url = m_pendingCollabUrl;
+                m_pendingCollabUrl.Clear();
+                frame->HandleCollabJoinLink( url );
+                return;
+            }
+        }
+        // Manager not up yet (launched by the URL); OnInit flushes again.
     }
 
     wxString m_pendingCollabUrl;

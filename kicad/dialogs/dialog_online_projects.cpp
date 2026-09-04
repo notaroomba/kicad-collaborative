@@ -375,7 +375,7 @@ void DIALOG_ONLINE_PROJECTS::onOpen( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject )
+void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool aAutoLocation )
 {
     wxString server = COLLAB_SESSION::ServerUrl();
     wxString token = COLLAB_AUTH::StoredToken( server );
@@ -400,13 +400,27 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject )
     wxFileName base( PATHS::GetDefaultUserProjectsPath(), wxEmptyString );
     base.AppendDir( wxS( "Cloud" ) );
 
-    wxDirDialog dirDlg( this, _( "Folder to store the local copy in" ), base.GetPath(),
-                        wxDD_DEFAULT_STYLE );
+    wxString chosen = base.GetPath();
 
-    if( dirDlg.ShowModal() != wxID_OK )
-        return;
+    // A share-link / deep-link join places the copy automatically so opening a
+    // shared project is one step; the manual "Open..." button still lets the
+    // user choose where it lands.
+    if( !aAutoLocation )
+    {
+        wxDirDialog dirDlg( this, _( "Folder to store the local copy in" ), base.GetPath(),
+                            wxDD_DEFAULT_STYLE );
 
-    wxFileName target( dirDlg.GetPath(), wxEmptyString );
+        if( dirDlg.ShowModal() != wxID_OK )
+            return;
+
+        chosen = dirDlg.GetPath();
+    }
+    else
+    {
+        wxFileName::Mkdir( base.GetPath(), wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL );
+    }
+
+    wxFileName target( chosen, wxEmptyString );
     target.AppendDir( sanitizeDirName( name ) );
 
     // Re-opening an existing local copy: skip the download, keep local edits
@@ -674,12 +688,14 @@ void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken )
         { "name", project->value( "name", "" ) },
     };
 
-    if( wxMessageBox( wxString::Format( _( "Joined '%s'.  Download a local copy and open "
-                                           "it now?" ),
+    if( wxMessageBox( wxString::Format( _( "Joined '%s'.  Open it now?\n\n"
+                                           "A local working copy is downloaded so the desktop "
+                                           "editors can open it; your edits sync live to everyone "
+                                           "in the session." ),
                                         wxString::FromUTF8( project->value( "name", "" ) ) ),
                       _( "Join Shared Project" ), wxYES_NO | wxICON_QUESTION, this )
         == wxYES )
     {
-        openProject( listingLike );
+        openProject( listingLike, /* aAutoLocation */ true );
     }
 }
