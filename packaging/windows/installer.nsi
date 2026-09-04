@@ -34,7 +34,7 @@ SetCompressor /SOLID lzma
 
 Section "KiCad Collaborative"
   SetOutPath "$INSTDIR"
-  File /r "${STAGEDIR}/*.*"
+  File /r "${STAGEDIR}\*.*"
 
   WriteRegStr HKLM "Software\KiCad Collaborative" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
