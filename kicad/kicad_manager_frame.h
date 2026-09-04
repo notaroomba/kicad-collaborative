@@ -62,6 +62,14 @@ public:
     /// Start (or, when already signed in, offer to end) the collaboration
     /// server sign-in, directly from the File menu.
     void SignInToCollab();
+
+    /// Upload the open project as a new online project and make this folder
+    /// its local copy (signing in first if needed).
+    void PublishProjectOnline();
+
+    /// Keep syncing, make the open project local only (optionally dropping the
+    /// online side), or delete its local copy.
+    void ShowCollabSyncDialog();
     void RestoreLocalHistory();
     void RestoreCommitFromHistory( const wxString& aHash );
     void ToggleLocalHistory();

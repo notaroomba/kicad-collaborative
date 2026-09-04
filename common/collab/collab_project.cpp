@@ -133,6 +133,9 @@ std::optional<nlohmann::json> COLLAB_PROJECT::CreateAndShare( const wxString& aS
 
     aShareUrl = wxString::FromUTF8( link->value( "url", "" ) );
 
+    // What was just uploaded is the online project: base the merge on it.
+    SeedSyncBases( aProjectPath, aProjectName );
+
     return project;
 }
 
@@ -185,12 +188,156 @@ wxString COLLAB_PROJECT::ParseLinkToken( const wxString& aInput )
 }
 
 
-static wxString localLinkPath( const wxString& aProjectPath, const wxString& aProjectName )
+static wxString collabDirPath( const wxString& aProjectPath, const wxString& aProjectName )
 {
     wxFileName dir( aProjectPath, wxEmptyString );
     dir.AppendDir( aProjectName + wxS( ".collab" ) );
 
-    return wxFileName( dir.GetPath(), wxS( "link.json" ) ).GetFullPath();
+    return dir.GetPath();
+}
+
+
+static wxString localLinkPath( const wxString& aProjectPath, const wxString& aProjectName )
+{
+    return wxFileName( collabDirPath( aProjectPath, aProjectName ), wxS( "link.json" ) )
+            .GetFullPath();
+}
+
+
+/// <project>.collab/base/<aRelPath>, or empty for a path that climbs out of it.
+static wxString syncBasePath( const wxString& aProjectPath, const wxString& aProjectName,
+                              const wxString& aRelPath )
+{
+    if( aRelPath.IsEmpty() )
+        return wxEmptyString;
+
+    wxFileName rel( aRelPath, wxPATH_UNIX );
+    wxFileName file( collabDirPath( aProjectPath, aProjectName ), wxEmptyString );
+    file.AppendDir( wxS( "base" ) );
+
+    for( const wxString& dir : rel.GetDirs() )
+    {
+        if( dir == wxS( ".." ) )
+            return wxEmptyString;
+
+        file.AppendDir( dir );
+    }
+
+    file.SetFullName( rel.GetFullName() );
+
+    return file.GetFullPath();
+}
+
+
+static std::string readWholeFile( const wxString& aPath )
+{
+    if( aPath.IsEmpty() || !wxFileName::FileExists( aPath ) )
+        return std::string();
+
+    wxFFileInputStream in( aPath );
+
+    if( !in.IsOk() )
+        return std::string();
+
+    std::string text;
+    text.resize( in.GetLength() );
+    in.Read( text.data(), text.size() );
+
+    return text;
+}
+
+
+void COLLAB_PROJECT::WriteSyncBase( const wxString& aProjectPath, const wxString& aProjectName,
+                                    const wxString& aRelPath, const std::string& aText )
+{
+    wxFileName file( syncBasePath( aProjectPath, aProjectName, aRelPath ) );
+
+    if( file.GetFullPath().IsEmpty() )
+        return;
+
+    if( !file.DirExists()
+        && !wxFileName::Mkdir( file.GetPath(), wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
+    {
+        return;
+    }
+
+    wxFFileOutputStream out( file.GetFullPath() );
+
+    if( out.IsOk() )
+        out.Write( aText.data(), aText.size() );
+}
+
+
+std::string COLLAB_PROJECT::ReadSyncBase( const wxString& aProjectPath,
+                                          const wxString& aProjectName,
+                                          const wxString& aRelPath )
+{
+    return readWholeFile( syncBasePath( aProjectPath, aProjectName, aRelPath ) );
+}
+
+
+void COLLAB_PROJECT::RefreshSyncBaseFromDisk( const wxString& aProjectPath,
+                                              const wxString& aProjectName,
+                                              const wxString& aRelPath )
+{
+    wxFileName doc( aProjectPath + wxFileName::GetPathSeparator()
+                    + wxFileName( aRelPath, wxPATH_UNIX ).GetFullPath() );
+
+    std::string text = readWholeFile( doc.GetFullPath() );
+
+    if( !text.empty() )
+        WriteSyncBase( aProjectPath, aProjectName, aRelPath, text );
+}
+
+
+void COLLAB_PROJECT::SeedSyncBases( const wxString& aProjectPath, const wxString& aProjectName )
+{
+    wxArrayString files;
+    wxDir::GetAllFiles( aProjectPath, &files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
+
+    for( const wxString& path : files )
+    {
+        wxFileName fn( path );
+        wxString   ext = fn.GetExt().Lower();
+
+        if( ext != wxS( "kicad_pcb" ) && ext != wxS( "kicad_sch" ) )
+            continue;
+
+        wxFileName rel( path );
+        rel.MakeRelativeTo( aProjectPath );
+
+        // Not the copies inside .collab/base itself, backups, or local history.
+        bool skip = false;
+
+        for( const wxString& dir : rel.GetDirs() )
+        {
+            if( dir.EndsWith( wxS( ".collab" ) ) || dir.EndsWith( wxS( "-backups" ) )
+                || dir.StartsWith( wxS( "." ) ) )
+            {
+                skip = true;
+                break;
+            }
+        }
+
+        if( !skip )
+            RefreshSyncBaseFromDisk( aProjectPath, aProjectName, rel.GetFullPath( wxPATH_UNIX ) );
+    }
+}
+
+
+void COLLAB_PROJECT::UnlinkLocalProject( const wxString& aProjectPath,
+                                         const wxString& aProjectName )
+{
+    wxString server;
+    wxString projectId = ReadLocalLink( aProjectPath, aProjectName, server );
+
+    if( !projectId.IsEmpty() )
+        ForgetLocalCopy( projectId );
+
+    wxString dir = collabDirPath( aProjectPath, aProjectName );
+
+    if( wxFileName::DirExists( dir ) )
+        wxFileName::Rmdir( dir, wxPATH_RMDIR_RECURSIVE );
 }
 
 
@@ -264,6 +411,45 @@ void COLLAB_PROJECT::RecordLocalCopy( const wxString& aProjectId, const wxString
 wxString COLLAB_PROJECT::FindLocalCopy( const wxString& aProjectId )
 {
     return FindLocalCopyIn( PATHS::GetUserSettingsPath(), aProjectId );
+}
+
+
+void COLLAB_PROJECT::ForgetLocalCopy( const wxString& aProjectId )
+{
+    ForgetLocalCopyIn( PATHS::GetUserSettingsPath(), aProjectId );
+}
+
+
+void COLLAB_PROJECT::ForgetLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId )
+{
+    std::string text = readWholeFile( localCopiesPathIn( aRegistryDir ) );
+
+    if( text.empty() )
+        return;
+
+    nlohmann::json map;
+
+    try
+    {
+        map = nlohmann::json::parse( text );
+    }
+    catch( ... )
+    {
+        return;
+    }
+
+    if( !map.is_object() || !map.contains( aProjectId.ToStdString( wxConvUTF8 ) ) )
+        return;
+
+    map.erase( aProjectId.ToStdString( wxConvUTF8 ) );
+
+    wxFFileOutputStream out( localCopiesPathIn( aRegistryDir ) );
+
+    if( out.IsOk() )
+    {
+        std::string dump = map.dump( 2 );
+        out.Write( dump.data(), dump.size() );
+    }
 }
 
 
@@ -415,7 +601,22 @@ bool COLLAB_PROJECT::DownloadAndExtract( const wxString& aServer, const wxString
             aProFile = target.GetFullPath();
     }
 
-    WriteLocalLink( aTargetDir, aProjectName, aServer, aProjectId );
+    // Pair the copy with the online project where the editors look for it:
+    // beside the .kicad_pro, under that file's name (the online name can
+    // differ, e.g. after a rename).  The download is the online state, so it
+    // is also the base for the next merge.
+    wxString linkDir = aTargetDir;
+    wxString linkName = aProjectName;
+
+    if( !aProFile.IsEmpty() )
+    {
+        wxFileName pro( aProFile );
+        linkDir = pro.GetPath();
+        linkName = pro.GetName();
+    }
+
+    WriteLocalLink( linkDir, linkName, aServer, aProjectId );
+    SeedSyncBases( linkDir, linkName );
 
     return true;
 }

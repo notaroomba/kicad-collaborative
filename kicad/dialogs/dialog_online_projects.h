@@ -47,7 +47,8 @@ public:
 
     /// Run the join-from-link flow.  Empty prompts for the link; otherwise the
     /// given share link / token is used directly (deep link, menu, etc.).
-    void JoinWithLink( const wxString& aLinkOrToken );
+    /// With aOpenWithoutAsking the joined project is opened straight away.
+    void JoinWithLink( const wxString& aLinkOrToken, bool aOpenWithoutAsking = false );
 
     /// Auto-run JoinWithLink once the dialog is shown (used by the deep link).
     void SetPendingJoinLink( const wxString& aLink ) { m_pendingJoinLink = aLink; }

@@ -21,6 +21,8 @@
 
 #include "pcb_collab_sync.h"
 
+#include <widgets/wx_infobar.h>
+#include <wx/hyperlink.h>
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
@@ -286,6 +288,8 @@ void PCB_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
                                     frame<PCB_EDIT_FRAME>()->Prj().GetProjectName(),
                                     COLLAB_SESSION::ServerUrl(),
                                     wxString::FromUTF8( project->value( "projectId", "" ) ) );
+    COLLAB_PROJECT::RecordLocalCopy( wxString::FromUTF8( project->value( "projectId", "" ) ),
+                                     frame<PCB_EDIT_FRAME>()->Prj().GetProjectFullName() );
 
     beginSession( *project, aToken, aLinkToken );
 }
@@ -319,6 +323,8 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
                                     editFrame->Prj().GetProjectName(),
                                     COLLAB_SESSION::ServerUrl(),
                                     wxString::FromUTF8( project->value( "projectId", "" ) ) );
+    COLLAB_PROJECT::RecordLocalCopy( wxString::FromUTF8( project->value( "projectId", "" ) ),
+                                     editFrame->Prj().GetProjectFullName() );
 
     beginSession( *project, aToken, wxEmptyString );
 
@@ -406,13 +412,73 @@ void PCB_COLLAB_TOOL::tryAutoJoin()
     wxString token = COLLAB_AUTH::StoredToken( server );
 
     if( token.IsEmpty() )
+    {
+        showOfflineBanner( _( "you are not signed in" ) );
         return;
+    }
 
     std::optional<nlohmann::json> project =
             COLLAB_REST::GetProject( server, token, projectId );
 
     if( project )
         beginSession( *project, token, wxEmptyString );
+    else
+        showOfflineBanner( _( "the online project could not be reached" ) );
+}
+
+
+void PCB_COLLAB_TOOL::showOfflineBanner( const wxString& aWhy )
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+    WX_INFOBAR*     infoBar = editFrame->GetInfoBar();
+
+    infoBar->RemoveAllButtons();
+    infoBar->AddLink( _( "Reconnect" ),
+                      [this]( wxHyperlinkEvent& )
+                      {
+                          m_autoJoinProject.clear();
+                          withSignIn( [this]( const wxString& ) { tryAutoJoin(); } );
+                      } );
+    infoBar->AddLink( _( "Make local only" ),
+                      [this]( wxHyperlinkEvent& )
+                      {
+                          unlinkFromOnline();
+                      } );
+    infoBar->AddCloseButton();
+    infoBar->ShowMessage( wxString::Format( _( "This is a copy of an online project and you "
+                                               "are editing it offline (%s).  Your edits are "
+                                               "merged with the online version when you "
+                                               "reconnect." ),
+                                            aWhy ),
+                          wxICON_WARNING );
+    m_offlineBanner = true;
+}
+
+
+void PCB_COLLAB_TOOL::unlinkFromOnline()
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+
+    if( wxMessageBox( _( "Stop syncing this copy with the online project?\n\nThe online "
+                         "project stays as it is; this folder becomes a plain local project." ),
+                      _( "Make Project Local" ), wxYES_NO | wxICON_QUESTION, editFrame )
+        != wxYES )
+    {
+        return;
+    }
+
+    if( sessionActive() )
+        endSession();
+
+    wxString projectPath = editFrame->Prj().GetProjectPath();
+
+    COLLAB_PROJECT::UnlinkLocalProject( projectPath, editFrame->Prj().GetProjectName() );
+    m_autoJoinProject = projectPath;    // and no auto-join for it from now on
+
+    m_offlineBanner = false;
+    editFrame->GetInfoBar()->Dismiss();
+    editFrame->ShowInfoBarMsg( _( "This project is now local only." ) );
+    editFrame->SetStatusText( wxEmptyString, 0 );
 }
 
 
@@ -809,6 +875,15 @@ void PCB_COLLAB_TOOL::rebuildCommentPins()
         if( frame<PCB_EDIT_FRAME>()->GetCanvas() )
             frame<PCB_EDIT_FRAME>()->GetCanvas()->Refresh();
     }
+}
+
+
+void PCB_COLLAB_TOOL::OnBoardSaved()
+{
+    // A save while live with every op of ours acknowledged puts the server's
+    // state on disk: that is the base the next offline merge starts from.
+    if( m_sync && COLLAB_SESSION::Get().IsLive() )
+        m_sync->RefreshSyncBaseFromDisk();
 }
 
 
@@ -1340,6 +1415,12 @@ void PCB_COLLAB_TOOL::OnSessionStateChanged()
     {
     case COLLAB_SESSION::STATE::LIVE:
     {
+        if( m_offlineBanner )
+        {
+            m_offlineBanner = false;
+            frame<PCB_EDIT_FRAME>()->GetInfoBar()->Dismiss();
+        }
+
         size_t peers = COLLAB_SESSION::Get().Peers( m_docId ).size();
 
         msg = peers > 0 ? wxString::Format( _( "Collaboration: live \u00b7 %zu collaborator(s)" ),

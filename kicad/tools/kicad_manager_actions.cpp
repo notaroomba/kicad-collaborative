@@ -91,6 +91,20 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::joinSharedProject( TOOL_ACTION_ARGS()
         .Tooltip( _( "Join a collaborative session from a share link or invite URL" ) )
         .Icon( BITMAPS::www ) );
 
+TOOL_ACTION KICAD_MANAGER_ACTIONS::publishProject( TOOL_ACTION_ARGS()
+        .Name( "kicad.Control.publishProject" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Publish Project Online..." ) )
+        .Tooltip( _( "Upload this project to the collaboration server and keep it synced" ) )
+        .Icon( BITMAPS::www ) );
+
+TOOL_ACTION KICAD_MANAGER_ACTIONS::collabSync( TOOL_ACTION_ARGS()
+        .Name( "kicad.Control.collabSync" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Online Sync..." ) )
+        .Tooltip( _( "Keep syncing, make the project local only, or delete the local or online copy" ) )
+        .Icon( BITMAPS::www ) );
+
 TOOL_ACTION KICAD_MANAGER_ACTIONS::openJobsetFile( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.openJobset" )
         .Scope( AS_GLOBAL )

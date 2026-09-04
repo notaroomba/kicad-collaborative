@@ -114,4 +114,36 @@ KICOMMON_API wxString FindLocalCopy( const wxString& aProjectId );
 KICOMMON_API wxString ReadLocalLink( const wxString& aProjectPath, const wxString& aProjectName,
                                      wxString& aServer );
 
+/**
+ * Break the pairing between a local project and its online copy: removes
+ * <project>.collab (link, sync bases, journals) and the registry entry, so the
+ * folder is a plain local project again.  The online project is untouched.
+ */
+KICOMMON_API void UnlinkLocalProject( const wxString& aProjectPath,
+                                      const wxString& aProjectName );
+
+/// Drop the registry entry mapping aProjectId to a local copy.
+KICOMMON_API void ForgetLocalCopy( const wxString& aProjectId );
+KICOMMON_API void ForgetLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId );
+
+/**
+ * Sync bases.  A base is a document (project-relative path, forward slashes)
+ * as it was the last time this copy matched the online project: the third
+ * side of the three-way merge that reconciles edits made while offline with
+ * what happened online meanwhile.  Kept under <project>.collab/base/.
+ */
+KICOMMON_API void        WriteSyncBase( const wxString& aProjectPath, const wxString& aProjectName,
+                                        const wxString& aRelPath, const std::string& aText );
+KICOMMON_API std::string ReadSyncBase( const wxString& aProjectPath, const wxString& aProjectName,
+                                       const wxString& aRelPath );
+
+/// Copy the document on disk at aRelPath into its base (after a save while in sync).
+KICOMMON_API void RefreshSyncBaseFromDisk( const wxString& aProjectPath,
+                                           const wxString& aProjectName,
+                                           const wxString& aRelPath );
+
+/// Base every board and schematic of the project on its current on-disk state —
+/// right after an upload or a download, when both sides are known to match.
+KICOMMON_API void SeedSyncBases( const wxString& aProjectPath, const wxString& aProjectName );
+
 } // namespace COLLAB_PROJECT

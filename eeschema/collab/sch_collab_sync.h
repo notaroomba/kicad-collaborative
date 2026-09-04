@@ -143,7 +143,11 @@ private:
     ///< Reconcile a whole screen against the server's snapshot: upsert items
     ///< that differ or are missing locally, remove local items the server does
     ///< not have.  Used after a doc reset (checkpoint restore).
-    void reconcileFromSnapshot( const wxString& aDocId, const std::string& aFileText );
+    void reconcileFromSnapshot( const wxString& aDocId, const std::string& aFileText,
+                                const nlohmann::json& aThenOps );
+
+    ///< Record aDocId's screen as its sync base (it matches the server now).
+    void writeSyncBase( const wxString& aDocId );
 
 public:
 
@@ -162,6 +166,12 @@ public:
 
     /// Re-send every unacknowledged op; call once the session goes live again.
     void ReplayUnacked();
+
+    /**
+     * The project was just saved while live: every doc with no op of ours in
+     * flight now matches the server on disk, so make those the sync bases.
+     */
+    void RefreshSyncBasesFromDisk();
     void OnSnapshotRequest();
     void OnReset( const wxString& aDocId, long long aSeq );
 

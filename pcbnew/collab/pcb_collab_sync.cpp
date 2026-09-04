@@ -21,6 +21,7 @@
 
 #include <collab/collab_auth.h>
 #include <collab/collab_rest.h>
+#include <collab/collab_project.h>
 #include <collab/collab_session.h>
 
 #include <board.h>
@@ -874,31 +875,40 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
     m_resyncPending = false;
     m_queue.clear();
 
+    nlohmann::json thenOps = aSnapshotMsg.value( "thenOps", nlohmann::json::array() );
+
     if( aSnapshotMsg.contains( "file" ) )
     {
-        // Every snapshot catch-up reconciles the whole open board against the
-        // server's file: it heals a stale or drifted local copy on join, it
-        // is what a doc reset (checkpoint restore) needs, and it subsumes the
-        // targeted rejected-op rollback.  The diff-based reconcile is a no-op
-        // when the board already matches.
+        // Every snapshot catch-up merges the whole open board with the server's
+        // state: it heals a stale or drifted copy on join, carries edits made
+        // offline back online, is what a doc reset (checkpoint restore) needs,
+        // and subsumes the targeted rejected-op rollback.  The ops since the
+        // snapshot are folded into that merge rather than replayed separately,
+        // so the merged board is at the head seq.
+        for( const nlohmann::json& opJson : thenOps )
+            m_lastAppliedSeq = std::max( m_lastAppliedSeq, opJson.value( "seq", 0LL ) );
+
+        COLLAB_SESSION::Get().SetAppliedSeq( m_docId, m_lastAppliedSeq );
+
         m_reconcilePending = false;
         m_pendingRollback.clear();
-        reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ) );
+        reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ), thenOps );
     }
-
-    // Replay the ops since the snapshot through the normal queue.
-    for( const nlohmann::json& opJson : aSnapshotMsg.value( "thenOps",
-                                                            nlohmann::json::array() ) )
+    else
     {
-        PENDING_OP op;
-        op.seq = opJson.value( "seq", 0LL );
-        op.changes = opJson.value( "changes", nlohmann::json::array() );
+        // Replay the ops since the snapshot through the normal queue.
+        for( const nlohmann::json& opJson : thenOps )
+        {
+            PENDING_OP op;
+            op.seq = opJson.value( "seq", 0LL );
+            op.changes = opJson.value( "changes", nlohmann::json::array() );
 
-        if( opJson.contains( "author" ) && opJson[ "author" ].is_object() )
-            op.authorClientId = wxString::FromUTF8( opJson[ "author" ].value( "clientId", "" ) );
+            if( opJson.contains( "author" ) && opJson[ "author" ].is_object() )
+                op.authorClientId = wxString::FromUTF8( opJson[ "author" ].value( "clientId", "" ) );
 
-        if( op.seq > 0 )
-            m_queue.push_back( std::move( op ) );
+            if( op.seq > 0 )
+                m_queue.push_back( std::move( op ) );
+        }
     }
 
     wxWakeUpIdle();
@@ -935,7 +945,8 @@ std::string normalizeNetNumbers( const std::string& aSexpr )
 } // anonymous namespace
 
 
-void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
+void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
+                                             const nlohmann::json& aThenOps )
 {
     BOARD* board = m_frame->GetBoard();
 
@@ -945,37 +956,71 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
     // This runs on every join, so its cost is worth watching in the field.
     wxStopWatch reconcileTimer;
 
-    PCB_IO_KICAD_SEXPR     io;
-    std::unique_ptr<BOARD> server;
-
-    try
+    auto parseBoard = []( const std::string& aText ) -> std::unique_ptr<BOARD>
     {
-        BOARD_ITEM* parsed = io.Parse( wxString::FromUTF8( aFileText ) );
+        PCB_IO_KICAD_SEXPR io;
 
-        if( !parsed )
-            return;
-
-        if( parsed->Type() != PCB_T )
+        try
         {
+            BOARD_ITEM* parsed = io.Parse( wxString::FromUTF8( aText ) );
+
+            if( parsed && parsed->Type() == PCB_T )
+                return std::unique_ptr<BOARD>( static_cast<BOARD*>( parsed ) );
+
             delete parsed;
-            return;
+        }
+        catch( const IO_ERROR& ioe )
+        {
+            wxLogTrace( traceCollab, wxS( "reconcile: parse failed: %s" ), ioe.What() );
         }
 
-        server.reset( static_cast<BOARD*>( parsed ) );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        wxLogTrace( traceCollab, wxS( "reconcile: snapshot parse failed: %s" ), ioe.What() );
+        return nullptr;
+    };
+
+    std::unique_ptr<BOARD> server = parseBoard( aFileText );
+
+    if( !server )
         return;
-    }
 
-    std::map<KIID, BOARD_ITEM*> serverItems;
-
-    for( BOARD_ITEM* item : server->GetItemSet() )
+    // The server's truth is the snapshot plus every op since it; fold those in
+    // headlessly so the merge sees one consistent online state.
+    if( aThenOps.is_array() )
     {
-        if( typeSyncs( item ) )
-            serverItems[ item->m_Uuid ] = item;
+        for( const nlohmann::json& opJson : aThenOps )
+        {
+            for( const nlohmann::json& change :
+                 opJson.value( "changes", nlohmann::json::array() ) )
+            {
+                PCB_COLLAB::ApplyItemChange( server.get(), change, nullptr );
+            }
+        }
     }
+
+    // The sync base is this copy as it last matched the online project.  With
+    // it, a differing item can be attributed to an edit made here while
+    // offline or to a change made online; without one (a copy older than
+    // bases) the online version wins outright, as it always did.
+    std::string baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
+                                                         m_frame->Prj().GetProjectName(),
+                                                         docRelPath() );
+    std::unique_ptr<BOARD> base = baseText.empty() ? nullptr : parseBoard( baseText );
+    const bool             haveBase = base != nullptr;
+
+    auto collect = []( BOARD* aBoard, std::map<KIID, BOARD_ITEM*>& aOut )
+    {
+        for( BOARD_ITEM* item : aBoard->GetItemSet() )
+        {
+            if( typeSyncs( item ) )
+                aOut[ item->m_Uuid ] = item;
+        }
+    };
+
+    std::map<KIID, BOARD_ITEM*> serverItems, baseItems, localItems;
+    collect( server.get(), serverItems );
+    collect( board, localItems );
+
+    if( base )
+        collect( base.get(), baseItems );
 
     auto upsertChange = []( BOARD_ITEM* aItem, std::string aSexpr ) -> nlohmann::json
     {
@@ -1012,81 +1057,209 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText )
         return change;
     };
 
-    nlohmann::json changes = nlohmann::json::array();
-    std::set<KIID>  localIds;
-    int             kept = 0;
-
-    for( BOARD_ITEM* local : board->GetItemSet() )
+    auto removeChange = []( const KIID& aId ) -> nlohmann::json
     {
-        if( !typeSyncs( local ) )
-            continue;
+        nlohmann::json change;
+        change[ "id" ] = aId.AsStdString();
+        change[ "kind" ] = "REMOVED";
+        change[ "typeName" ] = "";
+        return change;
+    };
 
-        localIds.insert( local->m_Uuid );
+    auto find = []( std::map<KIID, BOARD_ITEM*>& aMap, const KIID& aId ) -> BOARD_ITEM*
+    {
+        auto it = aMap.find( aId );
+        return it == aMap.end() ? nullptr : it->second;
+    };
 
-        auto it = serverItems.find( local->m_Uuid );
+    std::set<KIID> ids;
 
-        if( it == serverItems.end() )
+    for( const auto& [id, item] : localItems )  ids.insert( id );
+    for( const auto& [id, item] : serverItems ) ids.insert( id );
+    for( const auto& [id, item] : baseItems )   ids.insert( id );
+
+    nlohmann::json fromOnline = nlohmann::json::array();  // apply to this board
+    nlohmann::json toOnline = nlohmann::json::array();    // push to the server
+    int            kept = 0;
+    int            conflicts = 0;
+    int            unchanged = 0;
+
+    for( const KIID& id : ids )
+    {
+        BOARD_ITEM* L = find( localItems, id );
+        BOARD_ITEM* R = find( serverItems, id );
+        BOARD_ITEM* B = find( baseItems, id );
+
+        // Types that cannot travel as s-expressions are left alone on both sides.
+        if( ( L && !typeSupportsSexprTransfer( L ) ) || ( R && !typeSupportsSexprTransfer( R ) ) )
         {
-            // The restored document does not have it.
-            nlohmann::json change;
-            change[ "id" ] = local->m_Uuid.AsStdString();
-            change[ "kind" ] = "REMOVED";
-            change[ "typeName" ] = "";
-            changes.push_back( std::move( change ) );
+            unchanged++;
             continue;
         }
 
-        if( !typeSupportsSexprTransfer( it->second ) )
+        // Net numbers are board-local (identity travels by name): compare with
+        // them blanked, but transfer the raw form.
+        std::string rawL = L ? PCB_COLLAB::FormatItemSexpr( L ) : std::string();
+        std::string rawR = R ? PCB_COLLAB::FormatItemSexpr( R ) : std::string();
+        std::string ls = normalizeNetNumbers( rawL );
+        std::string rs = normalizeNetNumbers( rawR );
+        std::string bs = B ? normalizeNetNumbers( PCB_COLLAB::FormatItemSexpr( B ) ) : std::string();
+
+        // An item that will not serialize cannot be compared; leave it be.
+        if( ( L && ls.empty() ) || ( R && rs.empty() ) )
         {
+            unchanged++;
+            continue;
+        }
+
+        if( !haveBase )
+        {
+            if( L && !R )
+                fromOnline.push_back( removeChange( id ) );
+            else if( R && ( !L || ls != rs ) )
+                fromOnline.push_back( upsertChange( R, std::move( rawR ) ) );
+            else
+                unchanged++;
+
+            continue;
+        }
+
+        const bool haveB = B && !bs.empty();
+        const bool localChanged = ( L != nullptr ) != haveB || ( L && ls != bs );
+        const bool remoteChanged = ( R != nullptr ) != haveB || ( R && rs != bs );
+
+        if( !localChanged && !remoteChanged )
+        {
+            unchanged++;
+        }
+        else if( !localChanged )
+        {
+            // Only the online copy moved on: take it.
+            if( R )
+                fromOnline.push_back( upsertChange( R, std::move( rawR ) ) );
+            else
+                fromOnline.push_back( removeChange( id ) );
+        }
+        else if( !remoteChanged )
+        {
+            // Only this copy changed — an edit made offline: keep it, publish it.
+            if( L )
+                toOnline.push_back( upsertChange( L, std::move( rawL ) ) );
+            else
+                toOnline.push_back( removeChange( id ) );
+
             kept++;
-            continue;
         }
-
-        std::string localSexpr = PCB_COLLAB::FormatItemSexpr( local );
-        std::string serverSexpr = PCB_COLLAB::FormatItemSexpr( it->second );
-
-        if( localSexpr.empty() || serverSexpr.empty()
-            || normalizeNetNumbers( localSexpr ) == normalizeNetNumbers( serverSexpr ) )
+        else if( L && R && ls == rs )
         {
-            kept++;
-            continue;
+            unchanged++;    // the same edit on both sides
         }
+        else
+        {
+            // Both sides changed the same item.  A deletion on either side
+            // wins; otherwise the last writer wins, and that is this copy,
+            // syncing now — the rule Figma applies to offline edits too.
+            conflicts++;
 
-        changes.push_back( upsertChange( it->second, std::move( serverSexpr ) ) );
+            if( !R )
+                fromOnline.push_back( removeChange( id ) );
+            else if( !L )
+                toOnline.push_back( removeChange( id ) );
+            else
+                toOnline.push_back( upsertChange( L, std::move( rawL ) ) );
+        }
     }
 
-    for( auto& [id, item] : serverItems )
-    {
-        if( localIds.count( id ) || !typeSupportsSexprTransfer( item ) )
-            continue;
-
-        std::string sexpr = PCB_COLLAB::FormatItemSexpr( item );
-
-        if( !sexpr.empty() )
-            changes.push_back( upsertChange( item, std::move( sexpr ) ) );
-    }
+    const size_t updated = fromOnline.size();
 
     if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
     {
-        fprintf( stderr, "COLLAB reconcile: %zu changes, %d unchanged, %ldms\n",
-                 (size_t) changes.size(), kept, reconcileTimer.Time() );
+        fprintf( stderr, "COLLAB merge (%s base): %zu from online, %d kept, %d conflicts, "
+                         "%d unchanged, %ldms\n",
+                 haveBase ? "with" : "no", updated, kept, conflicts, unchanged,
+                 reconcileTimer.Time() );
     }
 
-    if( !changes.empty() )
+    if( !fromOnline.empty() )
     {
-        size_t count = changes.size();
-
         PENDING_OP op;
         op.seq = m_lastAppliedSeq;
-        op.changes = std::move( changes );
+        op.changes = std::move( fromOnline );
         applyOp( op );
+    }
 
+    if( !toOnline.empty() )
+    {
+        m_batch = std::move( toOnline );
+        m_batchIds.clear();
+        flushBatch();
+    }
+
+    // The board now holds the merged state, which the server holds too once
+    // our pushes are acknowledged: it is the base for the next merge.
+    writeSyncBase();
+
+    if( kept || conflicts )
+    {
         m_frame->ShowInfoBarMsg( wxString::Format(
-                _( "Board synchronized with the server (%zu item(s) updated)." ), count ) );
+                _( "Merged with the online project: %zu item(s) updated from online, %d "
+                   "offline change(s) kept, %d conflict(s) resolved in favour of this copy." ),
+                updated, kept, conflicts ) );
+    }
+    else if( updated )
+    {
+        m_frame->ShowInfoBarMsg( wxString::Format(
+                _( "Board synchronized with the online project (%zu item(s) updated)." ),
+                updated ) );
     }
 
     if( m_frame->GetCanvas() )
         m_frame->GetCanvas()->Refresh();
+}
+
+
+void PCB_COLLAB_SYNC::writeSyncBase()
+{
+    try
+    {
+        STRING_FORMATTER   formatter;
+        PCB_IO_KICAD_SEXPR io;
+
+        io.FormatBoardToFormatter( &formatter, m_frame->GetBoard(), nullptr );
+
+        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
+                                       m_frame->Prj().GetProjectName(), docRelPath(),
+                                       formatter.GetString() );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "sync base serialization failed: %s" ), ioe.What() );
+    }
+}
+
+
+wxString PCB_COLLAB_SYNC::docRelPath() const
+{
+    BOARD* board = m_frame->GetBoard();
+
+    if( !board || board->GetFileName().IsEmpty() )
+        return wxEmptyString;
+
+    wxFileName fn( board->GetFileName() );
+    fn.MakeRelativeTo( m_frame->Prj().GetProjectPath() );
+
+    return fn.GetFullPath( wxPATH_UNIX );
+}
+
+
+void PCB_COLLAB_SYNC::RefreshSyncBaseFromDisk()
+{
+    // Only a fully acknowledged save is the server's state.
+    if( !m_unacked.empty() )
+        return;
+
+    COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                             m_frame->Prj().GetProjectName(), docRelPath() );
 }
 
 

@@ -21,6 +21,8 @@
 #ifndef KIPLATFORM_APP_H_
 #define KIPLATFORM_APP_H_
 
+#include <functional>
+
 class wxString;
 class wxWindow;
 
@@ -110,6 +112,17 @@ namespace KIPLATFORM
          * @param aPath is the full path to insert
          */
         void AddDynamicLibrarySearchPath( const wxString& aPath );
+
+        /**
+         * Receive URLs the OS routes to this application for a scheme the app
+         * bundle declares (e.g. kicad-collab://).  macOS delivers these as
+         * kAEGetURL Apple Events; this installs the app's own handler for them,
+         * replacing the toolkit's, so delivery does not depend on toolkit
+         * launch-state bookkeeping.  Call after the wxApp is initialized (the
+         * toolkit installs its handler during launch and would replace an
+         * earlier one).  No-op on platforms that pass URLs on the command line.
+         */
+        void RegisterURLSchemeHandler( std::function<void( const wxString& aUrl )> aHandler );
     }
 }
 

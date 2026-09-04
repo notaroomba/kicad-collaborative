@@ -207,6 +207,20 @@ bool COLLAB_REST::DeleteProject( const wxString& aServerUrl, const wxString& aTo
 }
 
 
+bool COLLAB_REST::LeaveProject( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/leave" ),
+                  aToken );
+
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_POSTFIELDS, "" );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_POSTFIELDSIZE, 0L );
+
+    return performOk( curl );
+}
+
+
 bool COLLAB_REST::RenameProject( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId, const wxString& aName )
 {
