@@ -89,6 +89,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
 
     fileMenu->AppendSeparator();
     fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::joinSharedProject );
 
     fileMenu->AppendSeparator();
     fileMenu->Add( KICAD_MANAGER_ACTIONS::newJobsetFile );

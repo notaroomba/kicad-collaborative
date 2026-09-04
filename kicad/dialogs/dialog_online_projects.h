@@ -45,6 +45,13 @@ public:
     /// The .kicad_pro the user chose to open, or empty.  Valid after ShowModal().
     wxString GetProjectToOpen() const { return m_projectToOpen; }
 
+    /// Run the join-from-link flow.  Empty prompts for the link; otherwise the
+    /// given share link / token is used directly (deep link, menu, etc.).
+    void JoinWithLink( const wxString& aLinkOrToken );
+
+    /// Auto-run JoinWithLink once the dialog is shown (used by the deep link).
+    void SetPendingJoinLink( const wxString& aLink ) { m_pendingJoinLink = aLink; }
+
 private:
     void refresh();
 
@@ -65,6 +72,7 @@ private:
     void onShare( wxCommandEvent& aEvent );
     void onUpload( wxCommandEvent& aEvent );
     void onJoinLink( wxCommandEvent& aEvent );
+    wxString m_pendingJoinLink;
     void onRename( wxCommandEvent& aEvent );
     void onTogglePublic( wxCommandEvent& aEvent );
     void onDelete( wxCommandEvent& aEvent );

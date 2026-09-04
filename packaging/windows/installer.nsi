@@ -34,10 +34,17 @@ SetCompressor /SOLID lzma
 
 Section "KiCad Collaborative"
   SetOutPath "$INSTDIR"
-  File /r "${STAGEDIR}\*.*"
+  File /r "${STAGEDIR}/*.*"
 
   WriteRegStr HKLM "Software\KiCad Collaborative" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
+
+  ; Register the kicad-collab:// URL scheme (the web "Open in KiCad
+  ; Collaborative" button) to launch the project manager with the link.
+  WriteRegStr HKCR "kicad-collab" "" "URL:KiCad Collaborative Protocol"
+  WriteRegStr HKCR "kicad-collab" "URL Protocol" ""
+  WriteRegStr HKCR "kicad-collab\DefaultIcon" "" "$INSTDIR\bin\kicad.exe,0"
+  WriteRegStr HKCR "kicad-collab\shell\open\command" "" '"$INSTDIR\bin\kicad.exe" "%1"
 
   CreateDirectory "$SMPROGRAMS\KiCad Collaborative"
   CreateShortcut "$SMPROGRAMS\KiCad Collaborative\KiCad Collaborative.lnk" "$INSTDIR\bin\kicad.exe"
@@ -61,5 +68,6 @@ Section "Uninstall"
   RMDir /r "$INSTDIR"
   RMDir /r "$SMPROGRAMS\KiCad Collaborative"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KiCadCollaborative"
+  DeleteRegKey HKCR "kicad-collab"
   DeleteRegKey HKLM "Software\KiCad Collaborative"
 SectionEnd

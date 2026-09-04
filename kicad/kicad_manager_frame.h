@@ -52,6 +52,11 @@ public:
     void OnSize( wxSizeEvent& event ) override;
 
     void UnarchiveFiles();
+
+    /// Join a collaborative project from a share link / invite token, or from
+    /// a kicad-collab:// deep link.  Empty prompts for the link.  Opens the
+    /// Online Projects dialog to carry out the join.
+    void HandleCollabJoinLink( const wxString& aLinkOrToken );
     void RestoreLocalHistory();
     void RestoreCommitFromHistory( const wxString& aHash );
     void ToggleLocalHistory();

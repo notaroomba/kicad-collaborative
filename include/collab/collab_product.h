@@ -31,4 +31,4 @@
  * Keep KICAD_COLLAB_PRODUCT_VERSION in sync with packaging/VERSION.
  */
 #define KICAD_COLLAB_PRODUCT_NAME     wxS( "KiCad Collaborative" )
-#define KICAD_COLLAB_PRODUCT_VERSION  wxS( "1.0.1" )
+#define KICAD_COLLAB_PRODUCT_VERSION  wxS( "1.0.2" )

@@ -240,6 +240,14 @@ def main():
     plist["CFBundleDisplayName"] = APP_NAME
     plist["CFBundleIdentifier"] = BUNDLE_ID
     plist["CFBundleShortVersionString"] = args.version
+    # Register the kicad-collab:// URL scheme so the web "Open in KiCad
+    # Collaborative" button routes share links to this app.
+    plist["CFBundleURLTypes"] = [
+        {
+            "CFBundleURLName": BUNDLE_ID,
+            "CFBundleURLSchemes": ["kicad-collab"],
+        }
+    ]
     with open(plist_path, "wb") as f:
         plistlib.dump(plist, f)
 
