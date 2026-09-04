@@ -255,3 +255,10 @@ void KIPLATFORM::APP::AddDynamicLibrarySearchPath( const wxString& aPath )
 {
     SetDllDirectory( aPath.c_str() );
 }
+
+
+void KIPLATFORM::APP::RegisterURLSchemeHandler(
+        std::function<void( const wxString& aUrl )> aHandler )
+{
+    // URLs arrive on the command line on this platform.
+}

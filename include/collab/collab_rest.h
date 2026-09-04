@@ -80,6 +80,10 @@ KICOMMON_API std::optional<nlohmann::json> ListProjects( const wxString& aServer
 KICOMMON_API bool DeleteProject( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId );
 
+/// POST /api/projects/{id}/leave: give up our own membership (not for owners).
+KICOMMON_API bool LeaveProject( const wxString& aServerUrl, const wxString& aToken,
+                                const wxString& aProjectId );
+
 /// PATCH /api/projects/{id} { name } (owner only).
 KICOMMON_API bool RenameProject( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId, const wxString& aName );

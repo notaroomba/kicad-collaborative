@@ -26,7 +26,11 @@
 #include "project_tree_pane.h"
 #include <collab/collab_product.h>
 #include "dialogs/dialog_online_projects.h"
+#include "dialogs/dialog_collab_sync.h"
+#include <collab/collab_project.h>
+#include <collab/collab_rest.h>
 #include <collab/collab_session.h>
+#include <wx/clipbrd.h>
 #include <dialogs/dialog_git_mr_review.h>
 #include "local_history_pane.h"
 #include "widgets/bitmap_button.h"
@@ -1618,4 +1622,275 @@ void KICAD_MANAGER_FRAME::SignInToCollab()
     else
         wxMessageBox( _( "Continue signing in in your web browser." ),
                       _( "Collaboration Sign-In" ), wxOK | wxICON_INFORMATION, this );
+}
+
+
+void KICAD_MANAGER_FRAME::PublishProjectOnline()
+{
+    if( Prj().IsNullProject() )
+    {
+        wxMessageBox( _( "Open a project first." ), _( "Publish Project Online" ),
+                      wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    wxString projectPath = Prj().GetProjectPath();
+    wxString projectName = Prj().GetProjectName();
+    wxString proFile = Prj().GetProjectFullName();
+    wxString server = COLLAB_SESSION::ServerUrl();
+    wxString linkedServer;
+
+    if( !COLLAB_PROJECT::ReadLocalLink( projectPath, projectName, linkedServer ).IsEmpty() )
+    {
+        wxMessageBox( _( "This project is already synced with an online project.\n\n"
+                         "Use File > Online Sync to change that." ),
+                      _( "Publish Project Online" ), wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    auto publish = [this, projectPath, projectName, proFile, server]( const wxString& aToken )
+    {
+        wxString url;
+        wxString error;
+
+        std::optional<nlohmann::json> project = COLLAB_PROJECT::CreateAndShare(
+                server, aToken, projectPath, projectName, url, error );
+
+        if( !project )
+        {
+            wxMessageBox( error, _( "Publish Project Online" ), wxOK | wxICON_ERROR, this );
+            return;
+        }
+
+        // This folder is the project's local copy from now on: the editors
+        // auto-join the live session and "Open" from the online list comes
+        // back here instead of downloading a second copy.
+        wxString projectId = wxString::FromUTF8( project->value( "projectId", "" ) );
+        COLLAB_PROJECT::WriteLocalLink( projectPath, projectName, server, projectId );
+        COLLAB_PROJECT::RecordLocalCopy( projectId, proFile );
+
+        if( wxTheClipboard->Open() )
+        {
+            wxTheClipboard->SetData( new wxTextDataObject( url ) );
+            wxTheClipboard->Close();
+        }
+
+        wxMessageBox( wxString::Format( _( "Project published.  Share link copied to the "
+                                           "clipboard:\n%s\n\nOpen the schematic or board "
+                                           "editor to start the live session." ),
+                                        url ),
+                      _( "Publish Project Online" ), wxOK | wxICON_INFORMATION, this );
+    };
+
+    wxString token = COLLAB_AUTH::StoredToken( server );
+
+    if( !token.IsEmpty() )
+    {
+        publish( token );
+        return;
+    }
+
+    wxString error;
+
+    bool started = m_collabAuth.SignIn(
+            server,
+            [this, publish]( bool aSuccess, const wxString& aTokenOrError )
+            {
+                if( aSuccess )
+                    publish( aTokenOrError );
+                else
+                    wxMessageBox( aTokenOrError, _( "Publish Project Online" ),
+                                  wxOK | wxICON_ERROR, this );
+            },
+            error );
+
+    if( !started )
+    {
+        wxMessageBox( error, _( "Publish Project Online" ), wxOK | wxICON_ERROR, this );
+    }
+    else
+    {
+        wxMessageBox( _( "Continue signing in in your web browser; the project is published "
+                         "as soon as you are signed in." ),
+                      _( "Publish Project Online" ), wxOK | wxICON_INFORMATION, this );
+    }
+}
+
+
+void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
+{
+    if( Prj().IsNullProject() )
+    {
+        wxMessageBox( _( "Open a project first." ), _( "Online Sync" ),
+                      wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    wxString projectPath = Prj().GetProjectPath();
+    wxString projectName = Prj().GetProjectName();
+    wxString proFile = Prj().GetProjectFullName();
+    wxString server;
+    wxString projectId = COLLAB_PROJECT::ReadLocalLink( projectPath, projectName, server );
+
+    if( projectId.IsEmpty() )
+    {
+        if( wxMessageBox( _( "This project is local only.\n\nPublish it online to "
+                             "collaborate on it?" ),
+                          _( "Online Sync" ), wxYES_NO | wxICON_QUESTION, this )
+            == wxYES )
+        {
+            PublishProjectOnline();
+        }
+
+        return;
+    }
+
+    wxString                      token = COLLAB_AUTH::StoredToken( server );
+    std::optional<nlohmann::json> project;
+    std::optional<nlohmann::json> me;
+
+    if( !token.IsEmpty() )
+    {
+        project = COLLAB_REST::GetProject( server, token, projectId );
+        me = COLLAB_REST::Me( server, token );
+    }
+
+    wxString onlineName = project ? wxString::FromUTF8( project->value( "name", "" ) )
+                                  : wxString( _( "(unavailable)" ) );
+    wxString role = project ? wxString::FromUTF8( project->value( "role", "" ) )
+                            : wxString( _( "offline" ) );
+    bool     owner = project && me
+                     && project->value( "ownerId", -1LL ) == me->value( "id", -2LL );
+
+    if( owner )
+        role = _( "the owner" );
+
+    DIALOG_COLLAB_SYNC dlg( this, projectName, onlineName, server, role, owner,
+                            project.has_value(), projectPath );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return;
+
+    auto editorsOpen = [this]()
+    {
+        if( Kiway().Player( FRAME_SCH, false ) || Kiway().Player( FRAME_PCB_EDITOR, false ) )
+        {
+            wxMessageBox( _( "Close the schematic and board editors first." ),
+                          _( "Online Sync" ), wxOK | wxICON_INFORMATION, this );
+            return true;
+        }
+
+        return false;
+    };
+
+    switch( dlg.GetChoice() )
+    {
+    case DIALOG_COLLAB_SYNC::CHOICE::KEEP:
+        break;
+
+    case DIALOG_COLLAB_SYNC::CHOICE::UNLINK:
+        if( editorsOpen() )
+            break;
+
+        if( wxMessageBox( _( "Stop syncing this copy with the online project?\n\n"
+                             "The online project stays as it is; this folder becomes a "
+                             "plain local project.  Publishing it again later creates a "
+                             "new online project." ),
+                          _( "Make Project Local" ), wxYES_NO | wxICON_QUESTION, this )
+            != wxYES )
+        {
+            break;
+        }
+
+        COLLAB_PROJECT::UnlinkLocalProject( projectPath, projectName );
+        wxMessageBox( _( "This project is now local only." ), _( "Make Project Local" ),
+                      wxOK | wxICON_INFORMATION, this );
+        break;
+
+    case DIALOG_COLLAB_SYNC::CHOICE::UNLINK_AND_DROP_ONLINE:
+    {
+        if( editorsOpen() )
+            break;
+
+        if( token.IsEmpty() || !project )
+        {
+            wxMessageBox( _( "Sign in and connect to change the online project." ),
+                          _( "Online Sync" ), wxOK | wxICON_INFORMATION, this );
+            break;
+        }
+
+        wxString question =
+                owner ? wxString::Format( _( "Delete the online project '%s' for everyone?\n\n"
+                                             "Collaborators lose access; the copies on their "
+                                             "computers stay.  This folder becomes a plain "
+                                             "local project." ),
+                                          onlineName )
+                      : wxString::Format( _( "Leave the online project '%s'?\n\n"
+                                             "You lose access to it (ask the owner for a new "
+                                             "link to rejoin).  This folder becomes a plain "
+                                             "local project." ),
+                                          onlineName );
+
+        if( wxMessageBox( question, _( "Make Project Local" ), wxYES_NO | wxICON_WARNING, this )
+            != wxYES )
+        {
+            break;
+        }
+
+        bool ok = owner ? COLLAB_REST::DeleteProject( server, token, projectId )
+                        : COLLAB_REST::LeaveProject( server, token, projectId );
+
+        if( !ok )
+        {
+            wxMessageBox( owner ? _( "Deleting the online project failed." )
+                                : _( "Leaving the online project failed." ),
+                          _( "Make Project Local" ), wxOK | wxICON_ERROR, this );
+            break;
+        }
+
+        COLLAB_PROJECT::UnlinkLocalProject( projectPath, projectName );
+        wxMessageBox( owner ? _( "Online project deleted.  This project is now local only." )
+                            : _( "Left the online project.  This project is now local only." ),
+                      _( "Make Project Local" ), wxOK | wxICON_INFORMATION, this );
+        break;
+    }
+
+    case DIALOG_COLLAB_SYNC::CHOICE::DELETE_LOCAL:
+    {
+        // Only ever remove a folder that really holds this project.
+        if( !wxFileName::FileExists( proFile ) || projectPath.IsEmpty() )
+            break;
+
+        if( wxMessageBox( wxString::Format( _( "Delete the local copy?\n\n%s\n\nEverything in "
+                                               "that folder is removed.  The online project "
+                                               "stays and can be downloaded again from "
+                                               "File > Online Projects." ),
+                                            projectPath ),
+                          _( "Delete Local Copy" ), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING,
+                          this )
+            != wxYES )
+        {
+            break;
+        }
+
+        if( !CloseProject( true ) )
+            break;
+
+        COLLAB_PROJECT::ForgetLocalCopy( projectId );
+
+        if( wxFileName::Rmdir( projectPath, wxPATH_RMDIR_RECURSIVE ) )
+        {
+            wxMessageBox( _( "Local copy deleted." ), _( "Delete Local Copy" ),
+                          wxOK | wxICON_INFORMATION, this );
+        }
+        else
+        {
+            wxMessageBox( wxString::Format( _( "Some files could not be removed from:\n%s" ),
+                                            projectPath ),
+                          _( "Delete Local Copy" ), wxOK | wxICON_ERROR, this );
+        }
+
+        break;
+    }
+    }
 }

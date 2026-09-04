@@ -145,10 +145,19 @@ private:
     ///< item), undoing our optimistic local application.
     void rollbackFromSnapshot( const std::string& aFileText );
 
-    ///< Reconcile the whole open board against the server's snapshot: upsert
-    ///< items that differ or are missing locally, remove local items the
-    ///< server does not have.  Used after a doc reset (checkpoint restore).
-    void reconcileFromSnapshot( const std::string& aFileText );
+    ///< Merge the whole open board with the server's state (snapshot + the ops
+    ///< since it).  With a sync base (see COLLAB_PROJECT) this is a three-way
+    ///< merge: changes made only online are applied here, changes made only
+    ///< here (offline edits) are kept and pushed, a deletion on either side
+    ///< wins, and a true conflict goes to this copy as the last writer.
+    ///< Without a base the server wins outright.
+    void reconcileFromSnapshot( const std::string& aFileText, const nlohmann::json& aThenOps );
+
+    ///< Record the current board as the sync base (it matches the server now).
+    void writeSyncBase();
+
+    ///< The board file's project-relative path (forward slashes).
+    wxString docRelPath() const;
 
 public:
 
@@ -160,6 +169,12 @@ public:
 
     /// Re-send every unacknowledged op; call once the session goes live again.
     void ReplayUnacked();
+
+    /**
+     * The board was just saved while live: if every op of ours is acknowledged
+     * the file on disk is the server's state, so make it the sync base.
+     */
+    void RefreshSyncBaseFromDisk();
     void OnSnapshotRequest();
     void OnReset( long long aSeq );
 

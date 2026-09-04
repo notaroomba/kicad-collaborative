@@ -1067,6 +1067,23 @@ pub async fn remove_member(
     }
 }
 
+/// POST /api/projects/{id}/leave: a member drops their own access.  The owner
+/// cannot leave (delete the project instead).
+pub async fn leave_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id == user.id {
+        return Err(AppError::BadRequest(
+            "the owner cannot leave a project; delete it instead".into(),
+        ));
+    }
+    persist::remove_member(&state.pool, id, user.id).await?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct InviteRequest {
     pub login: Option<String>,

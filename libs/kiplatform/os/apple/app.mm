@@ -23,6 +23,29 @@
 #include <wx/string.h>
 #include <wx/sysopt.h>
 
+#import <Cocoa/Cocoa.h>
+#include <objc/runtime.h>
+
+#include <cstdio>
+
+
+static std::function<void( const wxString& )> s_urlSchemeHandler;
+
+
+// The kAEGetURL handler method body (an IMP installed on a runtime-built class).
+static void handleGetURLEvent( id aSelf, SEL aCmd, NSAppleEventDescriptor* aEvent,
+                               NSAppleEventDescriptor* aReply )
+{
+    (void) aSelf;
+    (void) aCmd;
+    (void) aReply;
+
+    NSString* url = [[aEvent paramDescriptorForKeyword:keyDirectObject] stringValue];
+
+    if( url && s_urlSchemeHandler )
+        s_urlSchemeHandler( wxString::FromUTF8( [url UTF8String] ) );
+}
+
 
 bool KIPLATFORM::APP::Init()
 {
@@ -88,4 +111,38 @@ void KIPLATFORM::APP::ForceTimerMessagesToBeCreatedIfNecessary()
 
 void KIPLATFORM::APP::AddDynamicLibrarySearchPath( const wxString& aPath )
 {
+}
+
+
+void KIPLATFORM::APP::RegisterURLSchemeHandler(
+        std::function<void( const wxString& aUrl )> aHandler )
+{
+    static id handler = nil;
+
+    s_urlSchemeHandler = std::move( aHandler );
+
+    if( !handler )
+    {
+        // The handler class is built at runtime under an image-unique name:
+        // kiplatform is linked into several images (the app, kicommon, the
+        // kifaces), and a compiled-in Objective-C class would be registered by
+        // each of them, leaving the runtime to keep one arbitrarily — with the
+        // static above belonging to a different image than the method.
+        char name[64];
+        snprintf( name, sizeof( name ), "KICAD_URL_SCHEME_HANDLER_%p",
+                  (void*) &handleGetURLEvent );
+
+        Class cls = objc_allocateClassPair( [NSObject class], name, 0 );
+        class_addMethod( cls, @selector( handleGetURLEvent:withReplyEvent: ),
+                         (IMP) handleGetURLEvent, "v@:@@" );
+        objc_registerClassPair( cls );
+
+        handler = [[cls alloc] init];
+    }
+
+    [[NSAppleEventManager sharedAppleEventManager]
+            setEventHandler:handler
+                andSelector:@selector( handleGetURLEvent:withReplyEvent: )
+              forEventClass:kInternetEventClass
+                 andEventID:kAEGetURL];
 }

@@ -76,6 +76,7 @@
 #include <tools/board_editor_control.h>
 #include <tools/zone_filler_tool.h>
 #include <board_commit.h>
+#include <collab/pcb_collab_tool.h>
 #include <reporter.h>
 #include <zone_filler.h>
 #include <widgets/filedlg_import_non_kicad.h>
@@ -382,6 +383,14 @@ bool PCB_EDIT_FRAME::SaveBoard( bool aSaveAs, bool aSaveCopy )
             if( SavePcbFile( Prj().AbsolutePath( GetBoard()->GetFileName() ) ) )
             {
                 m_autoSaveRequired = false;
+
+                // The file on disk now matches the live session (if any).
+                if( PCB_COLLAB_TOOL* collab =
+                            m_toolManager ? m_toolManager->GetTool<PCB_COLLAB_TOOL>() : nullptr )
+                {
+                    collab->OnBoardSaved();
+                }
+
                 return true;
             }
 

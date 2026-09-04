@@ -185,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/users/search", get(http::search_users))
         .route("/api/projects/{id}/members", get(http::list_members))
         .route("/api/projects/{id}/members/{member_id}", delete(http::remove_member))
+        .route("/api/projects/{id}/leave", post(http::leave_project))
         .route("/api/links/{token}", delete(http::revoke_link))
         .route("/api/join/{token}", post(http::claim_link))
         .route("/api/docs/{doc_id}/snapshots", post(http::upload_snapshot))

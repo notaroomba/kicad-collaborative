@@ -54,6 +54,8 @@ public:
     static TOOL_ACTION onlineProjects;
     static TOOL_ACTION collabSignIn;
     static TOOL_ACTION joinSharedProject;
+    static TOOL_ACTION publishProject;
+    static TOOL_ACTION collabSync;
 
     static TOOL_ACTION archiveProject;
     static TOOL_ACTION unarchiveProject;

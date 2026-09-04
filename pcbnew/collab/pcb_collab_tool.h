@@ -130,6 +130,9 @@ public:
     ///< The live-editing sync engine, or nullptr when the board doc is not joined.
     PCB_COLLAB_SYNC* GetSync() const { return m_sync.get(); }
 
+    ///< The board file was just saved (plain save): refresh the sync base if live.
+    void OnBoardSaved();
+
 private:
     ///< Set up handlers for various events.
     void setTransitions() override;
@@ -160,6 +163,15 @@ private:
     ///< Rejoin the live session recorded beside a cloud project copy (link.json),
     ///< silently.  No-op without a stored token or link file.
     void tryAutoJoin();
+
+    ///< Tell the user this copy of an online project is being edited offline,
+    ///< with ways to reconnect or to make it local only.
+    void showOfflineBanner( const wxString& aWhy );
+
+    ///< Stop syncing this copy with its online project (after confirmation).
+    void unlinkFromOnline();
+
+    bool m_offlineBanner = false;   ///< our offline banner is up
 
     ///< The board's file name, relative to the project (forward slashes).
     wxString boardFile() const;

@@ -148,7 +148,7 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
               {
                   wxString link = m_pendingJoinLink;
                   m_pendingJoinLink.Clear();
-                  CallAfter( [this, link]() { JoinWithLink( link ); } );
+                  CallAfter( [this, link]() { JoinWithLink( link, /* aOpenWithoutAsking */ true ); } );
               }
           } );
 
@@ -421,7 +421,11 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
     }
 
     wxFileName target( chosen, wxEmptyString );
-    target.AppendDir( sanitizeDirName( name ) );
+
+    // Picking (or creating) a folder already named after the project is the
+    // natural thing to do in the directory dialog; don't nest <name>/<name>/.
+    if( target.GetDirs().IsEmpty() || target.GetDirs().Last() != sanitizeDirName( name ) )
+        target.AppendDir( sanitizeDirName( name ) );
 
     // Re-opening an existing local copy: skip the download, keep local edits
     // (they replay from the journal when the session reconnects).
@@ -577,54 +581,8 @@ void DIALOG_ONLINE_PROJECTS::onDelete( wxCommandEvent& aEvent )
 
 void DIALOG_ONLINE_PROJECTS::onUpload( wxCommandEvent& aEvent )
 {
-    wxString projectPath = m_frame->Prj().GetProjectPath();
-    wxString projectName = m_frame->Prj().GetProjectName();
-
-    if( projectPath.IsEmpty() || projectName.IsEmpty() )
-    {
-        wxMessageBox( _( "Open a local project first." ), _( "Upload Project" ),
-                      wxOK | wxICON_INFORMATION, this );
-        return;
-    }
-
-    wxString server = COLLAB_SESSION::ServerUrl();
-    wxString token = COLLAB_AUTH::StoredToken( server );
-
-    if( token.IsEmpty() )
-    {
-        wxMessageBox( _( "Sign in first." ), _( "Upload Project" ), wxOK | wxICON_INFORMATION,
-                      this );
-        return;
-    }
-
-    wxString url;
-    wxString error;
-
-    std::optional<nlohmann::json> project =
-            COLLAB_PROJECT::CreateAndShare( server, token, projectPath, projectName, url,
-                                            error );
-
-    if( !project )
-    {
-        wxMessageBox( error, _( "Upload Project" ), wxOK | wxICON_ERROR, this );
-        return;
-    }
-
-    // Remember the pairing so the editors auto-join the live session.
-    COLLAB_PROJECT::WriteLocalLink( projectPath, projectName, server,
-                                    wxString::FromUTF8( project->value( "projectId", "" ) ) );
-
-    if( wxTheClipboard->Open() )
-    {
-        wxTheClipboard->SetData( new wxTextDataObject( url ) );
-        wxTheClipboard->Close();
-    }
-
-    wxMessageBox( wxString::Format( _( "Project uploaded.  Share link copied to the "
-                                       "clipboard:\n%s" ),
-                                    url ),
-                  _( "Upload Project" ), wxOK | wxICON_INFORMATION, this );
-
+    // One publish path, shared with File > Publish Project Online.
+    m_frame->PublishProjectOnline();
     refresh();
 }
 
@@ -635,7 +593,7 @@ void DIALOG_ONLINE_PROJECTS::onJoinLink( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken )
+void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken, bool aOpenWithoutAsking )
 {
     wxString provided = aLinkOrToken;
 
@@ -688,13 +646,16 @@ void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken )
         { "name", project->value( "name", "" ) },
     };
 
-    if( wxMessageBox( wxString::Format( _( "Joined '%s'.  Open it now?\n\n"
-                                           "A local working copy is downloaded so the desktop "
-                                           "editors can open it; your edits sync live to everyone "
-                                           "in the session." ),
-                                        wxString::FromUTF8( project->value( "name", "" ) ) ),
-                      _( "Join Shared Project" ), wxYES_NO | wxICON_QUESTION, this )
-        == wxYES )
+    // "Open in KiCad Collaborative" on the web already said what to do: go
+    // straight to the project.  A pasted link still gets the question.
+    if( aOpenWithoutAsking
+        || wxMessageBox( wxString::Format( _( "Joined '%s'.  Open it now?\n\n"
+                                              "A local working copy is downloaded so the "
+                                              "desktop editors can open it; your edits sync "
+                                              "live to everyone in the session." ),
+                                           wxString::FromUTF8( project->value( "name", "" ) ) ),
+                         _( "Join Shared Project" ), wxYES_NO | wxICON_QUESTION, this )
+                   == wxYES )
     {
         openProject( listingLike, /* aAutoLocation */ true );
     }

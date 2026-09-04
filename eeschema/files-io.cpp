@@ -54,6 +54,7 @@
 #include <sch_bus_entry.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
+#include <collab/sch_collab_tool.h>
 #include <sch_draw_panel.h>
 #include <sch_io/kicad_legacy/sch_io_kicad_legacy.h>
 #include <sch_file_versions.h>
@@ -1422,6 +1423,17 @@ bool SCH_EDIT_FRAME::SaveProject( bool aSaveAs )
 
         m_autoSavePending = false;
         m_autoSaveRequired = false;
+
+        // The files on disk now match the live session (if any).  Not for a
+        // Save As / copy: those land somewhere else.
+        if( !aSaveAs && !saveCopy )
+        {
+            if( SCH_COLLAB_TOOL* collab =
+                        m_toolManager ? m_toolManager->GetTool<SCH_COLLAB_TOOL>() : nullptr )
+            {
+                collab->OnProjectSaved();
+            }
+        }
     }
 
     if( aSaveAs && success )

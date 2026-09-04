@@ -599,6 +599,16 @@ struct APP_KICAD : public wxApp
             return false;
         }
 
+#ifdef __WXMAC__
+        // Take over kAEGetURL delivery from wx: a kicad-collab:// link opened
+        // while the app is already running must reach the manager reliably.
+        KIPLATFORM::APP::RegisterURLSchemeHandler(
+                [this]( const wxString& aUrl )
+                {
+                    MacOpenURL( aUrl );
+                } );
+#endif
+
         // A kicad-collab:// URL that launched us (via MacOpenURL before the
         // frame existed, or an argv on Windows/Linux) is flushed now.
         if( !m_pendingCollabUrl.IsEmpty() )
@@ -616,7 +626,6 @@ struct APP_KICAD : public wxApp
     {
         if( !aUrl.StartsWith( wxS( "kicad-collab://" ) ) )
             return;
-
         m_pendingCollabUrl = aUrl;
         CallAfter( [this]() { flushPendingCollabUrl(); } );
     }
@@ -632,7 +641,9 @@ struct APP_KICAD : public wxApp
 
         for( wxWindow* win : wxTopLevelWindows )
         {
-            if( KICAD_MANAGER_FRAME* frame = wxDynamicCast( win, KICAD_MANAGER_FRAME ) )
+            // dynamic_cast, not wxDynamicCast: KiCad frames carry no wx RTTI, so
+            // wxDynamicCast resolves to wxFrame's class info and matches ANY frame.
+            if( KICAD_MANAGER_FRAME* frame = dynamic_cast<KICAD_MANAGER_FRAME*>( win ) )
             {
                 wxString url = m_pendingCollabUrl;
                 m_pendingCollabUrl.Clear();

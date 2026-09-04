@@ -51,6 +51,8 @@ public:
     int ShowOnlineProjects( const TOOL_EVENT& aEvent );
     int CollabSignIn( const TOOL_EVENT& aEvent );
     int JoinSharedProject( const TOOL_EVENT& aEvent );
+    int PublishProject( const TOOL_EVENT& aEvent );
+    int CollabSync( const TOOL_EVENT& aEvent );
     int LoadProject( const TOOL_EVENT& aEvent );
 
     int ArchiveProject( const TOOL_EVENT& aEvent );

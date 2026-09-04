@@ -23,6 +23,7 @@
 
 #include <collab/collab_auth.h>
 #include <collab/collab_rest.h>
+#include <collab/collab_project.h>
 #include <collab/collab_session.h>
 
 #include <commit.h>
@@ -806,37 +807,46 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 
     m_resyncPending[ docId ] = false;
 
-    if( aSnapshotMsg.contains( "file" ) )
-    {
-        // Every snapshot catch-up reconciles the screen against the server's
-        // file: heals stale/drifted local copies on join, serves doc resets,
-        // and subsumes the targeted rejected-op rollback.  Diff-based, so a
-        // matching screen is a no-op.
-        m_reconcilePending.erase( docId );
-        m_pendingRollback.erase( docId );
-        reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ) );
-    }
-
     std::erase_if( m_queue,
                    [&]( const PENDING_OP& aPending )
                    {
                        return aPending.docId == docId;
                    } );
 
-    // Replay the ops since the snapshot through the normal queue.
-    for( const nlohmann::json& opJson : aSnapshotMsg.value( "thenOps",
-                                                            nlohmann::json::array() ) )
+    nlohmann::json thenOps = aSnapshotMsg.value( "thenOps", nlohmann::json::array() );
+
+    if( aSnapshotMsg.contains( "file" ) )
     {
-        PENDING_OP op;
-        op.docId = docId;
-        op.seq = opJson.value( "seq", 0LL );
-        op.changes = opJson.value( "changes", nlohmann::json::array() );
+        // Every snapshot catch-up merges the screen with the server's state:
+        // heals stale/drifted copies on join, carries offline edits back
+        // online, serves doc resets, and subsumes the rejected-op rollback.
+        // The ops since the snapshot are folded into that merge rather than
+        // replayed separately, so the merged screen is at the head seq.
+        for( const nlohmann::json& opJson : thenOps )
+            m_lastAppliedSeq[ docId ] = std::max( m_lastAppliedSeq[ docId ], opJson.value( "seq", 0LL ) );
 
-        if( opJson.contains( "author" ) && opJson[ "author" ].is_object() )
-            op.authorClientId = wxString::FromUTF8( opJson[ "author" ].value( "clientId", "" ) );
+        COLLAB_SESSION::Get().SetAppliedSeq( docId, m_lastAppliedSeq[ docId ] );
 
-        if( op.seq > 0 )
-            m_queue.push_back( std::move( op ) );
+        m_reconcilePending.erase( docId );
+        m_pendingRollback.erase( docId );
+        reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ), thenOps );
+    }
+    else
+    {
+        // Replay the ops since the snapshot through the normal queue.
+        for( const nlohmann::json& opJson : thenOps )
+        {
+            PENDING_OP op;
+            op.docId = docId;
+            op.seq = opJson.value( "seq", 0LL );
+            op.changes = opJson.value( "changes", nlohmann::json::array() );
+
+            if( opJson.contains( "author" ) && opJson[ "author" ].is_object() )
+                op.authorClientId = wxString::FromUTF8( opJson[ "author" ].value( "clientId", "" ) );
+
+            if( op.seq > 0 )
+                m_queue.push_back( std::move( op ) );
+        }
     }
 
     wxWakeUpIdle();
@@ -933,114 +943,289 @@ void SCH_COLLAB_SYNC::ReplayUnacked()
 
 
 void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
-                                              const std::string& aFileText )
+                                             const std::string& aFileText,
+                                             const nlohmann::json& aThenOps )
 {
     SCH_SCREEN* screen = screenForDocId( aDocId );
 
     if( !screen || aFileText.empty() )
         return;
 
-    SCH_SHEET tempSheet;
-
-    // Screen object on heap is owned by the sheet (the paste-path pattern).
-    SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
-    tempSheet.SetScreen( tempScreen );
-
-    STRING_LINE_READER reader( aFileText, wxS( "collab-reset" ) );
-    SCH_IO_KICAD_SEXPR plugin;
-
-    try
+    // Screen objects on the heap are owned by their sheet (the paste-path pattern).
+    auto loadTemp = [this]( const std::string& aText, SCH_SHEET& aSheet ) -> SCH_SCREEN*
     {
-        plugin.LoadContent( reader, &tempSheet );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        wxLogTrace( traceCollab, wxS( "reconcile: snapshot parse failed: %s" ), ioe.What() );
+        SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
+        aSheet.SetScreen( tempScreen );
+
+        STRING_LINE_READER reader( aText, wxS( "collab-merge" ) );
+        SCH_IO_KICAD_SEXPR plugin;
+
+        try
+        {
+            plugin.LoadContent( reader, &aSheet );
+        }
+        catch( const IO_ERROR& ioe )
+        {
+            wxLogTrace( traceCollab, wxS( "reconcile: parse failed: %s" ), ioe.What() );
+            return nullptr;
+        }
+
+        return tempScreen;
+    };
+
+    SCH_SHEET   serverSheet;
+    SCH_SCREEN* serverScreen = loadTemp( aFileText, serverSheet );
+
+    if( !serverScreen )
         return;
+
+    // The server's truth is the snapshot plus every op since it; fold those in
+    // headlessly so the merge sees one consistent online state.
+    if( aThenOps.is_array() )
+    {
+        for( const nlohmann::json& opJson : aThenOps )
+        {
+            for( const nlohmann::json& change :
+                 opJson.value( "changes", nlohmann::json::array() ) )
+            {
+                SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), serverScreen, change, nullptr );
+            }
+        }
     }
 
-    std::map<KIID, SCH_ITEM*> serverItems;
+    // The sync base is this copy as it last matched the online project (see
+    // the board engine for the rules); without one the online version wins.
+    wxString    relPath = m_pathByDocId.count( aDocId ) ? m_pathByDocId.at( aDocId )
+                                                         : wxString();
+    std::string baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
+                                                         m_frame->Prj().GetProjectName(),
+                                                         relPath );
+    SCH_SHEET   baseSheet;
+    SCH_SCREEN* baseScreen = baseText.empty() ? nullptr : loadTemp( baseText, baseSheet );
+    const bool  haveBase = baseScreen != nullptr;
 
-    for( SCH_ITEM* item : tempScreen->Items() )
+    auto collect = []( SCH_SCREEN* aScreen, std::map<KIID, SCH_ITEM*>& aOut )
     {
-        if( item->Type() != SCH_MARKER_T )
-            serverItems[ item->m_Uuid ] = item;
-    }
+        for( SCH_ITEM* item : aScreen->Items() )
+        {
+            // ERC markers are local diagnostics, not document content.
+            if( item->Type() != SCH_MARKER_T )
+                aOut[ item->m_Uuid ] = item;
+        }
+    };
 
-    nlohmann::json changes = nlohmann::json::array();
-    std::set<KIID> localIds;
+    std::map<KIID, SCH_ITEM*> serverItems, baseItems, localItems;
+    collect( serverScreen, serverItems );
+    collect( screen, localItems );
 
-    for( SCH_ITEM* local : screen->Items() )
+    if( baseScreen )
+        collect( baseScreen, baseItems );
+
+    auto upsertChange = []( SCH_ITEM* aItem, std::string aSexpr ) -> nlohmann::json
     {
-        // ERC markers are local diagnostics, not document content.
-        if( local->Type() == SCH_MARKER_T )
+        nlohmann::json change;
+        change[ "id" ] = aItem->m_Uuid.AsStdString();
+        change[ "kind" ] = "ADDED";
+        change[ "typeName" ] = aItem->GetClass().ToStdString( wxConvUTF8 );
+        change[ "sexpr" ] = std::move( aSexpr );
+        return change;
+    };
+
+    auto removeChange = []( const KIID& aId ) -> nlohmann::json
+    {
+        nlohmann::json change;
+        change[ "id" ] = aId.AsStdString();
+        change[ "kind" ] = "REMOVED";
+        change[ "typeName" ] = "";
+        return change;
+    };
+
+    auto find = []( std::map<KIID, SCH_ITEM*>& aMap, const KIID& aId ) -> SCH_ITEM*
+    {
+        auto it = aMap.find( aId );
+        return it == aMap.end() ? nullptr : it->second;
+    };
+
+    std::set<KIID> ids;
+
+    for( const auto& [id, item] : localItems )  ids.insert( id );
+    for( const auto& [id, item] : serverItems ) ids.insert( id );
+    for( const auto& [id, item] : baseItems )   ids.insert( id );
+
+    nlohmann::json fromOnline = nlohmann::json::array();
+    nlohmann::json toOnline = nlohmann::json::array();
+    int            kept = 0;
+    int            conflicts = 0;
+
+    for( const KIID& id : ids )
+    {
+        SCH_ITEM* L = find( localItems, id );
+        SCH_ITEM* R = find( serverItems, id );
+        SCH_ITEM* B = find( baseItems, id );
+
+        std::string ls = L ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), screen, L )
+                           : std::string();
+        std::string rs = R ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), serverScreen, R )
+                           : std::string();
+        std::string bs = B ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), baseScreen, B )
+                           : std::string();
+
+        // An item that will not serialize cannot be compared; leave it be.
+        if( ( L && ls.empty() ) || ( R && rs.empty() ) )
             continue;
 
-        localIds.insert( local->m_Uuid );
-
-        auto it = serverItems.find( local->m_Uuid );
-
-        if( it == serverItems.end() )
+        if( !haveBase )
         {
-            nlohmann::json change;
-            change[ "id" ] = local->m_Uuid.AsStdString();
-            change[ "kind" ] = "REMOVED";
-            change[ "typeName" ] = "";
-            changes.push_back( std::move( change ) );
+            if( L && !R )
+                fromOnline.push_back( removeChange( id ) );
+            else if( R && ( !L || ls != rs ) )
+                fromOnline.push_back( upsertChange( R, std::move( rs ) ) );
+
             continue;
         }
 
-        std::string localSexpr =
-                SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), screen, local );
-        std::string serverSexpr =
-                SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, it->second );
+        const bool haveB = B && !bs.empty();
+        const bool localChanged = ( L != nullptr ) != haveB || ( L && ls != bs );
+        const bool remoteChanged = ( R != nullptr ) != haveB || ( R && rs != bs );
 
-        if( localSexpr.empty() || serverSexpr.empty() || localSexpr == serverSexpr )
+        if( !localChanged && !remoteChanged )
+        {
             continue;
+        }
+        else if( !localChanged )
+        {
+            if( R )
+                fromOnline.push_back( upsertChange( R, std::move( rs ) ) );
+            else
+                fromOnline.push_back( removeChange( id ) );
+        }
+        else if( !remoteChanged )
+        {
+            if( L )
+                toOnline.push_back( upsertChange( L, std::move( ls ) ) );
+            else
+                toOnline.push_back( removeChange( id ) );
 
-        nlohmann::json change;
-        change[ "id" ] = it->second->m_Uuid.AsStdString();
-        change[ "kind" ] = "ADDED";
-        change[ "typeName" ] = it->second->GetClass().ToStdString( wxConvUTF8 );
-        change[ "sexpr" ] = std::move( serverSexpr );
-        changes.push_back( std::move( change ) );
+            kept++;
+        }
+        else if( L && R && ls == rs )
+        {
+            continue;   // the same edit on both sides
+        }
+        else
+        {
+            // A deletion on either side wins; otherwise this copy, syncing
+            // now, is the last writer and wins.
+            conflicts++;
+
+            if( !R )
+                fromOnline.push_back( removeChange( id ) );
+            else if( !L )
+                toOnline.push_back( removeChange( id ) );
+            else
+                toOnline.push_back( upsertChange( L, std::move( ls ) ) );
+        }
     }
 
-    for( auto& [id, item] : serverItems )
+    const size_t updated = fromOnline.size();
+
+    if( !fromOnline.empty() )
     {
-        if( localIds.count( id ) )
-            continue;
-
-        std::string sexpr = SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, item );
-
-        if( sexpr.empty() )
-            continue;
-
-        nlohmann::json change;
-        change[ "id" ] = id.AsStdString();
-        change[ "kind" ] = "ADDED";
-        change[ "typeName" ] = item->GetClass().ToStdString( wxConvUTF8 );
-        change[ "sexpr" ] = std::move( sexpr );
-        changes.push_back( std::move( change ) );
-    }
-
-    if( !changes.empty() )
-    {
-        size_t count = changes.size();
-
         PENDING_OP op;
         op.docId = aDocId;
         op.seq = m_lastAppliedSeq[ aDocId ];
-        op.changes = std::move( changes );
+        op.changes = std::move( fromOnline );
         applyOp( op );
+    }
 
+    if( !toOnline.empty() )
+    {
+        m_batch[ aDocId ] = std::move( toOnline );
+        flushBatch();
+    }
+
+    writeSyncBase( aDocId );
+
+    if( kept || conflicts )
+    {
         m_frame->ShowInfoBarMsg( wxString::Format(
-                _( "Schematic synchronized with the server (%zu item(s) updated)." ),
-                count ) );
+                _( "Merged with the online project: %zu item(s) updated from online, %d "
+                   "offline change(s) kept, %d conflict(s) resolved in favour of this copy." ),
+                updated, kept, conflicts ) );
+    }
+    else if( updated )
+    {
+        m_frame->ShowInfoBarMsg( wxString::Format(
+                _( "Schematic synchronized with the online project (%zu item(s) updated)." ),
+                updated ) );
     }
 
     if( m_frame->GetCanvas() )
         m_frame->GetCanvas()->Refresh();
+}
+
+
+void SCH_COLLAB_SYNC::writeSyncBase( const wxString& aDocId )
+{
+    SCH_SCREEN* screen = screenForDocId( aDocId );
+
+    if( !screen || !m_pathByDocId.count( aDocId ) )
+        return;
+
+    SCH_SHEET* sheet = nullptr;
+
+    for( const SCH_SHEET_PATH& path : m_frame->Schematic().Hierarchy() )
+    {
+        if( path.LastScreen() == screen )
+        {
+            sheet = path.Last();
+            break;
+        }
+    }
+
+    if( !sheet )
+        return;
+
+    try
+    {
+        STRING_FORMATTER   formatter;
+        SCH_IO_KICAD_SEXPR plugin;
+
+        plugin.FormatSchematicToFormatter( &formatter, sheet, &m_frame->Schematic() );
+
+        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
+                                       m_frame->Prj().GetProjectName(),
+                                       m_pathByDocId.at( aDocId ), formatter.GetString() );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogTrace( traceCollab, wxS( "sync base serialization failed: %s" ), ioe.What() );
+    }
+}
+
+
+void SCH_COLLAB_SYNC::RefreshSyncBasesFromDisk()
+{
+    for( const auto& [path, docId] : m_docIdByPath )
+    {
+        bool inFlight = false;
+
+        for( const auto& [opId, unacked] : m_unacked )
+        {
+            if( unacked.docId == docId )
+            {
+                inFlight = true;
+                break;
+            }
+        }
+
+        // Only a fully acknowledged save is the server's state.
+        if( !inFlight )
+        {
+            COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                                     m_frame->Prj().GetProjectName(), path );
+        }
+    }
 }
 
 

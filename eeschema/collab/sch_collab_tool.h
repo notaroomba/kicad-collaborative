@@ -92,6 +92,9 @@ public:
     ///< The live-editing sync engine, or nullptr when no session is active.
     SCH_COLLAB_SYNC* GetSync() const { return m_sync.get(); }
 
+    ///< The schematic files were just saved (plain save): refresh sync bases if live.
+    void OnProjectSaved();
+
 private:
     ///< Set up handlers for various events.
     void setTransitions() override;
@@ -118,6 +121,15 @@ private:
     ///< Rejoin the live session recorded beside a cloud project copy (link.json),
     ///< silently.  No-op without a stored token or link file.
     void tryAutoJoin();
+
+    ///< Tell the user this copy of an online project is being edited offline,
+    ///< with ways to reconnect or to make it local only.
+    void showOfflineBanner( const wxString& aWhy );
+
+    ///< Stop syncing this copy with its online project (after confirmation).
+    void unlinkFromOnline();
+
+    bool m_offlineBanner = false;   ///< our offline banner is up
 
 
     ///< The displayed screen's file name, relative to the project (forward slashes).

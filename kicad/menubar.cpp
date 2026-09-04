@@ -91,6 +91,8 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     fileMenu->Add( KICAD_MANAGER_ACTIONS::collabSignIn );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::joinSharedProject );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::publishProject );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::collabSync );
 
     fileMenu->AppendSeparator();
     fileMenu->Add( KICAD_MANAGER_ACTIONS::newJobsetFile );
