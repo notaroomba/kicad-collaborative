@@ -475,19 +475,38 @@ async fn finish_login(
         // local process that opens this URL cannot silently obtain a token.
         // The loopback URI is shown because it is the only thing that
         // distinguishes the real KiCad listener from an impostor's port.
+        let host = state
+            .cfg
+            .site_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
         let page = format!(
-            r#"<!doctype html><meta charset="utf-8"><title>Authorize sign-in</title>
-<style>body{{font-family:system-ui,sans-serif;max-width:560px;margin:10vh auto;padding:0 24px;line-height:1.5}}
-button{{padding:10px 20px;border:0;border-radius:8px;background:#4477ee;color:#fff;font:inherit;font-weight:600;cursor:pointer}}
-code{{background:#8883;padding:2px 6px;border-radius:4px}}</style>
-<h1>Authorize desktop sign-in</h1>
-<p>An application on this computer (<code>{uri}</code>) is asking to sign in as
-<b>{login}</b> for 30 days.</p>
-<p>If you did not just start a sign-in from KiCad, close this page.</p>
-<form method="post" action="/auth/desktop/confirm">
-  <input type="hidden" name="code" value="{code}">
-  <button type="submit">Allow</button>
-</form>"#,
+            r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize sign-in — KiCad Collaborative</title>{style}</head><body>
+<div class="dialog">
+  <div class="titlebar"><span class="mark">{mark}</span>Authorize sign-in<span class="host">{host}</span></div>
+  <div class="body">
+    <h1>KiCad Collaborative wants to sign in as you</h1>
+    <p>The desktop app on this computer is asking to use your account for 30 days.</p>
+    <dl class="kv">
+      <dt>Account</dt><dd><b>{login}</b></dd>
+      <dt>App address</dt><dd><code>{uri}</code></dd>
+      <dt>Access</dt><dd>Your online projects and live sessions</dd>
+    </dl>
+    <p class="muted">Only continue if you just chose <b>File &rarr; Sign In to Collaboration</b> in KiCad Collaborative.
+       The address above is the app that receives the sign-in — a stranger's app would show a different one.</p>
+  </div>
+  <form method="post" action="/auth/desktop/confirm" class="actions">
+    <input type="hidden" name="code" value="{code}">
+    <a class="btn" href="/">Cancel</a>
+    <button type="submit" class="btn primary">Allow</button>
+  </form>
+</div></body></html>"#,
+            style = crate::pages::STYLE,
+            mark = crate::pages::MARK,
+            host = crate::pages::esc(&host),
             uri = crate::pages::esc(&redirect_uri),
             login = crate::pages::esc(&user.login),
             code = crate::pages::esc(&code),

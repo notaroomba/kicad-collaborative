@@ -12,21 +12,99 @@ pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-const STYLE: &str = r#"
+pub(crate) const MARK: &str = r##"<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>"##;
+
+pub(crate) const STYLE: &str = r#"
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 8vh auto; padding: 0 24px; line-height: 1.5; }
-  .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 12px; padding: 32px; }
-  h1 { margin-top: 0; font-size: 1.5rem; }
-  .muted { opacity: .65; font-size: .9rem; }
-  .btn { display: inline-block; padding: 10px 20px; border-radius: 8px; background: #4477ee; color: white;
-         text-decoration: none; font-weight: 600; margin-right: 12px; }
-  .btn.secondary { background: transparent; color: inherit; border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-                   font: inherit; cursor: pointer; }
-  code { background: color-mix(in srgb, currentColor 10%, transparent); padding: 2px 6px; border-radius: 4px; }
-  .linkbox { display: flex; gap: 8px; margin-top: 16px; }
-  .linkbox input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
-                   background: transparent; color: inherit; }
+  :root {
+    color-scheme: light dark;
+    /* KiCad's own palette is the only colour source: schematic paper for the
+       workbench, the board canvas for stages, layer colours as accents. */
+    --bench: #ECEBE6;      /* chrome: toolbars, sidebars, title bars */
+    --paper: #F5F4EF;      /* surfaces (the schematic sheet) */
+    --panel: #FFFFFF;      /* inputs, raised surfaces */
+    --line: #CFCDC5;       /* 1px rules (Edge.Cuts grey) */
+    --line-2: #B5B5B5;     /* grid dots */
+    --ink: #1B1B1B;
+    --ink-2: #5B5A55;
+    --ink-3: #8C8B85;
+    --copper: #C83434;     /* F.Cu — primary action */
+    --copper-2: #A82B2B;
+    --blue: #4D7FC4;       /* B.Cu — links, selection */
+    --teal: #006464;       /* values & references */
+    --wire: #009600;       /* live */
+    --warn: #D19200;       /* ERC warning */
+    --err: #E6090D;        /* ERC error */
+    --silk: #F2EDA1;       /* silkscreen: labels on the canvas */
+    --canvas: #001023;     /* board background */
+    --shadow: 0 10px 30px #0003;
+    --font: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* legacy aliases used by inline styles */
+    --bg: var(--bench); --panel-2: var(--paper); --text: var(--ink); --muted: var(--ink-2);
+    --accent: var(--blue); --hot: var(--warn); --ok: var(--wire); --danger: var(--err);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
+      --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
+      --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
+      --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
+    --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
+    --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
+    --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+         color: var(--ink); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased;
+         background-color: var(--paper);
+         background-image: radial-gradient(color-mix(in srgb, var(--line-2) 55%, transparent) 1px, transparent 1.3px);
+         background-size: 20px 20px; }
+  a { color: var(--blue); }
+  .dialog, .card { width: min(580px, 100%); background: var(--panel); border: 1px solid var(--line);
+                   border-radius: 4px; box-shadow: var(--shadow); overflow: hidden; }
+  .card { padding: 26px 30px; }
+  .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: var(--bench);
+              border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+  .titlebar .mark svg { width: 18px; height: 18px; display: block; }
+  .titlebar .host { margin-left: auto; font: 11px var(--mono); color: var(--ink-3); }
+  .dialog .body { padding: 22px 24px 18px; }
+  h1 { margin: 0 0 10px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--ink-2); font-size: 13.5px; }
+  code { font: 13px var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: 3px;
+         padding: 2px 6px; overflow-wrap: anywhere; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 14px 0 16px; align-items: baseline; }
+  .kv dt { color: var(--ink-3); font: 500 10.5px var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+  .kv dd { margin: 0; }
+  .actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; padding: 12px 24px;
+             border-top: 1px solid var(--line); background: var(--bench); margin: 0; }
+  .btn { display: inline-flex; align-items: center; padding: 7px 16px; border-radius: 3px; border: 1px solid var(--line);
+         background: var(--panel); color: var(--ink); font: 500 14px var(--font); cursor: pointer;
+         text-decoration: none; white-space: nowrap; }
+  .btn:hover { border-color: var(--ink-3); }
+  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
+  .btn.primary:hover { background: var(--copper-2); }
+  .btn.secondary { background: var(--panel); }
+  .linkbox { display: flex; gap: 8px; margin-top: 8px; }
+  .linkbox input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 3px; border: 1px solid var(--line);
+                   background: var(--paper); color: var(--ink); font: 12.5px var(--mono); }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 14px; }
+  .choice { display: block; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: 3px;
+            padding: 12px 14px; background: var(--paper); }
+  .choice:hover { border-color: var(--blue); }
+  .choice b { display: block; font-size: 14.5px; margin-bottom: 3px; }
+  .choice .muted { font-size: 12.5px; }
+  .choice.web { box-shadow: inset 3px 0 0 var(--blue); }
+  .choice.desktop { box-shadow: inset 3px 0 0 var(--copper); }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  @media (max-width: 520px) { .choices { grid-template-columns: 1fr; } }
 </style>
 "#;
 
@@ -49,11 +127,15 @@ pub async fn index() -> Html<String> {
     Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KiCad Collaborative</title>{STYLE}</head><body>
-<div class="card">
-  <h1>KiCad Collaborative</h1>
-  <p>Real-time multiplayer for KiCad — shared cursors, live edits, offline sync.</p>
-  <p class="muted">To join a project, open the invite link someone shared with you,
-     or paste it into KiCad &rarr; <b>File &rarr; Join Shared Project…</b></p>
+<div class="dialog">
+  <div class="titlebar"><span class="mark">{MARK}</span>KiCad Collaborative<span class="host">kicad.notaroomba.dev</span></div>
+  <div class="body">
+    <h1>Real-time collaboration for KiCad</h1>
+    <p>Shared cursors, live edits, comments and history — in the desktop app and in the browser. Edits made offline merge back when you reconnect.</p>
+    <p class="muted">To join a project, open the invite link someone shared with you, or paste it into
+       KiCad Collaborative &rarr; <b>File &rarr; Join Session from URL…</b></p>
+  </div>
+  <div class="actions"><a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases">Get the desktop app</a><a class="btn primary" href="/">Open the web app</a></div>
 </div></body></html>"#
     ))
 }
@@ -67,8 +149,10 @@ pub async fn join_page(
     let Some(link) = link else {
         return Ok(Html(format!(
             r#"<!doctype html><html><head><meta charset="utf-8"><title>Invalid link</title>{STYLE}</head><body>
-<div class="card"><h1>Link invalid or expired</h1>
-<p class="muted">Ask the project owner for a fresh invite link.</p></div></body></html>"#
+<div class="dialog"><div class="titlebar"><span class="mark">{MARK}</span>Join project</div>
+<div class="body"><h1>This link is invalid or has expired</h1>
+<p class="muted">Ask the project owner for a fresh invite link.</p></div>
+<div class="actions"><a class="btn" href="/">Open the web app</a></div></div></body></html>"#
         ))
         .into_response());
     };
@@ -95,41 +179,22 @@ pub async fn join_page(
     let url = format!("{}/j/{}", state.cfg.site_url, token);
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join {name} — KiCad Collaborative</title>
-<style>
-  :root {{ color-scheme: dark; }}
-  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #1b1f23; color: #d9dee4;
-          font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }}
-  .card {{ width: min(560px, calc(100vw - 32px)); background: #23282d; border: 1px solid #3a4148; border-radius: 12px; padding: 28px 32px; }}
-  .brand {{ display: flex; align-items: center; gap: 8px; font-weight: 600; color: #8a949e; font-size: 12px; margin-bottom: 18px; }}
-  .logo {{ width: 16px; height: 16px; border-radius: 4px; background: #001023; position: relative; }}
-  .logo::before, .logo::after {{ content: ""; position: absolute; width: 5px; height: 5px; border-radius: 50%; }}
-  .logo::before {{ left: 2px; top: 2px; background: #C83434; }} .logo::after {{ right: 2px; bottom: 2px; background: #4D7FC4; }}
-  h1 {{ margin: 0 0 4px; font-size: 22px; }}
-  .muted {{ color: #8a949e; font-size: 13px; }}
-  .choices {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0 14px; }}
-  .choice {{ display: block; text-decoration: none; color: inherit; border: 1px solid #3a4148; border-radius: 10px; padding: 14px 16px; background: #2b3137; }}
-  .choice:hover {{ border-color: #5b9dd9; }}
-  .choice b {{ display: block; font-size: 15px; margin-bottom: 4px; }}
-  .choice.web {{ border-color: #5b9dd9; background: #5b9dd922; }}
-  .linkbox {{ display: flex; gap: 8px; margin-top: 8px; }}
-  .linkbox input {{ flex: 1; padding: 8px 10px; border-radius: 6px; border: 1px solid #3a4148; background: #001023; color: #d9dee4; font: 12px ui-monospace, monospace; }}
-  .btn {{ padding: 8px 14px; border-radius: 6px; border: 1px solid #3a4148; background: #2b3137; color: #d9dee4; font: inherit; cursor: pointer; text-decoration: none; }}
-  @media (max-width: 520px) {{ .choices {{ grid-template-columns: 1fr; }} }}
-</style></head><body>
-<div class="card">
-  <div class="brand"><span class="logo"></span>KiCad Collaborative</div>
-  <h1>{name}</h1>
-  <p class="muted">Shared by <b>{owner}</b> &middot; you'll join as <b>{role}</b></p>
-  <div class="choices">
-    <a class="choice web" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
-    <a class="choice" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">Full editing in the desktop app (installed separately).</span></a>
-  </div>
-  {signin}
-  <p class="muted">Desktop app didn't open? Paste this link into KiCad Collaborative &rarr; <b>File &rarr; Join Shared Project…</b></p>
-  <div class="linkbox">
-    <input id="lnk" readonly value="{url}">
-    <button type="button" class="btn" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied!';">Copy</button>
+<title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
+<div class="dialog">
+  <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">kicad.notaroomba.dev</span></div>
+  <div class="body">
+    <h1>{name}</h1>
+    <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>You join as</dt><dd>{role}</dd></dl>
+    <div class="choices">
+      <a class="choice web" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
+      <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">Full editing in the desktop app; a working copy is kept in sync.</span></a>
+    </div>
+    {signin}
+    <p class="muted">Desktop app didn't open? Paste this link into KiCad Collaborative &rarr; <b>File &rarr; Join Session from URL…</b></p>
+    <div class="linkbox">
+      <input id="lnk" readonly value="{url}">
+      <button type="button" class="btn" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied';">Copy</button>
+    </div>
   </div>
 </div></body></html>"#,
         name = esc(&project.name),
