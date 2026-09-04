@@ -19,6 +19,11 @@ use sqlx::PgPool;
 
 pub struct Config {
     pub public_url: String,
+    /// Public-facing base URL for human links (share/invite).  Defaults to
+    /// public_url.  Kept separate because public_url must stay on the host the
+    /// GitHub OAuth callback is registered for, while share links should show
+    /// the branded domain.
+    pub site_url: String,
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
@@ -52,6 +57,13 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config {
         public_url: std::env::var("PUBLIC_URL")
             .unwrap_or_else(|_| format!("http://localhost:{port}"))
+            .trim_end_matches('/')
+            .to_string(),
+        site_url: std::env::var("SITE_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("PUBLIC_URL").ok())
+            .unwrap_or_else(|| format!("http://localhost:{port}"))
             .trim_end_matches('/')
             .to_string(),
         jwt_secret: std::env::var("JWT_SECRET").unwrap_or_else(|_| {

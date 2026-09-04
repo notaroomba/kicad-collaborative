@@ -975,7 +975,7 @@ pub async fn create_link(
     persist::create_share_link(&state.pool, &token, id, &role, user.id, expires_at).await?;
     Ok(Json(json!({
         "token": token,
-        "url": format!("{}/j/{}", state.cfg.public_url, token),
+        "url": format!("{}/j/{}", state.cfg.site_url, token),
         "role": role,
     }))
     .into_response())
