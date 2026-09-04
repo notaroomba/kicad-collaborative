@@ -365,6 +365,7 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
                                      m_frame->Prj().GetProjectFullName() );
 
     beginSession( *project, aToken, wxEmptyString );
+    m_startedHere = true;   // we published it: we host it
 
     // An infobar, not a modal: a message box here wedges scripted flows, and
     // File > Copy Share Link can re-mint the link at any time.
@@ -377,6 +378,9 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxString& aToken,
                                     const wxString& aLinkToken, bool aConnect )
 {
+    if( aProject.contains( "ownerId" ) )
+        m_projectOwnerId = aProject.value( "ownerId", 0LL );
+
     if( aConnect )
         endSession();
 
@@ -455,8 +459,25 @@ void SCH_COLLAB_TOOL::OnProjectSaved()
 }
 
 
+bool SCH_COLLAB_TOOL::IsHost() const
+{
+    if( !sessionActive() )
+        return false;
+
+    if( m_startedHere )
+        return true;
+
+    long long self = COLLAB_SESSION::Get().SelfUserId();
+
+    return self > 0 && m_projectOwnerId == self;
+}
+
+
 void SCH_COLLAB_TOOL::endSession()
 {
+    m_startedHere = false;
+    m_projectOwnerId = 0;
+
     m_cachedShareLink.clear();
     m_timer.Stop();
     m_sync.reset();

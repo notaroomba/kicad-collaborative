@@ -59,6 +59,12 @@ public:
     ///< Leave the session and remove all remote cursors.
     int LeaveSession( const TOOL_EVENT& aEvent );
 
+    /**
+     * True when we host the session: we started it here, or we own the online
+     * project.  Drives the "Stop Session" vs "Leave Session" wording.
+     */
+    bool IsHost() const;
+
     ///< True while this frame is connected to a collaboration session.
     bool sessionActive() const { return !m_pathByDocId.empty(); }
 
@@ -210,4 +216,6 @@ private:
     wxDateTime     m_lastRejectNotice;  ///< throttles the rejected-edit infobar
     bool           m_presenceDirty;
     wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
+    long long      m_projectOwnerId = 0; ///< owner of the joined online project (0 = unknown)
+    bool           m_startedHere = false; ///< this frame published the project / started the session
 };

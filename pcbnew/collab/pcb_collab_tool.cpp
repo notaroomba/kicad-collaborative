@@ -327,6 +327,7 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
                                      editFrame->Prj().GetProjectFullName() );
 
     beginSession( *project, aToken, wxEmptyString );
+    m_startedHere = true;   // we published it: we host it
 
     // An infobar, not a modal: a message box here wedges scripted flows, and
     // File > Copy Share Link can re-mint the link at any time.
@@ -380,10 +381,25 @@ void PCB_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
     session.SetProjectId( wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
 
     m_ownsSession = true;
+    m_projectOwnerId = aProject.value( "ownerId", 0LL );
 
     session.Connect( aToken, aLinkToken );
     joinDoc( docId, file );
     OnSessionStateChanged();
+}
+
+
+bool PCB_COLLAB_TOOL::IsHost() const
+{
+    if( !sessionActive() )
+        return false;
+
+    if( m_startedHere )
+        return true;
+
+    long long self = COLLAB_SESSION::Get().SelfUserId();
+
+    return self > 0 && m_projectOwnerId == self;
 }
 
 
@@ -891,6 +907,8 @@ void PCB_COLLAB_TOOL::endSession()
 {
     leaveDoc();
     m_ownsSession = false;
+    m_startedHere = false;
+    m_projectOwnerId = 0;
 
     COLLAB_SESSION::Get().Disconnect();
 }

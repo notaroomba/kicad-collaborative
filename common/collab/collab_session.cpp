@@ -383,6 +383,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
 
         m_selfColor = wxString::FromUTF8( aMsg.value( "color", "#4477ee" ) );
         m_selfLogin = wxString::FromUTF8( aMsg.value( "login", "" ) );
+        m_selfUserId = aMsg.value( "userId", 0LL );
 
         setState( STATE::LIVE );
 
