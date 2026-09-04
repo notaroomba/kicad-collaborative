@@ -32,7 +32,7 @@ wxDEFINE_EVENT( COLLAB_WS_MESSAGE_EVENT, wxCommandEvent );
 
 static const wxChar* const traceCollab = wxT( "COLLAB" );
 
-static const char* DEFAULT_SERVER = "https://kicad-collab-production.up.railway.app";
+static const char* DEFAULT_SERVER = "https://kicad.notaroomba.dev";
 
 
 COLLAB_SESSION* COLLAB_SESSION::s_instance = nullptr;
