@@ -67,6 +67,14 @@ public:
     /// its local copy (signing in first if needed).
     void PublishProjectOnline();
 
+    /// Cached collaboration sign-in state for menu labels: whether a token is
+    /// stored, and the account login once fetched (empty until then).
+    bool            IsCollabSignedIn() const { return m_collabSignedIn; }
+    const wxString& CollabSignedInAs() const { return m_collabLogin; }
+
+    /// Re-read the stored token and fetch the account login off-thread.
+    void RefreshCollabIdentity();
+
     /// Keep syncing, make the open project local only (optionally dropping the
     /// online side), or delete its local copy.
     void ShowCollabSyncDialog();
@@ -275,6 +283,9 @@ private:
 
 private:
     COLLAB_AUTH           m_collabAuth;
+    bool                  m_collabSignedIn = false;
+    wxString              m_collabLogin;
+    std::shared_ptr<bool> m_collabAlive = std::make_shared<bool>( true );
     bool                  m_openSavedWindows;
     bool                  m_restoredFromHistory;  ///< Set after restore to mark editors dirty
     int                   m_leftWinWidth;

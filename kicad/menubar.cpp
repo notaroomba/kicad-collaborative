@@ -54,7 +54,46 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
 
     //-- File menu -----------------------------------------------------------
     //
-    ACTION_MENU*  fileMenu    = new ACTION_MENU( false, controlTool );
+    // The File menu says who is signed in to collaboration and offers to sign out.
+    class KICAD_FILE_MENU : public ACTION_MENU
+    {
+    public:
+        KICAD_FILE_MENU( KICAD_MANAGER_FRAME* aFrame, TOOL_INTERACTIVE* aTool ) :
+                ACTION_MENU( false, aTool ), m_frame( aFrame )
+        {
+        }
+
+    protected:
+        ACTION_MENU* create() const override { return new KICAD_FILE_MENU( m_frame, m_tool ); }
+
+        void update() override
+        {
+            // One keychain read, the first time the menu opens; afterwards the
+            // cached state is refreshed by sign-in / sign-out themselves.
+            if( !m_checked )
+            {
+                m_checked = true;
+                m_frame->RefreshCollabIdentity();
+            }
+
+            if( wxMenuItem* item = FindItem( KICAD_MANAGER_ACTIONS::collabSignIn.GetUIId() ) )
+            {
+                if( !m_frame->IsCollabSignedIn() )
+                    item->SetItemLabel( _( "Sign In to Collaboration..." ) );
+                else if( m_frame->CollabSignedInAs().IsEmpty() )
+                    item->SetItemLabel( _( "Sign Out of Collaboration..." ) );
+                else
+                    item->SetItemLabel( wxString::Format( _( "Sign Out (%s)..." ),
+                                                          m_frame->CollabSignedInAs() ) );
+            }
+        }
+
+    private:
+        KICAD_MANAGER_FRAME* m_frame;
+        bool                 m_checked = false;
+    };
+
+    ACTION_MENU*  fileMenu    = new KICAD_FILE_MENU( this, controlTool );
     FILE_HISTORY& fileHistory = GetFileHistory();
 
     fileHistory.SetClearText( _( "Clear Recent Projects" ) );

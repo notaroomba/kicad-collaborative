@@ -317,6 +317,8 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
 
 KICAD_MANAGER_FRAME::~KICAD_MANAGER_FRAME()
 {
+    *m_collabAlive = false;   // drop async identity results after this point
+
     Unbind( wxEVT_CHAR, &TOOL_DISPATCHER::DispatchWxEvent, m_toolDispatcher );
     Unbind( wxEVT_CHAR_HOOK, &TOOL_DISPATCHER::DispatchWxEvent, m_toolDispatcher );
 
@@ -1590,12 +1592,19 @@ void KICAD_MANAGER_FRAME::SignInToCollab()
 
     if( !COLLAB_AUTH::StoredToken( server ).IsEmpty() )
     {
-        if( wxMessageBox( _( "You are signed in to the collaboration server.\n\n"
-                             "Sign out on this computer?" ),
+        wxString who = m_collabLogin.IsEmpty() ? _( "the collaboration server" )
+                                                : wxString::Format( _( "collaboration as %s" ),
+                                                                    m_collabLogin );
+
+        if( wxMessageBox( wxString::Format( _( "You are signed in to %s.\n\n"
+                                               "Sign out on this computer?" ),
+                                            who ),
                           _( "Collaboration Sign-In" ), wxYES_NO | wxICON_QUESTION, this )
             == wxYES )
         {
             COLLAB_AUTH::ForgetToken( server );
+            m_collabSignedIn = false;
+            m_collabLogin.clear();
             wxMessageBox( _( "Signed out." ), _( "Collaboration Sign-In" ),
                           wxOK | wxICON_INFORMATION, this );
         }
@@ -1609,8 +1618,11 @@ void KICAD_MANAGER_FRAME::SignInToCollab()
             [this]( bool aSuccess, const wxString& aTokenOrError )
             {
                 if( aSuccess )
+                {
+                    RefreshCollabIdentity();
                     wxMessageBox( _( "Signed in to the collaboration server." ),
                                   _( "Collaboration Sign-In" ), wxOK | wxICON_INFORMATION, this );
+                }
                 else
                     wxMessageBox( aTokenOrError, _( "Collaboration Sign-In" ),
                                   wxOK | wxICON_ERROR, this );
@@ -1697,7 +1709,10 @@ void KICAD_MANAGER_FRAME::PublishProjectOnline()
             [this, publish]( bool aSuccess, const wxString& aTokenOrError )
             {
                 if( aSuccess )
+                {
+                    RefreshCollabIdentity();
                     publish( aTokenOrError );
+                }
                 else
                     wxMessageBox( aTokenOrError, _( "Publish Project Online" ),
                                   wxOK | wxICON_ERROR, this );
@@ -1893,4 +1908,40 @@ void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
         break;
     }
     }
+}
+
+
+void KICAD_MANAGER_FRAME::RefreshCollabIdentity()
+{
+    wxString server = COLLAB_SESSION::ServerUrl();
+    wxString token = COLLAB_AUTH::StoredToken( server );
+
+    m_collabSignedIn = !token.IsEmpty();
+
+    if( !m_collabSignedIn )
+    {
+        m_collabLogin.clear();
+        return;
+    }
+
+    // The login comes from /api/me; fetch it off the UI thread and drop the
+    // result if the frame is gone by then.
+    std::string           serverStd = server.ToStdString( wxConvUTF8 );
+    std::string           tokenStd = token.ToStdString( wxConvUTF8 );
+    std::shared_ptr<bool> alive = m_collabAlive;
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, serverStd, tokenStd]()
+            {
+                std::optional<nlohmann::json> me = COLLAB_REST::Me(
+                        wxString::FromUTF8( serverStd ), wxString::FromUTF8( tokenStd ) );
+                std::string login = me ? me->value( "login", "" ) : std::string();
+
+                wxTheApp->CallAfter(
+                        [this, alive, login]()
+                        {
+                            if( *alive )
+                                m_collabLogin = wxString::FromUTF8( login );
+                        } );
+            } );
 }
