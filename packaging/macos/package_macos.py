@@ -82,7 +82,53 @@ def main():
     print(f"copying {src_app} …")
     run("ditto", src_app, app)
 
+    # The dev bundle links some resources (e.g. SharedSupport/resources/
+    # images.tar.gz, the toolbar icons) by an ABSOLUTE symlink into the build
+    # tree.  ditto preserves the symlink, so it resolves on this machine but is
+    # a dead link on any other Mac ("can't open file … No such file").  Replace
+    # every symlink that points outside the bundle with the real file/dir.
+    def deref_external_symlinks(root):
+        fixed = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in list(dirnames) + list(filenames):
+                link = os.path.join(dirpath, name)
+                if not os.path.islink(link):
+                    continue
+                target = os.path.realpath(link)
+                if target.startswith(os.path.realpath(root) + os.sep):
+                    continue  # points inside the bundle — fine
+                if not os.path.exists(target):
+                    sys.exit(f"dangling symlink in bundle: {link} -> {os.readlink(link)}")
+                os.remove(link)
+                if os.path.isdir(target):
+                    shutil.copytree(target, link, symlinks=False)
+                else:
+                    shutil.copy2(target, link)
+                fixed.append(os.path.relpath(link, root))
+        return fixed
+
+    deref = deref_external_symlinks(app)
+    if deref:
+        print(f"dereferenced {len(deref)} external symlink(s): {', '.join(deref)}")
+
     contents = os.path.join(app, "Contents")
+
+    # Branded app icon: the KiCad "Ki" with a two-tone (red/blue) dot on the
+    # "i" so KiCad Collaborative is distinct from stock KiCad in the Dock,
+    # Launchpad and Finder.  Overwrites the icon the bundle references.
+    branded_icns = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.icns")
+    if os.path.exists(branded_icns):
+        icon_name = "kicad.icns"
+        try:
+            with open(os.path.join(contents, "Info.plist"), "rb") as f:
+                icon_name = plistlib.load(f).get("CFBundleIconFile", "kicad.icns")
+        except Exception:
+            pass
+        if not icon_name.endswith(".icns"):
+            icon_name += ".icns"
+        shutil.copy2(branded_icns, os.path.join(contents, "Resources", icon_name))
+        print(f"installed branded icon -> Resources/{icon_name}")
+
     fw_dir = os.path.join(contents, "Frameworks")
     os.makedirs(fw_dir, exist_ok=True)
     fw_ref = "@executable_path/../Frameworks/"
