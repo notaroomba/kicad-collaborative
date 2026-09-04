@@ -138,6 +138,20 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     joinButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onJoinLink, this );
     m_list->Bind( wxEVT_DATAVIEW_ITEM_ACTIVATED, &DIALOG_ONLINE_PROJECTS::onItemActivated, this );
 
+    // A deep link / menu can pre-load a share link to join as soon as we show.
+    Bind( wxEVT_SHOW,
+          [this]( wxShowEvent& aEvt )
+          {
+              aEvt.Skip();
+
+              if( aEvt.IsShown() && !m_pendingJoinLink.IsEmpty() )
+              {
+                  wxString link = m_pendingJoinLink;
+                  m_pendingJoinLink.Clear();
+                  CallAfter( [this, link]() { JoinWithLink( link ); } );
+              }
+          } );
+
     m_openButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
     m_shareButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
     m_renameButton->Bind( wxEVT_UPDATE_UI, &DIALOG_ONLINE_PROJECTS::onUpdateUI, this );
@@ -603,12 +617,26 @@ void DIALOG_ONLINE_PROJECTS::onUpload( wxCommandEvent& aEvent )
 
 void DIALOG_ONLINE_PROJECTS::onJoinLink( wxCommandEvent& aEvent )
 {
-    wxTextEntryDialog dlg( this, _( "Share link or invite token:" ), _( "Join Shared Project" ) );
+    JoinWithLink( wxEmptyString );
+}
 
-    if( dlg.ShowModal() != wxID_OK )
-        return;
 
-    wxString linkToken = COLLAB_PROJECT::ParseLinkToken( dlg.GetValue() );
+void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken )
+{
+    wxString provided = aLinkOrToken;
+
+    if( provided.IsEmpty() )
+    {
+        wxTextEntryDialog dlg( this, _( "Share link or invite token:" ),
+                               _( "Join Shared Project" ) );
+
+        if( dlg.ShowModal() != wxID_OK )
+            return;
+
+        provided = dlg.GetValue();
+    }
+
+    wxString linkToken = COLLAB_PROJECT::ParseLinkToken( provided );
 
     if( linkToken.IsEmpty() )
     {

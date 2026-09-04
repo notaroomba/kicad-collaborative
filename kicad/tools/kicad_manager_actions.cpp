@@ -77,6 +77,13 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::onlineProjects( TOOL_ACTION_ARGS()
                      "collaboration server" ) )
         .Icon( BITMAPS::www ) );
 
+TOOL_ACTION KICAD_MANAGER_ACTIONS::joinSharedProject( TOOL_ACTION_ARGS()
+        .Name( "kicad.Control.joinSharedProject" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Join Shared Project..." ) )
+        .Tooltip( _( "Join a collaborative project from a share link or invite token" ) )
+        .Icon( BITMAPS::www ) );
+
 TOOL_ACTION KICAD_MANAGER_ACTIONS::openJobsetFile( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.openJobset" )
         .Scope( AS_GLOBAL )

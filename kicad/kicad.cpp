@@ -562,6 +562,15 @@ struct APP_KICAD : public wxApp
 
     bool OnInit()           override
     {
+        for( int i = 1; i < wxApp::argc; ++i )
+        {
+            if( wxString( wxApp::argv[i] ).StartsWith( wxS( "kicad-collab://" ) ) )
+            {
+                m_pendingCollabUrl = wxApp::argv[i];
+                break;
+            }
+        }
+
 #ifdef NDEBUG
         // These checks generate extra assert noise
         wxSizerFlags::DisableConsistencyChecks();
@@ -590,8 +599,40 @@ struct APP_KICAD : public wxApp
             return false;
         }
 
+        // A kicad-collab:// URL that launched us arrives via MacOpenURL before
+        // the frame exists; dispatch it now that OnPgmInit built the frame.
+        if( !m_pendingCollabUrl.IsEmpty() )
+        {
+            wxString url = m_pendingCollabUrl;
+            m_pendingCollabUrl.Clear();
+            CallAfter( [this, url]() { dispatchCollabUrl( url ); } );
+        }
+
         return true;
     }
+
+#ifdef __WXMAC__
+    // The web "Open in KiCad" button uses the kicad-collab:// scheme; macOS
+    // delivers it here (declared in the bundle's CFBundleURLTypes).
+    void MacOpenURL( const wxString& aUrl ) override
+    {
+        if( !aUrl.StartsWith( wxS( "kicad-collab://" ) ) )
+            return;
+
+        if( wxDynamicCast( GetTopWindow(), KICAD_MANAGER_FRAME ) )
+            dispatchCollabUrl( aUrl );
+        else
+            m_pendingCollabUrl = aUrl;   // launched by the URL; handle after OnInit
+    }
+#endif
+
+    void dispatchCollabUrl( const wxString& aUrl )
+    {
+        if( KICAD_MANAGER_FRAME* frame = wxDynamicCast( GetTopWindow(), KICAD_MANAGER_FRAME ) )
+            frame->HandleCollabJoinLink( aUrl );
+    }
+
+    wxString m_pendingCollabUrl;
 
     int OnExit() override
     {

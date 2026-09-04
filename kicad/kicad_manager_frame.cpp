@@ -25,6 +25,7 @@
 #include "project_tree.h"
 #include "project_tree_pane.h"
 #include <collab/collab_product.h>
+#include "dialogs/dialog_online_projects.h"
 #include <dialogs/dialog_git_mr_review.h>
 #include "local_history_pane.h"
 #include "widgets/bitmap_button.h"
@@ -1558,4 +1559,21 @@ void KICAD_MANAGER_FRAME::RestoreCommitFromHistory( const wxString& aHash )
 bool KICAD_MANAGER_FRAME::HistoryPanelShown()
 {
     return m_historyPane && m_auimgr.GetPane( m_historyPane ).IsShown();
+}
+
+
+void KICAD_MANAGER_FRAME::HandleCollabJoinLink( const wxString& aLinkOrToken )
+{
+    Raise();
+
+    DIALOG_ONLINE_PROJECTS dlg( this );
+
+    if( !aLinkOrToken.IsEmpty() )
+        dlg.SetPendingJoinLink( aLinkOrToken );
+
+    if( dlg.ShowModal() == wxID_OK && !dlg.GetProjectToOpen().IsEmpty() )
+    {
+        wxString proj = dlg.GetProjectToOpen();
+        CallAfter( [this, proj]() { LoadProject( wxFileName( proj ) ); } );
+    }
 }
