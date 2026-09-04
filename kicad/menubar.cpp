@@ -88,8 +88,9 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     wxMenuItem* item = fileMenu->Add( openRecentMenu->Clone() );
 
     fileMenu->AppendSeparator();
-    fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::collabSignIn );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::joinSharedProject );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects );
 
     fileMenu->AppendSeparator();
     fileMenu->Add( KICAD_MANAGER_ACTIONS::newJobsetFile );

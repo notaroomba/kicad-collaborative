@@ -569,6 +569,13 @@ int KICAD_MANAGER_CONTROL::LoadProject( const TOOL_EVENT& aEvent )
 }
 
 
+int KICAD_MANAGER_CONTROL::CollabSignIn( const TOOL_EVENT& aEvent )
+{
+    m_frame->SignInToCollab();
+    return 0;
+}
+
+
 int KICAD_MANAGER_CONTROL::JoinSharedProject( const TOOL_EVENT& aEvent )
 {
     m_frame->HandleCollabJoinLink( wxEmptyString );
@@ -974,6 +981,7 @@ void KICAD_MANAGER_CONTROL::setTransitions()
     Go( &KICAD_MANAGER_CONTROL::SaveProjectAs,      ACTIONS::saveAs.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::LoadProject,        KICAD_MANAGER_ACTIONS::loadProject.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::ShowOnlineProjects, KICAD_MANAGER_ACTIONS::onlineProjects.MakeEvent() );
+    Go( &KICAD_MANAGER_CONTROL::CollabSignIn, KICAD_MANAGER_ACTIONS::collabSignIn.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::JoinSharedProject, KICAD_MANAGER_ACTIONS::joinSharedProject.MakeEvent() );
     Go( &KICAD_MANAGER_CONTROL::ViewDroppedViewers, KICAD_MANAGER_ACTIONS::viewDroppedGerbers.MakeEvent() );
 

@@ -22,6 +22,7 @@
 #define KICAD_H
 
 #include <kiway_player.h>
+#include <collab/collab_auth.h>
 
 class ACTION_TOOLBAR;
 class BITMAP_BUTTON;
@@ -57,6 +58,10 @@ public:
     /// a kicad-collab:// deep link.  Empty prompts for the link.  Opens the
     /// Online Projects dialog to carry out the join.
     void HandleCollabJoinLink( const wxString& aLinkOrToken );
+
+    /// Start (or, when already signed in, offer to end) the collaboration
+    /// server sign-in, directly from the File menu.
+    void SignInToCollab();
     void RestoreLocalHistory();
     void RestoreCommitFromHistory( const wxString& aHash );
     void ToggleLocalHistory();
@@ -261,6 +266,7 @@ private:
     void updatePcmButtonBadge();
 
 private:
+    COLLAB_AUTH           m_collabAuth;
     bool                  m_openSavedWindows;
     bool                  m_restoredFromHistory;  ///< Set after restore to mark editors dirty
     int                   m_leftWinWidth;
