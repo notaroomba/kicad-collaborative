@@ -92,7 +92,7 @@ pub async fn join_page(
         )
     };
 
-    let url = format!("{}/j/{}", state.cfg.public_url, token);
+    let url = format!("{}/j/{}", state.cfg.site_url, token);
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Join {name} — KiCad Collaborative</title>
