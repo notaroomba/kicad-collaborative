@@ -11,6 +11,7 @@ Usage: package_macos.py <build-dir> <out-dir> [--version 10.99]
 """
 
 import argparse
+import glob
 import os
 import plistlib
 import shutil
@@ -196,6 +197,34 @@ def main():
                 cmd += ["-id", fw_ref + os.path.basename(macho)]
             cmd.append(macho)
             run(*cmd)
+
+    # TBB dlopens its scalable allocator by name at runtime (not a link-time
+    # dependency, so the closure walk never sees it); it looks next to libtbb
+    # first, so ship it there or the app silently loads Homebrew's copy here
+    # and nothing on another Mac.
+    tbb = [f for f in os.listdir(fw_dir) if f.startswith("libtbb.")]
+    if tbb:
+        for cand in sorted(glob.glob("/opt/homebrew/opt/tbb/lib/libtbbmalloc.*.dylib")):
+            real = os.path.realpath(cand)
+            name = os.path.basename(real)
+            dst = os.path.join(fw_dir, name)
+            if not os.path.exists(dst):
+                shutil.copy2(real, dst)
+                os.chmod(dst, 0o755)
+                copied[real] = name
+                by_name[name] = name
+                by_name[os.path.basename(cand)] = name
+                # its own deps (libc++ only) are system; still run the fixups below
+                for dep in deps_of(dst):
+                    r = resolve(dep, dst)
+                    if r and wants_relocation(r, build_dir) and r in copied:
+                        run("install_name_tool", "-change", dep, fw_ref + copied[r], dst)
+                run("install_name_tool", "-id", fw_ref + name, dst)
+            # alias name without the minor version, e.g. libtbbmalloc.2.dylib
+            alias = os.path.basename(cand)
+            if alias != name and not os.path.exists(os.path.join(fw_dir, alias)):
+                os.symlink(name, os.path.join(fw_dir, alias))
+        print("bundled TBB scalable allocator for runtime dlopen")
 
     print(f"bundled {len(copied)} external dylibs")
 

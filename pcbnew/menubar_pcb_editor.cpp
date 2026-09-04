@@ -31,6 +31,7 @@
 #include <tool/action_manager.h>
 #include <tool/actions.h>
 #include <tool/tool_manager.h>
+#include <collab/pcb_collab_tool.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection_tool.h>
 #include <widgets/wx_menubar.h>
@@ -48,7 +49,39 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     //-- File menu -----------------------------------------------------------
     //
-    ACTION_MENU*   fileMenu = new ACTION_MENU( false, selTool );
+    // The File menu relabels "Leave Session" as "Stop Session" for the host.
+    class PCB_FILE_MENU : public ACTION_MENU
+    {
+    public:
+        PCB_FILE_MENU( PCB_EDIT_FRAME* aFrame, TOOL_INTERACTIVE* aTool ) :
+                ACTION_MENU( false, aTool ), m_frame( aFrame )
+        {
+        }
+
+    protected:
+        ACTION_MENU* create() const override { return new PCB_FILE_MENU( m_frame, m_tool ); }
+
+        void update() override
+        {
+            PCB_COLLAB_TOOL* collab = m_frame->GetToolManager()->GetTool<PCB_COLLAB_TOOL>();
+            bool             host = collab && collab->IsHost();
+
+            if( wxMenuItem* item = FindItem( PCB_ACTIONS::collabLeaveSession.GetUIId() ) )
+            {
+                item->SetItemLabel( host ? _( "Stop Session" ) : _( "Leave Session" ) );
+                item->SetHelp( host ? _( "Stop hosting the live session on this computer; the "
+                                         "online project and everyone's copies stay" )
+                                    : _( "Disconnect this computer from the live session; the "
+                                         "shared project stays on the server for everyone "
+                                         "else" ) );
+            }
+        }
+
+    private:
+        PCB_EDIT_FRAME* m_frame;
+    };
+
+    ACTION_MENU*   fileMenu = new PCB_FILE_MENU( this, selTool );
     static ACTION_MENU* openRecentMenu;
 
     if( Kiface().IsSingle() )   // not when under a project mgr

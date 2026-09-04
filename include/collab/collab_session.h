@@ -126,6 +126,8 @@ public:
     /// Our server-assigned client id (stable for this process).
     const wxString& ClientId() const { return m_clientId; }
     const wxString& SelfColor() const { return m_selfColor; }
+    /// Our server user id (0 until the hello handshake completes).
+    long long       SelfUserId() const { return m_selfUserId; }
     const wxString& SelfLogin() const { return m_selfLogin; }
 
     /**
@@ -206,6 +208,7 @@ private:
     wxString                          m_clientId;
     wxString                          m_selfColor;
     wxString                          m_selfLogin;
+    long long                         m_selfUserId = 0;
     std::map<wxString, JOINED_DOC>    m_docs;
 
     /// Bumped on every Connect/Disconnect so wx events queued by a torn-down
