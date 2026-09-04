@@ -49,6 +49,7 @@ public:
     int CloseProject( const TOOL_EVENT& aEvent );
     int SaveProjectAs( const TOOL_EVENT& aEvent );
     int ShowOnlineProjects( const TOOL_EVENT& aEvent );
+    int CollabSignIn( const TOOL_EVENT& aEvent );
     int JoinSharedProject( const TOOL_EVENT& aEvent );
     int LoadProject( const TOOL_EVENT& aEvent );
 

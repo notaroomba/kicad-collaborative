@@ -52,6 +52,7 @@ public:
     static TOOL_ACTION editOtherPCB;
 
     static TOOL_ACTION onlineProjects;
+    static TOOL_ACTION collabSignIn;
     static TOOL_ACTION joinSharedProject;
 
     static TOOL_ACTION archiveProject;

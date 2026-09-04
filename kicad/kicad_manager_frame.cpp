@@ -26,6 +26,7 @@
 #include "project_tree_pane.h"
 #include <collab/collab_product.h>
 #include "dialogs/dialog_online_projects.h"
+#include <collab/collab_session.h>
 #include <dialogs/dialog_git_mr_review.h>
 #include "local_history_pane.h"
 #include "widgets/bitmap_button.h"
@@ -1576,4 +1577,45 @@ void KICAD_MANAGER_FRAME::HandleCollabJoinLink( const wxString& aLinkOrToken )
         wxString proj = dlg.GetProjectToOpen();
         CallAfter( [this, proj]() { LoadProject( wxFileName( proj ) ); } );
     }
+}
+
+
+void KICAD_MANAGER_FRAME::SignInToCollab()
+{
+    wxString server = COLLAB_SESSION::ServerUrl();
+
+    if( !COLLAB_AUTH::StoredToken( server ).IsEmpty() )
+    {
+        if( wxMessageBox( _( "You are signed in to the collaboration server.\n\n"
+                             "Sign out on this computer?" ),
+                          _( "Collaboration Sign-In" ), wxYES_NO | wxICON_QUESTION, this )
+            == wxYES )
+        {
+            COLLAB_AUTH::ForgetToken( server );
+            wxMessageBox( _( "Signed out." ), _( "Collaboration Sign-In" ),
+                          wxOK | wxICON_INFORMATION, this );
+        }
+
+        return;
+    }
+
+    wxString error;
+
+    bool started = m_collabAuth.SignIn( server,
+            [this]( bool aSuccess, const wxString& aTokenOrError )
+            {
+                if( aSuccess )
+                    wxMessageBox( _( "Signed in to the collaboration server." ),
+                                  _( "Collaboration Sign-In" ), wxOK | wxICON_INFORMATION, this );
+                else
+                    wxMessageBox( aTokenOrError, _( "Collaboration Sign-In" ),
+                                  wxOK | wxICON_ERROR, this );
+            },
+            error );
+
+    if( !started )
+        wxMessageBox( error, _( "Collaboration Sign-In" ), wxOK | wxICON_ERROR, this );
+    else
+        wxMessageBox( _( "Continue signing in in your web browser." ),
+                      _( "Collaboration Sign-In" ), wxOK | wxICON_INFORMATION, this );
 }
