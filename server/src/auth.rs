@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use axum::extract::{FromRequestParts, Query, State};
 use axum::http::request::Parts;
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
@@ -38,6 +39,19 @@ pub struct PendingLogin {
     pub next: String,
     /// Set when this login was initiated by a desktop PKCE authorize request.
     pub desktop: Option<PendingDesktop>,
+    /// A non-canonical origin (e.g. the custom domain) to hand the finished
+    /// session back to via a one-time adopt code, when the browser started the
+    /// flow somewhere other than public_url.
+    pub return_origin: Option<String>,
+    pub created: Instant,
+}
+
+/// One-time code that hands a finished browser session to a non-canonical
+/// host, so its cookie is set on that host rather than public_url.
+pub struct PendingAdopt {
+    pub user_id: i64,
+    pub login: String,
+    pub next: String,
     pub created: Instant,
 }
 
@@ -60,6 +74,7 @@ pub struct PendingDesktopCode {
 pub struct AuthPending {
     pub logins: Mutex<HashMap<String, PendingLogin>>,
     pub desktop_codes: Mutex<HashMap<String, PendingDesktopCode>>,
+    pub adopt_codes: Mutex<HashMap<String, PendingAdopt>>,
 }
 
 impl AuthPending {
@@ -69,6 +84,10 @@ impl AuthPending {
             .unwrap()
             .retain(|_, v| v.created.elapsed() < PENDING_TTL);
         self.desktop_codes
+            .lock()
+            .unwrap()
+            .retain(|_, v| v.created.elapsed() < PENDING_TTL);
+        self.adopt_codes
             .lock()
             .unwrap()
             .retain(|_, v| v.created.elapsed() < PENDING_TTL);
@@ -167,15 +186,60 @@ fn github_configured(state: &AppState) -> AppResult<(&str, &str)> {
 #[derive(Deserialize)]
 pub struct LoginQuery {
     pub next: Option<String>,
+    /// The origin to return the session to (set by the broker redirect only).
+    pub origin: Option<String>,
+}
+
+/// The origin (scheme://host) this request arrived on; prod is always https.
+fn request_origin(headers: &HeaderMap) -> Option<String> {
+    let host = headers.get(axum::http::header::HOST)?.to_str().ok()?;
+    Some(format!("https://{host}"))
+}
+
+/// A host the browser may sign in from: public_url itself, or one listed in
+/// ALLOWED_ORIGINS.  Guards the adopt redirect against handing a session to an
+/// arbitrary origin.
+fn is_allowed_origin(state: &AppState, origin: &str) -> bool {
+    let canon = state.cfg.public_url.trim_end_matches('/');
+    origin == canon || state.cfg.allowed_origins.iter().any(|o| o == origin)
 }
 
 pub async fn github_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<LoginQuery>,
 ) -> AppResult<Response> {
     let (client_id, _) = github_configured(&state)?;
     let next = sanitize_next(q.next.as_deref());
-    Ok(start_github_flow(&state, client_id, next, None))
+    let canonical = state.cfg.public_url.trim_end_matches('/');
+
+    // The GitHub OAuth app's callback + the flow's cookies all live on
+    // public_url.  If the browser started somewhere else (the custom domain),
+    // send the whole dance to public_url and remember where to hand the
+    // session back, so the state and session cookies are never set on a host
+    // the callback can't read.
+    if q.origin.is_none() {
+        if let Some(here) = request_origin(&headers) {
+            if here != canonical && is_allowed_origin(&state, &here) {
+                let url = format!(
+                    "{}/auth/github/login?next={}&origin={}",
+                    canonical,
+                    urlencode(&next),
+                    urlencode(&here),
+                );
+                return Ok(Redirect::to(&url).into_response());
+            }
+        }
+    }
+
+    let return_origin = q
+        .origin
+        .as_deref()
+        .map(|o| o.trim_end_matches('/'))
+        .filter(|o| *o != canonical && is_allowed_origin(&state, o))
+        .map(str::to_string);
+
+    Ok(start_github_flow(&state, client_id, next, None, return_origin))
 }
 
 fn start_github_flow(
@@ -183,12 +247,13 @@ fn start_github_flow(
     client_id: &str,
     next: String,
     desktop: Option<PendingDesktop>,
+    return_origin: Option<String>,
 ) -> Response {
     state.auth_pending.purge();
     let oauth_state = random_token();
     state.auth_pending.logins.lock().unwrap().insert(
         oauth_state.clone(),
-        PendingLogin { next, desktop, created: Instant::now() },
+        PendingLogin { next, desktop, return_origin, created: Instant::now() },
     );
     let url = format!(
         "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=read%3Auser%20user%3Aemail&state={}",
@@ -324,12 +389,65 @@ pub async fn github_callback(
 
 /// Shared tail of the browser flow: either hand a one-time code back to the
 /// desktop loopback, or set the session cookie and continue to `next`.
+#[derive(Deserialize)]
+pub struct AdoptQuery {
+    pub code: String,
+}
+
+/// Land the browser on the origin it started from and set the session cookie
+/// there.  Reached only via the one-time code minted in finish_login for a
+/// brokered cross-origin sign-in.
+pub async fn adopt(
+    State(state): State<AppState>,
+    Query(q): Query<AdoptQuery>,
+) -> AppResult<Response> {
+    state.auth_pending.purge();
+    let pending = state
+        .auth_pending
+        .adopt_codes
+        .lock()
+        .unwrap()
+        .remove(&q.code)
+        .ok_or_else(|| AppError::BadRequest("unknown or expired sign-in code".into()))?;
+    if pending.created.elapsed() > PENDING_TTL {
+        return Err(AppError::BadRequest("expired sign-in code".into()));
+    }
+
+    let jwt = mint_jwt(&state, pending.user_id, &pending.login);
+    let cookie = Cookie::build((COOKIE_NAME, jwt))
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(true)
+        .build();
+
+    Ok((CookieJar::new().add(cookie), Redirect::to(&pending.next)).into_response())
+}
+
 async fn finish_login(
     state: &AppState,
     jar: CookieJar,
     user: User,
     pending: PendingLogin,
 ) -> AppResult<Response> {
+    // Brokered sign-in from another host (the custom domain): its cookie must
+    // be set on that host, not public_url, so mint a one-time adopt code and
+    // bounce the browser back there.
+    if let Some(origin) = pending.return_origin.clone() {
+        let code = random_token();
+        state.auth_pending.adopt_codes.lock().unwrap().insert(
+            code.clone(),
+            PendingAdopt {
+                user_id: user.id,
+                login: user.login.clone(),
+                next: pending.next.clone(),
+                created: Instant::now(),
+            },
+        );
+        let url = format!("{}/auth/adopt?code={}", origin.trim_end_matches('/'), urlencode(&code));
+        return Ok(Redirect::to(&url).into_response());
+    }
+
     let jwt = mint_jwt(state, user.id, &user.login);
     // Session cookie (no max_age): the JWT inside carries its own 30-day expiry.
     let cookie = Cookie::build((COOKIE_NAME, jwt))
@@ -472,12 +590,12 @@ pub async fn desktop_authorize(
     {
         if let Some(user) = persist::get_user(&state.pool, claims.sub).await? {
             let pending =
-                PendingLogin { next: "/".into(), desktop: Some(desktop), created: Instant::now() };
+                PendingLogin { next: "/".into(), desktop: Some(desktop), return_origin: None, created: Instant::now() };
             return finish_login(&state, jar, user, pending).await;
         }
     }
 
-    Ok(start_github_flow(&state, client_id, "/".into(), Some(desktop)).into_response())
+    Ok(start_github_flow(&state, client_id, "/".into(), Some(desktop), None).into_response())
 }
 
 #[derive(Deserialize)]

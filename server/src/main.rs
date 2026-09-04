@@ -25,6 +25,9 @@ pub struct Config {
     /// Path to kicad-cli for SVG previews; previews are disabled when unset.
     pub kicad_cli: Option<String>,
     pub render_cache_dir: String,
+    /// Extra hostnames (besides public_url) the browser may sign in from; the
+    /// OAuth dance is brokered on public_url and the session handed back here.
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +63,12 @@ async fn main() -> anyhow::Result<()> {
         kicad_cli: std::env::var("KICAD_CLI").ok().filter(|s| !s.is_empty()),
         render_cache_dir: std::env::var("RENDER_CACHE_DIR")
             .unwrap_or_else(|_| "./render-cache".into()),
+        allowed_origins: std::env::var("ALLOWED_ORIGINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
     };
     if cfg.github_client_id.is_none() {
         tracing::warn!("GITHUB_CLIENT_ID/SECRET not set — sign-in disabled until configured");
@@ -128,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/desktop/confirm", post(auth::desktop_confirm))
         .route("/api/me", get(auth::me))
         .route("/api/ws-ticket", get(auth::ws_ticket))
+        .route("/auth/adopt", get(auth::adopt))
         .route("/api/projects", post(http::create_project).get(http::list_projects))
         .route(
             "/api/projects/{id}",
