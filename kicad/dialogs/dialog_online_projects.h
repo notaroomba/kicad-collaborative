@@ -80,7 +80,7 @@ private:
     void onUpdateUI( wxUpdateUIEvent& aEvent );
 
     ///< Download (or reuse) a local copy of the listing row and note it for opening.
-    void openProject( const nlohmann::json& aProject );
+    void openProject( const nlohmann::json& aProject, bool aAutoLocation = false );
 
 private:
     KICAD_MANAGER_FRAME* m_frame;
