@@ -1441,6 +1441,7 @@ function serialize(node) {
   if (!isList(node)) {
     if (typeof node === "number") return Number.isInteger(node) ? String(node) : String(+node.toFixed(6));
     const s = String(node);
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return '"' + s + '"';   // KiCad always quotes uuids
     return /^[A-Za-z_][\w.:*-]*$/.test(s) || /^[-+]?\d*\.?\d+$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
   }
   return "(" + node.map(serialize).join(" ") + ")";

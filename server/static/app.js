@@ -296,6 +296,7 @@ function toolCtx(extra) {
     commit(changes, label) { commitChanges(changes, label); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender, toast, enterSheet, setTool,
+    setStatus(text) { const el = $("#sbMode"); if (el) el.textContent = text || ""; },
   }, extra || {});
 }
 // Local apply + broadcast, with an inverse recorded for undo.
@@ -423,6 +424,7 @@ async function openDoc(doc) {
   DOC_TYPE = doc.docType;
   IU = isSch() ? 1e4 : 1e6;
   ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";
+  { const lm = $("#lineModeBtn"); if (lm) lm.style.display = isSch() ? "" : "none"; const sm = $("#sbMode"); if (sm) sm.textContent = ""; }
   $("#docSel").value = doc.docId;
   const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
@@ -683,15 +685,12 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
-  drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU], wires: [] };
-  // Schematic moves drag the attached wire ends along (KiCad's rubber band).
-  if (kdoc && isSch()) {
+  drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU], wires: [], engine: false };
+  // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
+  // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
+  if (kdoc && isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
     const it = kdoc.items.get(best.id);
-    if (it && it.kind === "symbol") {
-      for (const pin of KiCadCanvas.pinPoints(kdoc, it)) for (const end of KiCadCanvas.wireEndsAt(kdoc, pin.x, pin.y, 0.02)) {
-        if (!drag.wires.some((w) => w.item === end.item && w.index === end.index)) drag.wires.push({ item: end.item, index: end.index, off: [pin.x - best.x / IU, pin.y - best.y / IU], orig: KiCadCanvas.ptsOf(end.item.node)[end.index].slice() });
-      }
-    }
+    try { if (it && CollabTools.sch.beginDrag(toolCtx(), it, [x, y], true)) drag.engine = true; } catch (e) { console.warn(e); }
   }
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
@@ -702,6 +701,16 @@ stage.addEventListener("pointermove", (ev) => {
   const modM = activeModule();
   if (modM && moduleTool(tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
   if (!drag) { sendPresence(mm); return; }
+  if (drag.engine) {
+    const d = CollabTools.sch.state.drag;
+    if (!d) { drag = null; sendPresence(mm); return; }           // cancelled (Escape) or already dropped
+    CollabTools.sch.moveDrag(toolCtx(), mm);
+    if (!d.moved) { sendPresence(mm); return; }
+    drag.moved = true; drag.curMm = [drag.fp.x / IU + d.last[0], drag.fp.y / IU + d.last[1]];
+    const nowE = Date.now();
+    if (nowE - lastLiveMove > 150 && d.kind === "symbol") { lastLiveMove = nowE; sendOp([moveOp(drag.fp, Math.round(drag.curMm[0] * IU), Math.round(drag.curMm[1] * IU))]); }
+    sendPresence(mm); return;
+  }
   if (!drag.moved && Math.hypot(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1]) > 0.4) drag.moved = true;
   if (!drag.moved) return;
   // Keep the grab offset, then snap the item's own anchor to the grid.
@@ -728,6 +737,13 @@ stage.addEventListener("pointerup", (ev) => {
   const modU = activeModule();
   if (modU && moduleTool(tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } return; }
   if (ev.button !== 0 || !drag) return;
+  if (drag.engine) {
+    const fpE = drag.fp, cur = drag.curMm; drag = null; dragG.replaceChildren();
+    if (CollabTools.sch.state.drag) { try { CollabTools.sch.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
+    sendPresence(cur, []);
+    if (kdoc) syncItemsFromDoc(); selected = items.find((f) => f.id === fpE.id) || selected; drawSelection(); renderProps(); requestRender();
+    return;
+  }
   const fp = drag.fp, wasMoved = drag.moved, wires = drag.wires || [];
   const nx = Math.round(drag.curMm[0] * IU), ny = Math.round(drag.curMm[1] * IU);
   drag = null; dragG.replaceChildren();
@@ -750,6 +766,7 @@ document.addEventListener("keydown", (ev) => {
   if (["TEXTAREA", "INPUT"].includes(ev.target.tagName) || state.view !== "editor") return;
   const k = ev.key;
   if (k === "Escape") { if ($("#popover").style.display === "block") { closePopover(); return; }
+    if (drag && drag.engine && CollabTools.sch && CollabTools.sch.cancelDrag) { try { CollabTools.sch.cancelDrag(toolCtx()); } catch (e) { console.warn(e); } }
     drag = null; selected = null; dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
   if (k === "f" || k === "F") { fitView(); return; }
   if (k === "+" || k === "=") { zoomBy(1.25); return; }
@@ -1151,6 +1168,7 @@ async function runAction(act, el) {
     case "fit": fitView(); break;
     case "grid": gridOn = !gridOn; updateGridStatus(); requestRender(); break;
     case "snap": snapOn = !snapOn; updateGridStatus(); break;
+    case "linemode": if (CollabTools.sch && CollabTools.sch.cycleLineMode) CollabTools.sch.cycleLineMode(toolCtx()); break;
     case "tab-appearance": showTab("appearance"); break;
     case "tab-props": showTab("props"); break;
     case "tab-peers": showTab("peers"); break;
