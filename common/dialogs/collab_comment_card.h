@@ -59,8 +59,11 @@ public:
     /// True when aPt (screen coords) is over the card, with a little slack.
     bool ContainsScreenPoint( const wxPoint& aPt ) const;
 
-    /// True while the reply box has focus or holds a draft — keep the card open.
+    /// True while a reply is being typed — keep the card open even off-pointer.
     bool HasFocusedInput() const;
+
+    /// Bring the card forward so its controls take the very next click.
+    void ActivateForPointer();
 
 private:
     void rebuild( const nlohmann::json& aComments );
@@ -77,6 +80,9 @@ private:
 
     wxPanel*    m_panel = nullptr;
     wxBoxSizer* m_sizer = nullptr;
+    class wxScrolledWindow* m_thread = nullptr;
+    wxBoxSizer* m_threadSizer = nullptr;
+    bool        m_raised = false;
     wxTextCtrl* m_input = nullptr;
     wxButton*   m_resolveBtn = nullptr;
 
