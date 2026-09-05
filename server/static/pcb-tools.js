@@ -2,8 +2,8 @@
 // interactions: route (X) with KiCad's 45° posture, via (V), active layer
 // (PgUp/PgDn), rotate (R) / flip (F) of the selected footprint, selection and
 // delete of tracks, vias and graphics, expand to the connected run (U), drag a
-// segment (D), width cycling (W), graphic line/rect/circle (Shift+L/R/C) and
-// text (T).
+// segment (D), width cycling (W), graphic line/rect/circle/arc/polygon
+// (Shift+L/R/C, Ctrl+Shift+A/P), text (T) and KiCad's interactive delete tool.
 //
 // Registers on window.CollabTools.pcb.  The geometry and node builders touch no
 // DOM and are exported as PcbTools on the global so the node test can drive
@@ -13,7 +13,9 @@
 
 let K = root.KiCadCanvas;                 // re-bound from ctx.K on every hook
 const WIDTHS = [0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
-const HL = "#FFB43A", VIA = "#ECECEC";
+const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
+// KiCad's delete cursor: a small bin with a crosshair hotspot
+const DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
 const SNAP_MM = 0.5, HIT_MM = 0.2, DBL_MS = 400;
 // The desktop applier only parses kicad_pcb documents (a bare item takes the
 // legacy-format branches), so every fragment travels wrapped.  The version is
@@ -79,6 +81,9 @@ const strokeNode = (w) => ["stroke", ["width", r6(w)], ["type", "default"]];
 function lineNode(a, b, layer) { return ["gr_line", ["start", r6(a[0]), r6(a[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["layer", layer]]; }
 function rectNode(a, b, layer) { return ["gr_rect", ["start", r6(a[0]), r6(a[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
 function circleNode(c, e, layer) { return ["gr_circle", ["center", r6(c[0]), r6(c[1])], ["end", r6(e[0]), r6(e[1])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
+// PCB_IO_KICAD_SEXPR::format(PCB_SHAPE): start/mid/end, stroke, (fill only for closed shapes), layer, then the uuid
+function arcNode(a, m, b, layer) { return ["gr_arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["layer", layer]]; }
+function polyNode(pts, layer) { return ["gr_poly", ["pts", ...pts.map((p) => ["xy", r6(p[0]), r6(p[1])])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
 function textNode(text, x, y, layer) {
   const eff = ["effects", ["font", ["size", 1, 1], ["thickness", 0.15]]];
   if (/^B\./.test(layer)) eff.push(["justify", "mirror"]);   // back-side text reads mirrored, like KiCad's
@@ -427,15 +432,53 @@ function finishDrag(ctx) {
   if (d && Math.abs(d.off) > 1e-6) ctx.commit(dragNodes(d, d.off).map(({ item, node }) => replacedChange(item, node)), "drag track");
   ctx.setTool("select");
 }
+// S.draw = { shape, start, cur, pts }: line/rect/circle take two clicks, an arc its start, end and
+// then a point on the arc, a polygon any number of corners until the first corner is clicked again
+// (or the last one twice, or Enter).
 function drawClick(ctx, hv, t) {
   const p = [hv.x, hv.y], layer = S.gfxLayer;
-  if (!S.draw) { S.draw = { shape: t, start: p, cur: p.slice() }; ctx.requestRender(); return; }
+  if (!S.draw) { S.draw = { shape: t, start: p, cur: p.slice(), pts: [p] }; ctx.requestRender(); return; }
   const d = S.draw;
+  if (t === "garc") {
+    if (d.pts.length === 1) { if (!samePt(p, d.start)) d.pts.push(p); ctx.requestRender(); return; }
+    const [a, b] = d.pts;
+    if (samePt(p, a) || samePt(p, b) || !K.arcFrom3(a, p, b)) { ctx.toast("Click a point on the arc, off the line between its ends"); return; }
+    ctx.commit([addedChange(ctx.doc, arcNode(a, p, b, layer))], "arc");
+    S.draw = null; ctx.requestRender(); return;
+  }
+  if (t === "gpoly") {
+    if (samePt(p, d.pts[0]) || samePt(p, d.pts[d.pts.length - 1])) finishPoly(ctx);
+    else { d.pts.push(p); ctx.requestRender(); }
+    return;
+  }
   if (samePt(p, d.start)) { S.draw = null; ctx.requestRender(); return; }   // clicking the start again ends the chain
   const node = t === "gline" ? lineNode(d.start, p, layer) : t === "grect" ? rectNode(d.start, p, layer) : circleNode(d.start, p, layer);
   ctx.commit([addedChange(ctx.doc, node)], t === "gline" ? "line" : t === "grect" ? "rectangle" : "circle");
-  S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice() } : null;   // lines chain like KiCad's polyline drawing
+  S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice(), pts: [p] } : null;   // lines chain like KiCad's polyline drawing
   ctx.requestRender();
+}
+function finishPoly(ctx) {
+  const d = S.draw; if (!d || d.shape !== "gpoly") return;
+  S.draw = null;
+  if (d.pts.length < 3) ctx.toast("A polygon needs at least three corners");
+  else ctx.commit([addedChange(ctx.doc, polyNode(d.pts, S.gfxLayer))], "polygon");
+  ctx.requestRender();
+}
+/** The delete tool's click: a track / via / graphic under the cursor first, else the footprint app.js would pick. */
+function itemAt(ctx, mm) {
+  const doc = ctx.doc, [x, y] = mm;
+  const it = hitTestItem(doc, x, y, HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1)); if (it) return it;
+  const id = K.hitTest(doc, x, y, Math.min(5 / Math.max(1, (ctx.zoom || 1) * 0.6), 0.5));
+  return id ? doc.items.get(id) || null : null;
+}
+function deleteAt(ctx, mm) {
+  const it = itemAt(ctx, mm); if (!it) return null;
+  S.sel.delete(it.id); if (S.hover) S.hover.del = null;
+  if (ctx.selected && ctx.selected.id === it.id) ctx.setSelected(null);
+  ctx.commit([removedChange(it)], "delete");
+  ctx.toast(`Deleted ${it.kind === "footprint" ? (it.ref || "footprint") : it.kind.replace(/^gr_/, "")}`);
+  ctx.requestRender();
+  return it;
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
 function cancelOps() { S.route = null; S.draw = null; S.drag = null; closeTextPrompt(); }
@@ -492,9 +535,14 @@ function onStagePointerDown(ev) {
   ctx.requestRender();
 }
 function onCaptureKey(ev) {
-  if (!isPcbDoc() || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (!isPcbDoc() || ev.metaKey || ev.altKey) return;
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   const k = ev.key;
+  if (ev.ctrlKey) {
+    const ctrlRemap = ev.shiftKey && (k === "A" || k === "a") ? "Arc" : ev.shiftKey && (k === "P" || k === "p") ? "Polygon" : null;
+    if (ctrlRemap) { ev.stopImmediatePropagation(); ev.preventDefault(); document.dispatchEvent(new KeyboardEvent("keydown", { key: ctrlRemap, bubbles: true, cancelable: true })); }
+    return;
+  }
   if (k === "Escape") {
     if (S.route || S.draw || S.drag || S.text) {   // first Escape only cancels the operation, KiCad style; the next one leaves the tool
       cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
@@ -563,7 +611,21 @@ function drawOverlay(c, view, ctx) {
     const d = S.draw; c.globalAlpha = 0.85; c.strokeStyle = color(S.gfxLayer); c.lineWidth = Math.max(gfxWidth(S.gfxLayer), 1.5 * px);
     if (d.shape === "gline") line(c, d.start, d.cur);
     else if (d.shape === "grect") c.strokeRect(Math.min(d.start[0], d.cur[0]), Math.min(d.start[1], d.cur[1]), Math.abs(d.cur[0] - d.start[0]), Math.abs(d.cur[1] - d.start[1]));
-    else ring(c, d.start, Math.hypot(d.cur[0] - d.start[0], d.cur[1] - d.start[1]));
+    else if (d.shape === "garc") {
+      const a = d.pts.length > 1 ? K.arcFrom3(d.pts[0], d.cur, d.pts[1]) : null;
+      if (a) { c.beginPath(); c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise); c.stroke(); } else line(c, d.start, d.pts.length > 1 ? d.pts[1] : d.cur);
+      if (d.pts.length > 1) { c.setLineDash([2 * px, 2 * px]); line(c, d.pts[0], d.pts[1]); c.setLineDash([]); }
+    } else if (d.shape === "gpoly") {
+      c.beginPath(); c.moveTo(d.pts[0][0], d.pts[0][1]); for (let i = 1; i < d.pts.length; i++) c.lineTo(d.pts[i][0], d.pts[i][1]); c.lineTo(d.cur[0], d.cur[1]); c.stroke();
+      if (d.pts.length > 1) { c.setLineDash([2 * px, 2 * px]); line(c, d.cur, d.pts[0]); c.setLineDash([]); }
+    } else ring(c, d.start, Math.hypot(d.cur[0] - d.start[0], d.cur[1] - d.start[1]));
+    if (d.pts) { c.fillStyle = HL; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
+  }
+  // delete tool: what the click would remove
+  if (S.modTool === "delete" && S.hover && S.hover.del) {
+    const it = S.hover.del; c.globalAlpha = 0.9; c.strokeStyle = DEL;
+    if (it.kind === "footprint" || it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") { const b = it.bbox; if (b) { c.lineWidth = 1.5 * px; c.setLineDash([4 * px, 3 * px]); c.strokeRect(b[0] - 0.2, b[1] - 0.2, b[2] - b[0] + 0.4, b[3] - b[1] + 0.4); c.setLineDash([]); } }
+    else for (const g of it.geom) { if (it.kind === "zone" && g.fill) continue; c.lineWidth = (g.w || 0) + 3 * px; strokeGeom(c, g); }
   }
   // cursor: the via about to be placed, and the magnetic snap marker
   const hv = S.hover;
@@ -583,10 +645,15 @@ const TOOLS = [
   { id: "grect", label: "Draw rectangle", key: "Shift+R", cursor: "crosshair", icon: '<rect x="4" y="6" width="16" height="12" rx="1"/>' },
   { id: "gcircle", label: "Draw circle", key: "Shift+C", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="8"/>' },
   { id: "gtext", label: "Add text", key: "T", cursor: "text", icon: '<path d="M6 6h12M12 6v13M9 19h6"/>' },
+  { id: "garc", label: "Draw arc", key: "Ctrl+Shift+A", cursor: "crosshair", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
+  { id: "gpoly", label: "Draw polygon", key: "Ctrl+Shift+P", cursor: "crosshair", icon: '<path d="M12 3l9 7-4 11H7L3 10z"/>' },
+  { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
 ];
 const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V via, W width, PgUp/PgDn layer, Enter or double-click to end",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
-  grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes" };
+  grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
+  garc: "Arc — click the start, the end, then a point on the arc", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
+  delete: "Delete — click an item to remove it; Esc to leave the tool" };
 
 const pcb = {
   id: "pcb", tools: TOOLS, state: S,
@@ -608,12 +675,14 @@ const pcb = {
     else if (t === "via") placeVia(ctx, hv);
     else if (t === "drag") finishDrag(ctx);
     else if (t === "gtext") openTextPrompt(ctx, ev, [hv.x, hv.y]);
+    else if (t === "delete") deleteAt(ctx, mm);   // an empty click is ours too: the tool stays armed
     else drawClick(ctx, hv, t);
     return true;
   },
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     const hv = hoverPoint(ctx, mm, t === "route" || t === "via"); S.hover = hv;
+    if (t === "delete") hv.del = ctx.viewOnly ? null : itemAt(ctx, mm);
     if (S.route) S.route.target = [hv.x, hv.y];
     if (S.drag) dragMove(ctx, mm);
     if (S.draw) S.draw.cur = [hv.x, hv.y];
@@ -634,6 +703,8 @@ const pcb = {
       // fall through: plain R (caps lock) rotates like r
     case "r": return editing() && rotateSelected(ctx);   // false lets app.js's orientation-only fallback run when nothing applies
     case "Circle": ctx.setTool("gcircle"); return true;
+    case "Arc": ctx.setTool("garc"); return true;
+    case "Polygon": ctx.setTool("gpoly"); return true;
     case "Flip": return editing() && flipSelected(ctx);
     case "/": if (S.route) { S.route.diagFirst = !S.route.diagFirst; ctx.requestRender(); return true; } return false;
     case "PageUp": setLayer(ctx, "F.Cu"); return true;
@@ -642,10 +713,13 @@ const pcb = {
     case "w": case "W": if (editing()) cycleWidth(ctx); return true;
     case "Enter":
       if (S.route) { if (editing()) endRoute(ctx, true); return true; }
-      if (S.draw) { S.draw = null; ctx.requestRender(); return true; }
+      if (S.draw) { if (S.draw.shape === "gpoly") { if (editing()) finishPoly(ctx); } else { S.draw = null; ctx.requestRender(); } return true; }
       if (S.drag) { if (editing()) finishDrag(ctx); return true; }
       return false;
-    case "Delete": case "Backspace": if (!S.sel.size) return false; if (editing()) deleteSelection(ctx); return true;
+    case "Backspace":
+      if (S.draw && S.draw.shape === "gpoly") { if (S.draw.pts.length > 1) S.draw.pts.pop(); else S.draw = null; ctx.requestRender(); return true; }
+      // fall through: with nothing being drawn Backspace deletes like Delete
+    case "Delete": if (!S.sel.size) return false; if (editing()) deleteSelection(ctx); return true;
     default: return false;
     }
   },
@@ -664,7 +738,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, textNode, netOf, netNode, netStyle,
-  wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, connectedRun, rotateFootprintNode, flipFootprintNode,
-  flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360 };
+root.PcbTools = { state: S, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+  wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
+  flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360, DELETE_CURSOR };
 })(typeof window !== "undefined" ? window : globalThis);

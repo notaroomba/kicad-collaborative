@@ -1,7 +1,9 @@
 // sch-tools.js — schematic editing tools for the web editor: wires and buses with
 // KiCad's 90° routing and automatic junctions, bus entries, no-connects, labels,
-// text, symbol placement, rotate / mirror / duplicate, wire-segment drag and
-// delete of the non-symbol items app.js does not select itself.
+// text, symbol and power-symbol placement, directive labels, graphic shapes
+// (rectangle, circle, arc, lines, text box), rotate / mirror / duplicate,
+// wire-segment drag, KiCad's interactive delete tool and delete of the
+// non-symbol items app.js does not select itself.
 //
 // Registers on window.CollabTools.sch; app.js drives the hooks documented at its
 // "editing tools" seam.  Edits are whole-item changes built from a *cloned* node,
@@ -17,6 +19,10 @@ const CLR = { wire: "#009600", bus: "#0000C2", sel: "#FFB43A", hover: "#4D7FC4" 
 const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
 const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
 const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
+const SHAPE_KINDS = new Set(["rectangle", "circle", "arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
+const DRAW_TOOLS = new Set(["rect", "circle", "arc", "lines", "textbox"]);
+// KiCad's delete cursor: a small bin with a crosshair hotspot
+const DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
 const TOOLS = [
   { id: "wire", label: "Wire", key: "W", kind: "wire", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10"/>' },
   { id: "bus", label: "Bus", key: "B", kind: "bus", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10" stroke-width="3.2"/>' },
@@ -28,13 +34,21 @@ const TOOLS = [
   { id: "hlabel", label: "Hierarchical label", key: "Shift+H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
   { id: "text", label: "Text", key: "T", kind: "text", cursor: "crosshair", icon: '<path d="M5 6h14M12 6v13M9 19h6"/>' },
   { id: "place", label: "Place symbol", key: "A", cursor: "crosshair", icon: '<rect x="7" y="5" width="10" height="14"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
+  { id: "power", label: "Power symbol", key: "P", cursor: "crosshair", icon: '<path d="M12 21v-9M6 12h12M12 12l-5-7M12 12l5-7"/>' },
+  { id: "classlabel", label: "Directive label", key: "", cursor: "crosshair", icon: '<path d="M4 20l8-8"/><circle cx="14" cy="10" r="2.5"/><path d="M15 4h6v3h-6z"/>' },
+  { id: "lines", label: "Lines", key: "I", cursor: "crosshair", icon: '<path d="M3 20l6-10 5 6 7-12"/>' },
+  { id: "rect", label: "Rectangle", key: "", cursor: "crosshair", icon: '<rect x="4" y="6" width="16" height="12"/>' },
+  { id: "circle", label: "Circle", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="8"/>' },
+  { id: "arc", label: "Arc", key: "", cursor: "crosshair", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
+  { id: "textbox", label: "Text box", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M8 9h8M12 9v7"/>' },
+  { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
 ];
 const toolOf = (id) => TOOLS.find((t) => t.id === id) || null;
 
 // Module state: one in-progress operation at a time, plus a selection of our own
 // for the items app.js's select tool ignores (everything but symbols).
 const S = { ctx: null, tool: "select", wire: null, carry: null, drag: null, pending: null, sel: null, hover: null,
-  cursor: null, cursorClient: null, prompt: null, picker: null, dom: false };
+  cursor: null, cursorClient: null, prompt: null, picker: null, dom: false, draw: null };
 
 // ---------------------------------------------------------------- small helpers
 const deep = (n) => JSON.parse(JSON.stringify(n));
@@ -79,6 +93,34 @@ function labelNode(kind, text, p, rot) {
   // KiCad always stores the intersheet-refs field on global labels
   if (kind === "global_label") n.push(["property", "Intersheetrefs", "${INTERSHEET_REFS}", ["at", r4(p[0]), r4(p[1]), 0], ["hide", "yes"], ["effects", fontNode(1.27), ["justify", "left"]]]);
   return n;
+}
+// Sheet-level graphic shapes (sch_io_kicad_sexpr_common.cpp formatRect/Circle/Arc/Poly): stroke, fill, then the uuid.
+const stroke0 = () => ["stroke", ["width", 0], ["type", "default"]];
+const fillNone = () => ["fill", ["type", "none"]];
+const xy = (p) => ["xy", r4(p[0]), r4(p[1])];
+function corners(a, b) { return [r4(Math.min(a[0], b[0])), r4(Math.min(a[1], b[1])), r4(Math.max(a[0], b[0])), r4(Math.max(a[1], b[1]))]; }
+function rectangleNode(a, b) { const [x0, y0, x1, y1] = corners(a, b); return ["rectangle", ["start", x0, y0], ["end", x1, y1], stroke0(), fillNone()]; }
+function circleNode(c, r) { return ["circle", ["center", r4(c[0]), r4(c[1])], ["radius", r4(r)], stroke0(), fillNone()]; }
+function arcNode(a, m, b) { return ["arc", ["start", r4(a[0]), r4(a[1])], ["mid", r4(m[0]), r4(m[1])], ["end", r4(b[0]), r4(b[1])], stroke0(), fillNone()]; }
+function polylineNode(pts) { return ["polyline", ["pts", ...pts.map(xy)], stroke0(), fillNone()]; }
+// SCH_TEXTBOX: (at) is the top-left corner, (size) the extent; margins default to stroke/2 + 0.75 × text size.
+const TEXTBOX_MARGIN = r4(1.27 * 0.75);
+function textBoxNode(text, a, b) {
+  const [x0, y0, x1, y1] = corners(a, b);
+  return ["text_box", text, ["exclude_from_sim", "no"], ["at", x0, y0, 0], ["size", r4(x1 - x0), r4(y1 - y0)], ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN],
+    stroke0(), fillNone(), ["effects", fontNode(1.27), ["justify", "left", "top"]]];
+}
+// Directive label (netclass flag) with its Netclass field where SCH_DIRECTIVE_LABEL::AutoplaceFields puts it
+// for the spin style of the angle: symbol size 20 mil + text offset (0.15 × size) beside the pin-length flag.
+const FLAG_LENGTH = 2.54, FLAG_SYMBOL = 0.508, FLAG_MARGIN = r4(0.15 * 1.27);
+function classLabelNode(name, p, rot) {
+  rot = ((Math.round(rot || 0) % 360) + 360) % 360;
+  const off = rot === 180 ? [FLAG_SYMBOL + FLAG_MARGIN, FLAG_LENGTH] : rot === 90 ? [-FLAG_LENGTH, -(FLAG_SYMBOL + FLAG_MARGIN)]
+    : rot === 270 ? [FLAG_LENGTH, -(FLAG_SYMBOL + FLAG_MARGIN)] : [FLAG_SYMBOL + FLAG_MARGIN, -FLAG_LENGTH];
+  const fieldRot = rot === 90 || rot === 270 ? 90 : 0;
+  return ["netclass_flag", "", ["length", FLAG_LENGTH], ["shape", "round"], ["at", r4(p[0]), r4(p[1]), rot], ["fields_autoplaced", "yes"],
+    ["effects", fontNode(1.27), ["justify", "left", "bottom"]], ["uuid", K.newUuid()],
+    ["property", "Netclass", name, ["at", r4(p[0] + off[0]), r4(p[1] + off[1]), fieldRot], ["effects", fontNode(1.27), ["justify", "left", "bottom"]]]];
 }
 const MANDATORY = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
 function symbolNode(doc, libId, p, rot, mirror) {
@@ -152,10 +194,16 @@ function mirrorNode(kind, node, axis) {
   }
   return false;
 }
-function anchorOf(kind, node) { if (LINE_KINDS.has(kind)) { const p = ptsOf(node); return p[0] || [0, 0]; } const [x, y] = atOf(node); return [x, y]; }
+const SHAPE_POINTS = { rectangle: ["start", "end"], circle: ["center"], arc: ["start", "mid", "end"] };
+function anchorOf(kind, node) {
+  if (LINE_KINDS.has(kind)) { const p = ptsOf(node); return p[0] || [0, 0]; }
+  if (SHAPE_KINDS.has(kind)) { const k = kid(node, SHAPE_POINTS[kind][0]); return k ? [num(k[1]), num(k[2])] : [0, 0]; }
+  const [x, y] = atOf(node); return [x, y];
+}
 function shiftNode(kind, node, dx, dy) {
   if (!dx && !dy) return;
   if (LINE_KINDS.has(kind)) { setPts(node, ptsOf(node).map(([x, y]) => [x + dx, y + dy])); return; }
+  if (SHAPE_KINDS.has(kind)) { for (const key of SHAPE_POINTS[kind]) { const k = kid(node, key); if (k) { k[1] = r4(num(k[1]) + dx); k[2] = r4(num(k[2]) + dy); } } return; }
   const [x, y] = atOf(node); setAt(node, r4(x + dx), r4(y + dy));
   for (const pr of kids(node, "property")) { const a = kid(pr, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
   if (kind === "sheet") for (const pin of kids(node, "pin")) { const a = kid(pin, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
@@ -278,7 +326,8 @@ function startCarry(ctx, kind, node, mm) {
 }
 function placeCarry(ctx, mm) {
   const c = S.carry; if (!c) return;
-  const p = c.kind === "symbol" || TEXT_KINDS.has(c.kind) ? ctx.snap([mm[0], mm[1]]).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire");
+  const gridOnly = c.kind === "symbol" || TEXT_KINDS.has(c.kind) || SHAPE_KINDS.has(c.kind) || c.kind === "text_box" || c.kind === "netclass_flag";
+  const p = gridOnly ? ctx.snap([mm[0], mm[1]]).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire");
   if (c.pos && same(c.pos, p)) return;
   const a = anchorOf(c.kind, c.node); shiftNode(c.kind, c.node, r4(p[0] - a[0]), r4(p[1] - a[1]));
   c.pos = p; c.item = ghost(ctx.doc, c.node); ctx.requestRender();
@@ -319,11 +368,24 @@ function textRect(item) {
   return [Math.min(...c.map((q) => q[0])), Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[0])), Math.max(...c.map((q) => q[1]))];
 }
 function rectOf(item) { return TEXT_KINDS.has(item.kind) ? textRect(item) : item.bbox || (() => { const [x, y] = atOf(item.node); return [x - 0.6, y - 0.6, x + 0.6, y + 0.6]; })(); }
+const boxDist = (b, x, y) => b ? Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0) : Infinity;
+function inSweep(t, g) { const n = (v) => ((v % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); return g.anticlockwise ? n(g.a0 - t) <= n(g.a0 - g.a1) : n(t - g.a0) <= n(g.a1 - g.a0); }
+/** Distance from (x, y) to a canvas geometry's stroke (shapes are picked by their outline, like KiCad). */
+function geomDist(g, x, y) {
+  if (g.t === "line") return segDist([x, y], [g.x1, g.y1], [g.x2, g.y2]);
+  if (g.t === "poly") { const n = g.pts.length; if (n < 2) return Infinity; let d = Infinity; for (let i = 0; i < (g.close ? n : n - 1); i++) d = Math.min(d, segDist([x, y], g.pts[i], g.pts[(i + 1) % n])); return d; }
+  if (g.t === "circle") return Math.abs(Math.hypot(x - g.x, y - g.y) - g.r);
+  if (g.t === "arc") return inSweep(Math.atan2(y - g.y, x - g.x), g) ? Math.abs(Math.hypot(x - g.x, y - g.y) - g.r) : Infinity;
+  if (g.t === "rect") return boxDist([g.x, g.y, g.x + g.w, g.y + g.h], x, y);
+  return Infinity;
+}
 function hitNonSymbol(doc, x, y, tol) {
   let best = null, bd = Infinity;
   for (const it of doc.items.values()) {
     let d;
     if (LINE_KINDS.has(it.kind)) { d = Infinity; for (const [a, b] of segs(it)) d = Math.min(d, segDist([x, y], a, b)); d += 0.01; }   // small things on a line win ties
+    else if (SHAPE_KINDS.has(it.kind)) { d = Infinity; for (const g of it.geom) if (!g.noStroke) d = Math.min(d, geomDist(g, x, y)); d += 0.01; }
+    else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label") d = boxDist(it.bbox, x, y);
     else if (it.kind === "bus_entry") { const [ax, ay] = atOf(it.node), s = kid(it.node, "size"); d = segDist([x, y], [ax, ay], [ax + (s ? num(s[1]) : 2.54), ay + (s ? num(s[2]) : 2.54)]); }
     else if (it.kind === "junction" || it.kind === "no_connect") { const [ax, ay] = atOf(it.node); d = Math.max(0, Math.hypot(ax - x, ay - y) - 0.6); }
     else if (TEXT_KINDS.has(it.kind)) { const b = textRect(it); d = Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0); }
@@ -338,6 +400,12 @@ function pickNonSymbol(ctx, mm) {
   const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
   if (symId && !LINE_KINDS.has(hit.kind)) { const sym = ctx.doc.items.get(symId); if (sym && area(sym.bbox) < area(rectOf(hit))) return null; }
   return hit;
+}
+// Anything under the cursor: our own items first, then the symbols and sheets app.js selects (K.hitTest).
+function pickAny(ctx, mm) {
+  const hit = pickNonSymbol(ctx, mm); if (hit) return hit;
+  const id = K.hitTest(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx)));
+  return id ? ctx.doc.items.get(id) || null : null;
 }
 
 // ---------------------------------------------------------------- drag (KiCad's "drag": attached ends stretch)
@@ -605,18 +673,39 @@ function orientSelected(ctx, op) {
   ctx.commit([modChange(ctx.doc, it, node)], op === "x" || op === "y" ? "mirror" : "rotate");
   return true;
 }
+// Removal of one item plus the junctions that only existed for it: a line's own points, or the
+// connection points (pins, ends, anchors) of anything else — SCH_EDIT_TOOL::DoDelete's junction pass.
+function deleteChanges(doc, it) {
+  const changes = [K.removeChange(it)];
+  const line = LINE_KINDS.has(it.kind), pts = line ? ptsOf(it.node) : connPoints(doc, it);
+  if (!pts.length) return changes;
+  doc.items.delete(it.id);
+  try {
+    for (const p of pts) {
+      const j = junctionAt(doc, p[0], p[1]); if (!j || changes.some((c) => c.id === j.id)) continue;
+      const needed = line ? needsJunction(doc, p[0], p[1], it.kind) : needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus");
+      if (!needed) changes.push(K.removeChange(j));
+    }
+  } finally { doc.items.set(it.id, it); }
+  return changes;
+}
 function deleteSelected(ctx) {
   const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it) return false;
-  const doc = ctx.doc, changes = [K.removeChange(it)];
-  if (LINE_KINDS.has(it.kind)) {                 // junctions that only existed for this line go too
-    doc.items.delete(it.id);
-    for (const p of ptsOf(it.node)) { const j = junctionAt(doc, p[0], p[1]); if (j && !needsJunction(doc, p[0], p[1], it.kind) && !changes.some((c) => c.id === j.id)) changes.push(K.removeChange(j)); }
-    doc.items.set(it.id, it);
-  }
+  const changes = deleteChanges(ctx.doc, it);
   S.sel = null; S.hover = null;
   ctx.commit(changes, "delete");
   ctx.requestRender();
   return true;
+}
+// The delete tool's click: whatever is under the cursor goes (symbols and sheets included).
+function deleteAt(ctx, mm) {
+  const it = pickAny(ctx, mm); if (!it) return null;
+  const changes = deleteChanges(ctx.doc, it);
+  S.sel = null; S.hover = null;
+  if (ctx.selected && ctx.selected.id === it.id) ctx.setSelected(null);
+  ctx.commit(changes, "delete");
+  ctx.requestRender();
+  return it;
 }
 function duplicateSelected(ctx) {
   const it = selectedItem(ctx); if (!it || it.kind === "sheet") return false;
@@ -652,18 +741,31 @@ let promptImpl = function (title, initial, client, done) {
   placePanel(box, client); S.ctx.stage.appendChild(box); S.prompt = box; inp.focus(); inp.select();
 };
 function closePrompt() { if (S.prompt) { S.prompt.remove(); S.prompt = null; } }
-function openPicker(ctx, client) {
+// A library symbol counts as a power symbol the way KiCad's chooser filters them: the (power) flag,
+// the power: library, or a #PWR / #FLG reference.
+function isPowerSymbol(doc, name) {
+  const lib = K.resolveLib(doc, name) || doc.lib.get(name); if (!lib) return false;
+  if (kid(lib, "power")) return true;
+  if (/^power:/i.test(name)) return true;
+  const ref = kids(lib, "property").find((p) => str(p[1]) === "Reference"); const v = ref ? str(ref[2]) : "";
+  return v === "#PWR" || v === "#FLG";
+}
+function powerSymbols(doc) { return Array.from(doc.lib.keys()).filter((n) => isPowerSymbol(doc, n)).sort((a, b) => a.localeCompare(b)); }
+// Chosen from the picker (or by a test): the symbol rides on the cursor until the click.
+function pickSymbol(ctx, name) { closePicker(); startCarry(ctx, "symbol", symbolNode(ctx.doc, name, S.cursor || [0, 0], 0, ""), S.cursor); }
+function openPicker(ctx, client, opts) {
   if (!hasDom()) return; closePicker();
-  const names = Array.from(ctx.doc.lib.keys()).sort((a, b) => a.localeCompare(b));
+  opts = opts || {};
+  const names = opts.names || Array.from(ctx.doc.lib.keys()).sort((a, b) => a.localeCompare(b));
   const box = el("div", PANEL_CSS + "width:260px;padding:6px;display:flex;flex-direction:column;gap:6px;");
-  const head = el("div", "display:flex;gap:6px;align-items:center"); head.appendChild(el("span", "color:var(--ink-2,#666);white-space:nowrap", "Place symbol"));
+  const head = el("div", "display:flex;gap:6px;align-items:center"); head.appendChild(el("span", "color:var(--ink-2,#666);white-space:nowrap", opts.title || "Place symbol"));
   const inp = el("input", INPUT_CSS + "flex:1;min-width:0"); inp.placeholder = "filter…"; inp.spellcheck = false; head.appendChild(inp); box.appendChild(head);
   const list = el("div", "max-height:240px;overflow:auto;border-top:1px solid var(--line,#ccc)"); box.appendChild(list);
-  const pick = (name) => { closePicker(); startCarry(ctx, "symbol", symbolNode(ctx.doc, name, S.cursor || [0, 0], 0, ""), S.cursor); };
+  const pick = (name) => pickSymbol(ctx, name);
   const fill = () => {
     const q = inp.value.trim().toLowerCase(); list.replaceChildren();
     const shown = names.filter((n) => !q || n.toLowerCase().includes(q));
-    if (!shown.length) list.appendChild(el("div", "padding:6px 8px;color:var(--ink-2,#666)", names.length ? "No match" : "This sheet has no library symbols yet"));
+    if (!shown.length) list.appendChild(el("div", "padding:6px 8px;color:var(--ink-2,#666)", names.length ? "No match" : opts.empty || "This sheet has no library symbols yet"));
     for (const n of shown.slice(0, 200)) {
       const row = el("div", "padding:3px 8px;cursor:pointer;font:12px var(--mono,ui-monospace,monospace);white-space:nowrap;overflow:hidden;text-overflow:ellipsis", n);
       row.title = n; row.addEventListener("mouseenter", () => row.style.background = "var(--paper,#f5f4ef)"); row.addEventListener("mouseleave", () => row.style.background = "");
@@ -676,6 +778,14 @@ function openPicker(ctx, client) {
   fill(); placePanel(box, client); ctx.stage.appendChild(box); S.picker = box; inp.focus();
 }
 function closePicker() { if (S.picker) { S.picker.remove(); S.picker = null; } }
+const NO_POWER = "This sheet's library has no power symbols yet — place one from the desktop first";
+// The power tool's picker: only power symbols; with none in the sheet library the tool stays armed and says so.
+function openPowerPicker(ctx, client) {
+  const names = powerSymbols(ctx.doc);
+  if (!names.length) { ctx.toast(NO_POWER, 3500); return false; }
+  openPicker(ctx, client, { title: "Place power symbol", names, empty: NO_POWER });
+  return true;
+}
 function schActive() { return typeof document === "undefined" || !!document.querySelector('#ltools [data-modtool="wire"]'); }
 function curTool() { if (typeof document !== "undefined") { const b = document.querySelector("#ltools .tb.on"); if (b) return b.dataset.modtool || b.dataset.tool || S.tool; } return S.tool; }
 // app.js owns the stage events; capture-phase listeners let this module see the clicks the
@@ -714,7 +824,8 @@ function onMoveCapture(ev) {
     if (Math.hypot(mm[0] - S.pending.mm[0], mm[1] - S.pending.mm[1]) > 0.4) { const p = S.pending; S.pending = null; if (beginDrag(ctx, p.item, p.mm, true)) moveDrag(ctx, mm); }
     return;
   }
-  if (curTool() !== "select") { if (S.hover) { S.hover = null; ctx.requestRender(); } return; }
+  const tool = curTool();
+  if (tool !== "select") { if (S.hover && tool !== "delete") { S.hover = null; ctx.requestRender(); } return; }   // the delete tool keeps its own hover
   const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm), id = hit ? hit.id : null;
   if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
 }
@@ -728,7 +839,7 @@ function onKeyCapture(ev) {
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA") return;
   if (ev.key === "Escape") {
     let took = true;
-    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) finishWire(ctx);
+    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) finishWire(ctx); else if (S.draw) cancelDraw(ctx);
     else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
@@ -741,6 +852,63 @@ function promptFor(ctx, kind, mm, client) {
   const p = ctx.snap([mm[0], mm[1]]).map(r4);
   const title = kind === "text" ? "Text" : kind === "label" ? "Net label" : kind === "global_label" ? "Global label" : "Hierarchical label";
   promptImpl(title, "", client, (text) => { if (text) placeText(ctx, kind, text, p, 0); });
+}
+// Directive label: the netclass name comes from the inline prompt, the flag lands on the grid point clicked.
+function promptClassLabel(ctx, mm, client) {
+  const p = ctx.snap([mm[0], mm[1]]).map(r4);
+  promptImpl("Netclass", "", client, (name) => { if (name) placeClassLabel(ctx, name, p, 0); });
+}
+function placeClassLabel(ctx, name, p, rot) {
+  const doc = ctx.doc; const { item, change } = addNode(doc, classLabelNode(name, p, rot || 0));
+  ctx.commit([change], "directive label");
+  S.sel = item.id; ctx.setSelected(null); ctx.requestRender();
+  return item;
+}
+
+// ---------------------------------------------------------------- graphic shapes (KiCad's two/three-click drawing)
+// S.draw = { shape, pts (fixed clicks), cur (cursor) }: rect and textbox take two corners, circle its
+// centre then a radius point, arc its start, end and then a point on the arc, lines any number of
+// points until Enter, a double click or a click on the last point.
+function drawPoint(ctx, mm) { return ctx.snap([mm[0], mm[1]]).map(r4); }
+function startDraw(ctx, shape, p) { S.draw = { shape, pts: [p], cur: p.slice() }; ctx.requestRender(); }
+function cancelDraw(ctx) { S.draw = null; closePrompt(); ctx.requestRender(); }
+function undoDrawPoint(ctx) { const d = S.draw; if (!d) return; if (d.pts.length > 1) d.pts.pop(); else S.draw = null; ctx.requestRender(); }
+function drawClick(ctx, shape, p) {
+  const d = S.draw;
+  if (!d || d.shape !== shape) { startDraw(ctx, shape, p); return; }
+  d.cur = p.slice();
+  const last = d.pts[d.pts.length - 1];
+  if (shape === "lines") { if (same(p, last)) finishDraw(ctx); else { d.pts.push(p); ctx.requestRender(); } return; }
+  if (shape === "arc") {
+    if (d.pts.length === 1) { if (!same(p, last)) d.pts.push(p); ctx.requestRender(); return; }
+    if (!K.arcFrom3(d.pts[0], p, d.pts[1]) || same(p, d.pts[0]) || same(p, d.pts[1])) { ctx.toast("Click a point on the arc, off the line between its ends"); return; }
+    d.pts.push(p); finishDraw(ctx); return;
+  }
+  if (same(p, last)) return;                     // a zero-size shape is not a shape
+  d.pts.push(p); finishDraw(ctx);
+}
+function finishDraw(ctx) {
+  const d = S.draw; if (!d) return;
+  const doc = ctx.doc, pts = d.pts; let node = null, label = d.shape;
+  if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
+  else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
+  else if (d.shape === "arc") node = arcNode(pts[0], pts[2], pts[1]);
+  else if (d.shape === "lines") { const p = simplify(pts); if (p.length >= 2) node = polylineNode(p); label = "lines"; }
+  else if (d.shape === "textbox") {
+    // the box is fixed, the text comes from the inline prompt; Escape there drops the box
+    d.await = true; ctx.requestRender();
+    promptImpl("Text box", "", S.cursorClient, (text) => { if (S.draw !== d) return; S.draw = null; if (text) commitShape(ctx, textBoxNode(text, pts[0], pts[1]), "text box"); ctx.requestRender(); });
+    return;
+  }
+  S.draw = null;
+  if (node) commitShape(ctx, node, label);
+  ctx.requestRender();
+}
+function commitShape(ctx, node, label) {
+  const { item, change } = addNode(ctx.doc, node);
+  ctx.commit([change], label);
+  S.sel = item.id; ctx.setSelected(null);
+  return item;
 }
 
 // ---------------------------------------------------------------- overlay painting
@@ -787,12 +955,27 @@ function drawOverlay(c, view, ctx) {
     c.fillStyle = CLR.sel; const h = 3 * px; for (const p of w.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
     c.restore();
   }
+  const d = S.draw;
+  if (d) {
+    c.save(); c.strokeStyle = K.SCH.notes; c.lineWidth = Math.max(0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round"; c.globalAlpha = 0.85;
+    const cur = d.await ? d.pts[1] : d.cur, p0 = d.pts[0];
+    if (d.shape === "rect" || d.shape === "textbox") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
+    else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
+    else if (d.shape === "arc") {
+      const a = d.pts.length > 1 ? K.arcFrom3(p0, cur, d.pts[1]) : null;
+      c.beginPath();
+      if (a) c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise); else { c.moveTo(p0[0], p0[1]); c.lineTo(cur[0], cur[1]); }
+      c.stroke();
+    } else { c.beginPath(); c.moveTo(p0[0], p0[1]); for (let i = 1; i < d.pts.length; i++) c.lineTo(d.pts[i][0], d.pts[i][1]); c.lineTo(cur[0], cur[1]); c.stroke(); }
+    c.fillStyle = CLR.sel; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+    c.restore();
+  }
   if (S.carry && S.carry.item) {
     paint(c, S.carry.item, 0.65, px);
     const b = S.carry.item.bbox; if (b) { c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.strokeRect(b[0] - 0.3, b[1] - 0.3, b[2] - b[0] + 0.6, b[3] - b[1] + 0.6); c.restore(); }
   }
   const t = toolOf(S.tool);
-  if (t && S.cursor && !S.carry) {   // where the next click lands
+  if (t && S.cursor && !S.carry && t.id !== "delete") {   // where the next click lands
     const p = t.kind === "wire" || t.kind === "bus" ? snapConn(ctx, S.cursor, t.kind) : ctx.snap(S.cursor);
     c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; const h = 5 * px; c.strokeRect(p[0] - h, p[1] - h, 2 * h, 2 * h); c.restore();
   }
@@ -804,13 +987,15 @@ function onActivate(toolId, ctx) {
   S.tool = toolId;
   if (S.wire) finishWire(ctx);                    // leaving the wire tool keeps what was drawn
   closePrompt(); S.pending = null; if (S.drag) endDrag(ctx, false);
+  if (S.draw) S.draw = null;                      // an unfinished shape is dropped with its tool
   if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
   S.sel = null; S.hover = null;
-  if (toolId !== "place") S.carry = null;         // a carried duplicate rides into the place tool
+  if (toolId !== "place" && toolId !== "power") S.carry = null;   // a carried duplicate rides into the place tool
   if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "noconnect") startCarry(ctx, "no_connect", noConnectNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "busentry") startCarry(ctx, "bus_entry", busEntryNode(S.cursor || [0, 0], 2.54, 2.54), S.cursor);
   else if (toolId === "place" && !S.carry) openPicker(ctx, S.cursorClient);
+  else if (toolId === "power" && !S.carry) openPowerPicker(ctx, S.cursorClient);
   ctx.requestRender();
 }
 function onPointerDown(ev, mm, ctx) {
@@ -833,17 +1018,27 @@ function onPointerDown(ev, mm, ctx) {
     onActivate(t.id, ctx);                       // the tool stays armed with a fresh ghost
     return true;
   }
-  if (t.id === "place") {
+  if (t.id === "place" || t.id === "power") {
     if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); }
-    else openPicker(ctx, S.cursorClient);
+    else if (t.id === "place") openPicker(ctx, S.cursorClient);
+    else openPowerPicker(ctx, S.cursorClient);
     return true;
   }
+  if (t.id === "classlabel") { promptClassLabel(ctx, mm, S.cursorClient); return true; }
+  if (DRAW_TOOLS.has(t.id)) { if (S.draw && S.draw.await) return true; drawClick(ctx, t.id, drawPoint(ctx, mm)); return true; }
+  if (t.id === "delete") { deleteAt(ctx, mm); return true; }   // an empty click is ours too: the tool stays armed
   return false;
 }
 function onPointerMove(ev, mm, ctx) {
   S.ctx = ctx; S.cursor = mm; if (ev && ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
   if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind); if (!same(S.wire.cur, p)) { S.wire.cur = p; ctx.requestRender(); } return; }
   if (S.carry) { placeCarry(ctx, mm); return; }
+  if (S.draw && !S.draw.await) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { S.draw.cur = p; ctx.requestRender(); } return; }
+  if (S.tool === "delete") {                      // what the click would remove
+    const hit = ctx.viewOnly ? null : pickAny(ctx, mm), id = hit ? hit.id : null;
+    if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
+    return;
+  }
   if (toolOf(S.tool)) ctx.requestRender();        // cursor marker
 }
 function onPointerUp() { /* clicks are handled on pointerdown, drags in the capture hooks */ }
@@ -862,12 +1057,19 @@ function onKey(key, ev, ctx) {
     if (key === "Enter" || lower === "k") { finishWire(ctx); return true; }
     if (key === "Backspace") { undoLeg(ctx); return true; }
   }
+  if (S.draw && !S.draw.await) {
+    if (key === "Enter") { if (S.draw.shape === "lines" && S.draw.pts.length >= 2) finishDraw(ctx); else cancelDraw(ctx); return true; }
+    if (key === "Backspace") { undoDrawPoint(ctx); return true; }
+    if (key === "Escape") { cancelDraw(ctx); return true; }
+  }
   switch (key) {
   case "w": case "W": return armTool("wire", "wire");
   case "b": case "B": return armTool("bus", "bus");
   case "z": case "Z": return armTool("busentry");
   case "j": case "J": return armTool("junction");
   case "q": case "Q": return armTool("noconnect");
+  case "p": case "P": return armTool("power");
+  case "i": case "I": return armTool("lines");
   case "l": return armTool("label", "label");
   case "L": return armTool("glabel", "global_label");
   case "t": case "T": return armTool("text", "text");
@@ -890,7 +1092,7 @@ function onKey(key, ev, ctx) {
 }
 function onDocChanged(ctx) {
   S.ctx = ctx; installDom(ctx);
-  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null;
+  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null; S.draw = null;
   closePrompt(); closePicker(); announceModes(ctx);
   S.tool = curTool();
 }
@@ -905,6 +1107,9 @@ root.CollabTools.sch = {
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   _: { lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
     tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
-    beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange },
+    beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
+    // graphic shapes, directive labels, power symbols and the delete tool
+    rectangleNode, circleNode, arcNode, polylineNode, textBoxNode, classLabelNode, placeClassLabel, isPowerSymbol, powerSymbols, pickSymbol,
+    drawClick, finishDraw, cancelDraw, deleteChanges, deleteAt, pickAny, geomDist, anchorOf, DELETE_CURSOR },
 };
 })(typeof window !== "undefined" ? window : globalThis);
