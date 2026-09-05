@@ -26,6 +26,7 @@
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
+#include <dialogs/collab_comment_card.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <router/pns_arc.h>
@@ -884,6 +885,9 @@ void PCB_COLLAB_TOOL::rebuildCommentPins()
 
     m_cursorItem.SetCommentPins( std::move( pins ) );
 
+    if( m_commentCard && m_commentCard->IsShown() )
+        m_commentCard->Reload( m_comments );
+
     if( KIGFX::VIEW* view = getView() )
     {
         view->Update( &m_cursorItem );
@@ -905,6 +909,7 @@ void PCB_COLLAB_TOOL::OnBoardSaved()
 
 void PCB_COLLAB_TOOL::endSession()
 {
+    hideCommentCard();
     leaveDoc();
     m_ownsSession = false;
     m_startedHere = false;
@@ -1124,6 +1129,7 @@ void PCB_COLLAB_TOOL::openThread( long long aRootId )
 
 void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 {
+    updateCommentCard();
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
     if( !session.IsLive() )
@@ -1707,4 +1713,84 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::UnselectedEvent );
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::ClearedEvent );
+}
+
+
+VECTOR2I PCB_COLLAB_TOOL::commentAnchor( long long aRootId ) const
+{
+    for( const nlohmann::json& c : m_comments )
+    {
+        if( c.is_object() && c.value( "id", -1LL ) == aRootId )
+            return VECTOR2I( (int) c.value( "x", 0LL ), (int) c.value( "y", 0LL ) );
+    }
+
+    return VECTOR2I( 0, 0 );
+}
+
+
+void PCB_COLLAB_TOOL::hideCommentCard()
+{
+    if( m_commentCard && m_commentCard->IsShown() )
+        m_commentCard->HideCard();
+
+    m_cardGrace = 0;
+}
+
+
+void PCB_COLLAB_TOOL::updateCommentCard()
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
+    KIGFX::VIEW*    view = getView();
+
+    if( !sessionActive() || m_comments.empty() || !editFrame || !view || !editFrame->GetCanvas() )
+    {
+        hideCommentCard();
+        return;
+    }
+
+    wxPoint   mouse = wxGetMousePosition();
+    long long root = -1;
+
+    // The pin under the pointer, unless the pointer is on the card itself.
+    if( editFrame->GetCanvas()->GetScreenRect().Contains( mouse )
+        && !( m_commentCard && m_commentCard->ContainsScreenPoint( mouse ) ) )
+    {
+        VECTOR2I cursor = editFrame->GetCanvas()->GetViewControls()->GetCursorPosition( false );
+        root = pinAt( cursor );
+    }
+
+    if( root >= 0 )
+    {
+        if( !m_commentCard )
+        {
+            m_commentCard = new COLLAB_COMMENT_CARD(
+                    editFrame,
+                    [this]( const wxString& aBody, long long aRootId )
+                    {
+                        postComment( aBody, aRootId, commentAnchor( aRootId ) );
+                    },
+                    [this]( long long aRootId, bool aResolved )
+                    {
+                        resolveComment( aRootId, aResolved );
+                    } );
+        }
+
+        if( !m_commentCard->IsShown() || m_commentCard->ThreadId() != root )
+        {
+            VECTOR2D scr = view->ToScreen( VECTOR2D( commentAnchor( root ) ) );
+            wxPoint  anchor = editFrame->GetCanvas()->ClientToScreen(
+                    wxPoint( KiROUND( scr.x ), KiROUND( scr.y ) ) );
+            m_commentCard->ShowThread( m_comments, root, anchor );
+        }
+
+        m_cardGrace = 0;
+    }
+    else if( m_commentCard && m_commentCard->IsShown() )
+    {
+        // Give the pointer half a second to travel from the pin to the card.
+        if( m_commentCard->ContainsScreenPoint( mouse ) || m_commentCard->HasFocusedInput() )
+            m_cardGrace = 0;
+        else if( ++m_cardGrace > 5 )
+            hideCommentCard();
+    }
 }

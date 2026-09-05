@@ -26,6 +26,7 @@
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
+#include <dialogs/collab_comment_card.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <math/util.h>
@@ -475,6 +476,7 @@ bool SCH_COLLAB_TOOL::IsHost() const
 
 void SCH_COLLAB_TOOL::endSession()
 {
+    hideCommentCard();
     m_startedHere = false;
     m_projectOwnerId = 0;
 
@@ -658,6 +660,7 @@ void SCH_COLLAB_TOOL::openThread( long long aRootId )
 
 void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 {
+    updateCommentCard();
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
     if( !sessionActive() || !session.IsLive() || !m_frame )
@@ -1389,6 +1392,12 @@ void SCH_COLLAB_TOOL::rebuildCommentPins()
 
     m_cursorItem.SetCommentPins( std::move( pins ) );
 
+    if( m_commentCard && m_commentCard->IsShown() )
+    {
+        auto it = m_commentsByDoc.find( docId );
+        m_commentCard->Reload( it != m_commentsByDoc.end() ? it->second : nlohmann::json::array() );
+    }
+
     if( KIGFX::VIEW* view = getView() )
     {
         view->Update( &m_cursorItem );
@@ -1578,4 +1587,89 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::SelectedEvent );
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::UnselectedEvent );
     Go( &SCH_COLLAB_TOOL::onSelectionChange, EVENTS::ClearedEvent );
+}
+
+
+VECTOR2I SCH_COLLAB_TOOL::commentAnchor( long long aRootId ) const
+{
+    auto it = m_commentsByDoc.find( currentDocId() );
+
+    if( it != m_commentsByDoc.end() )
+    {
+        for( const nlohmann::json& c : it->second )
+        {
+            if( c.is_object() && c.value( "id", -1LL ) == aRootId )
+                return VECTOR2I( (int) c.value( "x", 0LL ), (int) c.value( "y", 0LL ) );
+        }
+    }
+
+    return VECTOR2I( 0, 0 );
+}
+
+
+void SCH_COLLAB_TOOL::hideCommentCard()
+{
+    if( m_commentCard && m_commentCard->IsShown() )
+        m_commentCard->HideCard();
+
+    m_cardGrace = 0;
+}
+
+
+void SCH_COLLAB_TOOL::updateCommentCard()
+{
+    KIGFX::VIEW* view = getView();
+    wxString     docId = currentDocId();
+    auto         docIt = m_commentsByDoc.find( docId );
+
+    if( !sessionActive() || !m_frame || !view || !m_frame->GetCanvas() || docId.IsEmpty()
+        || docIt == m_commentsByDoc.end() || docIt->second.empty() )
+    {
+        hideCommentCard();
+        return;
+    }
+
+    wxPoint   mouse = wxGetMousePosition();
+    long long root = -1;
+
+    if( m_frame->GetCanvas()->GetScreenRect().Contains( mouse )
+        && !( m_commentCard && m_commentCard->ContainsScreenPoint( mouse ) ) )
+    {
+        VECTOR2I cursor = m_frame->GetCanvas()->GetViewControls()->GetCursorPosition( false );
+        root = pinAt( cursor );
+    }
+
+    if( root >= 0 )
+    {
+        if( !m_commentCard )
+        {
+            m_commentCard = new COLLAB_COMMENT_CARD(
+                    m_frame,
+                    [this]( const wxString& aBody, long long aRootId )
+                    {
+                        postComment( currentDocId(), aBody, aRootId, commentAnchor( aRootId ) );
+                    },
+                    [this]( long long aRootId, bool aResolved )
+                    {
+                        resolveComment( aRootId, aResolved );
+                    } );
+        }
+
+        if( !m_commentCard->IsShown() || m_commentCard->ThreadId() != root )
+        {
+            VECTOR2D scr = view->ToScreen( VECTOR2D( commentAnchor( root ) ) );
+            wxPoint  anchor = m_frame->GetCanvas()->ClientToScreen(
+                    wxPoint( KiROUND( scr.x ), KiROUND( scr.y ) ) );
+            m_commentCard->ShowThread( docIt->second, root, anchor );
+        }
+
+        m_cardGrace = 0;
+    }
+    else if( m_commentCard && m_commentCard->IsShown() )
+    {
+        if( m_commentCard->ContainsScreenPoint( mouse ) || m_commentCard->HasFocusedInput() )
+            m_cardGrace = 0;
+        else if( ++m_cardGrace > 5 )
+            hideCommentCard();
+    }
 }

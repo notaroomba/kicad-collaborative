@@ -578,6 +578,7 @@ set( COMMON_DLG_SRCS
     dialogs/dialog_plugin_options_base.cpp
     dialogs/dialog_text_entry_base.cpp
     dialogs/dialog_collab_comments.cpp
+    dialogs/collab_comment_card.cpp
     dialogs/dialog_page_settings.cpp
     dialogs/dialog_print_generic.cpp
     dialogs/dialog_print_generic_base.cpp

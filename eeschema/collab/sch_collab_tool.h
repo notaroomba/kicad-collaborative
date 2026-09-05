@@ -192,6 +192,16 @@ private:
     ///< The open comments dialog, if any (modeless; views the displayed doc).
     class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 
+    ///< Hover card beside a comment pin (thread + reply box), created lazily.
+    class COLLAB_COMMENT_CARD* m_commentCard = nullptr;
+    int                       m_cardGrace = 0;
+
+    void updateCommentCard();
+    void hideCommentCard();
+
+    ///< World position of a thread's root comment on the displayed sheet.
+    VECTOR2I commentAnchor( long long aRootId ) const;
+
     ///< The doc id the open dialog was built for (sheet switches invalidate it).
     wxString m_commentsDlgDocId;
 
