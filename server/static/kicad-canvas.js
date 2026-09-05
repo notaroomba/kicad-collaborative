@@ -45,6 +45,24 @@ function parse(text) {
   while (i < n && ws(text.charCodeAt(i))) i++;
   return text[i] === "(" ? list() : null;
 }
+function parseAll(text) {
+  const out = []; let rest = text;
+  // cheap split on top-level parentheses: parse, then continue after the consumed prefix
+  let i = 0; const n = text.length;
+  while (i < n) {
+    while (i < n && /\s/.test(text[i])) i++;
+    if (i >= n || text[i] !== "(") break;
+    let depth = 0, j = i, inStr = false;
+    for (; j < n; j++) {
+      const c = text[j];
+      if (inStr) { if (c === "\\") j++; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true; else if (c === "(") depth++; else if (c === ")") { depth--; if (depth === 0) { j++; break; } }
+    }
+    const node = parse(text.slice(i, j)); if (node) out.push(node);
+    i = j;
+  }
+  return out;
+}
 const isList = Array.isArray;
 function kid(node, key) { for (let j = 1; j < node.length; j++) { const c = node[j]; if (isList(c) && c[0] === key) return c; } return null; }
 function kids(node, key) { const out = []; for (let j = 1; j < node.length; j++) { const c = node[j]; if (isList(c) && c[0] === key) out.push(c); } return out; }
@@ -53,7 +71,11 @@ function str(v) { return v === undefined || v === null ? "" : String(v); }
 function has(node, tok) { for (let j = 1; j < node.length; j++) if (node[j] === tok) return true; return false; }
 function yesNo(node, key) { const k = kid(node, key); if (k) return str(k[1]) !== "no"; return has(node, key); }
 function uuidOf(node) { const u = kid(node, "uuid") || kid(node, "tstamp"); return u ? str(u[1]) : ""; }
-function atOf(node) { const a = kid(node, "at"); return a ? [num(a[1]), num(a[2]), num(a[3])] : [0, 0, 0]; }
+function atOf(node) {
+  const t = kid(node, "transform");
+  if (t) { const tr = kid(t, "translate"), ro = kid(t, "rotate"); return [tr ? num(tr[1]) : 0, tr ? num(tr[2]) : 0, ro ? num(ro[1]) : 0]; }
+  const a = kid(node, "at"); return a ? [num(a[1]), num(a[2]), num(a[3])] : [0, 0, 0];
+}
 function ptsOf(node) { const p = kid(node, "pts"); return p ? kids(p, "xy").map((x) => [num(x[1]), num(x[2])]) : []; }
 function widthOf(node, def) {
   const s = kid(node, "stroke"); const w = s && kid(s, "width"); if (w) return num(w[1], def);
@@ -214,7 +236,14 @@ function resolveLib(doc, name, depth) {
 }
 function textGeom(item, x, y, text, size, color, rot, just, layer, extra) {
   const j = justOf(just || []);
-  return G(item, Object.assign({ t: "text", x, y, text, size: size || 1.27, w: 0, color, rot: rot || 0, h: j.h, v: j.v, layer }, extra || {}));
+  let r = ((Math.round(rot || 0) % 360) + 360) % 360;
+  if (r === 180 || r === 270) {
+    // upright reading direction: flip the anchor instead of the glyphs
+    r -= 180;
+    j.h = j.h === "left" ? "right" : j.h === "right" ? "left" : j.h;
+    j.v = j.v === "top" ? "bottom" : j.v === "bottom" ? "top" : j.v;
+  }
+  return G(item, Object.assign({ t: "text", x, y, text, size: size || 1.27, w: 0, color, rot: r, h: j.h, v: j.v, layer }, extra || {}));
 }
 function buildSchGeom(doc, item) {
   const n = item.node, k = item.kind;
@@ -460,7 +489,7 @@ function buildFootprintGeom(doc, item) {
     if (!isList(kid(p, "at"))) continue;
     const ef = effectsOf(p); if (ef.hide || !val) continue;
     const [px, py, pr] = atOf(p); const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS"); const [x, y] = tf(px, py);
-    textGeom(item, x, y, val, ef.size, pcbColor(layer), pr + frot, ef.just, layer, { z: pcbZ(layer) + 1, w: ef.thick, mirror: ef.mirror || /^B\./.test(layer) });
+    textGeom(item, x, y, val, ef.size, pcbColor(layer), pr, ef.just, layer, { z: pcbZ(layer) + 1, w: ef.thick, mirror: ef.mirror || /^B\./.test(layer) });
   }
   for (let j = 2; j < n.length; j++) {
     const g = n[j]; if (!isList(g)) continue; const gk = g[0];
@@ -468,7 +497,7 @@ function buildFootprintGeom(doc, item) {
       graphicGeom(item, g, gk.replace("fp_", ""), tf, layerOf(g, "F.SilkS"));
     } else if (gk === "fp_text") {
       const [px, py, pr] = atOf(g); const ef = effectsOf(g); if (ef.hide) continue; const layer = layerOf(g, "F.SilkS"); const [x, y] = tf(px, py);
-      textGeom(item, x, y, str(g[2]), ef.size, pcbColor(layer), pr + frot, ef.just, layer, { z: pcbZ(layer) + 1, w: ef.thick, mirror: ef.mirror || /^B\./.test(layer) });
+      textGeom(item, x, y, str(g[2]), ef.size, pcbColor(layer), pr, ef.just, layer, { z: pcbZ(layer) + 1, w: ef.thick, mirror: ef.mirror || /^B\./.test(layer) });
     } else if (gk === "pad") {
       buildPadGeom(item, g, tf, side);
     }
@@ -507,15 +536,24 @@ function buildPadGeom(item, pad, tf, side) {
 
 // ---------------------------------------------------------------- ops
 function fragmentItems(doc, sexpr) {
-  const tree = parse(sexpr); if (!tree) return [];
-  if (tree[0] === "kicad_sch" || tree[0] === "kicad_pcb") {
-    const ls = kid(tree, "lib_symbols"); if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
-    return tree.slice(1).filter((c) => isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : PCB_KINDS.has(c[0])));
+  const out = [];
+  for (const tree of parseAll(sexpr)) {
+    if (tree[0] === "kicad_sch" || tree[0] === "kicad_pcb") {
+      const ls = kid(tree, "lib_symbols"); if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
+      for (const c of tree.slice(1)) if (isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : PCB_KINDS.has(c[0]))) out.push(c);
+    } else if (tree[0] === "lib_symbols") { for (const s of kids(tree, "symbol")) doc.lib.set(str(s[1]), s); }
+    else out.push(tree);
   }
-  if (tree[0] === "lib_symbols") { for (const s of kids(tree, "symbol")) doc.lib.set(str(s[1]), s); return []; }
-  return [tree];
+  return out;
 }
 function setAt(node, x, y, rot) {
+  const t = kid(node, "transform");
+  if (t) {
+    let tr = kid(t, "translate"); if (!tr) { tr = ["translate", 0, 0]; t.push(tr); }
+    let ro = kid(t, "rotate"); if (!ro) { ro = ["rotate", 0]; t.push(ro); }
+    if (x !== undefined) tr[1] = x; if (y !== undefined) tr[2] = y; if (rot !== undefined) ro[1] = rot;
+    return;
+  }
   let a = kid(node, "at");
   if (!a) { a = ["at", 0, 0]; node.splice(2, 0, a); }
   if (x !== undefined) a[1] = x; if (y !== undefined) a[2] = y;
@@ -541,25 +579,96 @@ function applyChange(doc, change, IU) {
   const item = doc.items.get(id);
   if (!item) return false;
   if (kind === "MODIFIED" && Array.isArray(change.properties) && change.properties.length) {
-    let nx, ny, nrot;
+    let nx, ny, nrot, changed = false;
+    const p2 = ptsOf(item.node);
     for (const p of change.properties) {
       const after = p.after && p.after.v;
       if (after === undefined || after === null) continue;
-      if (p.name === "Position X") nx = Number(after) / IU;
-      else if (p.name === "Position Y") ny = Number(after) / IU;
-      else if (p.name === "Orientation" || p.name === "Rotation") nrot = Number(after);
+      const v = Number(after);
+      switch (p.name) {
+      case "Position X": nx = v / IU; break;
+      case "Position Y": ny = v / IU; break;
+      case "Orientation": case "Rotation": nrot = v; break;
+      case "Start X": if (p2[0]) { p2[0][0] = v / IU; changed = true; } break;
+      case "Start Y": if (p2[0]) { p2[0][1] = v / IU; changed = true; } break;
+      case "End X": if (p2[1]) { p2[1][0] = v / IU; changed = true; } break;
+      case "End Y": if (p2[1]) { p2[1][1] = v / IU; changed = true; } break;
+      case "Value": case "Reference": case "Text":
+        if (doc.type === "sch" && item.kind === "symbol") { for (const pr of kids(item.node, "property")) if (str(pr[1]) === p.name) { pr[2] = String(after); changed = true; } }
+        else if (typeof item.node[1] === "string") { item.node[1] = String(after); changed = true; }
+        break;
+      default: break;
+      }
     }
+    if (changed && p2.length) setPts(item.node, p2);
     if (nx !== undefined || ny !== undefined || nrot !== undefined) {
-      const ox = item.x || 0, oy = item.y || 0;
+      const ox = item.x !== undefined ? item.x : atOf(item.node)[0], oy = item.y !== undefined ? item.y : atOf(item.node)[1];
       const dx = nx !== undefined ? nx - ox : 0, dy = ny !== undefined ? ny - oy : 0;
       setAt(item.node, nx, ny, nrot);
       if (doc.type === "sch" && item.kind === "symbol" && (dx || dy)) for (const p of kids(item.node, "property")) { const a = kid(p, "at"); if (a) { a[1] = num(a[1]) + dx; a[2] = num(a[2]) + dy; } }
-      buildGeom(doc, item);
-      return true;
+      changed = true;
     }
+    if (changed) { buildGeom(doc, item); return true; }
   }
   return false;
 }
+function setPts(node, pts) {
+  let p = kid(node, "pts"); if (!p) { p = ["pts"]; node.splice(1, 0, p); }
+  p.length = 1; for (const [x, y] of pts) p.push(["xy", +x.toFixed(4), +y.toFixed(4)]);
+}
+
+// ---------------------------------------------------------------- editing helpers (for the tools layer)
+/** Move an item's anchor to (x, y) mm; symbols carry their fields along.  Returns the wire-format change. */
+function moveItem(doc, item, x, y, IU) {
+  const [ox, oy] = atOf(item.node);
+  const dx = x - ox, dy = y - oy;
+  if (doc.type === "sch" && (item.kind === "wire" || item.kind === "bus" || item.kind === "polyline")) {
+    const p = ptsOf(item.node).map(([px, py]) => [px + dx, py + dy]); setPts(item.node, p); buildGeom(doc, item);
+    return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) };
+  }
+  setAt(item.node, x, y);
+  if (doc.type === "sch" && item.kind === "symbol") for (const p of kids(item.node, "property")) { const a = kid(p, "at"); if (a) { a[1] = num(a[1]) + dx; a[2] = num(a[2]) + dy; } }
+  buildGeom(doc, item);
+  return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), properties: [
+    { name: "Position X", before: { type: "int", v: Math.round(ox * IU) }, after: { type: "int", v: Math.round(x * IU) } },
+    { name: "Position Y", before: { type: "int", v: Math.round(oy * IU) }, after: { type: "int", v: Math.round(y * IU) } }] };
+}
+/** Whole-item replace change for an item whose node was edited in place. */
+function replaceChange(doc, item) { buildGeom(doc, item); return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
+function addChange(doc, item) { return { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
+function removeChange(item) { return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] }; }
+const SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE" };
+const PCB_TYPE_NAMES = { footprint: "FOOTPRINT", segment: "PCB_TRACK", arc: "PCB_ARC", via: "PCB_VIA", zone: "ZONE", gr_line: "PCB_SHAPE", gr_rect: "PCB_SHAPE", gr_circle: "PCB_SHAPE", gr_arc: "PCB_SHAPE", gr_poly: "PCB_SHAPE", gr_text: "PCB_TEXT", gr_text_box: "PCB_TEXTBOX" };
+function typeNameOf(item) { return (SCH_TYPE_NAMES[item.kind] || PCB_TYPE_NAMES[item.kind] || item.kind.toUpperCase()); }
+/** Screen-space connection points of a symbol's pins (mm). */
+function pinPoints(doc, item) {
+  const out = [];
+  if (item.kind !== "symbol") return out;
+  const n = item.node; const libId = str((kid(n, "lib_id") || [])[1]); const lib = resolveLib(doc, libId); if (!lib) return out;
+  const [ax, ay, rot] = atOf(n); const mirrorN = kid(n, "mirror"); const mirror = mirrorN ? str(mirrorN[1]) : "";
+  const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1;
+  let T = ORIENT[((Math.round(rot) % 360) + 360) % 360] || ORIENT[0];
+  if (mirror === "y") T = [-T[0], -T[1], T[2], T[3]]; if (mirror === "x") T = [T[0], T[1], -T[2], -T[3]];
+  for (const sub of kids(lib, "symbol")) {
+    const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0; if (u !== 0 && u !== unit) continue;
+    for (const g of kids(sub, "pin")) { const [px, py] = atOf(g); out.push({ x: ax + T[0] * px + T[1] * py, y: ay + T[2] * px + T[3] * py, number: str((kid(g, "number") || [])[1]), name: str((kid(g, "name") || [])[1]) }); }
+  }
+  return out;
+}
+/** Wires/buses with an endpoint within tol of (x, y): [{item, index}] */
+function wireEndsAt(doc, x, y, tol) {
+  const out = []; tol = tol || 0.01;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "wire" && it.kind !== "bus") continue;
+    const p = ptsOf(it.node);
+    p.forEach((pt, i) => { if (Math.abs(pt[0] - x) <= tol && Math.abs(pt[1] - y) <= tol) out.push({ item: it, index: i }); });
+  }
+  return out;
+}
+function newUuid() { return (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); }); }
+/** Build a fresh item node of a kind and add it to the document. */
+function createItem(doc, node) { if (!uuidOf(node)) node.push(["uuid", newUuid()]); return addItem(doc, node); }
+
 
 // ---------------------------------------------------------------- queries
 function movableItems(doc) {
@@ -677,6 +786,12 @@ function render(doc, ctx, view, opts) {
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
+/** Put the canvas into document space (mm) for a given view — for tool overlays. */
+function setViewTransform(ctx, view) {
+  const dpr = view.dpr || 1, s = view.ppm * view.zoom * dpr;
+  ctx.setTransform(s, 0, 0, s, view.panX * dpr - view.x0 * s, view.panY * dpr - view.y0 * s);
+  return s;
+}
 function drawPad(ctx, g, minW) {
   ctx.save(); ctx.translate(g.x, g.y); if (g.rot) ctx.rotate(-g.rot * Math.PI / 180);
   const w = g.w, h = g.h; ctx.beginPath();
@@ -689,5 +804,21 @@ function drawPad(ctx, g, minW) {
   ctx.restore();
 }
 
-root.KiCadCanvas = { parse, parseDoc, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS };
+function serialize(node) {
+  if (!isList(node)) {
+    if (typeof node === "number") return Number.isInteger(node) ? String(node) : String(+node.toFixed(6));
+    const s = String(node);
+    return /^[A-Za-z_][\w.:*-]*$/.test(s) || /^[-+]?\d*\.?\d+$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+  }
+  return "(" + node.map(serialize).join(" ") + ")";
+}
+function serializeItem(doc, item) {
+  // the desktop applier loads schematic fragments as a document, so wrap them
+  if (doc.type === "sch") {
+    const lib = item.kind === "symbol" ? doc.lib.get(str((kid(item.node, "lib_id") || [])[1])) : null;
+    return "(kicad_sch (version 20250114) (generator \"kicad-collab-web\")" + (lib ? " (lib_symbols " + serialize(lib) + ")" : "") + " " + serialize(item.node) + ")";
+  }
+  return serialize(item.node);
+}
+root.KiCadCanvas = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, moveItem, replaceChange, addChange, removeChange, typeNameOf, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS };
 })(typeof window !== "undefined" ? window : globalThis);

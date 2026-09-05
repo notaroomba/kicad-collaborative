@@ -117,7 +117,8 @@ fn asset_version() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
-        for b in include_str!("../static/app.js").bytes().chain(include_str!("../static/kicad-canvas.js").bytes()) {
+        let all = [include_str!("../static/app.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js")];
+        for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
@@ -130,7 +131,10 @@ pub async fn app_page() -> Html<String> {
     Html(
         include_str!("../static/app.html")
             .replace("/static/app.js\"", &format!("/static/app.js?v={v}\""))
-            .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\"")),
+            .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\""))
+            .replace("/static/sch-tools.js\"", &format!("/static/sch-tools.js?v={v}\""))
+            .replace("/static/pcb-tools.js\"", &format!("/static/pcb-tools.js?v={v}\""))
+            .replace("/static/props.js\"", &format!("/static/props.js?v={v}\"")),
     )
 }
 
@@ -142,6 +146,13 @@ pub async fn canvas_js() -> Response {
     )
         .into_response()
 }
+
+fn js_response(body: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+}
+pub async fn sch_tools_js() -> Response { js_response(include_str!("../static/sch-tools.js")) }
+pub async fn pcb_tools_js() -> Response { js_response(include_str!("../static/pcb-tools.js")) }
+pub async fn props_js() -> Response { js_response(include_str!("../static/props.js")) }
 
 pub async fn app_js() -> Response {
     (
