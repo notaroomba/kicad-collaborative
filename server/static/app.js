@@ -79,8 +79,10 @@ document.addEventListener("click", (ev) => {
   if (act) { $$(".menu.open").forEach((x) => x.classList.remove("open")); runAction(act.dataset.act, act); }
   const tool = ev.target.closest("[data-tool]");
   if (tool) setTool(tool.dataset.tool);
-  const tab = ev.target.closest("#dockTabs [data-tab]");
-  if (tab) showTab(tab.dataset.tab);
+  const pc = ev.target.closest("[data-pane-close]");
+  if (pc) KUI.showPane(pc.dataset.paneClose, false);
+  const atab = ev.target.closest("[data-atab]");
+  if (atab) { $$("[data-atab]").forEach((b) => b.classList.toggle("on", b === atab)); for (const id of ["layers", "objects", "nets"]) $("#" + id).hidden = id !== atab.dataset.atab; }
   const nav = ev.target.closest("#home nav [data-nav]");
   if (nav) { state.homeTab = nav.dataset.nav; renderHome(); }
 });
@@ -113,7 +115,7 @@ async function loadMe() {
 function showView(name) {
   state.view = name;
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === name));
-  if (name === "home") { leaveEditor(); $("#sbProject").textContent = ""; }
+  if (name === "home") { leaveEditor(); $("#sbProject").textContent = ""; delete document.body.dataset.editor; KUI.closePopup(); }
 }
 
 function showHome() {
@@ -217,6 +219,10 @@ const canvas = $("#canvas"), cctx = canvas.getContext("2d");
 let kdoc = null;                 // KiCadCanvas document when the canvas renderer is active
 let hiddenLayers = new Set(), layersSeeded = false;
 let gridOn = true, snapOn = true, gridPitch = 1.27;
+// KiCad-frame state: local origin for dx/dy (Space resets it), polar readout, crosshair mode,
+// render display options (hidden pins, outline modes, high contrast), measure/zoom tools, sheet navigation
+let localOrigin = [0, 0], lastCursorMm = [0, 0], polarCoords = false, crosshairMode = "small", renderOpts = {}, measure = null, zoomRect = null, activeLayer = "";
+const docNav = { list: [], idx: -1, lock: false };
 let renderReq = 0;
 const GRID_CHOICES = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
 function requestRender() { if (renderReq || !kdoc) return; renderReq = requestAnimationFrame(() => { renderReq = 0; drawCanvas(); }); }
@@ -228,7 +234,7 @@ function drawCanvas() {
   if (!kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
   const view = { ppm, zoom, panX, panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
-  KiCadCanvas.render(kdoc, cctx, view, { hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null });
+  KiCadCanvas.render(kdoc, cctx, view, Object.assign({ hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null }, renderOpts));
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
 }
@@ -259,6 +265,14 @@ function renderLayersFromDoc() {
   $("#layers").innerHTML = list.map((l) => `<label class="layer"><input type="checkbox" data-lkey="${esc(l.key)}" ${hiddenLayers.has(l.key) ? "" : "checked"}>
      <span class="sw" style="background:${l.color}"></span><span>${esc(l.name)}</span><span class="cnt">${l.count}</span></label>`).join("") || `<p class="note">Nothing to show yet.</p>`;
   $$("#layers input").forEach((cb) => cb.addEventListener("change", () => { if (cb.checked) hiddenLayers.delete(cb.dataset.lkey); else hiddenLayers.add(cb.dataset.lkey); requestRender(); }));
+  const ls = $("#layerSel");
+  if (ls && !isSch()) {
+    const cu = list.filter((l) => /\.Cu$/.test(l.name));
+    ls.innerHTML = cu.map((l) => `<option value="${esc(l.name)}" style="color:${l.color}">${esc(l.name)}</option>`).join("");
+    if (!cu.some((l) => l.name === activeLayer)) activeLayer = cu[0] ? cu[0].name : "";
+    ls.value = activeLayer; renderOpts.activeLayer = activeLayer;
+    ls.onchange = () => { activeLayer = ls.value; renderOpts.activeLayer = activeLayer; if (CollabTools.pcb && CollabTools.pcb.setLayer) { try { CollabTools.pcb.setLayer(toolCtx(), activeLayer); } catch (e) { /* module without layer API */ } } requestRender(); };
+  }
 }
 function applyChanges(changes) {
   if (!kdoc) return;
@@ -268,15 +282,18 @@ function applyChanges(changes) {
 }
 function setupGridControls() {
   const sel = $("#gridSel"); const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
-  sel.innerHTML = choices.map(([v, label]) => `<option value="${v}">${label}</option>`).join("");
-  gridPitch = choices[0][0]; sel.value = String(gridPitch);
-  sel.onchange = () => { gridPitch = Number(sel.value) || gridPitch; requestRender(); updateGridStatus(); };
+  gridPitch = choices[0][0];
+  if (sel) {                                     // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
+    sel.innerHTML = choices.map(([v, label]) => `<option value="${v}">${label}</option>`).join("");
+    sel.value = String(gridPitch);
+    sel.onchange = () => { gridPitch = Number(sel.value) || gridPitch; requestRender(); updateGridStatus(); };
+  }
   updateGridStatus();
 }
 function updateGridStatus() {
-  $$("[data-act=grid]").forEach((b) => b.classList.toggle("on", gridOn));
-  $$("[data-act=snap]").forEach((b) => b.classList.toggle("on", snapOn));
-  const el = $("#sbGrid"); if (el) el.textContent = `grid ${gridPitch} mm · snap ${snapOn ? "on" : "off"}`;
+  KUI.setOn("toggleGrid", gridOn);
+  KUI.status({ grid: gridPitch });
+  const g = $("#gridSel"); if (g && String(gridPitch) !== g.value) g.value = String(gridPitch);
 }
 function snapMm(mm) { return snapOn ? [KiCadCanvas.snap(mm[0], gridPitch), KiCadCanvas.snap(mm[1], gridPitch)] : mm; }
 
@@ -290,7 +307,7 @@ const undoStack = [], redoStack = [];
 function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.sch : CollabTools.pcb; }
 function toolCtx(extra) {
   return Object.assign({
-    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool,
+    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool, selFilter: KUI.filter(), activeLayer,
     selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm,
     setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     commit(changes, label) { commitChanges(changes, label); },
@@ -325,16 +342,7 @@ function redoLast() {
   applyChanges(e.changes); if (ws && ws.readyState === 1) sendOp(e.changes);
   undoStack.push(e); toast("Redo " + e.label);
 }
-function renderModuleTools() {
-  const m = activeModule(); const host = $("#ltools");
-  $$("[data-modtool]", host).forEach((b) => b.remove());
-  if (!m || !m.tools) return;
-  for (const t of m.tools) {
-    const b = document.createElement("button"); b.className = "tb"; b.dataset.modtool = t.id; b.title = t.label + (t.key ? ` (${t.key})` : "");
-    b.innerHTML = t.icon ? `<svg viewBox="0 0 24 24">${t.icon}</svg>` : `<span style="font:11px var(--mono)">${esc(t.label.slice(0, 2))}</span>`;
-    b.addEventListener("click", () => setTool(t.id)); host.appendChild(b);
-  }
-}
+function renderModuleTools() { const m = activeModule(); KUI.setModuleTools(m && m.tools ? m.tools : []); }
 function moduleTool(id) { const m = activeModule(); return m && m.tools ? m.tools.find((t) => t.id === id) : null; }
 
 function leaveEditor() {
@@ -424,13 +432,15 @@ async function openDoc(doc) {
   DOC_TYPE = doc.docType;
   IU = isSch() ? 1e4 : 1e6;
   ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";
-  { const lm = $("#lineModeBtn"); if (lm) lm.style.display = isSch() ? "" : "none"; const sm = $("#sbMode"); if (sm) sm.textContent = ""; }
+  { const sm = $("#sbMode"); if (sm) sm.textContent = ""; }
+  if (!docNav.lock) { docNav.list.length = docNav.idx + 1; docNav.list.push(doc.docId); docNav.idx = docNav.list.length - 1; }
+  setupEditorChrome(); renderHierarchy();
   $("#docSel").value = doc.docId;
   const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
-  $("#hint").textContent = isSch()
+  KUI.status({ message: isSch()
     ? "scroll to zoom · right-drag to pan · click a symbol to select · drag to move · Del deletes · double-click a sheet to enter it"
-    : "scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes";
+    : "scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes" });
   world.style.width = stage.clientWidth + "px";
   viewTouched = false;
   renderProps(); renderPeers(); renderThreads();
@@ -545,7 +555,7 @@ function renderObjects() {
 // ---- view transform ----
 function applyView() {
   world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  $("#sbZoom").textContent = Math.round(zoom * 100) + "%";
+  KUI.status({ zoom });
   // Everything on the overlay is sized in screen pixels, so a zoom or fit
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).
@@ -568,13 +578,14 @@ function contentBoxMm() {
   if (!n || x1 - x0 < 1 || y1 - y0 < 1) return [mmX0(), mmY0(), mmW(), mmH()];
   return [x0 / vbPerMm, y0 / vbPerMm, (x1 - x0) / vbPerMm, (y1 - y0) / vbPerMm];
 }
-function fitView() {
+function fitView() { fitBox(contentBoxMm(), isSch() ? 0.97 : 0.85); }
+function fitBox(box, margin) {
   const sw = stage.clientWidth, sh = stage.clientHeight;
   if (!sw || !sh) { setTimeout(fitView, 100); return; }
   world.style.width = sw + "px";
   const ppm = sw / mmW();                       // px per mm at zoom 1
-  const [bx, by, bw, bh] = contentBoxMm();
-  zoom = Math.min(40, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * (isSch() ? 0.97 : 0.85)));
+  const [bx, by, bw, bh] = box;
+  zoom = Math.min(400, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * (margin || 1)));
   panX = sw / 2 - ((bx - mmX0()) + bw / 2) * ppm * zoom;
   panY = sh / 2 - ((by - mmY0()) + bh / 2) * ppm * zoom;
   lastStageW = sw;   // the resize observer must not rescale pans computed at this width
@@ -622,10 +633,10 @@ function visibleRectNm() {
 function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
   const prev = tool; tool = t;
-  $$("#ltools [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t));
-  $$("#ltools [data-modtool]").forEach((b) => b.classList.toggle("on", b.dataset.modtool === t));
+  KUI.setActiveTool(t);
   const mt = moduleTool(t);
-  stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : "";
+  stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : t === "zoomtool" ? "zoomtool" : t === "measure" ? "measure" : "";
+  if (t !== "measure" && measure) { measure = null; dragG.replaceChildren(); KUI.status({ message: "" }); }
   if (mt && mt.cursor) stage.style.cursor = mt.cursor; else stage.style.cursor = "";
   if (t === "comment" && !canJoin) { toast("Sign in to comment"); setTool("select"); return; }
   const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }
@@ -676,6 +687,8 @@ stage.addEventListener("pointerdown", (ev) => {
     stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
   }
   if (ev.button !== 0) return;
+  if (tool === "zoomtool") { zoomRect = { start: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
+  if (tool === "measure") { measureClick(snapMm(worldMm(ev))); return; }
   if (tool === "comment") { placeComment(ev); return; }
   const [x, y] = worldMm(ev);
   const mod = activeModule();
@@ -696,7 +709,10 @@ stage.addEventListener("pointerdown", (ev) => {
 });
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
-  $("#sbCursor").textContent = `X ${mm[0].toFixed(3)}  Y ${mm[1].toFixed(3)} mm`;
+  lastCursorMm = mm; KUI.status({ x: mm[0], y: mm[1], dx: mm[0] - localOrigin[0], dy: mm[1] - localOrigin[1], polar: polarCoords });
+  if (crosshairMode !== "small") { const r = stage.getBoundingClientRect(); const cy = ev.clientY - r.top, cx = ev.clientX - r.left; $("#chH").setAttribute("y1", cy); $("#chH").setAttribute("y2", cy); $("#chV").setAttribute("x1", cx); $("#chV").setAttribute("x2", cx); }
+  if (zoomRect) { drawZoomRect(ev); return; }
+  if (measure && !measure.b) { drawMeasure(snapMm(mm)); }
   if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
   const modM = activeModule();
   if (modM && moduleTool(tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
@@ -734,6 +750,7 @@ stage.addEventListener("pointermove", (ev) => {
 });
 stage.addEventListener("pointerup", (ev) => {
   if (pan) { pan = null; return; }
+  if (zoomRect) { finishZoomRect(ev); return; }
   const modU = activeModule();
   if (modU && moduleTool(tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } return; }
   if (ev.button !== 0 || !drag) return;
@@ -777,7 +794,8 @@ document.addEventListener("keydown", (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && (k === "z" || k === "Z")) { ev.preventDefault(); if (ev.shiftKey) redoLast(); else undoLast(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "y" || k === "Y")) { ev.preventDefault(); redoLast(); return; }
   const modK = activeModule();
-  if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
+  if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); syncSchModes(); return; } } catch (e) { console.warn(e); } }
+  if (k === " " && !ev.shiftKey) { ev.preventDefault(); localOrigin = lastCursorMm.slice(); KUI.status({ dx: 0, dy: 0, polar: polarCoords }); return; }
   if (k === "g" || k === "G") { gridOn = !gridOn; updateGridStatus(); requestRender(); return; }
   if (k === "n" || k === "N") { snapOn = !snapOn; updateGridStatus(); return; }
   if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
@@ -785,8 +803,9 @@ document.addEventListener("keydown", (ev) => {
   if (k === "Delete" || k === "Backspace") deleteSelected();
 });
 
-function rotateSelected() {
-  const before = selected.rot || 0, after = (before + 90) % 360;
+function rotateSelected(delta) {
+  const d = typeof delta === "number" ? delta : 90;
+  const before = selected.rot || 0, after = (((before + d) % 360) + 360) % 360;
   sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [
     { name: "Orientation", before: { type: "double", v: before }, after: { type: "double", v: after } }] }]);
   selected.rot = after;
@@ -805,7 +824,7 @@ function moveOp(fp, nx, ny) {
     { name: "Position Y", before: { type: "int", v: fp.y }, after: { type: "int", v: ny } }] };
 }
 function nearestFootprint(x, y, radiusMm) {
-  if (kdoc) { const id = KiCadCanvas.hitTest(kdoc, x, y, Math.min(radiusMm, 0.5)); return id ? items.find((f) => f.id === id) || null : null; }
+  if (kdoc) { const f = KUI.filter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; const id = KiCadCanvas.hitTest(kdoc, x, y, Math.min(radiusMm, 0.5)); return id ? items.find((f2) => f2.id === id) || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of items) { const d = Math.hypot(fp.x / IU - x, fp.y / IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
@@ -879,10 +898,7 @@ function drawPeers(peers) {
 }
 
 // ---- panels ----
-function showTab(name) {
-  $$("#dockTabs [data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  $$(".pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === name));
-}
+function showTab(name) { KUI.showPane(name, true); }
 function renderProps() {
   const el = $("#props");
   if (kdoc && CollabTools.props && CollabTools.props.render) { try { CollabTools.props.render(el, selected, toolCtx()); return; } catch (e) { console.warn(e); } }
@@ -962,14 +978,17 @@ async function loadHistory() {
     const byName = {};
     for (const c of j.checkpoints || []) (byName[c.name] ||= { name: c.name, at: c.createdAt, docs: [] }).docs.push(c);
     const list = Object.values(byName).sort((a, b) => new Date(b.at) - new Date(a.at));
-    el.innerHTML = list.length ? list.map((c) => `<div class="ckpt"><span class="nm" title="${esc(c.name)}">${esc(c.name)}</span><span class="when">${ago(c.at)}</span>
-        ${viewOnly ? "" : `<button class="btn sm" data-restore="${esc(c.name)}">Restore</button>`}</div>`).join("")
-      : `<p class="note">No checkpoints yet. Create one to name the current state so you can come back to it.</p>`;
-    $$("[data-restore]", el).forEach((b) => b.onclick = async () => {
-      if (!confirm(`Restore "${b.dataset.restore}"? Everyone in the session gets this version.`)) return;
-      try { await api(`/api/projects/${state.project.projectId}/restore`, { method: "POST", body: JSON.stringify({ name: b.dataset.restore }) }); toast("Restored — rendering…"); scheduleRenderRefresh(); }
+    el.innerHTML = `<table class="ktable"><thead><tr><th>Checkpoint</th><th>When</th><th>Docs</th></tr></thead><tbody>` +
+      (list.length ? list.map((c) => `<tr data-restore="${esc(c.name)}"><td title="${esc(c.name)}">${esc(c.name)}</td><td>${ago(c.at)}</td><td>${c.docs.length}</td></tr>`).join("")
+        : `<tr><td colspan="3" class="note">No checkpoints yet. Create one to name the current state so you can come back to it.</td></tr>`) + `</tbody></table>`;
+    const restoreBtn = $("#restoreBtn"); let picked = null;
+    restoreBtn.disabled = true;
+    $$("tr[data-restore]", el).forEach((tr) => tr.onclick = () => { picked = tr.dataset.restore; $$("tr[data-restore]", el).forEach((x) => x.classList.toggle("sel", x === tr)); restoreBtn.disabled = viewOnly || !picked; });
+    restoreBtn.onclick = async () => {
+      if (!picked || !confirm(`Restore "${picked}"? Everyone in the session gets this version.`)) return;
+      try { await api(`/api/projects/${state.project.projectId}/restore`, { method: "POST", body: JSON.stringify({ name: picked }) }); toast("Restored — rendering…"); scheduleRenderRefresh(); }
       catch (e) { toast("Restore failed: " + e.message, 4000); }
-    });
+    };
   } catch (e) { el.innerHTML = `<p class="note">${esc(e.message)}</p>`; }
 }
 
@@ -1186,11 +1205,138 @@ async function runAction(act, el) {
         toast("Share link copied"); } catch (e) { toast("Couldn't create link: " + e.message, 4000); } break;
     case "checkpoint": if (!id) break; if (viewOnly) { toast("Only editors can create checkpoints"); break; }
       { const name = prompt("Checkpoint name", `checkpoint ${new Date().toLocaleString()}`); if (!name) break;
-        try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); showTab("history"); }
+        try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); KUI.showPane("history", true); }
         catch (e) { toast("Checkpoint failed: " + e.message, 4000); } } break;
     case "kicad": popover(`<h4>Open in KiCad Collaborative</h4><p class="note">1. Install the desktop app from the <a href="https://github.com/notaroomba/kicad-collaborative/releases" target="_blank">releases page</a>.<br>2. File → Join Shared Project… and paste a share link (File → Copy share link… here).<br>3. Edits sync both ways, live.</p>`, el); break;
   }
 }
+
+// ================================================================ KiCad frame (kicad-ui.js)
+function setupEditorChrome() {
+  const ed = isSch() ? "sch" : "pcb";
+  const app = $('.kpane[data-pane="appearance"]'), filt = $('.kpane[data-pane="filter"]'), hier = $('.kpane[data-pane="hier"]');
+  if (isSch()) { app.dataset.default = "hidden"; hier.after(filt); $("#dockL").appendChild(app); }          // Properties · Hierarchy · Selection Filter · History
+  else { app.dataset.default = ""; $("#dockR").appendChild(app); $("#dockR").appendChild(filt); }         // Appearance with the Selection Filter below it
+  const mod = isSch() ? CollabTools.sch : CollabTools.pcb;
+  KUI.setEditor(ed, mod && mod.tools ? mod.tools : []);
+  KUI.setRadio("Units", { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" }[KUI.units()]);
+  KUI.setRadio("Crosshair modes", crosshairMode === "full" ? "cursorFullCrosshairs" : crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
+  $("#crosshair").classList.toggle("on", crosshairMode !== "small");
+  KUI.setOn("toggleGrid", gridOn); KUI.setOn("togglePolarCoords", polarCoords); KUI.setOn("toggleHiddenPins", !!renderOpts.showHiddenPins);
+  KUI.setOn("highContrastMode", !!renderOpts.highContrast); KUI.setOn("padDisplayMode", !!renderOpts.outlinePads); KUI.setOn("viaDisplayMode", !!renderOpts.outlineVias); KUI.setOn("trackDisplayMode", !!renderOpts.outlineTracks);
+  KUI.setOn("zoneDisplayFilled", !renderOpts.zoneOutline); KUI.setOn("zoneDisplayOutline", !!renderOpts.zoneOutline);
+  syncSchModes();
+  const zs = $("#zoomSel"); if (zs) zs.onchange = () => { if (zs.value === "auto") fitView(); else { zoom = Number(zs.value) / 100; applyView(); } };
+  for (const [id, vals] of [["trackWidthSel", [0.2, 0.25, 0.3, 0.4, 0.5, 0.8, 1, 1.5, 2]], ["viaSizeSel", [0.6, 0.8, 1, 1.2, 1.6]]]) {
+    const el = $("#" + id); if (el && !el.options.length) el.innerHTML = vals.map((v) => `<option value="${v}">${v} mm</option>`).join("");
+  }
+  KUI.status({ grid: gridPitch, zoom, x: 0, y: 0, dx: 0, dy: 0, polar: polarCoords });
+  KUI.setActiveTool(tool);
+}
+// The schematic module owns its line / drag modes (Shift+Space, G, M); mirror them on the toolbar.
+function syncSchModes() {
+  if (!isSch() || !CollabTools.sch || !CollabTools.sch.state) return;
+  const lm = CollabTools.sch.state.lineMode;
+  KUI.setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
+}
+function renderHierarchy() {
+  const el = $("#hier"); if (!el) return;
+  const root = rootSchematic();
+  const sch = state.docs.filter((d) => d.docType === "kicad_sch").sort((a, b) => (a === root ? -1 : b === root ? 1 : a.path.localeCompare(b.path)));
+  el.innerHTML = sch.map((d) => `<div class="node ${state.doc && d.docId === state.doc.docId ? "cur" : ""}" data-doc="${esc(d.docId)}" style="padding-left:${d === root ? 4 : 18}px" title="${esc(d.path)}">${d === root ? "▾ " : "· "}${esc(d === root ? (state.project.name || "Root") : d.path.split("/").pop().replace(/\.kicad_sch$/, ""))}${d === root ? "" : ' <span class="muted">(page)</span>'}</div>`).join("")
+    || `<p class="note">No schematic sheets in this project.</p>`;
+  $$("[data-doc]", el).forEach((n) => n.onclick = () => { const d = state.docs.find((x) => x.docId === n.dataset.doc); if (d && d !== state.doc) openDoc(d); });
+}
+function openDocId(id) { const d = state.docs.find((x) => x.docId === id); if (d) openDoc(d); }
+function navigateDocs(dir) {
+  const i = docNav.idx + dir; if (i < 0 || i >= docNav.list.length) { toast(dir < 0 ? "No previous sheet" : "No next sheet"); return; }
+  docNav.lock = true; docNav.idx = i; try { openDocId(docNav.list[i]); } finally { docNav.lock = false; }
+}
+function switchEditor() {
+  const target = isSch() ? state.docs.find((d) => d.docType === "kicad_pcb") : rootSchematic();
+  if (target) openDoc(target); else toast(isSch() ? "This project has no board yet" : "This project has no schematic yet");
+}
+function setUnitsAction(u, id) { KUI.setUnits(u); KUI.setRadio("Units", id); KUI.status({ grid: gridPitch, x: lastCursorMm[0], y: lastCursorMm[1], dx: lastCursorMm[0] - localOrigin[0], dy: lastCursorMm[1] - localOrigin[1], polar: polarCoords }); }
+function setCrosshair(mode, id) { crosshairMode = mode; KUI.setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); }
+function toggleRenderOpt(key, id, exclusive) { renderOpts[key] = !renderOpts[key]; KUI.setOn(id, !!renderOpts[key]); if (exclusive) for (const [k2, id2] of exclusive) KUI.setOn(id2, k2 ? !!renderOpts[k2] : !renderOpts[key]); requestRender(); }
+function schKey(k) { const m = CollabTools.sch; if (!m || !isSch()) return false; try { return !!m.onKey(k, {}, toolCtx()); } catch (e) { console.warn(e); return false; } }
+function orientSelected(kind) {
+  if (isSch()) { if (!schKey({ ccw: "r", cw: "R", mv: "y", mh: "x" }[kind])) toast("Select a symbol or item first"); return; }
+  if (!selected) { toast("Select a footprint first"); return; }
+  if (kind === "ccw") rotateSelected(-90); else if (kind === "cw") rotateSelected(90);
+  else { const h = CollabTools.props && CollabTools.props.helpers; if (h && h.setFootprintSide) { const it = kdoc.items.get(selected.id); const side = (it && it.layer === "B.Cu") ? "F.Cu" : "B.Cu"; try { h.setFootprintSide(toolCtx(), it, side); } catch (e) { toast("Flip failed: " + e.message); } } else toast("Flip runs in the desktop app"); }
+}
+function deleteAction() { if (schKey("Delete")) return; if (selected && !viewOnly) deleteSelected(); else toast("Nothing selected"); }
+function findPopover(el) {
+  popover(`<h4>Find</h4><input id="findQ" placeholder="Reference or value…"><p class="note" id="findHits"></p>`, el);
+  const q = $("#findQ"), hits = $("#findHits"); q.focus();
+  const run = () => { const v = q.value.trim().toLowerCase(); const m = v ? items.filter((fp) => fpName(fp).toLowerCase().includes(v)).sort((x, y) => (fpName(y).toLowerCase() === v) - (fpName(x).toLowerCase() === v) || (fpName(y).toLowerCase().startsWith(v)) - (fpName(x).toLowerCase().startsWith(v))) : []; hits.textContent = v ? `${m.length} match${m.length === 1 ? "" : "es"}` : ""; if (m.length) { selected = m[0]; drawSelection(); renderProps(); centerOn(m[0].x / IU, m[0].y / IU); renderObjects(); } };
+  q.addEventListener("input", run); q.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { run(); closePopover(); } ev.stopPropagation(); });
+}
+function gridMenu(ev, el) {
+  const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
+  popover(`<h4>Grid</h4>` + choices.map(([v, label]) => `<button class="kbtn" data-grid="${v}" style="display:block;width:100%;text-align:left;margin:2px 0${Number(v) === gridPitch ? ";border-color:var(--blue)" : ""}">${esc(label)}</button>`).join(""), el);
+  $$("#popover [data-grid]").forEach((b) => b.onclick = () => { gridPitch = Number(b.dataset.grid) || gridPitch; updateGridStatus(); requestRender(); closePopover(); });
+}
+// measure tool: two clicks, the distance goes to the status bar
+function measureClick(mm) {
+  if (!measure || measure.b) { measure = { a: mm }; dragG.replaceChildren(); KUI.status({ message: "Measure — click the second point" }); return; }
+  measure.b = mm; drawMeasure(mm);
+  const dx = mm[0] - measure.a[0], dy = mm[1] - measure.a[1];
+  KUI.status({ message: `dist ${KUI.fmtLen(Math.hypot(dx, dy))} ${KUI.units()} · dx ${KUI.fmtLen(dx)} · dy ${KUI.fmtLen(dy)} · ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1)}°` });
+}
+function drawMeasure(mm) {
+  if (!measure) return; dragG.replaceChildren();
+  const s = pxPerMm(), a = measure.a;
+  const line = document.createElementNS(NS, "line"); line.setAttribute("x1", a[0]); line.setAttribute("y1", a[1]); line.setAttribute("x2", mm[0]); line.setAttribute("y2", mm[1]);
+  line.setAttribute("stroke", "#ffb43a"); line.setAttribute("stroke-width", 1.5 / s); dragG.appendChild(line);
+  const t = svgText((a[0] + mm[0]) / 2, (a[1] + mm[1]) / 2 - 6 / s, 11 / s, "#ffb43a", `${KUI.fmtLen(Math.hypot(mm[0] - a[0], mm[1] - a[1]))} ${KUI.units()}`); t.setAttribute("text-anchor", "middle"); dragG.appendChild(t);
+}
+// zoom-area tool: drag a rectangle, the view fits it
+function drawZoomRect(ev) {
+  dragG.replaceChildren(); const a = worldMm({ clientX: zoomRect.start[0], clientY: zoomRect.start[1] }), b = worldMm(ev);
+  const r = document.createElementNS(NS, "rect"); r.setAttribute("x", Math.min(a[0], b[0])); r.setAttribute("y", Math.min(a[1], b[1])); r.setAttribute("width", Math.abs(b[0] - a[0])); r.setAttribute("height", Math.abs(b[1] - a[1]));
+  r.setAttribute("fill", "#4D7FC433"); r.setAttribute("stroke", "#4D7FC4"); r.setAttribute("stroke-width", 1 / pxPerMm()); dragG.appendChild(r);
+}
+function finishZoomRect(ev) {
+  const a = worldMm({ clientX: zoomRect.start[0], clientY: zoomRect.start[1] }), b = worldMm(ev); zoomRect = null; dragG.replaceChildren();
+  const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+  if (w < 0.5 || h < 0.5) { zoomBy(2, ev.clientX, ev.clientY); return; }
+  fitBox([Math.min(a[0], b[0]), Math.min(a[1], b[1]), w, h], 0.9);
+}
+function desktopOnly(label, why, el) {
+  popover(`<h4>${esc(label)}</h4><p class="note">${esc(why)}</p><p class="note"><a href="#" data-act="kicad">Open this project in KiCad Collaborative…</a></p>`, el);
+}
+KUI.init({
+  appTools: ["select", "pan", "comment", "follow", "zoomtool", "measure"],
+  handlers: {
+    __setTool: (t) => setTool(t), __desktopOnly: desktopOnly, __filterChanged: () => { selected = null; drawSelection(); renderProps(); }, __layout: () => requestRender(),
+    save: (ev, el) => runAction("checkpoint", el), refreshHistory: () => loadHistory(),
+    undo: () => undoLast(), redo: () => redoLast(), find: (ev, el) => findPopover(el), doDelete: () => deleteAction(),
+    zoomRedraw: () => requestRender(), zoomInCenter: () => zoomBy(1.25), zoomOutCenter: () => zoomBy(0.8), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitView(),
+    navigateBack: () => navigateDocs(-1), navigateForward: () => navigateDocs(1), navigateUp: () => { const r = rootSchematic(); if (r && state.doc !== r) openDoc(r); else toast("Already at the root sheet"); },
+    rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
+    mirrorV: () => orientSelected("mv"), mirrorH: () => orientSelected("mh"),
+    showPcbNew: () => switchEditor(), showEeschema: () => switchEditor(),
+    toggleGrid: () => { gridOn = !gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": gridMenu,
+    millimetersUnits: () => setUnitsAction("mm", "millimetersUnits"), inchesUnits: () => setUnitsAction("in", "inchesUnits"), milsUnits: () => setUnitsAction("mil", "milsUnits"),
+    cursorSmallCrosshairs: () => setCrosshair("small", "cursorSmallCrosshairs"), cursorFullCrosshairs: () => setCrosshair("full", "cursorFullCrosshairs"), cursor45Crosshairs: () => setCrosshair("45", "cursor45Crosshairs"),
+    togglePolarCoords: () => { polarCoords = !polarCoords; KUI.setOn("togglePolarCoords", polarCoords); KUI.status({ dx: lastCursorMm[0] - localOrigin[0], dy: lastCursorMm[1] - localOrigin[1], polar: polarCoords }); },
+    toggleHiddenPins: () => toggleRenderOpt("showHiddenPins", "toggleHiddenPins"),
+    highContrastMode: () => toggleRenderOpt("highContrast", "highContrastMode"),
+    padDisplayMode: () => toggleRenderOpt("outlinePads", "padDisplayMode"), viaDisplayMode: () => toggleRenderOpt("outlineVias", "viaDisplayMode"), trackDisplayMode: () => toggleRenderOpt("outlineTracks", "trackDisplayMode"),
+    zoneDisplayFilled: () => { renderOpts.zoneOutline = false; KUI.setOn("zoneDisplayFilled", true); KUI.setOn("zoneDisplayOutline", false); requestRender(); },
+    zoneDisplayOutline: () => { renderOpts.zoneOutline = true; KUI.setOn("zoneDisplayFilled", false); KUI.setOn("zoneDisplayOutline", true); requestRender(); },
+    lineModeFree: () => { CollabTools.sch.setLineMode(toolCtx(), "free"); syncSchModes(); }, lineMode90: () => { CollabTools.sch.setLineMode(toolCtx(), "90"); syncSchModes(); }, lineMode45: () => { CollabTools.sch.setLineMode(toolCtx(), "45"); syncSchModes(); },
+    showHierarchy: () => KUI.showPane("hier"), showProperties: () => KUI.showPane("props"), showLayersManager: () => KUI.showPane("appearance"), showAppearance: () => KUI.showPane("appearance"),
+    showSelectionFilter: () => KUI.showPane("filter"), showHistory: () => KUI.showPane("history"), showPeers: () => KUI.showPane("peers"), showComments: () => KUI.showPane("comments"),
+    collabCopyLink: (ev, el) => runAction("share", el), collabComments: () => { KUI.showPane("comments", true); }, collabFollow: () => cycleFollow(), collabHistory: () => KUI.showPane("history", true),
+    collabLeave: () => navigate("/"), archive: (ev, el) => runAction("archive", el), clone: (ev, el) => runAction("clone", el), openInKicad: (ev, el) => runAction("kicad", el), home: () => navigate("/"),
+    theme: () => KUI.toggleTheme(), about: (ev, el) => runAction("about", el),
+    downloadDesktop: () => window.open("https://github.com/notaroomba/kicad-collaborative/releases", "_blank"), sourceCode: () => window.open("https://github.com/notaroomba/kicad-collaborative", "_blank"),
+    help: () => window.open("https://docs.kicad.org/", "_blank"), gettingStarted: () => window.open("https://docs.kicad.org/master/en/getting_started_in_kicad/getting_started_in_kicad.html", "_blank"),
+  },
+});
 
 // ---------- boot ----------
 (async () => { await loadMe(); route(); })();
