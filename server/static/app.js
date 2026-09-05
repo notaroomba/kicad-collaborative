@@ -264,7 +264,7 @@ function applyChanges(changes) {
   if (!kdoc) return;
   let any = false;
   for (const c of changes || []) { try { if (KiCadCanvas.applyChange(kdoc, c, IU)) any = true; } catch (e) { console.warn("change not applied", e); } }
-  if (any) { if (!isSch()) KiCadCanvas.computeBBox(kdoc); syncItemsFromDoc(); drawSelection(); requestRender(); }
+  if (any) { if (!isSch()) KiCadCanvas.computeBBox(kdoc); syncItemsFromDoc(); drawSelection(); renderProps(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
 }
 function setupGridControls() {
   const sel = $("#gridSel"); const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
@@ -290,7 +290,7 @@ const undoStack = [], redoStack = [];
 function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.sch : CollabTools.pcb; }
 function toolCtx(extra) {
   return Object.assign({
-    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm,
+    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool,
     selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm,
     setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     commit(changes, label) { commitChanges(changes, label); },
@@ -679,6 +679,7 @@ stage.addEventListener("pointerdown", (ev) => {
   const mod = activeModule();
   if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly) { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
+  if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
@@ -804,6 +805,7 @@ function svgText(x, y, size, color, text) {
 function drawSelection() {
   selG.replaceChildren();
   if (!selected) return;
+  if (kdoc) { requestRender(); return; }   // the renderer draws KiCad's selection halo around the item itself
   const s = pxPerMm(), x = selected.x / IU, y = selected.y / IU;
   const ring = document.createElementNS(NS, "circle");
   ring.setAttribute("cx", x); ring.setAttribute("cy", y); ring.setAttribute("r", 10 / s);
