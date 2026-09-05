@@ -158,6 +158,7 @@ function shiftNode(kind, node, dx, dy) {
   if (LINE_KINDS.has(kind)) { setPts(node, ptsOf(node).map(([x, y]) => [x + dx, y + dy])); return; }
   const [x, y] = atOf(node); setAt(node, r4(x + dx), r4(y + dy));
   for (const pr of kids(node, "property")) { const a = kid(pr, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
+  if (kind === "sheet") for (const pin of kids(node, "pin")) { const a = kid(pin, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
 }
 // A copy with a fresh identity; the desktop re-annotates and rebuilds instance data.
 function cloneNode(item) {
@@ -223,9 +224,16 @@ function snapConn(ctx, mm, kind) {
 
 // ---------------------------------------------------------------- wires and buses
 // One leg from the last fixed point to the cursor: straight when aligned, else two segments.
-function legPoints(a, c, hFirst) {
+function legPoints(a, c, hFirst, flip) {
   if (same(a, c)) return [];
-  if (a[0] === c[0] || a[1] === c[1]) return [c];
+  const dx = c[0] - a[0], dy = c[1] - a[1];
+  if (S.lineMode === "free" || Math.abs(dx) <= 1e-6 || Math.abs(dy) <= 1e-6) return [c];
+  if (S.lineMode === "45") {                                // straight run then a 45° diagonal; '/' goes diagonal first
+    const ax = Math.abs(dx), ay = Math.abs(dy), sx = Math.sign(dx), sy = Math.sign(dy);
+    if (Math.abs(ax - ay) <= 1e-6) return [c];
+    if (ax > ay) return flip ? [[r4(a[0] + sx * ay), c[1]], c] : [[r4(c[0] - sx * ay), a[1]], c];
+    return flip ? [[c[0], r4(a[1] + sy * ax)], c] : [[a[0], r4(c[1] - sy * ax)], c];
+  }
   return hFirst ? [[c[0], a[1]], c] : [[a[0], c[1]], c];
 }
 function posture(w) { const a = w.pts[w.pts.length - 1], c = w.cur; const auto = Math.abs(c[0] - a[0]) >= Math.abs(c[1] - a[1]); return w.flip ? !auto : auto; }
@@ -243,7 +251,7 @@ function startWire(ctx, kind, p) { S.wire = { kind, pts: [p], cur: p, flip: fals
 function wireClick(ctx, p) {
   const w = S.wire, last = w.pts[w.pts.length - 1];
   if (same(last, p)) { finishWire(ctx); return; }          // click on the last point (or a double click) ends it
-  w.cur = p; const leg = legPoints(last, p, posture(w)); w.pts.push(...leg); w.legs.push(leg.length);
+  w.cur = p; const leg = legPoints(last, p, posture(w), w.flip); w.pts.push(...leg); w.legs.push(leg.length);
   if (connectsAt(ctx.doc, p, w.kind)) finishWire(ctx);     // KiCad ends a wire on reaching a pin or another line
   else ctx.requestRender();
 }
@@ -333,37 +341,173 @@ function pickNonSymbol(ctx, mm) {
 }
 
 // ---------------------------------------------------------------- drag (KiCad's "drag": attached ends stretch)
-function beginDrag(ctx, item, mm, byPointer) {
-  const doc = ctx.doc, d = { item, kind: item.kind, start: ctx.snap([mm[0], mm[1]]).map(r4), last: [0, 0], moved: false, byPointer: !!byPointer, ends: [], pts: [], axis: "" };
-  if (LINE_KINDS.has(item.kind)) {
-    const pts = ptsOf(item.node); if (pts.length < 2) return null;
-    d.orig = pts.map((p) => p.slice());
-    const horiz = pts.every((p) => Math.abs(p[1] - pts[0][1]) < 1e-3), vert = pts.every((p) => Math.abs(p[0] - pts[0][0]) < 1e-3);
-    d.axis = horiz && !vert ? "y" : vert && !horiz ? "x" : "";   // a straight segment only moves across itself
-    const attach = [pts[0], pts[pts.length - 1]];
-    for (const it of doc.items.values()) {                       // things riding on the segment come along
-      if (!POINT_KINDS.has(it.kind) && !TEXT_KINDS.has(it.kind)) continue;
-      const [ax, ay] = atOf(it.node);
-      if (segs(item).some(([a, b]) => segDist([ax, ay], a, b) <= 1e-3)) { d.pts.push({ item: it, orig: [ax, ay] }); if (it.kind === "junction") attach.push([ax, ay]); }
-    }
-    for (const P of attach) for (const e of K.wireEndsAt(doc, P[0], P[1], 1e-3)) {
-      if (e.item === item || d.ends.some((q) => q.item === e.item && q.index === e.index)) continue;
-      d.ends.push({ item: e.item, index: e.index, orig: ptsOf(e.item.node).map((p) => p.slice()) });
-    }
-  } else if (POINT_KINDS.has(item.kind) || TEXT_KINDS.has(item.kind)) {
-    const [ax, ay] = atOf(item.node); d.pts.push({ item, orig: [ax, ay] });
-  } else return null;
-  S.drag = d; return d;
+// ---------------------------------------------------------------- connected drag (eeschema/tools/sch_move_tool.cpp)
+// KiCad's DRAG keeps the moved item's connections: a wire end sitting on a moved
+// connection point stretches (in 90° / 45° mode the wire stays on its own axis and
+// grows a bend segment), a fixed pin, junction, label or sheet pin sitting on the
+// point gets a brand-new wire, and no-connects ride along.  Afterwards junctions are
+// added or dropped and collinear wires merged the way AddJunctionsIfNeeded and
+// SCHEMATIC::CleanUp do on the desktop.  MOVE (M) is KiCad's plain move: the item
+// goes, its connections stay where they were.
+S.dragMode = "drag";                       // "drag" (G) | "move" (M)
+S.lineMode = "90";                         // "90" | "45" | "free"  (eeschema's LINE_MODE)
+const LINE_MODES = ["90", "45", "free"];
+const LINE_MODE_LABEL = { "90": "90°", "45": "45°", free: "free" };
+const LABEL_KINDS = new Set(["label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
+const RIDER_KINDS = new Set(["junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
+const DRAG_KINDS = new Set(["symbol", "sheet", "wire", "bus", "polyline", "junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "text"]);
+const isNetLine = (k) => k === "wire" || k === "bus";
+
+function modeText() { return `${S.dragMode === "drag" ? "drag keeps connections (G)" : "move leaves connections (M)"} · wires ${LINE_MODE_LABEL[S.lineMode]} (Shift+Space)`; }
+function announceModes(ctx) {
+  if (ctx && ctx.setStatus) ctx.setStatus(modeText());
+  if (typeof document !== "undefined") { const b = document.querySelector("[data-act=linemode]"); if (b) { b.textContent = LINE_MODE_LABEL[S.lineMode]; b.title = `Wire angle mode: ${LINE_MODE_LABEL[S.lineMode]} (Shift+Space)`; } }
 }
+function setLineMode(ctx, mode) {
+  if (!LINE_MODES.includes(mode)) return S.lineMode;
+  S.lineMode = mode; announceModes(ctx);
+  if (S.drag) { applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]); ctx.requestRender(); }
+  else if (S.wire) ctx.requestRender();
+  return mode;
+}
+function cycleLineMode(ctx) { return setLineMode(ctx, LINE_MODES[(LINE_MODES.indexOf(S.lineMode) + 1) % LINE_MODES.length]); }
+function setDragMode(ctx, mode) {
+  S.dragMode = mode === "move" ? "move" : "drag"; announceModes(ctx);
+  if (S.drag) { applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]); ctx.requestRender(); }
+  return S.dragMode;
+}
+
+// Connection points of an item (mm): symbol pins, sheet pins, bus-entry ends, net-line ends, anchors.
+function connPoints(doc, item) {
+  const k = item.kind, n = item.node;
+  if (k === "symbol") return K.pinPoints(doc, item).map((p) => [r4(p.x), r4(p.y)]);
+  if (k === "sheet") return kids(n, "pin").map((p) => atOf(p).slice(0, 2).map(r4));
+  if (k === "bus_entry") { const [x, y] = atOf(n), s = kid(n, "size"); return [[r4(x), r4(y)], [r4(x + num(s && s[1], 2.54)), r4(y + num(s && s[2], 2.54))]]; }
+  if (isNetLine(k)) { const p = ptsOf(n); return p.length > 1 ? [p[0].slice(), p[p.length - 1].slice()] : []; }
+  if (POINT_KINDS.has(k) || LABEL_KINDS.has(k)) return [atOf(n).slice(0, 2).map(r4)];
+  return [];
+}
+function labelsAt(doc, p, skip) { const out = []; for (const it of doc.items.values()) if (LABEL_KINDS.has(it.kind) && it !== skip && same(atOf(it.node), p)) out.push(it); return out; }
+function sheetPinsAt(doc, p, skip) { const out = []; for (const it of doc.items.values()) if (it.kind === "sheet" && it !== skip) for (const pin of kids(it.node, "pin")) if (same(atOf(pin), p)) { out.push(it); break; } return out; }
+function noConnectsAt(doc, p, skip) { const out = []; for (const it of doc.items.values()) if (it.kind === "no_connect" && it !== skip && same(atOf(it.node), p)) out.push(it); return out; }
+function busEntriesAt(doc, p, skip) { const out = []; for (const it of doc.items.values()) if (it.kind === "bus_entry" && it !== skip && connPoints(doc, it).some((q) => same(q, p))) out.push(it); return out; }
+// Which net lines a dragged item attaches to at a point (pins and sheet pins take wires only).
+function lineKindsFor(item) { return item.kind === "bus" ? ["bus"] : item.kind === "symbol" || item.kind === "sheet" || item.kind === "wire" || item.kind === "no_connect" ? ["wire"] : ["wire", "bus"]; }
+
+// One anchor per connection point: the line ends that stretch, the stub wire to create and the
+// no-connects that follow.  `moving` holds the ids travelling with the drag; they never anchor.
+function makeAnchor(doc, item, p, moving) {
+  const a = { p: [r4(p[0]), r4(p[1])], ends: [], stub: null, followers: [] };
+  const j = junctionAt(doc, p[0], p[1]);
+  const fixedJunction = j && !moving.has(j.id) ? j : null;
+  const ends = [];
+  for (const kd of lineKindsFor(item)) for (const e of lineEndsAt(doc, p[0], p[1], kd)) if (!moving.has(e.item.id) && ptsOf(e.item.node).length > 1) ends.push(e);
+  // An unselected junction on the point isolates the lines from the drag: the junction itself
+  // gets the new stub wire and the lines stay put (getConnectedDragItems' ptHasUnselectedJunction).
+  if (fixedJunction) a.stub = { from: a.p, kind: item.kind === "bus" || ends.some((e) => e.item.kind === "bus") ? "bus" : "wire" };
+  else for (const e of ends) a.ends.push({ item: e.item, index: e.index, orig: ptsOf(e.item.node).map((q) => q.slice()) });
+  if (!a.stub && item.kind !== "no_connect") {
+    const fixed = pinsAt(doc, p[0], p[1]).some((q) => !moving.has(q.item.id))
+      || labelsAt(doc, a.p, item).some((l) => !moving.has(l.id))
+      || sheetPinsAt(doc, a.p, item).some((s) => !moving.has(s.id))
+      || (item.kind !== "bus_entry" && busEntriesAt(doc, a.p, item).some((b) => !moving.has(b.id)));
+    if (fixed) a.stub = { from: a.p, kind: item.kind === "bus" ? "bus" : "wire" };
+    else if (LABEL_KINDS.has(item.kind)) {           // a label dragged off the middle of a line splits it (KiCad adds the junction)
+      for (const kd of ["wire", "bus"]) { const mids = lineMidsAt(doc, p[0], p[1], kd).filter((m) => !moving.has(m.id) && ptsOf(m.node).length === 2); if (mids.length) { a.stub = { from: a.p, kind: kd, split: mids[0] }; break; } }
+    }
+  }
+  if (item.kind !== "no_connect") for (const nc of noConnectsAt(doc, a.p, item)) if (!moving.has(nc.id)) a.followers.push({ item: nc, orig: atOf(nc.node).slice(0, 2) });
+  return a;
+}
+// Items riding on a dragged net line: labels, junctions, entries and no-connects sitting on it.
+// A junction at an end of the line is not a rider — it stays and gets a stub wire instead.
+function ridersOf(doc, item) {
+  const out = []; if (!isNetLine(item.kind)) return out;
+  const pts = ptsOf(item.node); if (pts.length < 2) return out;
+  const endsP = [pts[0], pts[pts.length - 1]], sg = segs(item);
+  for (const it of doc.items.values()) {
+    if (!RIDER_KINDS.has(it.kind) || it === item) continue;
+    const cps = it.kind === "bus_entry" ? connPoints(doc, it) : [atOf(it.node).slice(0, 2)];
+    if (!cps.some((c) => sg.some(([a, b]) => segDist(c, a, b) <= 1e-3))) continue;
+    if (it.kind === "junction" && endsP.some((e) => same(e, atOf(it.node)))) continue;
+    out.push({ item: it, orig: atOf(it.node).slice(0, 2) });
+  }
+  return out;
+}
+
+// End state of a stretched 2-point line: fixed end Q, moving end P -> Pn.  90°/45° keep an
+// orthogonal line on its axis and add a bend; anything else (free mode, diagonal lines) stretches.
+function bendPath(Q, P, Pn, lineMode) {
+  if (same(P, Pn)) return [Q, P];
+  if (lineMode === "free" || same(Q, P)) return [Q, Pn];
+  const horiz = Math.abs(Q[1] - P[1]) <= 1e-3, vert = Math.abs(Q[0] - P[0]) <= 1e-3;
+  if (!horiz && !vert) return [Q, Pn];
+  let C = horiz ? [Pn[0], Q[1]] : [Q[0], Pn[1]];
+  if (lineMode === "45") {                                 // the jog leaves the axis at 45°
+    const ax = Math.abs(Pn[0] - Q[0]), ay = Math.abs(Pn[1] - Q[1]);
+    const C45 = horiz ? [r4(Pn[0] - Math.sign(Pn[0] - Q[0]) * ay), Q[1]] : [Q[0], r4(Pn[1] - Math.sign(Pn[1] - Q[1]) * ax)];
+    const run = horiz ? (C45[0] - Q[0]) * (Pn[0] - Q[0]) : (C45[1] - Q[1]) * (Pn[1] - Q[1]);
+    if (run > 1e-6) C = C45; else if ((horiz ? ax : ay) <= 1e-6) return [Q, Pn];
+  }
+  C = [r4(C[0]), r4(C[1])];
+  if (same(C, Q) || same(C, Pn)) return [Q, Pn];
+  return [Q, C, Pn];
+}
+// New point list for a stretched end plus the extra bend segment (null when there is none).
+function endGeometry(e, Pn, lineMode) {
+  const pts = e.orig.map((q) => q.slice());
+  if (pts.length !== 2) { pts[e.index] = Pn.slice(); return { pts, extra: null, zero: false }; }
+  const P = pts[e.index], Q = pts[e.index === 0 ? 1 : 0];
+  const path = bendPath(Q, P, Pn, lineMode);
+  if (path.length === 3) return { pts: e.index === 0 ? [path[1], path[0]] : [path[0], path[1]], extra: [path[1], path[2]], zero: false };
+  return { pts: e.index === 0 ? [path[1], path[0]] : [path[0], path[1]], extra: null, zero: same(path[0], path[1]) };
+}
+function restoreNode(node, orig) { node.length = 0; for (const c of deep(orig)) node.push(c); }
+function lineCovers(doc, kind, a, b) {                   // an existing collinear line already spans a-b
+  for (const it of doc.items.values()) { if (it.kind !== kind) continue; for (const [s, e] of segs(it)) if (segDist(a, s, e) <= 1e-3 && segDist(b, s, e) <= 1e-3) return true; }
+  return false;
+}
+
+function beginDrag(ctx, item, mm, byPointer) {
+  const doc = ctx.doc; if (!item || !DRAG_KINDS.has(item.kind)) return null;
+  if (S.drag) endDrag(ctx, false);
+  const anchor0 = anchorOf(item.kind, item.node);
+  const d = { item, kind: item.kind, orig: deep(item.node), anchor0, grab: [mm[0] - anchor0[0], mm[1] - anchor0[1]], last: [0, 0], applied: [0, 0],
+    moved: false, byPointer: !!byPointer, riders: ridersOf(doc, item), anchors: [], preview: [] };
+  const moving = new Set([item.id, ...d.riders.map((r) => r.item.id)]);
+  for (const p of connPoints(doc, item)) d.anchors.push(makeAnchor(doc, item, p, moving));
+  for (const r of d.riders) {
+    if (r.item.kind === "junction") d.anchors.push(makeAnchor(doc, r.item, r.orig, moving));
+    else if (r.item.kind === "bus_entry") for (const p of connPoints(doc, r.item)) d.anchors.push(makeAnchor(doc, r.item, p, moving));
+  }
+  const seenEnd = new Set();                                // a line end belongs to one anchor only
+  for (const a of d.anchors) { a.ends = a.ends.filter((e) => { const k = e.item.id + ":" + e.index; if (seenEnd.has(k)) return false; seenEnd.add(k); return true; }); for (const f of a.followers) moving.add(f.item.id); }
+  S.drag = d; announceModes(ctx); return d;
+}
+// Live preview: the moved items and stretched ends are edited in place (restored by endDrag),
+// stub wires are drawn from d.preview by the overlay.
 function applyDrag(doc, d, dx, dy) {
-  if (d.orig) { setPts(d.item.node, d.orig.map(([x, y]) => [x + dx, y + dy])); K.replaceChange(doc, d.item); }
-  for (const e of d.ends) { const p = e.orig.map((q) => q.slice()); p[e.index] = [p[e.index][0] + dx, p[e.index][1] + dy]; setPts(e.item.node, p); K.replaceChange(doc, e.item); }
-  for (const q of d.pts) { shiftNode(q.item.kind, q.item.node, r4(q.orig[0] + dx - atOf(q.item.node)[0]), r4(q.orig[1] + dy - atOf(q.item.node)[1])); K.replaceChange(doc, q.item); }
+  if (!dx && !dy) { restoreNode(d.item.node, d.orig); }
+  else shiftNode(d.kind, d.item.node, r4(dx - d.applied[0]), r4(dy - d.applied[1]));
+  d.applied = [dx, dy]; K.replaceChange(doc, d.item);
+  for (const r of d.riders) { const [cx, cy] = atOf(r.item.node); shiftNode(r.item.kind, r.item.node, r4(r.orig[0] + dx - cx), r4(r.orig[1] + dy - cy)); K.replaceChange(doc, r.item); }
+  d.preview = [];
+  const connected = S.dragMode === "drag";
+  for (const a of d.anchors) {
+    const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)];
+    for (const e of a.ends) {
+      let pts = e.orig.map((q) => q.slice());
+      if (connected) { const g = endGeometry(e, Pn, S.lineMode); pts = g.extra ? (e.index === 0 ? [g.extra[1], g.extra[0], g.pts[1]] : [g.pts[0], g.extra[0], g.extra[1]]) : g.pts; }
+      setPts(e.item.node, pts); K.replaceChange(doc, e.item);
+    }
+    for (const f of a.followers) { const to = connected ? Pn : f.orig; const [cx, cy] = atOf(f.item.node); shiftNode("no_connect", f.item.node, r4(to[0] - cx), r4(to[1] - cy)); K.replaceChange(doc, f.item); }
+    if (connected && a.stub && !same(a.p, Pn)) d.preview.push({ kind: a.stub.kind, pts: [a.p, Pn] });
+  }
 }
 function moveDrag(ctx, mm) {
   const d = S.drag; if (!d) return;
-  const s = ctx.snap([mm[0], mm[1]]); let dx = r4(s[0] - d.start[0]), dy = r4(s[1] - d.start[1]);
-  if (d.axis === "y") dx = 0; if (d.axis === "x") dy = 0;
+  const t = ctx.snap([mm[0] - d.grab[0], mm[1] - d.grab[1]]);
+  const dx = r4(t[0] - d.anchor0[0]), dy = r4(t[1] - d.anchor0[1]);
   if (dx === d.last[0] && dy === d.last[1]) return;
   d.last = [dx, dy]; d.moved = true;
   applyDrag(ctx.doc, d, dx, dy); ctx.requestRender();
@@ -373,12 +517,80 @@ function endDrag(ctx, commit) {
   const [dx, dy] = d.last, doc = ctx.doc;
   applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
   if (!commit || !d.moved || (!dx && !dy)) { ctx.requestRender(); return; }
-  const changes = [];
-  if (d.orig) { const n = deep(d.item.node); setPts(n, d.orig.map(([x, y]) => [x + dx, y + dy])); changes.push(modChange(doc, d.item, n)); }
-  for (const e of d.ends) { const n = deep(e.item.node); const p = e.orig.map((q) => q.slice()); p[e.index] = [p[e.index][0] + dx, p[e.index][1] + dy]; setPts(n, p); changes.push(modChange(doc, e.item, n)); }
-  for (const q of d.pts) { const n = deep(q.item.node); shiftNode(q.item.kind, n, dx, dy); changes.push(modChange(doc, q.item, n)); }
-  ctx.commit(changes, d.orig ? "drag" : "move");
+  const changes = dragChanges(ctx, d, dx, dy);
+  if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move");
   ctx.requestRender();
+}
+function cancelDrag(ctx) { if (S.drag) endDrag(ctx, false); }
+
+// The committed change set for a finished drag, built from cloned nodes.
+function dragChanges(ctx, d, dx, dy) {
+  const doc = ctx.doc, connected = S.dragMode === "drag", out = new Map();
+  const put = (c) => {
+    const prev = out.get(c.id);
+    if (prev && prev.kind === "ADDED" && c.kind === "REMOVED") { out.delete(c.id); doc.items.delete(c.id); return; }
+    if (prev && prev.kind === "ADDED" && c.kind === "MODIFIED") c = Object.assign({}, c, { kind: "ADDED" });
+    out.set(c.id, c);
+  };
+  const touched = [];
+  { const n = deep(d.item.node); shiftNode(d.kind, n, dx, dy); put(modChange(doc, d.item, n)); }
+  for (const r of d.riders) { const n = deep(r.item.node); shiftNode(r.item.kind, n, dx, dy); put(modChange(doc, r.item, n)); }
+  for (const p of connPoints(doc, d.item)) touched.push(p, [r4(p[0] + dx), r4(p[1] + dy)]);
+  if (connected) for (const a of d.anchors) {
+    const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
+    for (const e of a.ends) {
+      const g = endGeometry(e, Pn, S.lineMode);
+      if (g.zero) { put(K.removeChange(e.item)); continue; }
+      const n = deep(e.item.node); setPts(n, g.pts); put(modChange(doc, e.item, n));
+      if (g.extra) { put(addNode(doc, lineNode(e.item.kind, g.extra[0], g.extra[1])).change); touched.push(g.extra[0]); }
+    }
+    for (const f of a.followers) { const n = deep(f.item.node); setAt(n, Pn[0], Pn[1]); put(modChange(doc, f.item, n)); }
+    if (a.stub && !same(a.p, Pn)) {
+      if (a.stub.split) {                        // the line the label sat on becomes two lines meeting at the stub
+        const m = a.stub.split, mp = ptsOf(m.node), n = deep(m.node);
+        setPts(n, [mp[0], a.p]); put(modChange(doc, m, n));
+        put(addNode(doc, lineNode(m.kind, a.p, mp[1])).change);
+      }
+      if (!lineCovers(doc, a.stub.kind, a.p, Pn)) put(addNode(doc, lineNode(a.stub.kind, a.p, Pn)).change);
+    }
+  }
+  const keep = new Set([d.item.id, ...d.riders.map((r) => r.item.id)]);
+  for (const c of cleanupAt(doc, Array.from(out.values()), touched, keep, ctx.IU || 1e4)) put(c);
+  for (const c of out.values()) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
+  return Array.from(out.values());
+}
+// SCHEMATIC::CleanUp + AddJunctionsIfNeeded around the touched points, evaluated on a dry run
+// of the changes (applied, inspected, then swapped back so the document is untouched).
+function cleanupAt(doc, changes, touched, keep, IU) {
+  const saved = new Map(); for (const c of changes) if (!saved.has(c.id)) saved.set(c.id, doc.items.get(c.id) || null);
+  for (const c of changes) K.applyChange(doc, c, IU);
+  const out = [], seen = new Set();
+  try {
+    for (const p of touched) {
+      const k = r4(p[0]) + "," + r4(p[1]); if (seen.has(k)) continue; seen.add(k);
+      const j = junctionAt(doc, p[0], p[1]);
+      const needed = needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus");
+      const dropJ = j && !needed && !keep.has(j.id);
+      if (dropJ) out.push(K.removeChange(j));
+      else if (!j && needed) out.push(addNode(doc, junctionNode(p)).change);
+      if ((!j || dropJ) && !needed) for (const kd of ["wire", "bus"]) { const m = mergeAt(doc, p, kd); if (m) { out.push(...m); break; } }
+    }
+  } finally {
+    for (const [id, obj] of saved) { if (obj) doc.items.set(id, obj); else doc.items.delete(id); }
+  }
+  return out;
+}
+// Two same-kind lines meeting end to end at p with nothing else there: one straight line.
+function mergeAt(doc, p, kind) {
+  const ends = lineEndsAt(doc, p[0], p[1], kind); if (ends.length !== 2 || ends[0].item === ends[1].item) return null;
+  if (pinsAt(doc, p[0], p[1]).length || labelsAt(doc, p).length || sheetPinsAt(doc, p).length || noConnectsAt(doc, p).length || busEntriesAt(doc, p).length) return null;
+  if (lineMidsAt(doc, p[0], p[1], "wire").length || lineMidsAt(doc, p[0], p[1], "bus").length) return null;
+  const [A, B] = ends, pa = ptsOf(A.item.node), pb = ptsOf(B.item.node); if (pa.length !== 2 || pb.length !== 2) return null;
+  const fa = pa[A.index === 0 ? 1 : 0], fb = pb[B.index === 0 ? 1 : 0];
+  const u = [fa[0] - p[0], fa[1] - p[1]], v = [fb[0] - p[0], fb[1] - p[1]];
+  if (Math.abs(u[0] * v[1] - u[1] * v[0]) > 1e-6 || u[0] * v[0] + u[1] * v[1] >= 0) return null;   // must run straight through p
+  const n = deep(A.item.node); setPts(n, A.index === 0 ? [fb, fa] : [fa, fb]);
+  return [modChange(doc, A.item, n), K.removeChange(B.item)];
 }
 
 // ---------------------------------------------------------------- edits on the current selection
@@ -560,10 +772,16 @@ function drawOverlay(c, view, ctx) {
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
   if (S.hover && S.hover !== S.sel && !S.drag) { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
   if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
-  if (S.drag) { const it = S.drag.item; if (it) outline(c, it, CLR.sel, px, 2); }
+  if (S.drag) {
+    const it = S.drag.item; if (it) outline(c, it, CLR.sel, px, 2);
+    for (const s of S.drag.preview || []) {                 // new wires the drop will create
+      c.save(); c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(s.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.globalAlpha = 0.85;
+      c.beginPath(); c.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) c.lineTo(s.pts[i][0], s.pts[i][1]); c.stroke(); c.restore();
+    }
+  }
   const w = S.wire;
   if (w) {
-    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w)));
+    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w), w.flip));
     c.save(); c.strokeStyle = w.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(w.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round";
     c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); c.stroke();
     c.fillStyle = CLR.sel; const h = 3 * px; for (const p of w.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
@@ -582,7 +800,7 @@ function drawOverlay(c, view, ctx) {
 
 // ---------------------------------------------------------------- hooks (see app.js "editing tools")
 function onActivate(toolId, ctx) {
-  S.ctx = ctx; installDom(ctx);
+  S.ctx = ctx; installDom(ctx); announceModes(ctx);
   S.tool = toolId;
   if (S.wire) finishWire(ctx);                    // leaving the wire tool keeps what was drawn
   closePrompt(); S.pending = null; if (S.drag) endDrag(ctx, false);
@@ -659,7 +877,13 @@ function onKey(key, ev, ctx) {
   case "x": case "X": return orientSelected(ctx, "x");
   case "y": case "Y": return orientSelected(ctx, "y");
   case "d": case "D": return duplicateSelected(ctx);
-  case "g": case "G": { const it = S.sel && !S.drag ? ctx.doc.items.get(S.sel) : null; if (!it || !S.cursor) return false; return !!beginDrag(ctx, it, S.cursor, false); }
+  case "g": case "G": case "m": case "M": {
+    setDragMode(ctx, lower === "m" ? "move" : "drag");
+    if (S.drag) return true;                                // switched mid-drag: the preview re-resolved
+    const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it || !S.cursor) return true;
+    return !!beginDrag(ctx, it, S.cursor, false);
+  }
+  case " ": if (ev && ev.shiftKey) { cycleLineMode(ctx); return true; } return false;
   case "Delete": case "Backspace": return deleteSelected(ctx);
   default: return false;
   }
@@ -667,7 +891,7 @@ function onKey(key, ev, ctx) {
 function onDocChanged(ctx) {
   S.ctx = ctx; installDom(ctx);
   S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null;
-  closePrompt(); closePicker();
+  closePrompt(); closePicker(); announceModes(ctx);
   S.tool = curTool();
 }
 
@@ -677,8 +901,10 @@ root.CollabTools.sch = {
   onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged,
   // for tests and the props panel
   state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; },
+  // connected drag engine, shared with app.js's select tool (symbols and sheets)
+  beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   _: { lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
     tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
-    beginDrag, moveDrag, endDrag, placeText, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange },
+    beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange },
 };
 })(typeof window !== "undefined" ? window : globalThis);

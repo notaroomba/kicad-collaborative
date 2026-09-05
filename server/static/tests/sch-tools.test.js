@@ -291,24 +291,151 @@ test("delete removes the selected wire and the junction it alone justified", () 
   assert.strictEqual(sch.onKey("Delete", {}, ctx), false, "nothing selected -> app.js keeps the key");
 });
 
-test("drag (G): a horizontal segment moves across itself and attached ends stretch", () => {
+// ---- connected drag (KiCad's sch_move_tool DRAG semantics) ----
+function fresh() { const d = K.parseDoc(SHEET), c = makeCtx(d); sch.onDocChanged(c); sch.setDragMode(c, "drag"); sch.setLineMode(c, "90"); return { d, c }; }
+function addR(doc, at) { return K.createItem(doc, _.symbolNode(doc, "Device:R", at, 0, "")); }
+function addWire(doc, a, b) { return K.createItem(doc, _.lineNode("wire", a, b)); }
+function dragItem(c, item, from, to) { assert.ok(_.beginDrag(c, item, from, true), "drag started"); _.moveDrag(c, to); _.endDrag(c, true); return lastCommit(c); }
+const ofType = (c, t) => c.changes.filter((x) => x.typeName === t);
+const linesOf = (c, kind) => ofType(c, "SCH_LINE").filter((x) => x.kind === kind).map((x) => ptsOf(fragItem(x)));
+
+test("bendPath: 90° keeps the wire on its axis and adds the perpendicular bend; free stretches", () => {
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [10, 5], "90"), [[0, 0], [10, 0], [10, 5]]);
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [15, 5], "90"), [[0, 0], [15, 0], [15, 5]]);
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [0, 5], "90"), [[0, 0], [0, 5]], "collapsed run leaves just the bend");
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [12, 0], "90"), [[0, 0], [12, 0]], "on-axis drag just stretches");
+  assert.deepStrictEqual(_.bendPath([0, 0], [0, 10], [5, 15], "90"), [[0, 0], [0, 15], [5, 15]]);
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [15, 5], "free"), [[0, 0], [15, 5]]);
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 10], [15, 5], "90"), [[0, 0], [15, 5]], "a diagonal wire stretches");
+  assert.deepStrictEqual(_.bendPath([0, 0], [10, 0], [15, 5], "45"), [[0, 0], [10, 0], [15, 5]], "45°: the jog leaves at 45°");
+});
+
+test("pin on pin (the GND case): dragging the symbol away spawns a wire between the two pins", () => {
+  const { d, c } = fresh();
+  const r2 = addR(d, [25.4, 107.95]);                              // pin 1 lands on R1's pin 2 at (25.4, 104.14)
+  assert.ok(_.connPoints(d, r2).some((p) => p[0] === 25.4 && p[1] === 104.14));
+  assert.ok(_.beginDrag(c, r2, [25.4, 107.95], true));
+  _.moveDrag(c, [25.4, 115.57]);
+  assert.deepStrictEqual(sch.state.drag.preview, [{ kind: "wire", pts: [[25.4, 104.14], [25.4, 111.76]] }], "the stub is previewed while dragging");
+  assert.deepStrictEqual(atOf(r2.node).slice(0, 2), [25.4, 115.57], "live preview moves the symbol");
+  _.endDrag(c, true);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "drag");
+  assert.ok(/\(at 25\.4 107\.95 0\)/.test(cm.before[cm.changes.findIndex((x) => x.id === r2.id)]), "original restored before commit (undo)");
+  assert.deepStrictEqual(atOf(fragItem(cm.changes.find((x) => x.id === r2.id))).slice(0, 2), [25.4, 115.57]);
+  assert.deepStrictEqual(linesOf(cm, "ADDED"), [[[25.4, 104.14], [25.4, 111.76]]]);
+  assert.strictEqual(ofType(cm, "SCH_JUNCTION").length, 0);
+  assert.ok(Array.from(d.items.values()).some((it) => it.kind === "wire" && ptsOf(it.node)[1][1] === 111.76), "wire applied to the document");
+});
+
+test("move (M) is KiCad's plain move: the symbol goes, the connection is left behind", () => {
+  const { d, c } = fresh();
+  const r2 = addR(d, [25.4, 107.95]);
+  sch.setDragMode(c, "move");
+  assert.ok(_.beginDrag(c, r2, [25.4, 107.95], true)); _.moveDrag(c, [25.4, 115.57]);
+  assert.deepStrictEqual(sch.state.drag.preview, []);
+  _.endDrag(c, true);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "move");
+  assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.id]), [["MODIFIED", r2.id]]);
+  assert.strictEqual(sch.state.dragMode, "move");
+});
+
+test("attached wire: 90° bends (wire stays on its axis + new bend segment), 45° jogs, free stretches diagonally", () => {
+  let { d, c } = fresh();
+  let w = addWire(d, [12.7, 96.52], [25.4, 96.52]);               // horizontal wire into R1 pin 1
+  let cm = dragItem(c, d.items.get("s1"), [25.4, 100.33], [38.1, 113.03]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === w.id))), [[12.7, 96.52], [38.1, 96.52]]);
+  assert.deepStrictEqual(linesOf(cm, "ADDED"), [[[38.1, 96.52], [38.1, 109.22]]]);
+  assert.strictEqual(ofType(cm, "SCH_JUNCTION").length, 0, "a corner needs no junction");
+  ({ d, c } = fresh()); w = addWire(d, [12.7, 96.52], [25.4, 96.52]);
+  sch.setLineMode(c, "45");
+  cm = dragItem(c, d.items.get("s1"), [25.4, 100.33], [38.1, 113.03]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === w.id))), [[12.7, 96.52], [25.4, 96.52]]);
+  assert.deepStrictEqual(linesOf(cm, "ADDED"), [[[25.4, 96.52], [38.1, 109.22]]]);
+  ({ d, c } = fresh()); w = addWire(d, [12.7, 96.52], [25.4, 96.52]);
+  sch.setLineMode(c, "free");
+  cm = dragItem(c, d.items.get("s1"), [25.4, 100.33], [38.1, 113.03]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === w.id))), [[12.7, 96.52], [38.1, 109.22]]);
+  assert.strictEqual(linesOf(cm, "ADDED").length, 0);
+  assert.strictEqual(sch.cycleLineMode(c), "90");
+});
+
+test("junction under a pin: the wires stay put and the junction gets the stub wire", () => {
+  const { d, c } = fresh();
+  const r3 = addR(d, [63.5, 59.69]);                               // pin 2 on junction j1 (63.5, 63.5)
+  const cm = dragItem(c, r3, [63.5, 59.69], [76.2, 46.99]);
+  for (const id of ["w1", "w2", "w3", "j1"]) assert.ok(!cm.changes.some((x) => x.id === id), id + " untouched");
+  assert.deepStrictEqual(linesOf(cm, "ADDED"), [[[63.5, 63.5], [76.2, 50.8]]]);
+});
+
+test("dragging the stem off a T drops the junction and merges the bar into one wire", () => {
+  const { d, c } = fresh();
+  const cm = dragItem(c, d.items.get("w3"), [63.5, 70], [76.2, 70]);
+  const kinds = Object.fromEntries(cm.changes.map((x) => [x.id, x.kind]));
+  assert.deepStrictEqual(kinds, { w3: "MODIFIED", j1: "REMOVED", w1: "MODIFIED", w2: "REMOVED" });
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === "w3"))), [[76.2, 63.5], [76.2, 76.2]]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === "w1"))), [[50.8, 63.5], [76.2, 63.5]]);
+  assert.ok(!d.items.has("j1") && !d.items.has("w2"));
+});
+
+test("dropping a pin on the middle of a wire adds the junction KiCad would", () => {
+  const { d, c } = fresh();
+  const cm = dragItem(c, d.items.get("s1"), [25.4, 100.33], [133.35, 54.61]);   // pin 1 -> (133.35, 50.8) on w5
+  const js = ofType(cm, "SCH_JUNCTION");
+  assert.strictEqual(js.length, 1); assert.strictEqual(js[0].kind, "ADDED");
+  assert.deepStrictEqual(atOf(fragItem(js[0])).slice(0, 2), [133.35, 50.8]);
+});
+
+test("a label dragged off a wire's middle splits the wire, takes a stub and gets a junction", () => {
+  const { d, c } = fresh();
+  const cm = dragItem(c, d.items.get("l1"), [55.88, 63.5], [55.88, 66.04]);
+  assert.deepStrictEqual(atOf(fragItem(cm.changes.find((x) => x.id === "l1"))).slice(0, 2), [55.88, 66.04]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === "w1"))), [[50.8, 63.5], [55.88, 63.5]]);
+  assert.deepStrictEqual(linesOf(cm, "ADDED").sort(), [[[55.88, 63.5], [55.88, 66.04]], [[55.88, 63.5], [63.5, 63.5]]].sort());
+  const js = ofType(cm, "SCH_JUNCTION").filter((x) => x.kind === "ADDED");
+  assert.strictEqual(js.length, 1); assert.deepStrictEqual(atOf(fragItem(js[0])).slice(0, 2), [55.88, 63.5]);
+});
+
+test("no-connect flags follow the pin they sit on", () => {
+  const { d, c } = fresh();
+  const nc = K.createItem(d, _.noConnectNode([25.4, 104.14]));
+  const cm = dragItem(c, d.items.get("s1"), [25.4, 100.33], [38.1, 100.33]);
+  assert.deepStrictEqual(atOf(fragItem(cm.changes.find((x) => x.id === nc.id))).slice(0, 2), [38.1, 104.14]);
+});
+
+test("drag (G) of a wire segment: attached ends stretch, riders come along, Escape restores", () => {
   const d2 = K.parseDoc(SHEET), c2 = makeCtx(d2); sch.onDocChanged(c2);
   sch.select("w5"); sch.state.cursor = [130, 50.8];
-  assert.ok(sch.onKey("g", {}, c2)); assert.ok(sch.state.drag && sch.state.drag.axis === "y");
-  _.moveDrag(c2, [135, 53.4]);
+  assert.ok(sch.onKey("g", {}, c2)); assert.ok(sch.state.drag && sch.state.dragMode === "drag");
+  _.moveDrag(c2, [130, 53.4]);
   assert.deepStrictEqual(ptsOf(d2.items.get("w5").node), [[127, 53.34], [139.7, 53.34]], "live preview");
   assert.deepStrictEqual(ptsOf(d2.items.get("w6").node), [[139.7, 53.34], [139.7, 63.5]], "attached end follows, far end stays");
+  assert.ok(sch.onKey("m", {}, c2), "M mid-drag switches to a plain move");
+  assert.deepStrictEqual(ptsOf(d2.items.get("w6").node), [[139.7, 50.8], [139.7, 63.5]], "…and the attached end springs back");
+  assert.ok(sch.onKey("g", {}, c2));
   _.endDrag(c2, true);
   const c = lastCommit(c2); assert.strictEqual(c.label, "drag");
   assert.ok(/\(xy 127 50\.8\)/.test(c.before[c.changes.findIndex((x) => x.id === "w5")]), "originals restored before commit, so undo is right");
   const w5 = fragItem(c.changes.find((x) => x.id === "w5")), w6 = fragItem(c.changes.find((x) => x.id === "w6"));
   assert.deepStrictEqual(ptsOf(w5), [[127, 53.34], [139.7, 53.34]]); assert.deepStrictEqual(ptsOf(w6), [[139.7, 53.34], [139.7, 63.5]]);
-  assert.deepStrictEqual(ptsOf(d2.items.get("w6").node), [[139.7, 53.34], [139.7, 63.5]]);
   // a label on the segment rides along; escape cancels cleanly
   sch.select("w1"); sch.state.cursor = [55, 63.5]; sch.onKey("g", {}, c2); _.moveDrag(c2, [55, 66.04]);
   assert.deepStrictEqual(atOf(d2.items.get("l1").node).slice(0, 2), [55.88, 66.04]);
+  assert.deepStrictEqual(sch.state.drag.preview, [{ kind: "wire", pts: [[63.5, 63.5], [63.5, 66.04]] }], "the end junction stays and offers a stub");
   _.endDrag(c2, false); assert.deepStrictEqual(atOf(d2.items.get("l1").node).slice(0, 2), [55.88, 63.5]);
   assert.deepStrictEqual(ptsOf(d2.items.get("w1").node), [[50.8, 63.5], [63.5, 63.5]]);
+});
+
+test("wire tool honours the line mode: free draws straight legs, 45° adds the diagonal", () => {
+  const { c } = fresh();
+  sch.setLineMode(c, "free");
+  sch.onActivate("wire", c); sch.onPointerDown(ev(), [152.4, 88.9], c); sch.onPointerMove(ev(), [165.1, 101.6], c); sch.onPointerDown(ev(), [165.1, 101.6], c);
+  assert.deepStrictEqual(sch.state.wire.pts, [[152.4, 88.9], [165.1, 101.6]]);
+  sch.state.wire = null; sch.onActivate("select", c);
+  sch.setLineMode(c, "45");
+  sch.onActivate("wire", c); sch.onPointerDown(ev(), [152.4, 88.9], c); sch.onPointerMove(ev(), [177.8, 101.6], c); sch.onPointerDown(ev(), [177.8, 101.6], c);
+  assert.deepStrictEqual(sch.state.wire.pts, [[152.4, 88.9], [165.1, 88.9], [177.8, 101.6]], "straight run then 45°");
+  sch.state.wire = null; sch.onActivate("select", c);
+  sch.setLineMode(c, "90");
 });
 
 test("leaving the tool keeps the fixed segments; view-only ignores editing keys", () => {

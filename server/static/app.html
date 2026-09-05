@@ -329,6 +329,7 @@
       <button class="tb on" data-act="grid" title="Show grid (G)"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 12h16M12 4v16"/></svg></button>
       <button class="tb on" data-act="snap" title="Snap to grid (N)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg> Snap</button>
       <select id="gridSel" class="tb" title="Grid pitch" style="background:var(--panel-2);border-color:var(--line)"></select>
+      <button class="tb" data-act="linemode" id="lineModeBtn" title="Wire angle mode: 90° (Shift+Space)" style="display:none;min-width:44px;font:12px var(--mono)">90°</button>
       <button class="tb" data-act="checkpoint" title="Create a named checkpoint"><svg viewBox="0 0 24 24"><path d="M12 3v12M6 9l6 6 6-6M4 21h16"/></svg> Checkpoint</button>
       <span style="flex:1"></span>
       <span class="muted" id="hint">scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes</span>
@@ -369,6 +370,7 @@
     <span id="sbProject"></span>
     <span class="spacer"></span>
     <span id="sbGrid"></span>
+    <span id="sbMode"></span>
     <span id="sbCursor">X 0.000  Y 0.000 mm</span>
     <span id="sbZoom">100%</span>
     <span id="sbEdits"></span>
