@@ -223,6 +223,17 @@ let gridOn = true, snapOn = true, gridPitch = 1.27;
 // render display options (hidden pins, outline modes, high contrast), measure/zoom tools, sheet navigation
 let localOrigin = [0, 0], lastCursorMm = [0, 0], polarCoords = false, crosshairMode = "small", renderOpts = {}, measure = null, zoomRect = null, activeLayer = "";
 const docNav = { list: [], idx: -1, lock: false };
+// Multi-selection (box / lasso, Shift-click, Ctrl+A): ids of any document items; `selected` stays the
+// primary footprint/symbol the Properties panel shows.  highlightIds = the net-highlight tool's set.
+let selection = new Set(), selMode = "rect", boxSel = null, highlightIds = null;
+function selectedSet() { const s = new Set(selection); if (selected) s.add(selected.id); return s.size ? s : null; }
+function clearSelection() { selection.clear(); selected = null; if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null); }
+// KiCad's selection filter categories for an item kind.
+function filterKey(kind) {
+  if (isSch()) return kind === "symbol" ? "symbols" : (kind === "wire" || kind === "bus") ? "wires" : /label|netclass_flag/.test(kind) ? "labels" : kind === "image" ? "images" : (kind === "text" || kind === "text_box") ? "text" : /rectangle|circle|arc|polyline|bezier|rule_area/.test(kind) ? "graphics" : "other";
+  return kind === "footprint" ? "footprints" : (kind === "segment" || kind === "arc") ? "tracks" : kind === "via" ? "vias" : kind === "zone" ? "zones" : kind === "dimension" ? "dimensions" : (kind === "gr_text" || kind === "gr_text_box") ? "text" : /^gr_|image|table/.test(kind) ? "graphics" : "other";
+}
+function filterAllows(kind) { const f = KUI.filter(); const k = filterKey(kind); return f[k] !== false; }
 let renderReq = 0;
 const GRID_CHOICES = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
 function requestRender() { if (renderReq || !kdoc) return; renderReq = requestAnimationFrame(() => { renderReq = 0; drawCanvas(); }); }
@@ -234,7 +245,7 @@ function drawCanvas() {
   if (!kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
   const view = { ppm, zoom, panX, panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
-  KiCadCanvas.render(kdoc, cctx, view, Object.assign({ hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null }, renderOpts));
+  KiCadCanvas.render(kdoc, cctx, view, Object.assign({ hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selectedSet(), highlight: highlightIds }, renderOpts));
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
 }
@@ -308,7 +319,8 @@ function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.s
 function toolCtx(extra) {
   return Object.assign({
     K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool, selFilter: KUI.filter(), activeLayer,
-    selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm,
+    selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm, selection, docs: state.docs, project: state.project, api,
+    setHighlight(ids) { highlightIds = ids && ids.size ? new Set(ids) : null; requestRender(); },
     setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     commit(changes, label) { commitChanges(changes, label); },
     applyLocal(changes) { applyChanges(changes); },
@@ -419,7 +431,7 @@ function leaveDoc() {
   connectGen++;   // any connect() still waiting for its ticket must give up
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   clearInterval(renderTimer); renderTimer = 0;
-  items = []; sheets = []; selected = null; drag = null; peerState = {}; comments = []; followPeer = null; layers = {};
+  items = []; sheets = []; selected = null; drag = null; boxSel = null; selection = new Set(); highlightIds = null; peerState = {}; comments = []; followPeer = null; layers = {};
   kdoc = null; layersSeeded = false; canvas.style.display = "none"; if (renderReq) { cancelAnimationFrame(renderReq); renderReq = 0; }
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
   cmtPanel.style.display = "none"; objFilter = "";
@@ -681,6 +693,13 @@ stage.addEventListener("dblclick", (ev) => {
   if (sh) enterSheet(sh.file);
 });
 stage.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || tool !== "select" || !kdoc || selection.size < 2 || viewOnly || ev.shiftKey) return;
+  const mm = worldMm(ev); const hit = hitAny(mm);
+  if (!hit || !selection.has(hit.id)) return;
+  ev.stopImmediatePropagation(); ev.preventDefault();
+  startGroupDrag(hit, mm, ev);
+}, true);
+stage.addEventListener("pointerdown", (ev) => {
   if (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay")) return;
   if (ev.button === 2 || ev.button === 1 || (ev.button === 0 && tool === "pan")) {
     pan = { x: ev.clientX - panX, y: ev.clientY - panY };
@@ -695,7 +714,17 @@ stage.addEventListener("pointerdown", (ev) => {
   if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly) { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
-  if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
+  if (!best) {
+    if (!ev.shiftKey) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
+    if (tool === "select" && kdoc) { boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: selMode === "lasso", add: ev.shiftKey, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
+    return;
+  }
+  if (ev.shiftKey) {                                   // KiCad: Shift+click adds to / removes from the selection
+    if (selection.has(best.id)) selection.delete(best.id); else selection.add(best.id);
+    selected = selection.has(best.id) ? best : (selected && selected.id === best.id ? null : selected);
+    drawSelection(); renderProps(); renderObjects(); return;
+  }
+  if (!selection.has(best.id)) selection.clear();
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
   drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU], wires: [], engine: false };
@@ -712,11 +741,13 @@ stage.addEventListener("pointermove", (ev) => {
   lastCursorMm = mm; KUI.status({ x: mm[0], y: mm[1], dx: mm[0] - localOrigin[0], dy: mm[1] - localOrigin[1], polar: polarCoords });
   if (crosshairMode !== "small") { const r = stage.getBoundingClientRect(); const cy = ev.clientY - r.top, cx = ev.clientX - r.left; $("#chH").setAttribute("y1", cy); $("#chH").setAttribute("y2", cy); $("#chV").setAttribute("x1", cx); $("#chV").setAttribute("x2", cx); }
   if (zoomRect) { drawZoomRect(ev); return; }
+  if (boxSel) { boxSel.cur = mm; if (boxSel.lasso) boxSel.pts.push(mm); drawBoxSel(); return; }
   if (measure && !measure.b) { drawMeasure(snapMm(mm)); }
   if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
   const modM = activeModule();
   if (modM && moduleTool(tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
   if (!drag) { sendPresence(mm); return; }
+  if (drag.group) { moveGroupDrag(mm); sendPresence(mm); return; }
   if (drag.engine) {
     const d = CollabTools.sch.state.drag;
     if (!d) { drag = null; sendPresence(mm); return; }           // cancelled (Escape) or already dropped
@@ -751,9 +782,11 @@ stage.addEventListener("pointermove", (ev) => {
 stage.addEventListener("pointerup", (ev) => {
   if (pan) { pan = null; return; }
   if (zoomRect) { finishZoomRect(ev); return; }
+  if (boxSel) { finishBoxSel(ev); return; }
   const modU = activeModule();
   if (modU && moduleTool(tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } return; }
   if (ev.button !== 0 || !drag) return;
+  if (drag.group) { finishGroupDrag(); return; }
   if (drag.engine) {
     const fpE = drag.fp, cur = drag.curMm; drag = null; dragG.replaceChildren();
     if (CollabTools.sch.state.drag) { try { CollabTools.sch.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
@@ -784,7 +817,9 @@ document.addEventListener("keydown", (ev) => {
   const k = ev.key;
   if (k === "Escape") { if ($("#popover").style.display === "block") { closePopover(); return; }
     if (drag && drag.engine && CollabTools.sch && CollabTools.sch.cancelDrag) { try { CollabTools.sch.cancelDrag(toolCtx()); } catch (e) { console.warn(e); } }
-    drag = null; selected = null; dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
+    drag = null; boxSel = null; clearSelection(); if (highlightIds) { highlightIds = null; } dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
+  if ((k === "Delete" || k === "Backspace") && selection.size > 1 && !viewOnly) { ev.preventDefault(); deleteSelection(); return; }
+  if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
   if (k === "f" || k === "F") { fitView(); return; }
   if (k === "+" || k === "=") { zoomBy(1.25); return; }
   if (k === "-" || k === "_") { zoomBy(0.8); return; }
@@ -1142,7 +1177,7 @@ function bumpEdits() { $("#sbEdits").textContent = editsSeen ? `${editsSeen} edi
 function noteRemoteOp(msg) {
   for (const c of msg.changes || []) {
     if (c.typeName !== ITEM_TYPE) continue;
-    if (c.kind === "REMOVED") { items = items.filter((f) => f.id !== c.id); if (selected && selected.id === c.id) { selected = null; renderProps(); } continue; }
+    if (c.kind === "REMOVED") { items = items.filter((f) => f.id !== c.id); selection.delete(c.id); if (selected && selected.id === c.id) { selected = null; renderProps(); } continue; }
     const fp = items.find((f) => f.id === c.id);
     if (!fp || c.kind !== "MODIFIED") continue;
     for (const p of c.properties || []) {
@@ -1220,6 +1255,7 @@ function setupEditorChrome() {
   const mod = isSch() ? CollabTools.sch : CollabTools.pcb;
   KUI.setEditor(ed, mod && mod.tools ? mod.tools : []);
   KUI.setRadio("Units", { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" }[KUI.units()]);
+  KUI.setRadio("Selection modes", selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
   KUI.setRadio("Crosshair modes", crosshairMode === "full" ? "cursorFullCrosshairs" : crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
   $("#crosshair").classList.toggle("on", crosshairMode !== "small");
   KUI.setOn("toggleGrid", gridOn); KUI.setOn("togglePolarCoords", polarCoords); KUI.setOn("toggleHiddenPins", !!renderOpts.showHiddenPins);
@@ -1304,13 +1340,101 @@ function finishZoomRect(ev) {
   if (w < 0.5 || h < 0.5) { zoomBy(2, ev.clientX, ev.clientY); return; }
   fitBox([Math.min(a[0], b[0]), Math.min(a[1], b[1]), w, h], 0.9);
 }
+// ---- multi-selection: box / lasso, group move, group delete ----
+function hitAny(mm) {
+  const fp = nearestFootprint(mm[0], mm[1], 5 / Math.max(1, zoom * 0.6)); if (fp) return { id: fp.id, kind: isSch() ? "symbol" : "footprint", fp };
+  const m = activeModule(); const pick = m && m._ && m._.pickNonSymbol;
+  if (pick) { try { const it = pick(toolCtx(), mm); if (it) return { id: it.id, kind: it.kind, item: it }; } catch (e) { /* module without pick */ } }
+  return null;
+}
+function itemBoxCentre(it) { const b = it.bbox; return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null; }
+function pointInPoly(p, poly) { let inside = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside; } return inside; }
+function drawBoxSel() {
+  dragG.replaceChildren(); if (!boxSel) return;
+  const s = pxPerMm();
+  if (boxSel.lasso) {
+    const p = document.createElementNS(NS, "polygon"); p.setAttribute("points", boxSel.pts.map((q) => q.join(",")).join(" "));
+    p.setAttribute("fill", "#4D7FC422"); p.setAttribute("stroke", "#4D7FC4"); p.setAttribute("stroke-width", 1 / s); p.setAttribute("stroke-dasharray", `${4 / s} ${3 / s}`); dragG.appendChild(p);
+  } else {
+    const a = boxSel.start, b = boxSel.cur, ltr = b[0] >= a[0];
+    const r = document.createElementNS(NS, "rect"); r.setAttribute("x", Math.min(a[0], b[0])); r.setAttribute("y", Math.min(a[1], b[1])); r.setAttribute("width", Math.abs(b[0] - a[0])); r.setAttribute("height", Math.abs(b[1] - a[1]));
+    r.setAttribute("fill", ltr ? "#4D7FC422" : "#00960022"); r.setAttribute("stroke", ltr ? "#4D7FC4" : "#009600"); r.setAttribute("stroke-width", 1 / s); if (!ltr) r.setAttribute("stroke-dasharray", `${4 / s} ${3 / s}`); dragG.appendChild(r);
+  }
+}
+// KiCad: dragging left-to-right selects what the box encloses, right-to-left what it touches; the lasso takes what it contains.
+function finishBoxSel(ev) {
+  const b = boxSel; boxSel = null; dragG.replaceChildren(); if (!b || !kdoc) return;
+  const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
+  if (moved < 4) return;
+  const picked = [];
+  if (b.lasso) { for (const it of kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind)) continue; const c = itemBoxCentre(it); if (c && pointInPoly(c, b.pts)) picked.push(it); } }
+  else {
+    const x0 = Math.min(b.start[0], b.cur[0]), x1 = Math.max(b.start[0], b.cur[0]), y0 = Math.min(b.start[1], b.cur[1]), y1 = Math.max(b.start[1], b.cur[1]), enclose = b.cur[0] >= b.start[0];
+    for (const it of kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind)) continue; const bb = it.bbox;
+      const inside = bb[0] >= x0 && bb[2] <= x1 && bb[1] >= y0 && bb[3] <= y1, touches = bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
+      if (enclose ? inside : touches) picked.push(it); }
+  }
+  if (!b.add) selection.clear();
+  for (const it of picked) selection.add(it.id);
+  const prim = picked.find((it) => it.kind === "symbol" || it.kind === "footprint");
+  selected = prim ? (items.find((f) => f.id === prim.id) || selected) : (b.add ? selected : null);
+  if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
+  drawSelection(); renderProps(); renderObjects();
+  KUI.status({ message: selection.size ? `${selection.size} item${selection.size === 1 ? "" : "s"} selected` : "" });
+}
+function selectAll() {
+  if (!kdoc) return; selection.clear();
+  for (const it of kdoc.items.values()) if (it.bbox && filterAllows(it.kind)) selection.add(it.id);
+  selected = items.find((f) => selection.has(f.id)) || null;
+  drawSelection(); renderProps(); renderObjects(); KUI.status({ message: `${selection.size} items selected` });
+}
+function deleteSelection() {
+  if (!kdoc || !selection.size) return;
+  const its = [...selection].map((id) => kdoc.items.get(id)).filter(Boolean);
+  const m = activeModule(); let changes = null;
+  if (m && m.deleteChanges) { try { changes = m.deleteChanges(kdoc, its); } catch (e) { console.warn(e); } }
+  if (!changes) changes = its.map((it) => KiCadCanvas.removeChange(it));
+  clearSelection(); commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects();
+  toast(`Deleted ${its.length} item${its.length === 1 ? "" : "s"}`);
+}
+function startGroupDrag(hit, mm, ev) {
+  const its = [...selection].map((id) => kdoc.items.get(id)).filter(Boolean);
+  const fp = hit.fp || { id: hit.id, x: Math.round(KiCadCanvas.atOf(hit.item.node)[0] * IU), y: Math.round(KiCadCanvas.atOf(hit.item.node)[1] * IU) };
+  if (isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
+    let d = null; try { d = CollabTools.sch.beginDrag(toolCtx(), its, mm, true); } catch (e) { d = null; }
+    if (d) { drag = { fp, engine: true, startMm: mm, curMm: [fp.x / IU, fp.y / IU], moved: false, wires: [] }; stage.setPointerCapture(ev.pointerId); return; }
+  }
+  // board (or a schematic module without group support): move the footprints together
+  const members = its.filter((it) => it.kind === "footprint" || it.kind === "symbol").map((it) => { const f = items.find((q) => q.id === it.id); return f ? { fp: f, ox: f.x, oy: f.y } : null; }).filter(Boolean);
+  if (!members.length) return;
+  drag = { fp, group: members, startMm: mm, grab: snapMm(mm), curMm: [fp.x / IU, fp.y / IU], moved: false, last: [0, 0] };
+  stage.setPointerCapture(ev.pointerId);
+}
+function moveGroupDrag(mm) {
+  const t = snapMm(mm); const dx = Math.round((t[0] - drag.grab[0]) * IU), dy = Math.round((t[1] - drag.grab[1]) * IU);
+  if (dx === drag.last[0] && dy === drag.last[1]) return; drag.last = [dx, dy]; drag.moved = true;
+  for (const m of drag.group) { const nx = m.ox + dx, ny = m.oy + dy; KiCadCanvas.applyChange(kdoc, moveOp(m.fp, nx, ny), IU); m.fp.x = nx; m.fp.y = ny; }
+  requestRender();
+  const now = Date.now(); if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp(drag.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y))); }
+}
+function finishGroupDrag() {
+  const g = drag; drag = null; dragG.replaceChildren(); if (!g.moved || (!g.last[0] && !g.last[1])) return;
+  const changes = g.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y));
+  const inverse = g.group.map((m) => moveOp({ id: m.fp.id, x: m.fp.x, y: m.fp.y }, m.ox, m.oy));
+  if (ws && ws.readyState === 1) sendOp(changes);
+  undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0;
+  if (kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
+}
 function desktopOnly(label, why, el) {
   popover(`<h4>${esc(label)}</h4><p class="note">${esc(why)}</p><p class="note"><a href="#" data-act="kicad">Open this project in KiCad Collaborative…</a></p>`, el);
 }
 KUI.init({
   appTools: ["select", "pan", "comment", "follow", "zoomtool", "measure"],
   handlers: {
-    __setTool: (t) => setTool(t), __desktopOnly: desktopOnly, __filterChanged: () => { selected = null; drawSelection(); renderProps(); }, __layout: () => requestRender(),
+    __setTool: (t) => setTool(t), __desktopOnly: desktopOnly,
+    selectSetRect: () => { selMode = "rect"; KUI.setRadio("Selection modes", "selectSetRect"); setTool("select"); },
+    selectSetLasso: () => { selMode = "lasso"; KUI.setRadio("Selection modes", "selectSetLasso"); setTool("select"); },
+    selectAll: () => selectAll(), __filterChanged: () => { selected = null; drawSelection(); renderProps(); }, __layout: () => requestRender(),
     save: (ev, el) => runAction("checkpoint", el), refreshHistory: () => loadHistory(),
     undo: () => undoLast(), redo: () => redoLast(), find: (ev, el) => findPopover(el), doDelete: () => deleteAction(),
     zoomRedraw: () => requestRender(), zoomInCenter: () => zoomBy(1.25), zoomOutCenter: () => zoomBy(0.8), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitView(),

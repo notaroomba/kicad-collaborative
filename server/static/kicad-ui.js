@@ -14,12 +14,15 @@ const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
 
 // Which KiCad draw actions map to which tool ids in the web modules (sch-tools / pcb-tools).
 const TOOL_MAP = {
-  sch: { selectSetRect: "select", placeSymbol: "place", placePower: "power", drawWire: "wire", drawBus: "bus", placeBusWireEntry: "busentry",
+  sch: { selectSetRect: "select", highlightNetTool: "highlight", placeSymbol: "place", placePower: "power", drawWire: "wire", drawBus: "bus", placeBusWireEntry: "busentry",
     placeNoConnect: "noconnect", placeJunction: "junction", placeLabel: "label", placeClassLabel: "classlabel", placeGlobalLabel: "glabel",
-    placeHierLabel: "hlabel", placeSchematicText: "text", drawTextBox: "textbox", drawRectangle: "rect", drawCircle: "circle", drawArc: "arc",
-    drawLines: "lines", deleteTool: "delete", zoomTool: "zoomtool", measureTool: "measure" },
-  pcb: { selectSetRect: "select", routeSingleTrack: "route", drawVia: "via", drawLine: "gline", drawArc: "garc", drawRectangle: "grect",
-    drawCircle: "gcircle", drawPolygon: "gpoly", placeText: "gtext", deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool" },
+    placeHierLabel: "hlabel", drawRuleArea: "rulearea", drawSheet: "sheet", placeSheetPin: "sheetpin", placeSchematicText: "text", drawTextBox: "textbox", drawTable: "table",
+    drawRectangle: "rect", drawCircle: "circle", drawArc: "arc", drawBezier: "bezier", drawPolygon: "polygon", drawLines: "lines", placeImage: "image",
+    deleteTool: "delete", zoomTool: "zoomtool", measureTool: "measure" },
+  pcb: { selectSetRect: "select", routeSingleTrack: "route", drawVia: "via", drawZone: "zone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawRectangle: "grect",
+    drawCircle: "gcircle", drawPolygon: "gpoly", drawBezier: "gcurve", placeReferenceImage: "image", placeText: "gtext", drawTextBox: "gtextbox", drawTable: "table",
+    drawAlignedDimension: "dimaligned", drawOrthogonalDimension: "dimortho", drawCenterDimension: "dimcenter", drawRadialDimension: "dimradial", drawLeader: "leader",
+    deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool" },
 };
 // Toolbar toggles whose state app.js owns (checkable buttons) and radio groups.
 const RADIO = { Units: ["millimetersUnits", "inchesUnits", "milsUnits"], "Crosshair modes": ["cursorSmallCrosshairs", "cursorFullCrosshairs", "cursor45Crosshairs"],
