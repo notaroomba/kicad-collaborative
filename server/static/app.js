@@ -227,8 +227,10 @@ function sizeCanvas() {
 function drawCanvas() {
   if (!kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
-  KiCadCanvas.render(kdoc, cctx, { ppm, zoom, panX, panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 },
-    { hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null });
+  const view = { ppm, zoom, panX, panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
+  KiCadCanvas.render(kdoc, cctx, view, { hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null });
+  const m = activeModule();
+  if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
 }
 function syncItemsFromDoc() {
   if (!kdoc) return;
@@ -247,7 +249,8 @@ function setDocFromText(text) {
   base.replaceChildren(); base.setAttribute("viewBox", vb.join(" ")); overlay.setAttribute("viewBox", vb.join(" "));
   $("#ovRoot").setAttribute("transform", "scale(1)");
   if (!layersSeeded) { hiddenLayers = new Set(isSch() ? [] : Array.from(KiCadCanvas.PCB_HIDDEN_DEFAULT)); layersSeeded = true; }
-  renderLayersFromDoc(); syncItemsFromDoc();
+  renderLayersFromDoc(); syncItemsFromDoc(); renderModuleTools();
+  const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } }
   canvas.style.display = "block"; requestRender();
   return true;
 }
@@ -276,6 +279,62 @@ function updateGridStatus() {
   const el = $("#sbGrid"); if (el) el.textContent = `grid ${gridPitch} mm · snap ${snapOn ? "on" : "off"}`;
 }
 function snapMm(mm) { return snapOn ? [KiCadCanvas.snap(mm[0], gridPitch), KiCadCanvas.snap(mm[1], gridPitch)] : mm; }
+
+// ---- editing tools (schematic / board modules register on window.CollabTools) ----
+// A module: { id, tools: [{ id, label, key, icon (svg inner markup), cursor }],
+//   onActivate(toolId, ctx), onPointerDown(ev, mm, ctx) -> handled?, onPointerMove(ev, mm, ctx),
+//   onPointerUp(ev, mm, ctx), onKey(key, ev, ctx) -> handled?, drawOverlay(ctx2d, view, ctx),
+//   onDocChanged(ctx) }.  Everything a module needs travels in ctx (see toolCtx()).
+window.CollabTools = window.CollabTools || {};
+const undoStack = [], redoStack = [];
+function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.sch : CollabTools.pcb; }
+function toolCtx(extra) {
+  return Object.assign({
+    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm,
+    selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm,
+    setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
+    commit(changes, label) { commitChanges(changes, label); },
+    applyLocal(changes) { applyChanges(changes); },
+    requestRender, toast, enterSheet, setTool,
+  }, extra || {});
+}
+// Local apply + broadcast, with an inverse recorded for undo.
+function commitChanges(changes, label) {
+  if (!changes || !changes.length) return;
+  const inverse = [];
+  for (const c of changes) {
+    const it = kdoc && kdoc.items.get(c.id);
+    if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });
+    else if (c.kind === "REMOVED" && it) inverse.push({ id: c.id, kind: "ADDED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(kdoc, it) });
+    else if (c.kind === "MODIFIED" && it) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(kdoc, it) });
+  }
+  applyChanges(changes);
+  if (ws && ws.readyState === 1) sendOp(changes); else toast("Not connected — change kept locally");
+  undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
+function undoLast() {
+  const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
+  const redo = e.changes.map((c) => { const it = kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(kdoc, it) } : c); });
+  applyChanges(e.inverse); if (ws && ws.readyState === 1) sendOp(e.inverse);
+  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); toast("Undo " + e.label);
+}
+function redoLast() {
+  const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
+  applyChanges(e.changes); if (ws && ws.readyState === 1) sendOp(e.changes);
+  undoStack.push(e); toast("Redo " + e.label);
+}
+function renderModuleTools() {
+  const m = activeModule(); const host = $("#ltools");
+  $$("[data-modtool]", host).forEach((b) => b.remove());
+  if (!m || !m.tools) return;
+  for (const t of m.tools) {
+    const b = document.createElement("button"); b.className = "tb"; b.dataset.modtool = t.id; b.title = t.label + (t.key ? ` (${t.key})` : "");
+    b.innerHTML = t.icon ? `<svg viewBox="0 0 24 24">${t.icon}</svg>` : `<span style="font:11px var(--mono)">${esc(t.label.slice(0, 2))}</span>`;
+    b.addEventListener("click", () => setTool(t.id)); host.appendChild(b);
+  }
+}
+function moduleTool(id) { const m = activeModule(); return m && m.tools ? m.tools.find((t) => t.id === id) : null; }
 
 function leaveEditor() {
   leaveDoc();
@@ -560,10 +619,15 @@ function visibleRectNm() {
 // ---- tools ----
 function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
-  tool = t;
+  const prev = tool; tool = t;
   $$("#ltools [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t));
+  $$("#ltools [data-modtool]").forEach((b) => b.classList.toggle("on", b.dataset.modtool === t));
+  const mt = moduleTool(t);
   stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : "";
-  if (t === "comment" && !canJoin) { toast("Sign in to comment"); setTool("select"); }
+  if (mt && mt.cursor) stage.style.cursor = mt.cursor; else stage.style.cursor = "";
+  if (t === "comment" && !canJoin) { toast("Sign in to comment"); setTool("select"); return; }
+  const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }
+  requestRender();
 }
 function cycleFollow() {
   const ids = Object.keys(peerState);
@@ -612,17 +676,30 @@ stage.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0) return;
   if (tool === "comment") { placeComment(ev); return; }
   const [x, y] = worldMm(ev);
+  const mod = activeModule();
+  if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly) { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
-  drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU] };
+  drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU], wires: [] };
+  // Schematic moves drag the attached wire ends along (KiCad's rubber band).
+  if (kdoc && isSch()) {
+    const it = kdoc.items.get(best.id);
+    if (it && it.kind === "symbol") {
+      for (const pin of KiCadCanvas.pinPoints(kdoc, it)) for (const end of KiCadCanvas.wireEndsAt(kdoc, pin.x, pin.y, 0.02)) {
+        if (!drag.wires.some((w) => w.item === end.item && w.index === end.index)) drag.wires.push({ item: end.item, index: end.index, off: [pin.x - best.x / IU, pin.y - best.y / IU], orig: KiCadCanvas.ptsOf(end.item.node)[end.index].slice() });
+      }
+    }
+  }
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
   $("#sbCursor").textContent = `X ${mm[0].toFixed(3)}  Y ${mm[1].toFixed(3)} mm`;
   if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
+  const modM = activeModule();
+  if (modM && moduleTool(tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
   if (!drag) { sendPresence(mm); return; }
   if (!drag.moved && Math.hypot(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1]) > 0.4) drag.moved = true;
   if (!drag.moved) return;
@@ -631,7 +708,12 @@ stage.addEventListener("pointermove", (ev) => {
   const target = snapMm([mm[0] - off[0], mm[1] - off[1]]);
   drag.curMm = target;
   drawDrag();
-  if (kdoc) { KiCadCanvas.applyChange(kdoc, moveOp(drag.fp, Math.round(target[0] * IU), Math.round(target[1] * IU)), IU); requestRender(); }
+  if (kdoc) {
+    KiCadCanvas.applyChange(kdoc, moveOp(drag.fp, Math.round(target[0] * IU), Math.round(target[1] * IU)), IU);
+    for (const w of drag.wires) { const p = KiCadCanvas.ptsOf(w.item.node); p[w.index] = [target[0] + w.off[0], target[1] + w.off[1]]; KiCadCanvas.setPts(w.item.node, p); w.item.geom = []; w.item.bbox = null; }
+    for (const w of drag.wires) KiCadCanvas.replaceChange(kdoc, w.item);
+    requestRender();
+  }
   const now = Date.now();
   if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp([moveOp(drag.fp, Math.round(target[0] * IU), Math.round(target[1] * IU))]); }
   const s = 4;
@@ -642,13 +724,24 @@ stage.addEventListener("pointermove", (ev) => {
 });
 stage.addEventListener("pointerup", (ev) => {
   if (pan) { pan = null; return; }
+  const modU = activeModule();
+  if (modU && moduleTool(tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } return; }
   if (ev.button !== 0 || !drag) return;
-  const fp = drag.fp, wasMoved = drag.moved;
+  const fp = drag.fp, wasMoved = drag.moved, wires = drag.wires || [];
   const nx = Math.round(drag.curMm[0] * IU), ny = Math.round(drag.curMm[1] * IU);
   drag = null; dragG.replaceChildren();
   sendPresence([nx / IU, ny / IU], []);
   if (!wasMoved) return;
-  if (nx !== fp.x || ny !== fp.y) sendOp([moveOp(fp, nx, ny)]);
+  const changes = [];
+  if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
+  for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(kdoc, w.item) });
+  if (changes.length) {
+    if (ws && ws.readyState === 1) sendOp(changes);
+    // inverse: put the symbol and the wire ends back
+    const inverse = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];
+    for (const w of wires) { const p = KiCadCanvas.ptsOf(w.item.node).map((q) => q.slice()); p[w.index] = w.orig; inverse.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: "(kicad_sch (version 20250114) (generator \"kicad-collab-web\") " + KiCadCanvas.serialize(Object.assign([], w.item.node, { })).replace(/\(pts[^]*?\)\)/, "(pts " + p.map((q) => `(xy ${q[0]} ${q[1]})`).join(" ") + ")") + ")" }); }
+    undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0;
+  }
   fp.x = nx; fp.y = ny; if (kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 });
 
@@ -663,6 +756,10 @@ document.addEventListener("keydown", (ev) => {
   if (k === "s" || k === "S") { setTool("select"); return; }
   if (k === "h" || k === "H") { setTool("pan"); return; }
   if (k === "c" || k === "C") { setTool("comment"); return; }
+  if ((ev.metaKey || ev.ctrlKey) && (k === "z" || k === "Z")) { ev.preventDefault(); if (ev.shiftKey) redoLast(); else undoLast(); return; }
+  if ((ev.metaKey || ev.ctrlKey) && (k === "y" || k === "Y")) { ev.preventDefault(); redoLast(); return; }
+  const modK = activeModule();
+  if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (k === "g" || k === "G") { gridOn = !gridOn; updateGridStatus(); requestRender(); return; }
   if (k === "n" || k === "N") { snapOn = !snapOn; updateGridStatus(); return; }
   if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
@@ -769,6 +866,7 @@ function showTab(name) {
 }
 function renderProps() {
   const el = $("#props");
+  if (kdoc && CollabTools.props && CollabTools.props.render) { try { CollabTools.props.render(el, selected, toolCtx()); return; } catch (e) { console.warn(e); } }
   if (!selected) { el.innerHTML = `<p class="note">Select a footprint on the board to see its properties.</p>`; return; }
   const ro = viewOnly ? "disabled" : "";
   if (isSch()) {
@@ -936,6 +1034,7 @@ let connectGen = 0;   // bumped by every connect()/leaveDoc(); a stale socket's 
 async function connect() {
   const gen = ++connectGen;
   if (!state.me) { setConn("", "sign in to collaborate"); return; }
+  setConn("err", retries ? `reconnecting…` : "connecting…");
   // A cookie riding the WS upgrade is unreliable (SameSite / tracking
   // protection / proxies), so authenticate the socket with a token fetched
   // over a normal request and sent in the hello frame, like the desktop.
@@ -949,11 +1048,25 @@ async function connect() {
   if (gen !== connectGen || state.view !== "editor") return;   // the document changed while we waited
   wsToken = ticket;
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const sock = new WebSocket(`${proto}://${location.host}/ws`);
+  let sock;
+  try { sock = new WebSocket(`${proto}://${location.host}/ws`); }
+  catch (e) { setConn("err", "connection blocked (VPN or proxy?)"); return; }
   ws = sock;
+  // A proxy that accepts the upgrade but never relays frames leaves the socket
+  // open and silent; treat "no hello_ok" as a failure and retry rather than
+  // sitting on the initial label forever.
+  let handshakeDone = false;
+  const watchdog = setTimeout(() => {
+    if (ws !== sock || handshakeDone) return;
+    console.warn("collab socket: no answer to hello within 8s (VPN/proxy?)");
+    setConn("err", "no answer from server (VPN or proxy?) — retrying");
+    sock.close();
+  }, 8000);
   sock.onopen = () => { if (ws !== sock) return; myClientId = "web-" + Math.random().toString(36).slice(2, 10);
     sock.send(JSON.stringify({ type: "hello", proto: 1, token: wsToken, clientId: myClientId, linkToken: null, client: "web" })); };
-  sock.onclose = () => {
+  sock.onclose = (ev) => {
+    clearTimeout(watchdog);
+    console.warn(`collab socket closed: code=${ev.code} clean=${ev.wasClean} reason=${JSON.stringify(ev.reason || "")}`);
     if (ws !== sock || gen !== connectGen) return;   // superseded: not ours to reconnect
     ws = null;
     peersG.replaceChildren(); peerState = {}; renderPeers();
@@ -964,7 +1077,9 @@ async function connect() {
   sock.onmessage = (ev) => {
     if (ws !== sock) return;
     const msg = JSON.parse(ev.data);
-    if (msg.type === "hello_ok") { retries = 0; sock.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
+    if (msg.type === "error") console.warn("collab server error:", msg.code, msg.docId || "");
+    if (msg.type === "hello_ok") { handshakeDone = true; clearTimeout(watchdog); retries = 0; sock.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
+    if (msg.type === "error" && (msg.code === "bad_message" || msg.code === "unsupported_protocol")) { setConn("err", `server refused the session (${msg.code}) — reload`); }
     if (msg.type === "error" && msg.code === "auth_failed") {
       sock.onclose = null; sock.close(); if (ws === sock) ws = null;
       setConn("err", "sign-in expired — reload to reconnect");
