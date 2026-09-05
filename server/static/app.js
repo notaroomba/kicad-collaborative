@@ -974,6 +974,7 @@ function drawComments() {
   cmtG.replaceChildren();
   const s = pxPerMm();
   for (const c of comments) {
+    if (c.resolved) continue;   // resolved threads leave the canvas; the Comments pane still lists them
     if (c.parentId) continue;
     const x = c.x / IU, y = c.y / IU, r = 9 / s;
     const pin = document.createElementNS(NS, "g"); pin.setAttribute("cursor", "pointer");

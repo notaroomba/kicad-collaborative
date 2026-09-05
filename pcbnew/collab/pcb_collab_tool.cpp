@@ -871,6 +871,10 @@ void PCB_COLLAB_TOOL::rebuildCommentPins()
         COMMENT_PIN pin;
         pin.pos = VECTOR2I( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
         pin.resolved = c.value( "resolved", false );
+        
+        // Resolved threads leave the canvas (the comments dialog still lists them).
+        if( pin.resolved )
+            continue;
 
         long long id = jsonNumber( c, "id", -1 );
         pin.count = 0;
