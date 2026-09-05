@@ -22,17 +22,122 @@
 #include <algorithm>
 #include <vector>
 
+#include <wx/bmpbuttn.h>
 #include <wx/button.h>
 #include <wx/datetime.h>
+#include <wx/dcmemory.h>
+#include <wx/graphics.h>
+#include <wx/statbmp.h>
 #include <wx/gdicmn.h>
 #include <wx/panel.h>
+#include <wx/settings.h>
 #include <wx/sizer.h>
+#include <wx/statline.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/time.h>
 
 static const int CARD_WIDTH = 300;
 static const int ANIM_MS = 160;
+
+// KiCad's own palette, in a dark and a light cut so the card sits naturally on
+// either appearance instead of forcing one.
+struct CARD_THEME
+{
+    wxColour bg, border, text, muted, accent, input, inputText;
+};
+
+// Figma-style avatar: a coloured disc with the author's initial.
+static wxBitmap avatarBitmap( const wxString& aLogin, int aSize, const CARD_THEME& aTheme )
+{
+    static const wxColour palette[] = { wxColour( 0xC8, 0x34, 0x34 ), wxColour( 0x4D, 0x7F, 0xC4 ),
+                                        wxColour( 0x00, 0x96, 0x00 ), wxColour( 0xD1, 0x92, 0x00 ),
+                                        wxColour( 0x84, 0x00, 0x84 ), wxColour( 0x00, 0x64, 0x64 ) };
+    unsigned hash = 0;
+
+    for( wxUniChar ch : aLogin )
+        hash = hash * 31 + (unsigned) ch.GetValue();
+
+    wxBitmap bmp( aSize, aSize, 32 );
+    bmp.UseAlpha();
+    wxMemoryDC dc( bmp );
+    dc.SetBackground( *wxTRANSPARENT_BRUSH );
+    dc.Clear();
+
+    if( wxGraphicsContext* gc = wxGraphicsContext::Create( dc ) )
+    {
+        gc->SetBrush( wxBrush( palette[hash % 6] ) );
+        gc->SetPen( *wxTRANSPARENT_PEN );
+        gc->DrawEllipse( 0, 0, aSize, aSize );
+
+        wxString initial = aLogin.IsEmpty() ? wxS( "?" ) : wxString( aLogin[0] ).Upper();
+        wxFont   font = wxSystemSettings::GetFont( wxSYS_DEFAULT_GUI_FONT ).Bold();
+        font.SetPointSize( aSize / 2 );
+        gc->SetFont( font, *wxWHITE );
+        double tw, th;
+        gc->GetTextExtent( initial, &tw, &th );
+        gc->DrawText( initial, ( aSize - tw ) / 2, ( aSize - th ) / 2 );
+        delete gc;
+    }
+
+    dc.SelectObject( wxNullBitmap );
+    return bmp;
+}
+
+// Small line icon (check mark or send arrow) in the theme's muted colour.
+static wxBitmap iconBitmap( const wxString& aKind, int aSize, const wxColour& aColour, const wxColour& aBg )
+{
+    wxBitmap bmp( aSize, aSize, 32 );
+    bmp.UseAlpha();
+    wxMemoryDC dc( bmp );
+    dc.SetBackground( *wxTRANSPARENT_BRUSH );
+    dc.Clear();
+
+    if( wxGraphicsContext* gc = wxGraphicsContext::Create( dc ) )
+    {
+        gc->SetBrush( wxBrush( aBg ) );
+        gc->SetPen( *wxTRANSPARENT_PEN );
+        gc->DrawEllipse( 0, 0, aSize, aSize );
+        gc->SetPen( wxPen( aColour, 2 ) );
+        wxGraphicsPath path = gc->CreatePath();
+        double s = aSize;
+
+        if( aKind == wxS( "check" ) )
+        {
+            path.MoveToPoint( s * 0.28, s * 0.52 );
+            path.AddLineToPoint( s * 0.44, s * 0.68 );
+            path.AddLineToPoint( s * 0.72, s * 0.36 );
+        }
+        else   // send: arrow up
+        {
+            path.MoveToPoint( s * 0.5, s * 0.72 );
+            path.AddLineToPoint( s * 0.5, s * 0.3 );
+            path.MoveToPoint( s * 0.32, s * 0.48 );
+            path.AddLineToPoint( s * 0.5, s * 0.3 );
+            path.AddLineToPoint( s * 0.68, s * 0.48 );
+        }
+
+        gc->StrokePath( path );
+        delete gc;
+    }
+
+    dc.SelectObject( wxNullBitmap );
+    return bmp;
+}
+
+static CARD_THEME cardTheme()
+{
+    if( wxSystemSettings::GetAppearance().IsDark() )
+    {
+        return { wxColour( 0x1E, 0x25, 0x30 ), wxColour( 0x3A, 0x46, 0x56 ), wxColour( 0xE9, 0xE7, 0xE0 ),
+                 wxColour( 0xA9, 0xAF, 0xB8 ), wxColour( 0x6F, 0xC7, 0xC7 ), wxColour( 0x11, 0x18, 0x21 ),
+                 wxColour( 0xE9, 0xE7, 0xE0 ) };
+    }
+
+    return { wxColour( 0xF5, 0xF4, 0xEF ), wxColour( 0xCF, 0xCD, 0xC5 ), wxColour( 0x1B, 0x1B, 0x1B ),
+             wxColour( 0x5B, 0x5A, 0x55 ), wxColour( 0x00, 0x64, 0x64 ), wxColour( 0xFF, 0xFF, 0xFF ),
+             wxColour( 0x1B, 0x1B, 0x1B ) };
+}
 
 
 COLLAB_COMMENT_CARD::COLLAB_COMMENT_CARD( wxWindow* aParent, REPLY_FN aReply, RESOLVE_FN aResolve ) :
@@ -42,7 +147,7 @@ COLLAB_COMMENT_CARD::COLLAB_COMMENT_CARD( wxWindow* aParent, REPLY_FN aReply, RE
         m_resolve( std::move( aResolve ) )
 {
     m_panel = new wxPanel( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_SIMPLE );
-    m_panel->SetBackgroundColour( wxColour( 0xF5, 0xF4, 0xEF ) );   // schematic paper
+    m_panel->SetBackgroundColour( cardTheme().bg );
     m_sizer = new wxBoxSizer( wxVERTICAL );
     m_panel->SetSizer( m_sizer );
 
@@ -89,6 +194,9 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
     m_input = nullptr;
     m_resolveBtn = nullptr;
 
+    const CARD_THEME theme = cardTheme();
+    m_panel->SetBackgroundColour( theme.bg );
+
     const nlohmann::json*              root = nullptr;
     std::vector<const nlohmann::json*> replies;
 
@@ -111,54 +219,97 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
 
     m_resolved = root->value( "resolved", false );
 
-    auto addComment = [&]( const nlohmann::json& c )
-    {
-        wxString who = wxString::FromUTF8( c.value( "authorLogin", "" ) );
-        wxString when = relativeTime( c.value( "createdAt", "" ) );
+    const int pad = 12;
+    wxFont    small = m_panel->GetFont().Smaller();
 
-        wxStaticText* head = new wxStaticText( m_panel, wxID_ANY, who + wxS( "  ·  " ) + when );
-        head->SetFont( head->GetFont().Bold() );
-        head->SetForegroundColour( wxColour( 0x00, 0x64, 0x64 ) );
+    auto addComment = [&]( const nlohmann::json& c, bool aFirst )
+    {
+        if( !aFirst )
+        {
+            wxStaticLine* rule = new wxStaticLine( m_panel );
+            rule->SetBackgroundColour( theme.border );
+            m_sizer->Add( rule, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
+        }
+
+        wxString login = wxString::FromUTF8( c.value( "authorLogin", "" ) );
+
+        wxBoxSizer*     head = new wxBoxSizer( wxHORIZONTAL );
+        wxStaticBitmap* avatar = new wxStaticBitmap( m_panel, wxID_ANY, avatarBitmap( login, 24, theme ) );
+        wxStaticText*   who = new wxStaticText( m_panel, wxID_ANY, login );
+        who->SetFont( who->GetFont().Bold() );
+        who->SetForegroundColour( theme.text );
+
+        wxStaticText* when = new wxStaticText( m_panel, wxID_ANY,
+                                               relativeTime( c.value( "createdAt", "" ) ) );
+        when->SetFont( small );
+        when->SetForegroundColour( theme.muted );
+
+        head->Add( avatar, 0, wxALIGN_CENTER_VERTICAL );
+        head->AddSpacer( 8 );
+        head->Add( who, 0, wxALIGN_CENTER_VERTICAL );
+        head->AddSpacer( 8 );
+        head->Add( when, 0, wxALIGN_CENTER_VERTICAL );
+
+        if( aFirst )
+        {
+            // Figma keeps the resolve action at the thread's top-right corner.
+            head->AddStretchSpacer();
+            wxBitmapButton* resolve = new wxBitmapButton(
+                    m_panel, wxID_ANY, iconBitmap( wxS( "check" ), 22, m_resolved ? wxColour( 0x3D, 0xBE, 0x3D ) : theme.muted, theme.bg ),
+                    wxDefaultPosition, wxDefaultSize, wxBORDER_NONE );
+            resolve->SetBackgroundColour( theme.bg );
+            resolve->SetToolTip( m_resolved ? _( "Reopen" ) : _( "Resolve" ) );
+            resolve->Bind( wxEVT_BUTTON, &COLLAB_COMMENT_CARD::onResolve, this );
+            head->Add( resolve, 0, wxALIGN_CENTER_VERTICAL );
+        }
 
         wxStaticText* body = new wxStaticText( m_panel, wxID_ANY,
                                                wxString::FromUTF8( c.value( "body", "" ) ) );
-        body->Wrap( CARD_WIDTH - 28 );
+        body->SetForegroundColour( theme.text );
+        body->Wrap( CARD_WIDTH - 2 * pad - 32 );
 
-        m_sizer->Add( head, 0, wxLEFT | wxRIGHT | wxTOP, 10 );
-        m_sizer->Add( body, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10 );
+        // The message hangs under the name, indented past the avatar.
+        wxBoxSizer* bodyRow = new wxBoxSizer( wxHORIZONTAL );
+        bodyRow->AddSpacer( 32 );
+        bodyRow->Add( body, 1 );
+
+        m_sizer->Add( head, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
+        m_sizer->Add( bodyRow, 0, wxEXPAND | wxLEFT | wxRIGHT, pad );
     };
 
-    addComment( *root );
+    addComment( *root, true );
 
     for( const nlohmann::json* r : replies )
-        addComment( *r );
+        addComment( *r, false );
 
     if( m_resolved )
     {
-        wxStaticText* tag = new wxStaticText( m_panel, wxID_ANY, _( "Resolved" ) );
-        tag->SetForegroundColour( wxColour( 0x00, 0x96, 0x00 ) );
-        m_sizer->Add( tag, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10 );
+        wxStaticText* tag = new wxStaticText( m_panel, wxID_ANY, _( "\u2713 Resolved" ) );
+        tag->SetFont( small );
+        tag->SetForegroundColour( wxColour( 0x3D, 0xBE, 0x3D ) );
+        m_sizer->Add( tag, 0, wxLEFT | wxRIGHT | wxTOP, pad );
     }
 
-    m_input = new wxTextCtrl( m_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( -1, 54 ),
-                              wxTE_MULTILINE | wxTE_PROCESS_ENTER );
-    m_input->SetHint( _( "Reply…" ) );
-    m_input->Bind( wxEVT_TEXT_ENTER, &COLLAB_COMMENT_CARD::onReply, this );
-    m_sizer->Add( m_input, 0, wxEXPAND | wxLEFT | wxRIGHT, 10 );
-
+    // Reply row: the field with a round send button, Figma style.
     wxBoxSizer* row = new wxBoxSizer( wxHORIZONTAL );
-    m_resolveBtn = new wxButton( m_panel, wxID_ANY, m_resolved ? _( "Reopen" ) : _( "Resolve" ),
-                                 wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT );
-    m_resolveBtn->Bind( wxEVT_BUTTON, &COLLAB_COMMENT_CARD::onResolve, this );
+    m_input = new wxTextCtrl( m_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( -1, 40 ),
+                              wxTE_MULTILINE | wxTE_PROCESS_ENTER | wxBORDER_SIMPLE );
+    m_input->SetHint( _( "Reply\u2026" ) );
+    m_input->SetBackgroundColour( theme.input );
+    m_input->SetForegroundColour( theme.inputText );
+    m_input->Bind( wxEVT_TEXT_ENTER, &COLLAB_COMMENT_CARD::onReply, this );
 
-    wxButton* reply = new wxButton( m_panel, wxID_ANY, _( "Reply" ), wxDefaultPosition,
-                                    wxDefaultSize, wxBU_EXACTFIT );
-    reply->Bind( wxEVT_BUTTON, &COLLAB_COMMENT_CARD::onReply, this );
+    wxBitmapButton* send = new wxBitmapButton( m_panel, wxID_ANY,
+                                               iconBitmap( wxS( "send" ), 28, *wxWHITE, theme.accent ),
+                                               wxDefaultPosition, wxDefaultSize, wxBORDER_NONE );
+    send->SetBackgroundColour( theme.bg );
+    send->SetToolTip( _( "Reply (Enter)" ) );
+    send->Bind( wxEVT_BUTTON, &COLLAB_COMMENT_CARD::onReply, this );
 
-    row->Add( m_resolveBtn, 0 );
-    row->AddStretchSpacer();
-    row->Add( reply, 0 );
-    m_sizer->Add( row, 0, wxEXPAND | wxALL, 10 );
+    row->Add( m_input, 1, wxALIGN_CENTER_VERTICAL );
+    row->AddSpacer( 8 );
+    row->Add( send, 0, wxALIGN_CENTER_VERTICAL );
+    m_sizer->Add( row, 0, wxEXPAND | wxALL, pad );
 
     m_panel->Layout();
     wxSize sz = m_sizer->ComputeFittingClientSize( m_panel );
