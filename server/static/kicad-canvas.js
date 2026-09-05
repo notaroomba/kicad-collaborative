@@ -91,6 +91,35 @@ function colorOf(node) {
   return rgba(num(c[1]), num(c[2]), num(c[3]), a);
 }
 function strokeColorOf(node) { const s = kid(node, "stroke"); return s ? colorOf(s) : null; }
+/** (stroke (width w) (type t) (color …)) → {w, color, dash}; w = def when unspecified */
+function strokeOf(node, def) {
+  const s = node && kid(node, "stroke"); if (!s) return { w: def, color: null, dash: false };
+  const wN = kid(s, "width"), tN = kid(s, "type"); const type = tN ? str(tN[1]) : "default";
+  return { w: wN ? num(wN[1], def) : def, color: colorOf(s), dash: type !== "default" && type !== "solid" };
+}
+/** (key yes|no) child, or a bare `key` token; def when absent */
+function boolOf(node, key, def) { const k = node && kid(node, key); if (k) return str(k[1]) !== "no"; return (node && has(node, key)) ? true : def; }
+/** Axis-aligned box of a text box / table cell: (at x y r) + (size w h), or (start) + (end) [+ (angle a)]. */
+function boxOf(node) {
+  const s0 = kid(node, "start"), e0 = kid(node, "end"); const a = kid(node, "at");
+  let x0, y0, x1, y1, rot = 0;
+  if (a) { x0 = num(a[1]); y0 = num(a[2]); rot = num(a[3]); const sz = kid(node, "size"); x1 = x0 + (sz ? num(sz[1]) : 0); y1 = y0 + (sz ? num(sz[2]) : 0); }
+  else if (s0 && e0) { x0 = num(s0[1]); y0 = num(s0[2]); x1 = num(e0[1]); y1 = num(e0[2]); }
+  else return null;
+  const angN = kid(node, "angle"); if (angN) rot = num(angN[1]);
+  return { x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), rot };
+}
+/** EDA_SHAPE::GetCornersInSequence: the box corners starting at the text's own top-left for its angle. */
+function cornersInSequence(b, angle) {
+  const a = ((Math.round(angle || 0) % 360) + 360) % 360;
+  const TL = [b.x0, b.y0], TR = [b.x1, b.y0], BR = [b.x1, b.y1], BL = [b.x0, b.y1];
+  if (a === 0) return [TL, TR, BR, BL];
+  if (a === 90) return [BL, TL, TR, BR];
+  if (a === 180) return [BR, BL, TL, TR];
+  if (a === 270) return [TR, BR, BL, TL];
+  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+  return [TL, TR, BR, BL].map(([x, y]) => { const [rx, ry] = rotPt(x - cx, y - cy, a); return [cx + rx, cy + ry]; });
+}
 /** fill descriptor: {type: none|outline|background|color|solid, color} */
 function fillOf(node) {
   const f = kid(node, "fill"); if (!f) return { type: "none", color: null };
@@ -210,14 +239,16 @@ const SCH = {
   sheetFile: "#725600", sheetFields: "#840084", sheetLabel: "#006464", noconnect: "#000084", notes: "#0000C2",
   busEntry: "#009600", dnp: "rgba(220,9,13,0.85)", netclass: "#484848", ruleArea: "#FF0000", excluded: "rgba(194,194,194,0.95)",
   hidden: "#C2C2C2", privateNotes: "#4848FF", frame: "#840000",
+  brightened: "#FF00FF",   // LAYER_BRIGHTENED: net highlighting / selection disambiguation
 };
 // draw order (eeschema SCH_VIEW layer order, bottom first)
-const SCH_Z = { sheetBg: -6, sheetFields: -5, sheet: -4, notesBg: -3, deviceBg: -2, notes: -1, device: 0, pinName: 1, pinNum: 2, pin: 3,
+const SCH_Z = { bitmap: -7, sheetBg: -6, sheetFields: -5, sheet: -4, notesBg: -3, deviceBg: -2, notes: -1, device: 0, pinName: 1, pinNum: 2, pin: 3,
   wire: 4, bus: 5, junction: 6, noconnect: 7, loclabel: 8, globlabel: 9, hierlabel: 10, ruleArea: 11, netclass: 12, fields: 13, value: 14, ref: 15, marker: 16 };
 const SCH_LAYERS = [
   ["Wires", SCH.wire], ["Buses", SCH.bus], ["Junctions", SCH.junction], ["Symbols", SCH.outline], ["Pins", SCH.pin],
   ["Pin names", SCH.pinName], ["Pin numbers", SCH.pinNum], ["Reference & value", SCH.ref], ["Fields", SCH.field],
   ["Labels", SCH.label], ["Sheets", SCH.sheet], ["Notes", SCH.notes], ["No-connects", SCH.noconnect], ["Rule areas", SCH.ruleArea],
+  ["Images", SCH.hidden],
 ];
 const PCB_COLORS = {
   "F.Cu": "#C83434", "B.Cu": "#4D7FC4", "In1.Cu": "#7FC87F", "In2.Cu": "#CE7D2C", "In3.Cu": "#4FCBCB", "In4.Cu": "#DB628B",
@@ -247,7 +278,7 @@ for (let i = 45; i >= 1; i--) PCB_ORDER.push("User." + i);
 PCB_ORDER.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dwgs.User");
 const PCB_ZMAP = new Map(PCB_ORDER.map((l, i) => [l, i * 10]));
 function pcbZ(layer) { const z = PCB_ZMAP.get(layer); return z === undefined ? 5 : z; }
-const Z_PAD = 2, Z_VIA = 3, Z_TEXT = 4, Z_ZONE = -1;
+const Z_PAD = 2, Z_VIA = 3, Z_TEXT = 4, Z_ZONE = -1, Z_BITMAP = -20;   // BITMAP_LAYER_FOR(…) sits below every board layer
 function padLayers(doc, names) {
   // expand *.Cu / F&B.Cu etc. against the board's copper layers (front→back order)
   const copper = doc.copper && doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
@@ -302,7 +333,7 @@ function addItem(doc, node) {
   if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
   let id = uuidOf(node);
   if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
-  const item = { id, kind: k, node, geom: [], bbox: null, movable: false, hiddenGeom: null };
+  const item = { id, kind: k, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
   buildGeom(doc, item);
   doc.items.set(id, item);
   return item;
@@ -333,7 +364,7 @@ function G(item, g) {
   if (g.t === "line") { bboxAdd(item, g.x1, g.y1, g.w / 2); bboxAdd(item, g.x2, g.y2, g.w / 2); }
   else if (g.t === "poly") for (const p of g.pts) bboxAdd(item, p[0], p[1], g.w / 2);
   else if (g.t === "circle" || g.t === "arc") { bboxAdd(item, g.x - g.r, g.y - g.r); bboxAdd(item, g.x + g.r, g.y + g.r); }
-  else if (g.t === "rect") { bboxAdd(item, g.x, g.y); bboxAdd(item, g.x + g.w, g.y + g.h); }
+  else if (g.t === "rect" || g.t === "image") { bboxAdd(item, g.x, g.y); bboxAdd(item, g.x + g.w, g.y + g.h); }
   else if (g.t === "pad") bboxAdd(item, g.x, g.y, Math.hypot(g.w, g.h) / 2);
   else if (g.t === "text" && !g.noBox) {
     // approximate extents so culling/hit-testing sees the text: along the reading direction per justification
@@ -456,6 +487,12 @@ function buildSchGeom(doc, item) {
     const p = ptsOf(n); const isBus = k === "bus";
     const w = widthOf(n, 0) || (isBus ? 0.3048 : 0.1524);
     const color = strokeColorOf(n) || (isBus ? SCH.bus : k === "polyline" ? SCH.notes : SCH.wire);
+    if (k === "polyline" && p.length > 2) {
+      // a closed polyline with a fill (drawPolygon writes one): SCH_SHAPE fill rules, as for library bodies
+      const f = fillOf(n);
+      const fill = f.type === "background" ? SCH.body : f.type === "outline" || f.type === "solid" ? color : f.type === "color" ? f.color : null;
+      if (fill) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer: "Notes", z: f.type === "outline" || f.type === "solid" ? SCH_Z.notes : SCH_Z.notesBg, noStroke: true });
+    }
     G(item, { t: "poly", pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" });
   } else if (k === "bus_entry") {
     // wire-to-bus entries take the wire colour and width
@@ -495,6 +532,10 @@ function buildSchGeom(doc, item) {
       const p = ptsOf(pl); if (p.length < 2) continue;
       G(item, { t: "poly", pts: p, close: true, w: widthOf(pl, 0) || SCH_PEN, color: strokeColorOf(pl) || SCH.ruleArea, layer: "Rule areas", z: SCH_Z.ruleArea });
     }
+  } else if (k === "table") {
+    buildTableGeom(doc, item, n);
+  } else if (k === "image") {
+    buildImageGeom(doc, item, n);
   } else if (k === "sheet") {
     buildSheetGeom(item, n);
   } else if (k === "symbol") {
@@ -819,8 +860,12 @@ function buildPcbGeom(doc, item) {
     G(item, { t: "circle", x, y, r, w, color, layer, z });
   } else if (k === "footprint") {
     buildFootprintGeom(doc, item);
+  } else if (k === "table") {
+    buildTableGeom(doc, item, n);
+  } else if (k === "image") {
+    buildImageGeom(doc, item, n);
   }
-  // groups, gr_bbox, images, generated items: nothing to draw
+  // groups, gr_bbox, generated items: nothing to draw
 }
 function buildViaGeom(doc, item, n) {
   const [x, y] = atOf(n); const sz = kid(n, "size"), dr = kid(n, "drill"); const size = sz ? num(sz[1]) : 0.8, drill = dr ? num(dr[1]) : 0.4;
@@ -969,7 +1014,7 @@ function buildDimensionGeom(item, n) {
   if (type === "aligned" || type === "orthogonal") {
     const height = num((kid(n, "height") || [])[1], 0); const orientN = kid(n, "orientation"); const ortho = type === "orthogonal";
     const horiz = ortho && num(orientN ? orientN[1] : 0) === 0;
-    let ext; if (ortho) ext = horiz ? [0, height] : [height, 0]; else { const d = [e[0] - s[0], e[1] - s[1]]; ext = height > 0 ? [-d[1], d[0]] : [d[1], -d[0]]; }
+    let ext; if (ortho) ext = horiz ? [0, 1] : [1, 0]; else { const d = [e[0] - s[0], e[1] - s[1]]; ext = [-d[1], d[0]]; }   // sgn below carries the height's sign (KiCad's Resize(negative))
     const el = Math.hypot(ext[0], ext[1]) || 1; const en = [ext[0] / el, ext[1] / el];
     const extLen = Math.abs(height) - extOff + extH;
     const sgn = height >= 0 ? 1 : -1;
@@ -1112,6 +1157,184 @@ function buildPadGeom(item, pad, tf, side, doc) {
   }
 }
 
+// ---------------------------------------------------------------- tables and images
+/**
+ * (table (column_count N) (border (external yes) (header yes) (stroke …)) (separators (rows yes) (cols yes) (stroke …))
+ *   (column_widths …) (row_heights …) (cells (table_cell "text" (at x y r) (size w h) (margins l t r b) (span c r)
+ *   (fill …) (effects …) (uuid)) …) (uuid))
+ * Boards add (layer …) and write their cells with (start)/(end) [+ (angle)].  Border lines follow
+ * SCH_TABLE/PCB_TABLE::DrawBorders; cell text is anchored per SCH_TEXTBOX/PCB_TEXTBOX::GetDrawPos.
+ * Cells covered by a span carry (span 0 0) and draw nothing.  The table's anchor is its first cell's position.
+ */
+function buildTableGeom(doc, item, n) {
+  const isPcb = doc.type === "pcb";
+  const cols = Math.max(1, Math.round(num((kid(n, "column_count") || [])[1], 1)) || 1);
+  const cellsN = kid(n, "cells"); const cellNodes = cellsN ? kids(cellsN, "table_cell") : [];
+  const rows = Math.ceil(cellNodes.length / cols);
+  const layer = isPcb ? layerOf(n, "Dwgs.User") : "Notes";
+  const z = isPcb ? pcbZ(layer) : SCH_Z.notes, zBg = isPcb ? pcbZ(layer) - 0.5 : SCH_Z.notesBg;
+  const borderN = kid(n, "border"), sepN = kid(n, "separators");
+  const external = boolOf(borderN, "external", true), header = boolOf(borderN, "header", true);
+  const rowsOn = boolOf(sepN, "rows", true), colsOn = boolOf(sepN, "cols", true);
+  const bs = strokeOf(borderN, isPcb ? 0 : SCH_PEN), ss = strokeOf(sepN, isPcb ? 0 : SCH_PEN);
+  const lineColor = (st) => isPcb ? pcbColor(layer) : (st.color || SCH.notes);
+  const lineWidth = (st) => isPcb ? Math.max(st.w, 0) : (st.w > 0 ? st.w : SCH_PEN);   // SCH_PAINTER: width 0 → default pen
+  const cells = cellNodes.map((c, i) => {
+    const b = boxOf(c); if (!b) return null;
+    const sp = kid(c, "span"); const cs = sp ? num(sp[1], 1) : 1, rs = sp ? num(sp[2], 1) : 1;
+    return { node: c, box: b, cs, rs };
+  });
+  const first = cells.find((c) => c);
+  item.movable = true; item.rot = 0; if (isPcb) item.layer = layer;
+  if (!first) { const [x, y] = atOf(n); item.x = x; item.y = y; bboxAdd(item, x, y, 1); return; }
+  const a0 = kid(first.node, "at") || kid(first.node, "start"); item.x = num(a0[1]); item.y = num(a0[2]);
+  const drawAngle = first.box.rot;
+  // cells: fill + text
+  for (const c of cells) {
+    if (!c) continue;
+    const b = c.box; bboxAdd(item, b.x0, b.y0); bboxAdd(item, b.x1, b.y1);
+    if (c.cs <= 0 || c.rs <= 0) continue;
+    const cn = c.node; const ef = effectsOf(cn);
+    if (!isPcb) {
+      const f = fillOf(cn); const fill = f.type === "color" ? f.color : f.type === "background" ? SCH.body : f.type === "solid" || f.type === "outline" ? SCH.notes : null;
+      if (fill) G(item, { t: "rect", x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0, wd: 0, color: fill, fill, layer, z: zBg, noStroke: true });
+    }
+    const text = str(cn[1]); if (ef.hide || !text) continue;
+    const mg = kid(cn, "margins"); const dm = ef.size * 0.75;
+    const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2]) : dm, rm = mg ? num(mg[3]) : dm, bm = mg ? num(mg[4]) : dm;
+    const j = justOf(ef.just, "center", "middle");   // parseEDA_TEXT resets to centre before reading (justify …)
+    if (isPcb) {
+      // PCB_TEXTBOX::GetDrawPos: the corner / mid-point matching the justification, offset by the margins in the text frame
+      const cr = cornersInSequence(b, b.rot);
+      const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+      const anchor = j.v === "top" ? (j.h === "left" ? cr[0] : j.h === "right" ? cr[1] : mid(cr[0], cr[1]))
+        : j.v === "bottom" ? (j.h === "left" ? cr[3] : j.h === "right" ? cr[2] : mid(cr[3], cr[2]))
+        : (j.h === "left" ? mid(cr[0], cr[3]) : j.h === "right" ? mid(cr[1], cr[2]) : mid(mid(cr[0], cr[2]), mid(cr[1], cr[3])));
+      const ox = j.h === "left" ? lm : j.h === "right" ? -rm : 0, oy = j.v === "top" ? tm : j.v === "bottom" ? -bm : 0;
+      const [dx, dy] = rotPt(ox, oy, b.rot);
+      pcbTextGeom(item, cn, anchor[0] + dx, anchor[1] + dy, text, b.rot, layer, { defH: "center", defV: "middle" });
+    } else {
+      // SCH_TEXTBOX::GetDrawPos
+      const vert = ((Math.round(b.rot) % 180) + 180) % 180 === 90; let tx, ty;
+      if (vert) { ty = j.h === "left" ? b.y1 - bm : j.h === "right" ? b.y0 + tm : (b.y0 + b.y1) / 2; tx = j.v === "top" ? b.x0 + lm : j.v === "bottom" ? b.x1 - rm : (b.x0 + b.x1) / 2; }
+      else { tx = j.h === "left" ? b.x0 + lm : j.h === "right" ? b.x1 - rm : (b.x0 + b.x1) / 2; ty = j.v === "top" ? b.y0 + tm : j.v === "bottom" ? b.y1 - bm : (b.y0 + b.y1) / 2; }
+      textLines(item, tx, ty, text, ef.size, colorOf(cn) || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size) });
+    }
+  }
+  // borders: SCH_TABLE::DrawBorders / PCB_TABLE::DrawBorders
+  const cellAt = (r, c) => cells[r * cols + c] || null;
+  const line = (p, q, st) => G(item, { t: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: lineWidth(st), color: lineColor(st), layer, z, cap: "butt", dash: st.dash || undefined });
+  for (let col = 0; col < cols - 1; col++) for (let row = 0; row < rows; row++) {
+    const st = row === 0 && header ? bs : colsOn ? ss : null; if (!st) continue;
+    const c = cellAt(row, col); if (!c || c.cs <= 0 || col + c.cs === cols) continue;
+    const cr = cornersInSequence(c.box, drawAngle); line(cr[1], cr[2], st);
+  }
+  for (let row = 0; row < rows - 1; row++) {
+    const st = row === 0 && header ? bs : rowsOn ? ss : null; if (!st) continue;
+    for (let col = 0; col < cols; col++) {
+      const c = cellAt(row, col); if (!c || c.rs <= 0 || row + c.rs === rows) continue;
+      const cr = cornersInSequence(c.box, drawAngle); line(cr[2], cr[3], st);
+    }
+  }
+  if (external && bs.w >= 0) {
+    const tl = cellAt(0, 0), tr = cellAt(0, cols - 1), bl = cellAt(rows - 1, 0), br = cellAt(rows - 1, cols - 1);
+    if (tl && tr && bl && br) {
+      const TL = cornersInSequence(tl.box, drawAngle), TR = cornersInSequence(tr.box, drawAngle), BL = cornersInSequence(bl.box, drawAngle), BR = cornersInSequence(br.box, drawAngle);
+      line(TL[0], TR[1], bs); line(TR[1], BR[2], bs); line(BR[2], BL[3], bs); line(BL[3], TL[0], bs);
+    }
+  }
+  if (item.bbox) { item.w = item.bbox[2] - item.bbox[0]; item.h = item.bbox[3] - item.bbox[1]; }
+}
+/** Shift every cell of a table node by (dx, dy) — tables have no (at) of their own. */
+function shiftTable(node, dx, dy) {
+  const cellsN = kid(node, "cells"); if (!cellsN) return;
+  for (const c of kids(cellsN, "table_cell")) for (const key of ["at", "start", "end"]) { const p = kid(c, key); if (p) { p[1] = +(num(p[1]) + dx).toFixed(4); p[2] = +(num(p[2]) + dy).toFixed(4); } }
+}
+
+/**
+ * (image (at x y) [(layer …)] [(scale s)] (uuid …) (data "base64" "…" …)) — KiCad writes the base64 in 76-character
+ * string atoms.  The bitmap is centred on `at`; its size is pixels × 25.4 mm / PPI (BITMAP_BASE::m_pixelSizeIu =
+ * 254000 IU / PPI, PPI from the file's own resolution, 300 by default) × scale.  Decoding is lazy and cached per
+ * item id + data hash; until the browser has decoded the image a placeholder frame is drawn.  When an image
+ * finishes loading (or fails) KiCadCanvas.onAssetLoaded({ id, kind: "image", ok }) is called, if set, so the
+ * app can request a repaint.
+ */
+const IMAGE_CACHE = new Map(), IMAGE_CACHE_MAX = 64;
+const DATA_CACHE = new WeakMap();   // (data …) node → { b64, hash }: geometry rebuilds (drags) must not re-join / re-hash megabytes
+function strHash(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16) + "-" + s.length; }
+/** Decode base64 to bytes (only the first `limit` characters when given — headers live at the front). */
+function base64Bytes(b64, limit) {
+  let s = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, ""); if (limit && s.length > limit) s = s.slice(0, limit - (limit % 4));
+  if (typeof Buffer !== "undefined" && Buffer.from) return new Uint8Array(Buffer.from(s, "base64"));
+  if (typeof atob === "function") { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  return new Uint8Array(0);
+}
+/** Pixel size, MIME type and PPI from a PNG (IHDR / pHYs) or JPEG (SOFn / JFIF density) header: BITMAP_BASE::updatePPI rules, 300 PPI default. */
+function imageInfo(bytes) {
+  const info = { mime: "image/png", w: 0, h: 0, ppi: 300 };
+  const be32 = (i) => ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0, be16 = (i) => (bytes[i] << 8) | bytes[i + 1];
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+    info.w = be32(16); info.h = be32(20);
+    for (let p = 8; p + 8 <= bytes.length;) {
+      const len = be32(p), type = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7]);
+      if (type === "IDAT" || type === "IEND") break;
+      // pHYs in pixels per metre: wx reports px/cm, KiCad rounds px/cm × 2.54
+      if (type === "pHYs" && p + 17 <= bytes.length && bytes[p + 16] === 1) { const dpcm = be32(p + 8) / 100; if (dpcm > 1) info.ppi = Math.round(dpcm * 2.54); }
+      p += 12 + len;
+    }
+  } else if (bytes.length >= 4 && bytes[0] === 0xFF && bytes[1] === 0xD8) {
+    info.mime = "image/jpeg";
+    for (let p = 2; p + 4 <= bytes.length;) {
+      if (bytes[p] !== 0xFF) break;
+      const m = bytes[p + 1];
+      if (m === 0xFF) { p++; continue; }
+      if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { p += 2; continue; }
+      const len = be16(p + 2);
+      if (m === 0xE0 && len >= 14 && bytes[p + 4] === 0x4A && bytes[p + 5] === 0x46 && bytes[p + 6] === 0x49 && bytes[p + 7] === 0x46) {
+        const units = bytes[p + 11], xd = be16(p + 12);   // JFIF density: 1 = dots/inch, 2 = dots/cm
+        if (units === 2 && xd > 0) info.ppi = Math.round(xd * 2.54); else if (xd > 1) info.ppi = xd;
+      }
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) { info.h = be16(p + 5); info.w = be16(p + 7); break; }
+      if (m === 0xDA || m === 0xD9) break;
+      p += 2 + len;
+    }
+  }
+  return info;
+}
+function notifyAsset(id, ok) {
+  const cb = root.KiCadCanvas && root.KiCadCanvas.onAssetLoaded;
+  if (typeof cb === "function") { try { cb({ id, kind: "image", ok }); } catch (e) { /* a repaint hook must not break the loader */ } }
+}
+/** Cached decoded image per item id + data hash: {url, mime, w, h (px), ppi, img, loaded, failed}. */
+function imageEntry(id, b64, hash) {
+  const key = id + ":" + (hash || strHash(b64));
+  let e = IMAGE_CACHE.get(key); if (e) return e;
+  const info = imageInfo(base64Bytes(b64, 1 << 17));
+  e = { key, id, url: b64 ? "data:" + info.mime + ";base64," + b64 : "", mime: info.mime, w: info.w, h: info.h, ppi: info.ppi, img: null, loaded: false, failed: false };
+  if (IMAGE_CACHE.size >= IMAGE_CACHE_MAX) IMAGE_CACHE.delete(IMAGE_CACHE.keys().next().value);
+  IMAGE_CACHE.set(key, e);
+  const Img = root.Image;
+  if (b64 && typeof Img === "function") {
+    const img = new Img(); e.img = img;
+    img.onload = () => { e.loaded = true; if (img.naturalWidth > 0) { e.w = img.naturalWidth; e.h = img.naturalHeight; } notifyAsset(id, true); };
+    img.onerror = () => { e.failed = true; notifyAsset(id, false); };
+    img.src = e.url;
+  }
+  return e;
+}
+function buildImageGeom(doc, item, n) {
+  const isPcb = doc.type === "pcb"; const [x, y] = atOf(n);
+  const scN = kid(n, "scale"); let scale = scN ? num(scN[1], 1) : 1; if (!(scale > 0) || !isFinite(scale)) scale = 1;
+  const dataN = kid(n, "data"); let d = dataN ? DATA_CACHE.get(dataN) : null;
+  if (!d) { const b64 = dataN ? dataN.slice(1).map(str).join("") : ""; d = { b64, hash: strHash(b64) }; if (dataN) DATA_CACHE.set(dataN, d); }
+  const e = imageEntry(item.id, d.b64, d.hash);
+  const pxMm = 25.4 / (e.ppi || 300);
+  const w = (e.w * pxMm * scale) || 10, h = (e.h * pxMm * scale) || 10;   // unknown pixel size: a 10 mm placeholder
+  const layer = isPcb ? layerOf(n, "Dwgs.User") : "Images";
+  G(item, { t: "image", x: x - w / 2, y: y - h / 2, w, h, entry: e, pxMm, scale, color: isPcb ? pcbColor(layer) : SCH.notes, layer, z: isPcb ? Z_BITMAP : SCH_Z.bitmap });
+  item.movable = true; item.x = x; item.y = y; item.rot = 0; item.w = w; item.h = h; item.scale = scale; if (isPcb) item.layer = layer;
+}
+
 // ---------------------------------------------------------------- ops
 function fragmentItems(doc, sexpr) {
   const out = [];
@@ -1182,7 +1405,7 @@ function applyChange(doc, change, IU) {
     if (nx !== undefined || ny !== undefined || nrot !== undefined) {
       const ox = item.x !== undefined ? item.x : atOf(item.node)[0], oy = item.y !== undefined ? item.y : atOf(item.node)[1];
       const dx = nx !== undefined ? nx - ox : 0, dy = ny !== undefined ? ny - oy : 0;
-      setAt(item.node, nx, ny, nrot);
+      if (item.kind === "table") shiftTable(item.node, dx, dy); else setAt(item.node, nx, ny, nrot);
       if (doc.type === "sch" && item.kind === "symbol" && (dx || dy)) for (const p of kids(item.node, "property")) { const a = kid(p, "at"); if (a) { a[1] = num(a[1]) + dx; a[2] = num(a[2]) + dy; } }
       changed = true;
     }
@@ -1198,10 +1421,14 @@ function setPts(node, pts) {
 // ---------------------------------------------------------------- editing helpers (for the tools layer)
 /** Move an item's anchor to (x, y) mm; symbols carry their fields along.  Returns the wire-format change. */
 function moveItem(doc, item, x, y, IU) {
-  const [ox, oy] = atOf(item.node);
+  const [ox, oy] = item.kind === "table" ? [item.x || 0, item.y || 0] : atOf(item.node);
   const dx = x - ox, dy = y - oy;
   if (doc.type === "sch" && (item.kind === "wire" || item.kind === "bus" || item.kind === "polyline")) {
     const p = ptsOf(item.node).map(([px, py]) => [px + dx, py + dy]); setPts(item.node, p); buildGeom(doc, item);
+    return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) };
+  }
+  if (item.kind === "table") {   // a table's position is its first cell's: every cell moves
+    shiftTable(item.node, dx, dy); buildGeom(doc, item);
     return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) };
   }
   setAt(item.node, x, y);
@@ -1215,9 +1442,13 @@ function moveItem(doc, item, x, y, IU) {
 function replaceChange(doc, item) { buildGeom(doc, item); return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
 function addChange(doc, item) { return { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
 function removeChange(item) { return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] }; }
-const SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE", netclass_flag: "SCH_DIRECTIVE_LABEL", directive_label: "SCH_DIRECTIVE_LABEL" };
-const PCB_TYPE_NAMES = { footprint: "FOOTPRINT", segment: "PCB_TRACK", arc: "PCB_ARC", via: "PCB_VIA", zone: "ZONE", gr_line: "PCB_SHAPE", gr_rect: "PCB_SHAPE", gr_circle: "PCB_SHAPE", gr_arc: "PCB_SHAPE", gr_poly: "PCB_SHAPE", gr_text: "PCB_TEXT", gr_text_box: "PCB_TEXTBOX" };
-function typeNameOf(item) { return (SCH_TYPE_NAMES[item.kind] || PCB_TYPE_NAMES[item.kind] || item.kind.toUpperCase()); }
+const SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE", netclass_flag: "SCH_DIRECTIVE_LABEL", directive_label: "SCH_DIRECTIVE_LABEL", table: "SCH_TABLE", image: "SCH_BITMAP" };
+const PCB_TYPE_NAMES = { footprint: "FOOTPRINT", segment: "PCB_TRACK", arc: "PCB_ARC", via: "PCB_VIA", zone: "ZONE", gr_line: "PCB_SHAPE", gr_rect: "PCB_SHAPE", gr_circle: "PCB_SHAPE", gr_arc: "PCB_SHAPE", gr_poly: "PCB_SHAPE", gr_text: "PCB_TEXT", gr_text_box: "PCB_TEXTBOX", table: "PCB_TABLE", image: "PCB_REFERENCE_IMAGE" };
+function typeNameOf(item) {
+  // kinds shared by both editors (arc, table, image) resolve through the item's document type
+  const first = item.docType === "pcb" ? PCB_TYPE_NAMES : SCH_TYPE_NAMES, second = first === SCH_TYPE_NAMES ? PCB_TYPE_NAMES : SCH_TYPE_NAMES;
+  return first[item.kind] || second[item.kind] || item.kind.toUpperCase();
+}
 /** Screen-space connection points of a symbol's pins (mm). */
 function pinPoints(doc, item) {
   const out = [];
@@ -1326,15 +1557,32 @@ function tracePad(ctx, g) {
  *                                hairline instead of filled;
  *   highContrast + activeLayer (board) — high-contrast mode: everything not on `activeLayer` is
  *                                dimmed to HC_DIM alpha (holes stay visible), the active layer is
- *                                drawn at full colour.
+ *                                drawn at full colour;
+ *   highlight      (both)      — Set of item ids (or null): everything else is dimmed to HL_DIM alpha
+ *                                and the set is drawn in KiCad's brightened look — LAYER_BRIGHTENED
+ *                                (magenta) on schematics, the item's own colour Brightened(0.5) on
+ *                                boards — with a translucent halo of that colour around it.
  */
-const HC_DIM = 0.2;
+const HC_DIM = 0.2, HL_DIM = 0.25;
+const HL_CACHE = new Map();
+/** COLOR4D::Brightened(f): every channel c → c·(1−f) + f */
+function brightened(c, f) { const [r, g, b, a] = parseColor(c); const k = (v) => Math.round(v * (1 - f) + 255 * f); return rgba(k(r), k(g), k(b), a); }
+/** The colour of a highlighted item: the board brightens its own colour by the highlight factor (0.5); eeschema paints LAYER_BRIGHTENED. */
+function highlightColor(c, isPcb) {
+  if (!isPcb) return SCH.brightened;
+  let v = HL_CACHE.get(c); if (!v) { v = brightened(c, 0.5); HL_CACHE.set(c, v); } return v;
+}
+/** Fills of a highlighted schematic item: background-layer fills go translucent (SCH_PAINTER: alpha 0.2), the rest take the highlight colour. */
+function highlightFill(g) { return g.z !== undefined && g.z < 0 ? "rgba(255,0,255,0.2)" : SCH.brightened; }
 function render(doc, ctx, view, opts) {
   opts = opts || {}; const hidden = opts.hidden || new Set();
   const isPcb = doc.type === "pcb";
   const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;
   const sketchPads = isPcb && !!opts.outlinePads, sketchTracks = isPcb && !!opts.outlineTracks, sketchVias = isPcb && !!opts.outlineVias;
   const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
+  const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
+  const hlGeoms = hl ? new Set() : null;   // geometry of the highlighted items
+  const hlColor = (c) => highlightColor(c, isPcb);
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1360,15 +1608,18 @@ function render(doc, ctx, view, opts) {
   const buckets = new Map();
   for (const it of doc.items.values()) {
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
+    const isHl = hl ? hl.has(it.id) : false;
     for (const g of it.geom) {
       if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
       const z = g.z === undefined ? 0 : g.z;
       let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
+      if (isHl) hlGeoms.add(g);
     }
     if (showHiddenPins && it.hiddenGeom) for (const g of it.hiddenGeom) {
       if (hidden.has(g.layer)) continue;
       const z = g.z === undefined ? 0 : g.z;
       let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
+      if (isHl) hlGeoms.add(g);
     }
   }
   const zs = Array.from(buckets.keys()).sort((a, b) => a - b);
@@ -1386,24 +1637,41 @@ function render(doc, ctx, view, opts) {
     for (const g of buckets.get(z)) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
       if (hcLayer && g.layer !== hcLayer && g.layer !== "holes") alpha *= HC_DIM;
+      let color = g.color, fill = g.fill;
+      if (hl) { if (hlGeoms.has(g)) { color = hlColor(color); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); } else alpha *= HL_DIM; }
       setAlpha(alpha);
       const t = g.t;
-      if (t === "text") { drawText(ctx, g, s, doc.type, minW); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
+      if (t === "text") { drawText(ctx, g, s, doc.type, minW, color); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
+      if (t === "image") {
+        const e = g.entry;
+        if (e && e.loaded && !e.failed && e.img && typeof ctx.drawImage === "function") {
+          // the decoded pixel size wins over the header estimate, keeping the centre
+          const w = e.w > 0 ? e.w * g.pxMm * g.scale : g.w, h = e.h > 0 ? e.h * g.pxMm * g.scale : g.h;
+          ctx.drawImage(e.img, g.x + (g.w - w) / 2, g.y + (g.h - h) / 2, w, h);
+        } else {
+          // not decoded (yet): KiCad has no placeholder, so a dashed hairline frame with a cross marks the bitmap's footprint
+          setStroke(color); setWidth(minW); setCap("butt"); ctx.setLineDash([0.6, 0.4]);
+          ctx.strokeRect(g.x, g.y, g.w, g.h);
+          ctx.beginPath(); ctx.moveTo(g.x, g.y); ctx.lineTo(g.x + g.w, g.y + g.h); ctx.moveTo(g.x + g.w, g.y); ctx.lineTo(g.x, g.y + g.h); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        continue;
+      }
       if ((sketchPads && g.pad) || (sketchVias && g.via)) {   // sketch mode: the shape's outline in a hairline, nothing filled
         if (t === "poly" && g.pts.length < 2) continue;
-        setStroke(g.color); setWidth(minW); setCap("butt"); strokeG(g); continue;
+        setStroke(color); setWidth(minW); setCap("butt"); strokeG(g); continue;
       }
-      if (sketchTracks && g.track) { setStroke(g.color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); continue; }
+      if (sketchTracks && g.track) { setStroke(color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); continue; }
       if (t === "rect") {
-        if (g.fill) { setFill(g.fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
-        if (!g.noStroke) { setStroke(g.color); setWidth(Math.max(g.wd || 0, minW)); ctx.strokeRect(g.x, g.y, g.w, g.h); }
+        if (fill) { setFill(fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
+        if (!g.noStroke) { setStroke(color); setWidth(Math.max(g.wd || 0, minW)); ctx.strokeRect(g.x, g.y, g.w, g.h); }
         continue;
       }
       if (t === "poly" && g.pts.length < 2) continue;
-      if (g.fill) { setFill(g.fill); fillG(g); }
+      if (fill) { setFill(fill); fillG(g); }
       if (g.noStroke) continue;
-      if (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !g.fill)) || (t === "circle" && (g.w > 0 || !g.fill)) || (t === "pad" && !g.fill)) {
-        setStroke(g.color); setWidth(Math.max(g.w, minW)); setCap(g.cap || (t === "poly" || t === "line" ? "round" : "butt"));
+      if (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !fill)) || (t === "circle" && (g.w > 0 || !fill)) || (t === "pad" && !fill)) {
+        setStroke(color); setWidth(Math.max(g.w, minW)); setCap(g.cap || (t === "poly" || t === "line" ? "round" : "butt"));
         if (g.dash) ctx.setLineDash([0.4, 0.3]);
         strokeG(g);
         if (g.dash) ctx.setLineDash([]);
@@ -1411,6 +1679,8 @@ function render(doc, ctx, view, opts) {
     }
   }
   ctx.globalAlpha = 1;
+  // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
+  if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
   // selection: KiCad's selection shadow — a translucent halo around the item's own geometry
   if (opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1438,14 +1708,21 @@ function traceTrackOutline(ctx, g) {
   } else tracePath(ctx, g);
 }
 /** Draw KiCad's selection shadow around every geom of the given item ids (canvas must be in document space). */
-function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) {
-  const halo = "#66B2FF", minW = Math.max(1, dpr) / s, extra = 5 * dpr / s;
+function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) { drawHalo(ctx, doc, ids, s, dpr, hidden, { color: "#66B2FF", alpha: 0.55, extraPx: 5 }); }
+/**
+ * A translucent halo around every geom of the given item ids: style = { color: css colour or (geomColour) → css colour,
+ * alpha, extraPx: width added to each stroke, in device px }.  Every id in the set gets its halo.
+ */
+function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
+  const minW = Math.max(1, dpr) / s, extra = style.extraPx * dpr / s;
+  const colorFn = typeof style.color === "function" ? style.color : () => style.color;
   ctx.save();
-  ctx.globalAlpha = 0.55; ctx.strokeStyle = halo; ctx.fillStyle = halo; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
+  ctx.globalAlpha = style.alpha; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
   for (const id of ids) {
     const it = doc.items.get(id); if (!it) continue;
     for (const g of it.geom) {
       if (hidden && hidden.has(g.layer)) continue;
+      const halo = colorFn(g.color); ctx.strokeStyle = halo; ctx.fillStyle = halo;
       if (g.t === "text") {
         const w = typeof textWidth === "function" ? textWidth(g.text || "", g.size, g.w || 0.1524) : (g.text || "").length * g.size * 0.75;
         const h = g.size * 1.35;
@@ -1454,7 +1731,7 @@ function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) {
         ctx.fillRect(x0 - extra / 2, y0 - extra / 4, w + extra, h + extra / 2); ctx.restore();
         continue;
       }
-      if (g.t === "rect") { ctx.lineWidth = Math.max(g.wd || 0, minW) + extra; ctx.strokeRect(g.x, g.y, g.w, g.h); continue; }
+      if (g.t === "rect" || g.t === "image") { ctx.lineWidth = Math.max(g.wd || 0, minW) + extra; ctx.strokeRect(g.x, g.y, g.w, g.h); continue; }
       if (g.t === "poly" && (!g.pts || g.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g.w || 0, minW) + extra;
       const p = pathOf(g);
@@ -1465,23 +1742,24 @@ function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) {
   ctx.restore();
 }
 /** One text run: KiCad's size is the cap height; the baseline sits size/2 below a "middle" anchor. */
-function drawText(ctx, g, s, docType, minW) {
+function drawText(ctx, g, s, docType, minW, colorOverride) {
   const px = g.size * s; if (px < (g.minPx || 3)) return;
+  const color = colorOverride || g.color;
   ctx.save(); ctx.translate(g.x, g.y); if (g.rot) ctx.rotate(-g.rot * Math.PI / 180); if (g.mirror) ctx.scale(-1, 1);
   let font = FONT_CACHE.get(g.size); if (!font) { font = `${g.size * FONT_EM}px ${FONT_FAMILY}`; FONT_CACHE.set(g.size, font); }
   ctx.font = font;
   ctx.textAlign = g.h; ctx.textBaseline = "alphabetic";
   const base = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
-  ctx.fillStyle = g.color;
+  ctx.fillStyle = color;
   if (g.padText) { ctx.fillText(g.text, 0, base); ctx.restore(); return; }
   // stroke-font thickness beyond a filled face's own stem (~0.13·size) reads as bold
   const extra = g.w - 0.13 * g.size;
-  if (extra > 0.01 && docType === "pcb") { ctx.lineWidth = extra; ctx.strokeStyle = g.color; ctx.lineJoin = "round"; ctx.strokeText(g.text, 0, base); }
+  if (extra > 0.01 && docType === "pcb") { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; ctx.strokeText(g.text, 0, base); }
   ctx.fillText(g.text, 0, base);
   if (g.bars && ctx.measureText) {
     // overbar: KiCad draws it 1.23·size above the baseline with the text pen
     const total = ctx.measureText(g.text).width; const shift = g.h === "center" ? -total / 2 : g.h === "right" ? -total : 0;
-    const y = base - g.size * 1.23; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = g.color; ctx.beginPath();
+    const y = base - g.size * 1.23; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = color; ctx.beginPath();
     for (const [i0, i1] of g.bars) { const x0 = shift + ctx.measureText(g.text.slice(0, i0)).width, x1 = shift + ctx.measureText(g.text.slice(0, i1)).width; ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.stroke();
   }
@@ -1504,7 +1782,7 @@ function serialize(node) {
     if (typeof node === "number") return Number.isInteger(node) ? String(node) : String(+node.toFixed(6));
     const s = String(node);
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return '"' + s + '"';   // KiCad always quotes uuids
-    return /^[A-Za-z_][\w.:*-]*$/.test(s) || /^[-+]?\d*\.?\d+$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+    return /^[A-Za-z_][\w.:*-]*$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
   }
   return "(" + node.map(serialize).join(" ") + ")";
 }
@@ -1517,6 +1795,10 @@ function serializeItem(doc, item) {
   return serialize(item.node);
 }
 root.KiCadCanvas = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, moveItem, replaceChange, addChange, removeChange, typeNameOf, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
+  // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
+  // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
+  onAssetLoaded: null,
+  drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable,
   // exposed for tests and tools
   symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf };
 })(typeof window !== "undefined" ? window : globalThis);

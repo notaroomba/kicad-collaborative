@@ -1,11 +1,14 @@
 // Node test for the board editing tools: routing legs, via/graphic node shapes,
-// footprint rotate/flip invariants, hit testing, connected-run selection and a
-// DOM-free drive of the module hooks.   Run: node server/static/tests/pcb-tools.test.js
+// footprint rotate/flip invariants, hit testing, connected-run selection, a
+// DOM-free drive of the module hooks, and the writer-exact fragments of the
+// curve, text box, table, image, zone, rule area and dimension tools.
+// Run: node server/static/tests/pcb-tools.test.js
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const zlib = require("node:zlib");
 
 require(path.join(__dirname, "..", "kicad-canvas.js"));
 require(path.join(__dirname, "..", "pcb-tools.js"));
@@ -409,4 +412,277 @@ test("sample board: rotate/flip invariants hold for every footprint, tracks snap
   assert.ok(ps && ps.net.name === pad.net.name);
   const pc = P.snapTarget(doc, pad.x, pad.y, 0.5, layer, null);
   assert.ok(pc && pc.kind === "pad" && near(pc.x, pad.x) && near(pc.y, pad.y));
+});
+
+// ---- the new board tools: node shapes against pcb_io_kicad_sexpr.cpp, previews, commits, undo safety
+/** An ADDED change re-applies to a fresh copy of the board, the item there re-serialises unchanged, and its inverse removes it. */
+function checkFragment(c, kind) {
+  assert.equal(c.kind, "ADDED");
+  const other = fixture(); assert.ok(K.applyChange(other, c, IU), "re-applies elsewhere");
+  const it = other.items.get(c.id); assert.equal(it.kind, kind); assert.ok(roundTrips(it.node), "file round trip");
+  assert.ok(K.applyChange(other, { id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] }, IU)); assert.equal(other.items.has(c.id), false, "the undo inverse removes it");
+  return K.kid(K.parse(c.sexpr), kind);
+}
+const lastNode = (log, kind) => checkFragment(log.commits.at(-1).changes[0], kind);
+// the serializer writes a numeric-looking dimension value ("10") bare and the parser hands it back as a number; KiCad's
+// NeedSYMBOLorNUMBER reads it as the text either way, so the value is compared as text
+const withText = (node) => { const gt = K.kid(node, "gr_text"); if (gt) gt[1] = String(gt[1]); return node; };
+
+test("new items take BOARD_DESIGN_SETTINGS' layer-class defaults: line widths, text sizes and thicknesses", () => {
+  assert.deepEqual(["F.SilkS", "F.Cu", "In1.Cu", "Edge.Cuts", "F.CrtYd", "B.Fab", "Dwgs.User"].map(P.gfxWidth), [0.1, 0.2, 0.2, 0.05, 0.05, 0.1, 0.1]);
+  assert.deepEqual(P.textStyle("F.Cu"), { size: 1.5, thick: 0.3 }); assert.deepEqual(P.textStyle("B.SilkS"), { size: 1, thick: 0.1 }); assert.deepEqual(P.textStyle("Dwgs.User"), { size: 1, thick: 0.15 });
+  assert.deepEqual(P.effectsNode("B.SilkS", ["left", "top"]), ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]], ["justify", "left", "top", "mirror"]]);
+  assert.deepEqual(P.effectsNode("Dwgs.User"), ["effects", ["font", ["size", 1, 1], ["thickness", 0.15]]]);
+  assert.deepEqual(K.kid(P.curveNode([[0, 0], [1, 1], [2, 1], [3, 0]], "F.Cu"), "stroke"), ["stroke", ["width", 0.2], ["type", "default"]], "copper graphics take the copper line width");
+});
+
+test("module: Bezier (Ctrl+Shift+B) takes the start, two control points and the end; the node is a gr_curve", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.equal(pcb.onKey("Bezier", ev(), ctx), true); assert.equal(log.tool, "gcurve");
+  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [12, 4], ctx); pcb.onPointerDown(ev(), [18, 4], ctx);
+  assert.equal(pcb.onKey("Backspace", ev(), ctx), true); assert.equal(P.state.draw.pts.length, 2, "Backspace drops the last point");
+  pcb.onPointerDown(ev(), [18, 4], ctx);
+  const n = log.commits.length; pcb.onPointerDown(ev(), [18, 4], ctx); assert.equal(log.commits.length, n, "a repeated point is refused");
+  pcb.onPointerMove(ev(), [20, 10], ctx); assert.deepEqual(P.state.draw.cur, [20, 10]);
+  pcb.onPointerDown(ev(), [20, 10], ctx);
+  const c = log.commits.at(-1); assert.equal(c.label, "curve"); assert.equal(c.changes[0].typeName, "PCB_SHAPE");
+  const node = lastNode(log, "gr_curve");
+  assert.deepEqual(node.slice(0, 4), ["gr_curve", ["pts", ["xy", 10, 10], ["xy", 12, 4], ["xy", 18, 4], ["xy", 20, 10]], ["stroke", ["width", 0.1], ["type", "default"]], ["layer", "F.SilkS"]]);
+  assert.equal(node[4][0], "uuid"); assert.equal(node.length, 5);
+  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "gr_curve"); assert.equal(it.geom[0].t, "poly"); assert.equal(it.geom[0].close, false); assert.ok(it.geom[0].pts.length > 4, "flattened curve");
+  assert.equal(P.state.draw, null); assert.equal(log.tool, "gcurve");
+});
+
+test("module: text box takes two corners and the prompt; the node follows the writer's child order", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let title = null; pcb.setPrompt((t, initial, client, done) => { title = t; done("Hello\nworld"); });
+  ctx.setTool("gtextbox"); pcb.onPointerDown(ev(), [30, 20], ctx); assert.ok(P.state.draw); pcb.onPointerDown(ev(), [10, 12], ctx);
+  assert.equal(title, "Text box");
+  const c = log.commits.at(-1); assert.equal(c.label, "text box"); assert.equal(c.changes[0].typeName, "PCB_TEXTBOX");
+  const node = lastNode(log, "gr_text_box");
+  assert.deepEqual(node.slice(0, 6), ["gr_text_box", "Hello\nworld", ["start", 10, 12], ["end", 30, 20], ["margins", 1.0025, 1.0025, 1.0025, 1.0025], ["layer", "F.SilkS"]]);
+  assert.deepEqual(node[6], ["uuid", c.changes[0].id]);
+  assert.deepEqual(node.slice(7), [["effects", ["font", ["size", 1, 1], ["thickness", 0.1]], ["justify", "left", "top"]], ["border", "yes"], ["stroke", ["width", 0.1], ["type", "default"]], ["knockout", "no"]]);
+  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "gr_text_box"); assert.ok(it.geom.some((g) => g.t === "poly") && it.geom.some((g) => g.t === "text"), "border and text");
+  // a cancelled prompt leaves nothing behind; a back layer mirrors the text
+  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done(null));
+  pcb.onPointerDown(ev(), [40, 40], ctx); pcb.onPointerDown(ev(), [50, 45], ctx); assert.equal(log.commits.length, n); assert.equal(P.state.draw, null);
+  assert.deepEqual(K.kid(K.kid(P.textBoxNode("x", [0, 0], [5, 5], "B.SilkS"), "effects"), "justify"), ["justify", "left", "top", "mirror"]);
+});
+
+test("module: table takes two corners and 'rows x cols'; the node carries the writer's border, separators, widths and cells", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let initial = null; pcb.setPrompt((t, i, client, done) => { initial = i; done(t === "Table rows x cols" ? "2 x 3" : null); });
+  ctx.setTool("table"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [40, 16], ctx);
+  assert.equal(initial, "2 x 2", "KiCad's own sizing of a 30 × 6 mm drag: 15 and 3 text sizes per cell");
+  const c = log.commits.at(-1); assert.equal(c.label, "table"); assert.equal(c.changes[0].typeName, "PCB_TABLE");
+  const node = lastNode(log, "table");
+  assert.deepEqual(node[1], ["column_count", 3]); assert.deepEqual(node[2], ["uuid", c.changes[0].id]);
+  assert.deepEqual(node.slice(3, 8), [["layer", "F.SilkS"], ["border", ["external", "yes"], ["header", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]],
+    ["separators", ["rows", "yes"], ["cols", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]], ["column_widths", 10, 10, 10], ["row_heights", 3, 3]]);
+  const cells = node[8]; assert.equal(cells[0], "cells"); assert.equal(cells.length, 7); assert.equal(node.length, 9);
+  const uuids = new Set();
+  cells.slice(1).forEach((cell, i) => {
+    const r = Math.floor(i / 3), col = i % 3;
+    assert.deepEqual(cell.slice(0, 6), ["table_cell", "", ["start", 10 + col * 10, 10 + r * 3], ["end", 20 + col * 10, 13 + r * 3], ["margins", 1.0025, 1.0025, 1.0025, 1.0025], ["span", 1, 1]]);
+    assert.deepEqual(cell[6], ["layer", "F.SilkS"]); assert.equal(cell[7][0], "uuid"); uuids.add(cell[7][1]);
+    assert.deepEqual(cell.slice(8), [["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]], ["knockout", "no"]]);
+  });
+  assert.equal(uuids.size, 6, "every cell has its own uuid");
+  assert.equal(doc.items.get(c.changes[0].id).kind, "table");
+  // nonsense sizes are refused and the box dropped; the grid rounds the cell size like KiCad; back layers mirror the cells
+  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done("lots"));
+  pcb.onPointerDown(ev(), [50, 50], ctx); pcb.onPointerDown(ev(), [60, 55], ctx); assert.equal(log.commits.length, n); assert.ok(log.toasts.at(-1).includes("rows x cols"));
+  assert.deepEqual(P.tableLayout([0, 0], [10.3, 4.1], 1, 1, "F.SilkS", 0.5), { x: 0, y: 0, cw: 10.5, ch: 4, rows: 1, cols: 1 });
+  assert.deepEqual(K.kid(K.kid(P.tableNode([0, 0], [10, 3], 1, 1, "B.SilkS", 0)[8][1], "effects"), "justify"), ["justify", "left", "mirror"]);
+});
+
+// a PNG built from its chunks: 8-bit RGB, a pHYs of 3937 px/m (100 ppi), proper CRCs
+function crc32(buf) { let crc = 0xFFFFFFFF; for (const b of buf) { let c = (crc ^ b) & 0xFF; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; } return (crc ^ 0xFFFFFFFF) >>> 0; }
+function pngChunk(type, data) { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type, "latin1"), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td)); return Buffer.concat([len, td, crc]); }
+function makePng(w, h, ppm) {
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const phys = Buffer.alloc(9); phys.writeUInt32BE(ppm, 0); phys.writeUInt32BE(ppm, 4); phys[8] = 1;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), pngChunk("IHDR", ihdr), pngChunk("pHYs", phys), pngChunk("IDAT", zlib.deflateSync(Buffer.alloc((w * 3 + 1) * h))), pngChunk("IEND", Buffer.alloc(0))]);
+}
+
+test("module: a reference image comes from the picker, rides the cursor and lands centred with 76-column data rows", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  const png = makePng(20, 10, 3937); const b64 = png.toString("base64");
+  let opened = 0; pcb.setImagePicker((done) => { opened++; done({ base64: b64, name: "logo.png" }); });
+  ctx.setTool("image");
+  assert.equal(opened, 1, "the file dialog opens with the tool");
+  const img = P.state.image; assert.ok(img); assert.deepEqual([img.info.type, img.info.w, img.info.h, img.info.ppi], ["png", 20, 10, 100]);
+  assert.ok(near(img.w, 5.08) && near(img.h, 2.54), "1000 mils per ppi, so 100 ppi is 0.254 mm a pixel");
+  pcb.onPointerMove(ev(), [50, 50], ctx);
+  assert.equal(pcb.onPointerDown(ev(), [50, 50], ctx), true);
+  const c = log.commits.at(-1); assert.equal(c.label, "image"); assert.equal(c.changes[0].typeName, "PCB_REFERENCE_IMAGE"); assert.equal(P.state.image, null);
+  const node = lastNode(log, "image");
+  assert.deepEqual(node.slice(0, 3), ["image", ["at", 50, 50], ["layer", "F.SilkS"]]);
+  const data = node[3]; assert.equal(data[0], "data"); assert.equal(node[4][0], "uuid"); assert.equal(node.length, 5, "no (scale) at 1");
+  const rows = data.slice(1).map(String); assert.ok(rows.length > 1 && rows.every((r) => r.length <= 76) && rows.slice(0, -1).every((r) => r.length === 76)); assert.equal(rows.join(""), b64);
+  assert.equal(doc.items.get(c.changes[0].id).kind, "image");
+  assert.equal(pcb.onPointerDown(ev(), [60, 60], ctx), true); assert.equal(opened, 2, "the next click asks for a file again");
+  // JPEG headers: JFIF density in dpi, SOF0 size; anything else is refused
+  const jpg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 1, 0, 72, 0, 72, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0, 30, 0, 40, 1, 1, 0x11, 0]);
+  assert.deepEqual(P.imageInfo(new Uint8Array(jpg)), { type: "jpeg", w: 40, h: 30, ppi: 72 });
+  assert.equal(P.imageInfo(new Uint8Array([1, 2, 3, 4, 5])), null);
+  assert.equal(P.imageInfo(P.base64Bytes(b64)).ppi, 100);
+  ctx.setTool("select"); assert.equal(P.state.image, null, "leaving the tool drops the image");
+  pcb.setImagePicker((done) => done({ base64: Buffer.from("GIF89a").toString("base64"), name: "x.gif" }));
+  ctx.setTool("image"); assert.equal(P.state.image, null); assert.ok(log.toasts.at(-1).includes("PNG"));
+});
+
+test("module: zone (Alt+Z) closes on the first corner, asks for the net and writes ZONE_SETTINGS' defaults unfilled", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let asked = null; pcb.setPrompt((t, initial, client, done, options) => { asked = { t, initial, options }; done("GND"); });
+  assert.equal(pcb.onKey("Zone", ev(), ctx), true); assert.equal(log.tool, "zone");
+  for (const p of [[112, 50], [130, 45], [130, 70], [95, 70]]) pcb.onPointerDown(ev(), p, ctx);
+  pcb.onPointerDown(ev(), [112, 50], ctx);
+  assert.equal(asked.t, "Zone net"); assert.equal(asked.initial, "GND", "the copper under the first corner"); assert.deepEqual(asked.options, ["/SIG", "GND"]);
+  const c = log.commits.at(-1); assert.equal(c.label, "zone"); assert.equal(c.changes[0].typeName, "ZONE"); assert.equal(c.changes[0].netName, "GND");
+  const node = lastNode(log, "zone");
+  assert.deepEqual(node.slice(0, 3), ["zone", ["net", "GND"], ["layer", "F.Cu"]]); assert.deepEqual(node[3], ["uuid", c.changes[0].id]);
+  assert.deepEqual(node.slice(4), [["hatch", "edge", 0.5], ["connect_pads", ["clearance", 0.5]], ["min_thickness", 0.25],
+    ["fill", ["thermal_gap", 0.5], ["thermal_bridge_width", 0.5], ["island_removal_mode", 0]],
+    ["polygon", ["pts", ["xy", 112, 50], ["xy", 130, 45], ["xy", 130, 70], ["xy", 95, 70]]]]);
+  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "zone"); assert.ok(it.geom.some((g) => g.t === "poly" && !g.fill) && !it.geom.some((g) => g.zoneFill), "outline and hatch, no fill");
+  // the next copper zone takes the next free priority; an empty net means no (net); Enter closes too; B.Cu when active
+  pcb.setPrompt((t, i, cl, done) => done(""));
+  assert.equal(pcb.onKey("PageDown", ev(), ctx), true);
+  for (const p of [[10, 10], [20, 10], [20, 20]]) pcb.onPointerDown(ev(), p, ctx);
+  assert.equal(pcb.onKey("Enter", ev(), ctx), true);
+  const z2 = lastNode(log, "zone");
+  assert.deepEqual(z2[1], ["layer", "B.Cu"]); assert.deepEqual(z2[4], ["priority", 1]); assert.equal(log.commits.at(-1).changes[0].netName, undefined);
+  // a cancelled prompt drops the outline; fewer than three corners is refused
+  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done(null));
+  for (const p of [[30, 30], [40, 30], [40, 40]]) pcb.onPointerDown(ev(), p, ctx); pcb.onPointerDown(ev(), [30, 30], ctx);
+  assert.equal(log.commits.length, n); assert.equal(P.state.draw, null);
+  pcb.onPointerDown(ev(), [50, 50], ctx); pcb.onPointerDown(ev(), [60, 50], ctx); assert.equal(pcb.onKey("Enter", ev(), ctx), true); assert.equal(log.commits.length, n);
+  // the legacy net style writes the code
+  const legacy = K.parseDoc(CODE_STYLE, "kicad_pcb");
+  assert.deepEqual(P.zoneNode(legacy, [[0, 0], [1, 0], [1, 1]], "B.Cu", { code: 2, name: "GND" })[1], ["net", 2]);
+  assert.equal(P.zoneNode(legacy, [[0, 0], [1, 0], [1, 1]], "B.Cu", { code: 0, name: "" })[1][0], "layer");
+  P.state.layer = "F.Cu";
+});
+
+test("module: rule area (Ctrl+Shift+K) is a keepout on both outer copper layers with KiCad's default rules", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.equal(pcb.onKey("RuleArea", ev(), ctx), true); assert.equal(log.tool, "rulearea");
+  for (const p of [[10, 10], [20, 10], [20, 20], [10, 20]]) pcb.onPointerDown(ev(), p, ctx);
+  pcb.onPointerDown(ev(), [10, 20], ctx);   // the last corner again closes
+  const c = log.commits.at(-1); assert.equal(c.label, "rule area"); assert.equal(c.changes[0].typeName, "ZONE"); assert.equal(c.changes[0].netName, undefined);
+  const node = lastNode(log, "zone");
+  assert.deepEqual(node[1], ["layers", "F.Cu", "B.Cu"]); assert.deepEqual(node[2], ["uuid", c.changes[0].id]);
+  assert.deepEqual(node.slice(3), [["hatch", "edge", 0.5], ["connect_pads", ["clearance", 0.5]], ["min_thickness", 0.25],
+    ["keepout", ["tracks", "not_allowed"], ["vias", "not_allowed"], ["pads", "not_allowed"], ["copperpour", "allowed"], ["footprints", "allowed"]],
+    ["placement", ["enabled", "no"], ["sheetname", ""]], ["fill", ["thermal_gap", 0.5], ["thermal_bridge_width", 0.5], ["island_removal_mode", 0]],
+    ["polygon", ["pts", ["xy", 10, 10], ["xy", 20, 10], ["xy", 20, 20], ["xy", 10, 20]]]]);
+  const it = doc.items.get(c.changes[0].id); assert.ok(it.geom.some((g) => g.layer === "F.Cu") && it.geom.some((g) => g.layer === "B.Cu"));
+  assert.equal(P.zonePriority(doc), 0, "rule areas hold no priority");
+  assert.deepEqual(P.ruleAreaNode([[0, 0], [1, 0], [1, 1]], ["In1.Cu"])[1], ["layer", "In1.Cu"]);
+});
+
+test("dimension text: GetValueText in mm at four places with zeroes suppressed; aligned text angles; 45° snapping", () => {
+  assert.deepEqual([10, 2.5, 3.14159, 0, 12.34567, 0.00004, 100.5].map(P.dimValueText), ["10", "2.5", "3.1416", "0", "12.3457", "0", "100.5"]);
+  assert.deepEqual([[5, 0], [0, 5], [5, 5], [-5, 5], [0, -5], [-5, 0], [-5, -5]].map(P.readableAngle), [0, 90, 315, 45, 90, 0, -45]);
+  assert.deepEqual([[10, 3], [3, 10], [10, 6], [-6, 10], [6, -10], [0, 0]].map(P.snap45), [[10, 0], [0, 10], [10, 10], [-10, 10], [10, -10], [0, 0]]);
+  assert.deepEqual(P.DIM_CLASS, { aligned: "PCB_DIM_ALIGNED", orthogonal: "PCB_DIM_ORTHOGONAL", center: "PCB_DIM_CENTER", radial: "PCB_DIM_RADIAL", leader: "PCB_DIM_LEADER" });
+  assert.equal(P.EXT_HEIGHT, 0.58642, "int(1.27 mm × sin 27.5°) in nanometres");
+});
+
+test("module: aligned dimension takes two points and the offset; the node carries the writer's format, style and KiCad's text placement", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  ctx.setTool("dimaligned");
+  pcb.onPointerDown(ev(), [10, 10], ctx);
+  const n0 = log.commits.length; pcb.onPointerDown(ev(), [10, 10], ctx); assert.equal(P.state.draw.pts.length, 1, "a zero-length dimension is refused");
+  pcb.onPointerDown(ev(), [20, 10], ctx); assert.deepEqual(P.state.draw.end, [20, 10]);
+  pcb.onPointerMove(ev(), [15, 7], ctx); assert.ok(near(P.state.draw.height, -3), "the cursor's signed distance from the line");
+  pcb.onPointerDown(ev(), [15, 7], ctx);
+  assert.equal(log.commits.length, n0 + 1);
+  const c = log.commits.at(-1); assert.equal(c.label, "dimension"); assert.equal(c.changes[0].typeName, "PCB_DIM_ALIGNED"); const id = c.changes[0].id;
+  assert.deepEqual(withText(lastNode(log, "dimension")), ["dimension", ["type", "aligned"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 20, 10]], ["height", -3],
+    ["format", ["prefix", ""], ["suffix", ""], ["units", 3], ["units_format", 0], ["precision", 4], ["suppress_zeroes", "yes"]],
+    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
+    ["gr_text", "10", ["at", 15, 5.9, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
+  const it = doc.items.get(id); assert.equal(it.kind, "dimension"); assert.ok(it.geom.filter((g) => g.t === "line").length >= 7, "extension lines, crossbar and arrow barbs");
+  assert.equal(P.state.draw, null); assert.equal(log.tool, "dimaligned");
+  // a slanted one on Dwgs.User: the crossbar sits on the cursor's side, the text turns with it into the readable half
+  P.state.gfxLayer = "Dwgs.User";
+  pcb.onPointerDown(ev(), [0, 0], ctx); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerMove(ev(), [10, 0], ctx); pcb.onPointerDown(ev(), [10, 0], ctx);
+  const d2 = withText(lastNode(log, "dimension")); const gt = K.kid(d2, "gr_text");
+  assert.ok(near(K.kid(d2, "height")[1], -7.071068, 1e-5));
+  assert.equal(gt[1], "14.1421"); assert.equal(K.kid(gt, "at")[3], 315);
+  assert.ok(near(K.kid(gt, "at")[1], 10.813173, 1e-5) && near(K.kid(gt, "at")[2], -0.813173, 1e-5), "1.15 mm off the crossbar's middle");
+  assert.deepEqual(K.kid(gt, "effects"), ["effects", ["font", ["size", 1, 1], ["thickness", 0.15]]]);
+  assert.deepEqual(K.kid(d2, "style")[1], ["thickness", 0.1]);
+  const g = P.dimGeometry("aligned", { start: [0, 0], end: [10, 10], height: -7.071068 }, "Dwgs.User");
+  assert.ok(near(g.lines[2][0][0], 5, 1e-5) && near(g.lines[2][0][1], -5, 1e-5), "crossbar start on the extension side");
+  P.state.gfxLayer = "F.SilkS";
+});
+
+test("module: orthogonal dimension (Ctrl+Shift+H) measures X or Y by where the third click falls", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.equal(pcb.onKey("Ortho", ev(), ctx), true); assert.equal(log.tool, "dimortho");
+  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 14], ctx);
+  assert.equal(P.state.draw.orientation, "h", "the longer side to start with");
+  pcb.onPointerMove(ev(), [15, 20], ctx); assert.equal(P.state.draw.orientation, "h"); assert.equal(P.state.draw.height, 10);
+  pcb.onPointerMove(ev(), [25, 12], ctx); assert.equal(P.state.draw.orientation, "v", "beside the points: Y"); assert.equal(P.state.draw.height, 15);
+  pcb.onPointerMove(ev(), [15, 12], ctx); assert.equal(P.state.draw.orientation, "v", "inside the points' box the axis stays"); assert.equal(P.state.draw.height, 5);
+  pcb.onPointerMove(ev(), [15, 20], ctx); pcb.onPointerDown(ev(), [15, 20], ctx);
+  const c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_ORTHOGONAL");
+  const node = withText(lastNode(log, "dimension"));
+  assert.deepEqual(node.slice(4, 7), [["pts", ["xy", 10, 10], ["xy", 20, 14]], ["height", 10], ["orientation", 0]]);
+  const gt = K.kid(node, "gr_text"); assert.equal(gt[1], "10"); assert.deepEqual(K.kid(gt, "at"), ["at", 15, 18.9, 0]);
+  assert.deepEqual(K.kid(node, "style"), ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]]);
+  // vertical: the text stands up beside the crossbar
+  pcb.onPointerDown(ev(), [30, 10], ctx); pcb.onPointerDown(ev(), [32, 30], ctx); pcb.onPointerMove(ev(), [40, 20], ctx); pcb.onPointerDown(ev(), [40, 20], ctx);
+  const n2 = withText(lastNode(log, "dimension")); const t2 = K.kid(n2, "gr_text");
+  assert.deepEqual([K.kid(n2, "height")[1], K.kid(n2, "orientation")[1], t2[1]], [10, 1, "20"]); assert.deepEqual(K.kid(t2, "at"), ["at", 38.9, 20, 90]);
+});
+
+test("module: centre, radial and leader dimensions — a 45° cross, an R-prefixed radius with turned text, leader text from the prompt", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  ctx.setTool("dimcenter"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [13, 11], ctx);
+  let c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_CENTER"); let id = c.changes[0].id;
+  assert.deepEqual(lastNode(log, "dimension"), ["dimension", ["type", "center"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 13, 10]],
+    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]]]);
+  assert.equal(doc.items.get(id).geom.length, 2, "two arms");
+  ctx.setTool("dimradial"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [15, 10], ctx);
+  pcb.onPointerMove(ev(), [20, 8], ctx); assert.deepEqual(P.state.draw.textPos, [20, 8]);
+  pcb.onPointerDown(ev(), [20, 8], ctx);
+  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_RADIAL"); id = c.changes[0].id;
+  assert.deepEqual(lastNode(log, "dimension"), ["dimension", ["type", "radial"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 15, 10]], ["leader_length", 3.81],
+    ["format", ["prefix", "R "], ["suffix", ""], ["units", 3], ["units_format", 0], ["precision", 4], ["suppress_zeroes", "yes"]],
+    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
+    ["gr_text", "R 5", ["at", 20, 8, 59], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
+  // without a third point the text sits ten arrow lengths past the knee, where the drawing tool first puts it
+  const g = P.dimGeometry("radial", { start: [10, 10], end: [5, 10] }, "Dwgs.User"); assert.deepEqual(g.tpos, [5 - 3.81 - 12.7, 10]); assert.equal(g.tang, 0); assert.equal(g.text, "R 5");
+  ctx.setTool("leader");
+  let asked = null; pcb.setPrompt((t, initial, client, done) => { asked = [t, initial]; done("Fiducial"); });
+  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 15], ctx);
+  assert.deepEqual(asked, ["Leader text", "Leader"]);
+  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_LEADER"); id = c.changes[0].id;
+  assert.deepEqual(lastNode(log, "dimension"), ["dimension", ["type", "leader"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 20, 15]],
+    ["format", ["prefix", ""], ["suffix", ""], ["units", 0], ["units_format", 0], ["precision", 4], ["override_value", "Fiducial"]],
+    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["text_frame", 0], ["extension_offset", 0.5]],
+    ["gr_text", "Fiducial", ["at", 32.7, 15, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
+  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done(null));
+  pcb.onPointerDown(ev(), [30, 30], ctx); pcb.onPointerDown(ev(), [40, 30], ctx); assert.equal(log.commits.length, n, "no text, no leader");
+  // Enter drops a dimension in progress; a back layer mirrors the value text
+  ctx.setTool("dimaligned"); pcb.onPointerDown(ev(), [1, 1], ctx); pcb.onPointerDown(ev(), [5, 1], ctx);
+  assert.equal(pcb.onKey("Enter", ev(), ctx), true); assert.equal(P.state.draw, null); assert.equal(log.commits.length, n);
+  assert.deepEqual(K.kid(K.kid(P.dimensionNode("aligned", { start: [0, 0], end: [4, 0], height: 2 }, "B.SilkS"), "gr_text"), "effects")[2], ["justify", "mirror"]);
+});
+
+test("deleteChanges returns REMOVED changes for a mixed multi-selection; every new tool is registered with KiCad's hotkey or none", () => {
+  const doc = fixture();
+  const ch = P.deleteChanges(doc, [doc.items.get("s-1"), "v-1", doc.items.get("fp-1"), "g-1", "nope"]);
+  assert.deepEqual(ch.map((c) => [c.kind, c.id, c.typeName]), [["REMOVED", "s-1", "PCB_TRACK"], ["REMOVED", "v-1", "PCB_VIA"], ["REMOVED", "fp-1", "FOOTPRINT"], ["REMOVED", "g-1", "PCB_SHAPE"]]);
+  assert.equal(pcb.deleteChanges, P.deleteChanges); assert.deepEqual(P.deleteChanges(doc, []), []);
+  const keys = Object.fromEntries(pcb.tools.map((t) => [t.id, t.key]));
+  assert.deepEqual(["gcurve", "gtextbox", "table", "image", "zone", "rulearea", "dimaligned", "dimortho", "dimcenter", "dimradial", "leader"].map((id) => keys[id]),
+    ["Ctrl+Shift+B", "", "", "", "Alt+Z", "Ctrl+Shift+K", "", "Ctrl+Shift+H", "", "", ""]);
+  for (const t of pcb.tools) assert.ok(t.label && t.icon && t.cursor, t.id);
+  assert.equal(typeof pcb.setPrompt, "function"); assert.equal(typeof pcb.setImagePicker, "function");
 });

@@ -237,6 +237,7 @@ function filterAllows(kind) { const f = KUI.filter(); const k = filterKey(kind);
 let renderReq = 0;
 const GRID_CHOICES = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
 function requestRender() { if (renderReq || !kdoc) return; renderReq = requestAnimationFrame(() => { renderReq = 0; drawCanvas(); }); }
+KiCadCanvas.onAssetLoaded = () => requestRender();   // bitmaps decode asynchronously; repaint once they are ready
 function sizeCanvas() {
   const dpr = window.devicePixelRatio || 1, w = stage.clientWidth, h = stage.clientHeight;
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
@@ -319,7 +320,7 @@ function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.s
 function toolCtx(extra) {
   return Object.assign({
     K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool, selFilter: KUI.filter(), activeLayer,
-    selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm, selection, docs: state.docs, project: state.project, api,
+    selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm, selection, docs: state.docs, project: state.project, api, docId: state.docId,
     setHighlight(ids) { highlightIds = ids && ids.size ? new Set(ids) : null; requestRender(); },
     setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     commit(changes, label) { commitChanges(changes, label); },
@@ -342,6 +343,7 @@ function commitChanges(changes, label) {
   if (ws && ws.readyState === 1) sendOp(changes); else toast("Not connected — change kept locally");
   undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0;
+  if (isSch() && label === "sheet") { renderHierarchy(); renderDocSwitcher(); }   // a new sheet file joined the project
 }
 function undoLast() {
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
@@ -711,7 +713,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (tool === "comment") { placeComment(ev); return; }
   const [x, y] = worldMm(ev);
   const mod = activeModule();
-  if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly) { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
+  if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly && tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (!best) {

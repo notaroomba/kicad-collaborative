@@ -66,7 +66,9 @@ const ev = (x, y) => ({ button: 0, clientX: x || 0, clientY: y || 0 });
 const lastCommit = (ctx) => ctx.log[ctx.log.length - 1];
 const byKind = (changes, kind) => changes.filter((c) => c.kind === kind);
 function fragRoot(sexpr) { const trees = K.parseAll(sexpr); assert.strictEqual(trees.length, 1, "one root"); return trees[0]; }
-function fragItem(change) { const root = fragRoot(change.sexpr); assert.strictEqual(root[0], "kicad_sch"); const it = root.slice(1).find((c) => Array.isArray(c) && K.uuidOf(c) === change.id); assert.ok(it, "fragment carries item " + change.id); return it; }
+// a rule area's uuid lives inside its polyline (formatPoly writes it there)
+const idOf = (n) => K.uuidOf(n) || (n[0] === "rule_area" && kid(n, "polyline") ? K.uuidOf(kid(n, "polyline")) : "");
+function fragItem(change) { const root = fragRoot(change.sexpr); assert.strictEqual(root[0], "kicad_sch"); const it = root.slice(1).find((c) => Array.isArray(c) && idOf(c) === change.id); assert.ok(it, "fragment carries item " + change.id); return it; }
 
 console.log("sch-tools under node");
 const doc = K.parseDoc(SHEET);
@@ -76,7 +78,8 @@ sch.onDocChanged(ctx);
 test("module registers tools with KiCad-style hotkeys", () => {
   assert.strictEqual(sch.id, "sch");
   assert.deepStrictEqual(Object.fromEntries(sch.tools.map((t) => [t.id, t.key])), { wire: "W", bus: "B", busentry: "Z", junction: "J", noconnect: "Q", label: "L", glabel: "Shift+L", hlabel: "Shift+H", text: "T", place: "A",
-    power: "P", classlabel: "", lines: "I", rect: "", circle: "", arc: "", textbox: "", delete: "" });
+    power: "P", classlabel: "", lines: "I", rect: "", circle: "", arc: "", textbox: "", delete: "",
+    sheet: "", sheetpin: "", table: "", bezier: "", polygon: "", rulearea: "", image: "", highlight: "`" });   // drawSheet's S is app.js's select key
   for (const t of sch.tools) assert.ok(t.icon.includes("<") && t.label && t.id && t.cursor);
   assert.ok(sch.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "the delete tool carries KiCad's delete cursor");
 });
@@ -614,13 +617,271 @@ test("leaving the tool keeps the fixed segments; view-only ignores editing keys"
   c3.viewOnly = true; assert.strictEqual(sch.onKey("w", {}, c3), false);
 });
 
+// ---- sheets, sheet pins, tables, curves, polygons, rule areas, images, net highlighting, multi-item drag ----
+test("sheet pin: a click near a sheet border prompts for the name; the pin lands on the nearest edge with KiCad's side rotation/justify, as a MODIFIED sheet", () => {
+  const { d, c } = fresh();
+  const sheet = K.createItem(d, _.sheetNode([101.6, 88.9], [127, 101.6], "Power", "Power.kicad_sch"));
+  sheet.node.push(["instances", ["project", "t", ["path", "/root-uuid", ["page", "2"]]]]);
+  sch.onActivate("sheetpin", c);
+  sch.onPointerMove(ev(), [102, 95.3], c); assert.strictEqual(sch.state.hover, sheet.id, "hover shows the sheet whose border is near");
+  c.toasts.length = 0; assert.ok(sch.onPointerDown(ev(), [60, 60], c)); assert.ok(c.toasts.some((m) => /border of a sheet/.test(m)));
+  sch.setPrompt((title, initial, client, done) => { assert.strictEqual(title, "Sheet pin"); done("VBUS"); });
+  assert.ok(sch.onPointerDown(ev(), [102.2, 95.1], c));              // left edge; y snaps to the grid
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "sheet pin"); assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.id, x.typeName]), [["MODIFIED", sheet.id, "SCH_SHEET"]]);
+  assert.ok(!/\(pin /.test(cm.before[0]), "commit saw the sheet without the pin (its undo record)");
+  const n = fragItem(cm.changes[0]), pins = kids(n, "pin"); assert.strictEqual(pins.length, 1);
+  assert.deepStrictEqual(pins[0].slice(0, 4), ["pin", "VBUS", "input", ["at", 101.6, 95.25, 180]]); assert.strictEqual(pins[0][4][0], "uuid");
+  assert.deepStrictEqual(pins[0][5], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]]); assert.strictEqual(pins[0].length, 6);
+  const at = (k) => n.findIndex((x) => Array.isArray(x) && x[0] === k);
+  assert.ok(at("property") < at("pin") && at("pin") < at("instances"), "fields, then pins, then instance data — saveSheet's order");
+  assert.ok(/\(page "2"\)/.test(cm.changes[0].sexpr), "page numbers stay quoted (the desktop parser wants a symbol)");
+  assert.strictEqual(kids(d.items.get(sheet.id).node, "pin").length, 1, "applied");
+  assert.deepStrictEqual(_.connPoints(d, d.items.get(sheet.id)), [[101.6, 95.25]], "the pin is a connection point");
+  // every side: right 0/right, top 90/right, left 180/left, bottom 270/left; the free coordinate is clamped to the edge
+  const edge = (p) => _.sheetEdgeAt(d, p, 2);
+  assert.strictEqual(edge([127.2, 95]).side, "right"); assert.deepStrictEqual(_.sheetPinPoint(c, edge([127.2, 95]), [127.2, 95]), [127, 95.25]);
+  assert.strictEqual(edge([110, 88.7]).side, "top"); assert.deepStrictEqual(_.sheetPinPoint(c, edge([110, 88.7]), [110, 88.7]), [110.49, 88.9]);
+  assert.strictEqual(edge([110, 101.8]).side, "bottom"); assert.deepStrictEqual(_.sheetPinPoint(c, edge([110, 101.8]), [110, 140]), [110.49, 101.6]);
+  assert.deepStrictEqual(_.sheetPinPoint(c, edge([101.5, 90]), [101.5, 10]), [101.6, 88.9], "clamped to the edge");
+  assert.strictEqual(edge([114, 95]), null, "the middle of the sheet is not its border");
+  for (const [side, rot, just] of [["right", 0, "right"], ["top", 90, "right"], ["left", 180, "left"], ["bottom", 270, "left"]]) {
+    const p = _.sheetPinNode("A", [1, 2], side); assert.deepStrictEqual([atOf(p)[2], kid(kid(p, "effects"), "justify")[1]], [rot, just], side);
+  }
+});
+
+test("table: two corners then 'rows x cols'; KiCad's (table …) with border/separator strokes, widths, heights, uuid, then the cells", () => {
+  const { d, c } = fresh();
+  sch.setPrompt((title, initial, client, done) => { assert.strictEqual(title, "Rows x cols"); assert.strictEqual(initial, "2x2"); done("2x3"); });
+  sch.onActivate("table", c);
+  sch.onPointerDown(ev(), [25.4, 25.4], c); sch.onPointerMove(ev(), [40, 30], c); assert.deepStrictEqual(sch.state.draw.cur, [39.37, 30.48]);
+  sch.onPointerDown(ev(), [63.5, 35.56], c);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "table"); assert.strictEqual(cm.changes[0].typeName, "SCH_TABLE"); assert.strictEqual(cm.changes[0].kind, "ADDED");
+  const n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 6), ["table", ["column_count", 3], ["border", ["external", "yes"], ["header", "yes"], STROKE0], ["separators", ["rows", "yes"], ["cols", "yes"], STROKE0], ["column_widths", 12.7, 12.7, 12.7], ["row_heights", 5.08, 5.08]]);
+  assert.strictEqual(n[6][0], "uuid"); assert.strictEqual(n[7][0], "cells"); assert.strictEqual(n.length, 8);
+  const cells = kids(n[7], "table_cell"); assert.strictEqual(cells.length, 6);
+  assert.deepStrictEqual(cells[4].slice(0, 9), ["table_cell", "", ["exclude_from_sim", "no"], ["at", 38.1, 30.48, 0], ["size", 12.7, 5.08], ["margins", 0.9525, 0.9525, 0.9525, 0.9525], ["span", 1, 1], FILL_NONE, ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]]]);
+  assert.strictEqual(cells[4][9][0], "uuid"); assert.strictEqual(cells[4].length, 10);
+  assert.ok(/\(table_cell "" /.test(cm.changes[0].sexpr), "empty cell text is a quoted string");
+  assert.ok(d.items.get(cm.changes[0].id)); assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "table");
+  const t2 = _.tableNode([0, 0], [1, 1], 1, 1, 1.27); assert.deepStrictEqual([kid(t2, "column_widths")[1], kid(t2, "row_heights")[1]], [6.35, 2.54], "5 × 2 grid steps minimum");
+  sch.setPrompt((t, i, cl, done) => done("lots")); const before = c.log.length; sch.onPointerDown(ev(), [10.16, 10.16], c); sch.onPointerDown(ev(), [20.32, 20.32], c);
+  assert.strictEqual(c.log.length, before, "an unreadable spec places nothing"); assert.strictEqual(sch.state.draw, null);
+});
+
+test("bezier: start, control 1, end, then the far handle (BEZIER_GEOM_MANAGER); control 2 is the handle reflected over the end", () => {
+  const { d, c } = fresh();
+  sch.onActivate("bezier", c);
+  sch.onPointerDown(ev(), [25.4, 50.8], c); sch.onPointerDown(ev(), [30.48, 38.1], c);
+  c.toasts.length = 0; sch.onPointerDown(ev(), [25.4, 50.8], c); assert.ok(c.toasts.length && sch.state.draw.pts.length === 2, "the end may not coincide with the start");
+  sch.onPointerDown(ev(), [50.8, 50.8], c); assert.strictEqual(sch.state.draw.pts.length, 3);
+  sch.onPointerDown(ev(), [55.88, 63.5], c);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "bezier"); assert.strictEqual(cm.changes[0].typeName, "SCH_SHAPE");
+  const n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 4), ["bezier", ["pts", ["xy", 25.4, 50.8], ["xy", 30.48, 38.1], ["xy", 45.72, 38.1], ["xy", 50.8, 50.8]], STROKE0, FILL_NONE]);
+  assert.strictEqual(n[4][0], "uuid"); assert.strictEqual(n.length, 5);
+  const it = d.items.get(cm.changes[0].id); assert.strictEqual(it.kind, "bezier"); assert.ok(it.geom[0].t === "poly" && it.geom[0].pts.length > 4, "the canvas flattens the curve");
+  assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "bezier");
+  assert.strictEqual(_.hitNonSymbol(d, 38.1, 41.275, 0.3).id, it.id, "picked along the curve (its midpoint)");
+  const dm = dragItem(c, it, [25.4, 50.8], [38.1, 50.8]); assert.deepStrictEqual(ptsOf(fragItem(dm.changes[0]))[0], [38.1, 50.8], "drags by its points");
+});
+
+test("polygon: points close back onto the first one (the file repeats it); Enter closes too; fewer than three points is nothing", () => {
+  const { d, c } = fresh();
+  sch.onActivate("polygon", c);
+  for (const p of [[25.4, 25.4], [38.1, 25.4], [38.1, 38.1]]) sch.onPointerDown(ev(), p, c);
+  sch.onPointerDown(ev(), [25.4, 25.4], c);                          // back on the first point
+  let cm = lastCommit(c); assert.strictEqual(cm.label, "polygon");
+  let n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 4), ["polyline", ["pts", ["xy", 25.4, 25.4], ["xy", 38.1, 25.4], ["xy", 38.1, 38.1], ["xy", 25.4, 25.4]], STROKE0, FILL_NONE]); assert.strictEqual(n[4][0], "uuid");
+  assert.strictEqual(d.items.get(cm.changes[0].id).kind, "polyline"); assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "polygon");
+  for (const p of [[50.8, 25.4], [63.5, 25.4], [63.5, 38.1], [50.8, 38.1]]) sch.onPointerDown(ev(), p, c);
+  assert.ok(sch.onKey("Enter", {}, c)); n = fragItem(lastCommit(c).changes[0]); assert.strictEqual(ptsOf(n).length, 5); assert.deepStrictEqual(ptsOf(n)[4], [50.8, 25.4]);
+  const before = c.log.length; sch.onPointerDown(ev(), [76.2, 25.4], c); sch.onPointerDown(ev(), [88.9, 25.4], c); assert.ok(sch.onKey("Enter", {}, c));
+  assert.strictEqual(c.log.length, before, "two points make no polygon"); assert.strictEqual(sch.state.draw, null);
+});
+
+test("rule area: a closed polygon as (rule_area (polyline …)) — dashed, the uuid inside the polyline, no repeated point; drags and deletes keep that shape", () => {
+  const { d, c } = fresh();
+  sch.onActivate("rulearea", c);
+  for (const p of [[152.4, 25.4], [165.1, 25.4], [165.1, 38.1], [152.4, 38.1]]) sch.onPointerDown(ev(), p, c);
+  sch.onPointerDown(ev(), [152.4, 38.1], c);                         // a click on the last point ends it
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "rule area"); assert.strictEqual(cm.changes[0].typeName, "SCH_RULE_AREA"); assert.strictEqual(cm.changes[0].kind, "ADDED");
+  const n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 5), ["rule_area", ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"]]);
+  const pl = n[5]; assert.strictEqual(n.length, 6);
+  assert.deepStrictEqual(pl.slice(0, 4), ["polyline", ["pts", ["xy", 152.4, 25.4], ["xy", 165.1, 25.4], ["xy", 165.1, 38.1], ["xy", 152.4, 38.1]], ["stroke", ["width", 0], ["type", "dash"]], FILL_NONE]);
+  assert.strictEqual(pl[4][0], "uuid"); assert.strictEqual(K.uuidOf(pl), cm.changes[0].id, "the change id is the polyline's uuid"); assert.strictEqual(kid(n, "uuid"), null, "no uuid on the rule_area itself");
+  const it = d.items.get(cm.changes[0].id); assert.ok(it && it.kind === "rule_area"); assert.ok(it.geom[0].t === "poly" && it.geom[0].close);
+  const dm = dragItem(c, it, [152.4, 30], [165.1, 30]);
+  assert.strictEqual(dm.changes[0].id, it.id); const moved = fragItem(dm.changes[0]);
+  assert.strictEqual(kid(moved, "uuid"), null, "the canvas's direct uuid is stripped again"); assert.deepStrictEqual(ptsOf(kid(moved, "polyline"))[0], [165.1, 25.4]);
+  sch.onActivate("delete", c); assert.ok(sch.onPointerDown(ev(), [165.1, 30], c));
+  assert.deepStrictEqual(lastCommit(c).changes.map((x) => [x.kind, x.id, x.typeName]), [["REMOVED", it.id, "SCH_RULE_AREA"]]); assert.ok(!d.items.has(it.id));
+});
+
+const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+test("image: the picked file rides on the cursor and lands as (image (at) (uuid) (data …)) in 76-column base64", () => {
+  const { d, c } = fresh();
+  let asked = 0; sch.setImagePicker((ctx, done) => { asked++; done({ name: "dot.png", base64: PNG_1x1 }); });
+  sch.onActivate("image", c); assert.strictEqual(asked, 1);
+  assert.ok(sch.state.carry && sch.state.carry.kind === "image"); assert.deepStrictEqual(sch.state.carry.size.map((v) => +v.toFixed(4)), [0.0847, 0.0847], "1 px at 300 PPI");
+  sch.onPointerMove(ev(), [50.9, 76.1], c); assert.deepStrictEqual(atOf(sch.state.carry.node).slice(0, 2), [50.8, 76.2]);
+  assert.ok(sch.onPointerDown(ev(), [50.9, 76.1], c));
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "image"); assert.strictEqual(cm.changes[0].typeName, "SCH_BITMAP");
+  const n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 2), ["image", ["at", 50.8, 76.2]]); assert.strictEqual(n[2][0], "uuid"); assert.strictEqual(n[3][0], "data"); assert.strictEqual(n.length, 4);
+  assert.strictEqual(kid(n, "scale"), null, "scale 1 is not written (saveBitmap)");
+  assert.strictEqual(_.imageData(n), PNG_1x1); assert.ok(n[3].slice(1).every((s) => s.length <= 76));
+  assert.ok(d.items.get(cm.changes[0].id)); assert.strictEqual(sch.state.carry, null); assert.strictEqual(sch.state.sel, cm.changes[0].id);
+  assert.deepStrictEqual(_.imageSize(_.base64ToBytes(PNG_1x1)), [1, 1]);
+  const jpeg = new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 0x4A, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xFF, 0xC0, 0, 17, 8, 0x01, 0x2C, 0x02, 0x58, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+  assert.deepStrictEqual(_.imageSize(jpeg), [600, 300], "JPEG SOF0 width/height");
+  assert.strictEqual(_.bytesToBase64(_.base64ToBytes(PNG_1x1)), PNG_1x1);
+  const big = _.imageNode([0, 0], "A".repeat(200)); assert.deepStrictEqual(kid(big, "data").slice(1).map((s) => s.length), [76, 76, 48]);
+  assert.ok(sch.onPointerDown(ev(), [60, 60], c)); assert.strictEqual(asked, 2, "the next click asks for a file again");
+  sch.setImagePicker((ctx, done) => done(null)); sch.onActivate("select", c);
+});
+
+test("highlight net: wires, junctions, labels, pins and bus entries on one net; net labels, global labels and power symbols join by name", () => {
+  const { d, c } = fresh();
+  const ids = (it, near) => Array.from(sch.netItems(d, it, near)).sort();
+  assert.deepStrictEqual(ids(d.items.get("w1")), ["j1", "l1", "w1", "w2", "w3"], "a T of three wires, its junction and the label on w1");
+  assert.deepStrictEqual(ids(d.items.get("w4")), ["w4"]);
+  const l2 = K.createItem(d, _.labelNode("label", "NETA", [133.35, 50.8], 0));       // on the middle of w5
+  const netA = ["j1", "l1", l2.id, "w1", "w2", "w3", "w5", "w6"].sort();
+  assert.deepStrictEqual(ids(d.items.get("w6")), netA, "same-name net labels join across the sheet");
+  const wa = addWire(d, [12.7, 96.52], [25.4, 96.52]), wb = addWire(d, [25.4, 104.14], [38.1, 104.14]);   // R1's pins 1 and 2
+  assert.deepStrictEqual(ids(wa), ["s1", wa.id].sort(), "a wire into a pin reaches the symbol, not the other pin's wire");
+  assert.deepStrictEqual(ids(d.items.get("s1"), [25.4, 96.52]), ["s1", wa.id].sort()); assert.deepStrictEqual(ids(d.items.get("s1"), [25.4, 104.14]), ["s1", wb.id].sort());
+  const bus = K.createItem(d, _.lineNode("bus", [203.2, 25.4], [215.9, 25.4])), be = K.createItem(d, _.busEntryNode([203.2, 25.4], 2.54, 2.54));
+  const wc = addWire(d, [205.74, 27.94], [220, 27.94]), wd = addWire(d, [215.9, 25.4], [215.9, 40]);
+  assert.deepStrictEqual(ids(wc), [wc.id, be.id, bus.id].sort(), "a bus entry bridges wire and bus"); assert.deepStrictEqual(ids(wd), [wd.id], "a wire end on a bus end does not connect");
+  d.lib.set("power:GND", K.parse(LIB_SYM("power:GND", "#PWR", "(power)")));
+  const gnd = K.createItem(d, _.symbolNode(d, "power:GND", [50.8, 127], 0, "")), gl = K.createItem(d, _.labelNode("global_label", "GND", [76.2, 127], 0)), we = addWire(d, [76.2, 127], [88.9, 127]);
+  assert.deepStrictEqual(ids(gnd), [gnd.id, gl.id, we.id].sort(), "power symbol value = global label name");
+  const sheet = K.createItem(d, _.sheetNode([101.6, 88.9], [127, 101.6], "Sub", "Sub.kicad_sch")); _.placeSheetPin(c, sheet, "IN", [101.6, 95.25], "left");
+  const wf = addWire(d, [88.9, 95.25], [101.6, 95.25]);
+  assert.deepStrictEqual(ids(wf), [wf.id, sheet.id].sort(), "sheet pins connect");
+  // the tool: a click reports the net through ctx.setHighlight; empty space, Escape and a document switch clear it
+  const seen = []; c.setHighlight = (s) => seen.push(s ? Array.from(s).sort() : null);
+  sch.onActivate("highlight", c);
+  sch.onPointerMove(ev(), [70, 63.55], c); assert.strictEqual(sch.state.hover, "w2");
+  assert.ok(sch.onPointerDown(ev(), [70, 63.55], c)); assert.deepStrictEqual(seen[0], netA); assert.deepStrictEqual(Array.from(sch.state.highlight).sort(), netA);
+  assert.ok(sch.onPointerDown(ev(), [25.4, 96.52], c)); assert.deepStrictEqual(seen[1], ["s1", wa.id].sort(), "a pin picks that pin's net");
+  assert.ok(sch.onPointerDown(ev(), [150, 150], c)); assert.strictEqual(seen[2], null); assert.strictEqual(sch.state.highlight, null);
+  sch.onPointerDown(ev(), [70, 63.55], c); assert.ok(sch.state.highlight);
+  sch.onDocChanged(c); assert.strictEqual(sch.state.highlight, null); assert.strictEqual(seen[seen.length - 1], null);
+  assert.ok(sch.onKey("`", {}, c)); assert.strictEqual(sch.state.tool, "highlight");
+  sch.onActivate("select", c);
+});
+
+test("multi-item drag: an array moves together — the wire between two moved pins just moves, outside wires stretch, one commit", () => {
+  const { d, c } = fresh();
+  const ra = addR(d, [152.4, 101.6]), rb = addR(d, [152.4, 127]);                  // ra pin 2 (152.4, 105.41), rb pin 1 (152.4, 123.19)
+  const between = addWire(d, [152.4, 105.41], [152.4, 123.19]), feed = addWire(d, [139.7, 97.79], [152.4, 97.79]);   // feed into ra pin 1
+  assert.ok(sch.beginDrag(c, [ra, rb, between, between], [152.4, 101.6], true));
+  assert.deepStrictEqual(sch.state.drag.items.map((e) => e.item.id).sort(), [ra.id, rb.id, between.id].sort(), "duplicates collapse");
+  _.moveDrag(c, [165.1, 101.6]);
+  assert.deepStrictEqual(sch.state.drag.preview, [], "no stub between two moved pins");
+  assert.deepStrictEqual(ptsOf(between.node), [[165.1, 105.41], [165.1, 123.19]], "live preview moves the spanning wire whole");
+  assert.deepStrictEqual(ptsOf(feed.node), [[139.7, 97.79], [165.1, 97.79]], "the feed stretches on its axis");
+  _.endDrag(c, true);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "drag");
+  assert.deepStrictEqual(Object.fromEntries(cm.changes.map((x) => [x.id, x.kind])), { [ra.id]: "MODIFIED", [rb.id]: "MODIFIED", [between.id]: "MODIFIED", [feed.id]: "MODIFIED" });
+  assert.deepStrictEqual(atOf(fragItem(cm.changes.find((x) => x.id === rb.id))).slice(0, 2), [165.1, 127]);
+  assert.deepStrictEqual(ptsOf(fragItem(cm.changes.find((x) => x.id === between.id))), [[165.1, 105.41], [165.1, 123.19]]);
+  assert.ok(/\(at 152\.4 127 0\)/.test(cm.before[cm.changes.findIndex((x) => x.id === rb.id)]), "originals restored before commit (undo)");
+  assert.deepStrictEqual(ptsOf(d.items.get(feed.id).node), [[139.7, 97.79], [165.1, 97.79]], "applied");
+  // a wire spanning two dragged symbols is promoted into the move even when it is not selected
+  const { d: d2, c: c2 } = fresh();
+  const xa = addR(d2, [152.4, 101.6]), xb = addR(d2, [152.4, 127]), mid = addWire(d2, [152.4, 105.41], [152.4, 123.19]);
+  assert.ok(sch.beginDrag(c2, [xa, xb], [152.4, 101.6], true)); assert.ok(sch.state.drag.items.some((e) => e.item === mid));
+  _.moveDrag(c2, [152.4, 114.3]); _.endDrag(c2, true);
+  const c2m = lastCommit(c2); assert.deepStrictEqual(ptsOf(fragItem(c2m.changes.find((x) => x.id === mid.id))), [[152.4, 118.11], [152.4, 135.89]]);
+  assert.strictEqual(c2m.changes.filter((x) => x.kind === "ADDED").length, 0);
+  assert.ok(sch.beginDrag(c2, xa, [152.4, 114.3], true)); assert.strictEqual(sch.state.drag.items.length, 1); assert.strictEqual(sch.state.drag.item, xa); _.endDrag(c2, false);
+  assert.strictEqual(sch.beginDrag(c2, [], [0, 0], true), null);
+});
+
+test("deleteChanges([...]) on the module: REMOVED for every item plus the junctions only they justified; the document is untouched", () => {
+  const { d } = fresh();
+  const ch = sch.deleteChanges(d, [d.items.get("w1"), d.items.get("w2")]);
+  assert.deepStrictEqual(ch.map((x) => [x.kind, x.id]).sort(), [["REMOVED", "j1"], ["REMOVED", "w1"], ["REMOVED", "w2"]].sort(), "w3 alone at the T needs no junction");
+  assert.ok(ch.every((x) => x.typeName && x.properties));
+  assert.deepStrictEqual(sch.deleteChanges(d, [d.items.get("s1"), d.items.get("s1")]).map((x) => x.id), ["s1"], "duplicates collapse");
+  assert.deepStrictEqual(sch.deleteChanges(d, d.items.get("l1")).map((x) => x.id), ["l1"], "a single item still works");
+  assert.ok(d.items.has("w1") && d.items.has("w2") && d.items.has("j1"), "nothing applied");
+});
+
+// ---- the asynchronous sheet tool, then the checks over every fragment produced ----
+async function testAsync(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { failed++; console.log("  FAIL " + name + "\n       " + (e.stack || e).toString().split("\n").slice(0, 4).join("\n       ")); } }
+async function main() {
+await testAsync("sheet: two corners, name and file prompts, the file created on the server (POST docs + snapshot 0), then KiCad's (sheet …) with instance data", async () => {
+  const { d, c } = fresh();
+  c.docs = [{ docId: "root-doc", path: "t.kicad_sch", docType: "kicad_sch" }, { docId: "pcb", path: "t.kicad_pcb", docType: "kicad_pcb" }, { docId: "pro", path: "t.kicad_pro", docType: "kicad_pro" }];
+  c.project = { projectId: "proj-1", name: "Display name" }; c.docId = "root-doc"; c.apiCalls = [];
+  c.api = async (path, opts) => { c.apiCalls.push({ path, opts }); if (/\/docs$/.test(path)) return { docId: "doc-2", path: JSON.parse(opts.body).path, docType: "kicad_sch", existing: false }; return { ok: true, docId: "doc-2", seq: 0, written: true }; };
+  sch.setPrompt((title, initial, client, done) => { if (title === "Sheet name") done("Power"); else { assert.strictEqual(title, "Sheet file"); assert.strictEqual(initial, "Power.kicad_sch"); done(initial); } });
+  sch.onActivate("sheet", c);
+  assert.ok(sch.onPointerDown(ev(), [101.6, 88.9], c)); sch.onPointerMove(ev(), [127, 101.6], c); assert.deepStrictEqual(sch.state.draw.cur, [127, 101.6]);
+  assert.ok(sch.onPointerDown(ev(), [127, 101.6], c));
+  const job = sch.state.sheetJob; assert.ok(job && job.promise, "creation runs asynchronously"); assert.strictEqual(sch.state.draw, null);
+  c.toasts.length = 0; assert.ok(sch.onPointerDown(ev(), [10, 10], c)); assert.strictEqual(sch.state.draw, null, "clicks while the request is out start nothing"); assert.ok(c.toasts.length);
+  const item = await job.promise; assert.ok(item && item.kind === "sheet");
+  assert.strictEqual(c.apiCalls.length, 2);
+  assert.strictEqual(c.apiCalls[0].path, "/api/projects/proj-1/docs"); assert.strictEqual(c.apiCalls[0].opts.method, "POST");
+  assert.deepStrictEqual(JSON.parse(c.apiCalls[0].opts.body), { path: "Power.kicad_sch", docType: "kicad_sch" });
+  assert.strictEqual(c.apiCalls[1].path, "/api/docs/doc-2/snapshots?seq=0"); assert.strictEqual(c.apiCalls[1].opts.method, "POST"); assert.strictEqual(c.apiCalls[1].opts.headers["content-type"], "text/plain");
+  const snap = K.parse(c.apiCalls[1].opts.body); assert.strictEqual(snap[0], "kicad_sch");
+  assert.deepStrictEqual(kid(snap, "version"), ["version", 20250114]); assert.deepStrictEqual(kid(snap, "generator"), ["generator", "kicad-collab-web"]); assert.deepStrictEqual(kid(snap, "generator_version"), ["generator_version", "9.0"]);
+  assert.ok(K.uuidOf(snap).length > 10); assert.deepStrictEqual(kid(snap, "paper"), ["paper", "A4"]); assert.deepStrictEqual(kid(snap, "lib_symbols"), ["lib_symbols"]);
+  assert.deepStrictEqual(kid(snap, "sheet_instances"), ["sheet_instances", ["path", "/", ["page", "1"]]]); assert.strictEqual(K.parseDoc(c.apiCalls[1].opts.body).items.size, 0);
+  assert.ok(c.docs.some((x) => x.docId === "doc-2" && x.path === "Power.kicad_sch"), "the new doc joined ctx.docs");
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "sheet"); assert.strictEqual(cm.changes[0].typeName, "SCH_SHEET"); assert.strictEqual(cm.changes[0].kind, "ADDED");
+  const n = fragItem(cm.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 10), ["sheet", ["at", 101.6, 88.9], ["size", 25.4, 12.7], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["fields_autoplaced", "yes"], ["stroke", ["width", 0.1524], ["type", "solid"]], ["fill", ["color", 0, 0, 0, 0]]]);
+  assert.strictEqual(n[10][0], "uuid");
+  assert.deepStrictEqual(n[11], ["property", "Sheetname", "Power", ["at", 101.6, 88.1888, 0], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]]], "name sits border/2 + 4 IU + 0.5 × text size above");
+  assert.deepStrictEqual(n[12], ["property", "Sheetfile", "Power.kicad_sch", ["at", 101.6, 102.1842, 0], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]]], "file sits border/2 + 4 IU + 0.4 × text size below");
+  assert.deepStrictEqual(n[13], ["instances", ["project", "t", ["path", "/root-uuid", ["page", "2"]]]], "the path and project name this sheet's symbols record; page 2 of a 2-sheet project (quoted: a string to KiCad)");
+  assert.strictEqual(n.length, 14);
+  assert.ok(/\(page "2"\)/.test(cm.changes[0].sexpr) && /\(color 0 0 0 0\)/.test(cm.changes[0].sexpr), cm.changes[0].sexpr);
+  const it = d.items.get(cm.changes[0].id); assert.strictEqual(it.name, "Power"); assert.strictEqual(it.file, "Power.kicad_sch"); assert.ok(it.movable);
+  assert.deepStrictEqual(c.selected, { id: it.id }); assert.strictEqual(sch.state.sheetJob, null); assert.strictEqual(sch.state.tool, "sheet");
+});
+
+await testAsync("sheet: an existing file is referenced (no request) relative to the current sheet; a failed request toasts and places nothing; pages skip the ones in use", async () => {
+  const { d, c } = fresh();
+  c.docs = [{ docId: "root", path: "hw/main.kicad_sch", docType: "kicad_sch" }, { docId: "sub", path: "hw/sub/Power.kicad_sch", docType: "kicad_sch" }, { docId: "other", path: "lib/Old.kicad_sch", docType: "kicad_sch" }];
+  c.docId = "root"; c.project = { projectId: "p" }; c.api = async () => { throw new Error("boom"); };
+  assert.deepStrictEqual(await _.ensureSheetDoc(c, "Power.kicad_sch"), { file: "sub/Power.kicad_sch", docId: "sub", created: false });
+  assert.deepStrictEqual(await _.ensureSheetDoc(c, "Old.kicad_sch"), { file: "../lib/Old.kicad_sch", docId: "other", created: false });
+  await assert.rejects(_.ensureSheetDoc(c, "New.kicad_sch"), /boom/);
+  sch.setPrompt((title, initial, client, done) => done(title === "Sheet name" ? "New" : initial));
+  sch.onActivate("sheet", c); sch.onPointerDown(ev(), [10.16, 10.16], c); sch.onPointerDown(ev(), [30.48, 20.32], c);
+  const before = c.log.length; await sch.state.sheetJob.promise;
+  assert.strictEqual(c.log.length, before, "nothing committed"); assert.ok(c.toasts.some((m) => /Could not create the sheet: boom/.test(m))); assert.strictEqual(sch.state.sheetJob, null);
+  assert.strictEqual(_.nextPage(c, d), 3);
+  const sn = _.sheetNode([50.8, 50.8], [63.5, 63.5], "X", "X.kicad_sch"); sn.push(["instances", ["project", "t", ["path", "/root-uuid", ["page", "3"]]]]); K.createItem(d, sn);
+  assert.strictEqual(_.nextPage(c, d), 4);
+  assert.deepStrictEqual(_.sheetInstance(c, d, 4), ["instances", ["project", "t", ["path", "/root-uuid", ["page", "4"]]]]);
+  assert.strictEqual(_.sheetInstance(c, K.parseDoc('(kicad_sch (version 20250114) (generator "eeschema") (paper "A4"))'), 2), null, "no instance data without a known sheet path");
+  // a subdirectory in the file name goes to the server verbatim, relative to this sheet's directory; the extension is added
+  const calls = []; c.api = async (path, opts) => { calls.push({ path, opts }); return path.endsWith("/docs") ? { docId: "n1", path: JSON.parse(opts.body).path, docType: "kicad_sch", existing: true } : {}; };
+  assert.deepStrictEqual(await _.ensureSheetDoc(c, "parts/Regs"), { file: "parts/Regs.kicad_sch", docId: "n1", created: false });
+  assert.strictEqual(calls.length, 1, "an existing server doc gets no snapshot"); assert.deepStrictEqual(JSON.parse(calls[0].opts.body), { path: "hw/parts/Regs.kicad_sch", docType: "kicad_sch" });
+  delete c.api; await assert.rejects(_.ensureSheetDoc(c, "Nope.kicad_sch"), /cannot create/);
+  sch.setPrompt((t, i, cl, done) => done(null));
+});
+
 test("every fragment is a kicad_sch document the desktop parser can load", () => {
   assert.ok(allSexprs.length > 15);
   for (const c of allSexprs) {
     const root = fragRoot(c.sexpr);
     assert.strictEqual(root[0], "kicad_sch"); assert.deepStrictEqual(kid(root, "version"), ["version", 20250114]); assert.deepStrictEqual(kid(root, "generator"), ["generator", "kicad-collab-web"]);
     const items = root.slice(1).filter((x) => Array.isArray(x) && !["version", "generator", "lib_symbols"].includes(x[0]));
-    assert.strictEqual(items.length, 1); assert.strictEqual(K.uuidOf(items[0]), c.id);
+    assert.strictEqual(items.length, 1); assert.strictEqual(idOf(items[0]), c.id);
     const once = K.serialize(K.parse(c.sexpr)); assert.strictEqual(K.serialize(K.parse(once)), once, "parse/serialise is stable");
   }
 });
@@ -659,3 +920,5 @@ if (fs.existsSync(SAMPLE)) {
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
+}
+main().catch((e) => { console.error(e); process.exit(1); });

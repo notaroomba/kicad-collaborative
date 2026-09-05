@@ -21,7 +21,7 @@ const findSym = (doc, pred) => { for (const it of doc.items.values()) if (it.kin
 function stubCtx(w, h) {
   const calls = {}; const rec = (n) => { calls[n] = (calls[n] || 0) + 1; };
   const ctx = { canvas: { width: w, height: h }, calls, font: "", textAlign: "", textBaseline: "", fillStyle: "", strokeStyle: "", lineWidth: 1, lineCap: "", lineJoin: "", globalAlpha: 1 };
-  for (const n of ["setTransform", "fillRect", "strokeRect", "beginPath", "moveTo", "lineTo", "closePath", "arc", "rect", "fill", "stroke", "save", "restore", "translate", "rotate", "scale", "fillText", "strokeText", "setLineDash"]) ctx[n] = () => rec(n);
+  for (const n of ["setTransform", "fillRect", "strokeRect", "beginPath", "moveTo", "lineTo", "closePath", "arc", "rect", "fill", "stroke", "save", "restore", "translate", "rotate", "scale", "fillText", "strokeText", "setLineDash", "drawImage"]) ctx[n] = () => rec(n);
   ctx.measureText = (t) => { rec("measureText"); return { width: t.length * 0.7 }; };
   return ctx;
 }
@@ -173,6 +173,238 @@ test("render works with a stub context on synthetic documents", () => {
   assert.strictEqual(texts(doc.items.get("t1")).length, 2);
   const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), { grid: 1.27, selected: new Set(["l1"]) });
   assert(ctx.calls.fillText >= 3 && ctx.calls.stroke >= 1);
+});
+
+// ---------------------------------------------------------------- tables, images, sheet pins, highlight, selection
+/** Recording context that also logs the stroke/fill/alpha/dash in force at each drawing call. */
+function recCtx(w, h) {
+  const ctx = stubCtx(w, h); const ops = []; let stroke = "", fill = "", alpha = 1, dash = [];
+  Object.defineProperty(ctx, "strokeStyle", { set: (v) => { stroke = v; }, get: () => stroke });
+  Object.defineProperty(ctx, "fillStyle", { set: (v) => { fill = v; }, get: () => fill });
+  Object.defineProperty(ctx, "globalAlpha", { set: (v) => { alpha = +(+v).toFixed(3); }, get: () => alpha });
+  for (const n of ["stroke", "fill", "strokeRect", "fillRect", "fillText", "drawImage"]) { const rec = ctx[n]; ctx[n] = (...args) => { rec(); ops.push({ op: n, stroke, fill, alpha, dash: dash.slice(), args }); }; }
+  ctx.setLineDash = (d) => { ctx.calls.setLineDash = (ctx.calls.setLineDash || 0) + 1; dash = d; };
+  ctx.ops = ops; return ctx;
+}
+const SCH_HEAD = '(kicad_sch (version 20250114) (generator "t") (paper "A4") ';
+const PCB_HEAD = '(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user) (41 "Cmts.User" user) (49 "Dwgs.User" user)) ';
+const lines = (it) => it.geom.filter((g) => g.t === "line");
+const seg = (g) => [g.x1, g.y1, g.x2, g.y2].map((v) => +v.toFixed(6));
+const schCell = (text, x, y, w, h, extra, id) => `(table_cell "${text}" (at ${x} ${y} 0) (size ${w} ${h}) (margins 0.5 0.5 0.5 0.5) ${extra} (uuid "${id}"))`;
+const schTable = (border, seps, cells) => SCH_HEAD + `(table (column_count 2) ${border} ${seps} (column_widths 20 10) (row_heights 5 5) (uuid "tb1") (cells ${cells}))` + ")";
+
+test("schematic table: external border + header separator, cell text per justification, fills", () => {
+  const doc = K.parseDoc(schTable('(border (external yes) (header yes) (stroke (width 0.2) (type default)))', '(separators (rows yes) (cols no) (stroke (width 0.05) (type dash)))',
+    schCell("A", 10, 10, 20, 5, '(span 1 1) (fill (type none)) (effects (font (size 1.27 1.27)) (justify left top))', "c1") +
+    schCell("B", 30, 10, 10, 5, '(span 1 1) (fill (type color) (color 255 0 0 1)) (effects (font (size 1.27 1.27)) (justify right bottom))', "c2") +
+    schCell("C", 10, 15, 20, 5, '(span 1 1) (fill (type none)) (effects (font (size 1.27 1.27)))', "c3") +
+    schCell("D", 30, 15, 10, 5, '(span 1 1) (fill (type none)) (effects (font (size 1.27 1.27)))', "c4")));
+  const it = doc.items.get("tb1"); assert(it && it.kind === "table");
+  // SCH_TABLE::DrawBorders: header column separator (right edge of cell 0,0), header row separator under both first-row cells, 4 external edges
+  const ls = lines(it).map(seg).sort();
+  assert.deepStrictEqual(ls, [[10, 10, 40, 10], [10, 20, 10, 10], [30, 10, 30, 15], [30, 15, 10, 15], [40, 10, 40, 20], [40, 15, 30, 15], [40, 20, 10, 20]].sort());
+  for (const g of lines(it)) { near(g.w, 0.2, 1e-9); assert.strictEqual(g.color, K.SCH.notes); assert.strictEqual(g.layer, "Notes"); assert(!g.dash); }
+  // SCH_TEXTBOX::GetDrawPos: the anchor is the box edge matching the justification, inset by the margin; no (justify …) = centred
+  const a = texts(it, (g) => g.text === "A")[0]; assert.strictEqual(a.h, "left"); assert.strictEqual(a.v, "top"); near(a.x, 10.5, 1e-9); near(a.y, 10.5, 1e-9);
+  const b = texts(it, (g) => g.text === "B")[0]; assert.strictEqual(b.h, "right"); assert.strictEqual(b.v, "bottom"); near(b.x, 39.5, 1e-9); near(b.y, 14.5, 1e-9);
+  const d = texts(it, (g) => g.text === "D")[0]; assert.strictEqual(d.h, "center"); assert.strictEqual(d.v, "middle"); near(d.x, 35, 1e-9); near(d.y, 17.5, 1e-9);
+  const fill = it.geom.find((g) => g.t === "rect" && g.fill); assert(fill, "colour-filled cell"); assert.strictEqual(fill.fill, "#ff0000"); assert.deepStrictEqual([fill.x, fill.y, fill.w, fill.h], [30, 10, 10, 5]); assert(fill.z < 0, "cell fills go to the notes background");
+  // movable by the first cell's position, hit-testable by bbox, moving shifts every cell
+  const mv = K.movableItems(doc).find((m) => m.id === "tb1"); assert(mv); assert.strictEqual(mv.x, 10); assert.strictEqual(mv.y, 10); assert.strictEqual(mv.kind, "table");
+  assert.strictEqual(K.hitTest(doc, 20, 12, 0), "tb1"); assert.strictEqual(K.hitTest(doc, 45, 12, 0), null);
+  near(it.bbox[0], 10, 0.11); near(it.bbox[1], 10, 0.11); near(it.bbox[2], 40, 0.11); near(it.bbox[3], 20, 0.11);   // ± half the border width
+  const ch = K.moveItem(doc, it, 20, 20, 10000); assert.strictEqual(ch.kind, "MODIFIED"); assert.strictEqual(ch.typeName, "SCH_TABLE"); assert(ch.sexpr.includes("(table") && ch.sexpr.includes("(kicad_sch"));
+  assert.strictEqual(it.x, 20); assert.strictEqual(it.y, 20); assert(!K.kid(it.node, "at"), "no (at) is invented on the table node");
+  assert.deepStrictEqual(K.atOf(K.kids(K.kid(it.node, "cells"), "table_cell")[3]).slice(0, 2), [40, 25]);
+  assert.deepStrictEqual(lines(it).map(seg).sort()[0], [20, 20, 50, 20]);
+  assert(K.applyChange(doc, { id: "tb1", kind: "MODIFIED", properties: [{ name: "Position X", after: { v: 300000 } }] }, 10000)); assert.strictEqual(it.x, 30);
+  assert.deepStrictEqual(K.atOf(K.kids(K.kid(it.node, "cells"), "table_cell")[0]).slice(0, 2), [30, 20]);
+  assert.strictEqual(K.typeNameOf(it), "SCH_TABLE");
+});
+test("schematic table: row/column separators, spans, and the border flags", () => {
+  // every separator on, no header stroke: 1 column line per row + 1 row line per column + external
+  let doc = K.parseDoc(schTable('(border (external yes) (header no) (stroke (width 0.2) (type default)))', '(separators (rows yes) (cols yes) (stroke (width 0.05) (type dash)))',
+    schCell("A", 10, 10, 20, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c1") + schCell("B", 30, 10, 10, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c2") +
+    schCell("C", 10, 15, 20, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c3") + schCell("D", 30, 15, 10, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c4")));
+  let it = doc.items.get("tb1"); let ls = lines(it);
+  assert.strictEqual(ls.length, 8); assert.strictEqual(ls.filter((g) => g.dash && Math.abs(g.w - 0.05) < 1e-9).length, 4, "separators use the separators stroke");
+  assert.strictEqual(ls.filter((g) => !g.dash && Math.abs(g.w - 0.2) < 1e-9).length, 4, "external border uses the border stroke");
+  // a cell spanning both columns: no column line beside it, the covered cell (span 0 0) draws nothing
+  doc = K.parseDoc(schTable('(border (external yes) (header yes) (stroke (width 0.2) (type default)))', '(separators (rows yes) (cols yes) (stroke (width 0.05) (type default)))',
+    schCell("A", 10, 10, 30, 5, '(span 2 1) (effects (font (size 1.27 1.27)))', "c1") + schCell("B", 30, 10, 10, 5, '(span 0 0) (effects (font (size 1.27 1.27)))', "c2") +
+    schCell("C", 10, 15, 20, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c3") + schCell("D", 30, 15, 10, 5, '(span 1 1) (effects (font (size 1.27 1.27)))', "c4")));
+  it = doc.items.get("tb1"); ls = lines(it).map(seg).sort();
+  assert.deepStrictEqual(ls, [[10, 10, 40, 10], [10, 20, 10, 10], [30, 15, 30, 20], [40, 10, 40, 20], [40, 15, 10, 15], [40, 20, 10, 20]].sort());
+  assert(!texts(it, (g) => g.text === "B")[0], "spanned-over cell is not drawn"); assert(texts(it, (g) => g.text === "A")[0]);
+  // nothing stroked at all
+  doc = K.parseDoc(schTable('(border (external no) (header no))', '(separators (rows no) (cols no))', schCell("A", 10, 10, 20, 5, '(effects (font (size 1.27 1.27)))', "c1") + schCell("B", 30, 10, 10, 5, '(effects (font (size 1.27 1.27)))', "c2")));
+  it = doc.items.get("tb1"); assert.strictEqual(lines(it).length, 0); assert(it.movable && it.bbox);
+  const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), {}); assert(ctx.calls.fillText >= 2);
+  // corners in sequence for a rotated cell (EDA_SHAPE::GetCornersInSequence)
+  assert.deepStrictEqual(K.cornersInSequence({ x0: 0, y0: 0, x1: 10, y1: 4 }, 90), [[0, 4], [0, 0], [10, 0], [10, 4]]);
+  assert.deepStrictEqual(K.cornersInSequence({ x0: 0, y0: 0, x1: 10, y1: 4 }, 180), [[10, 4], [0, 4], [0, 0], [10, 0]]);
+});
+test("board table: layer colour and z, dashed border stroke, PCB_TEXTBOX::GetDrawPos anchors", () => {
+  const cell = (t, x0, y0, x1, y1, extra, id) => `(table_cell "${t}" (start ${x0} ${y0}) (end ${x1} ${y1}) (margins 0.5 0.5 0.5 0.5) (span 1 1) (layer "Cmts.User") (uuid "${id}") (effects (font (size 1 1) (thickness 0.15)) ${extra}))`;
+  const doc = K.parseDoc(PCB_HEAD + '(table (column_count 2) (uuid "pt1") (layer "Cmts.User") (border (external yes) (header no) (stroke (width 0.1) (type dash))) (separators (rows yes) (cols yes) (stroke (width 0.05) (type default))) (column_widths 10 10) (row_heights 4 4) (cells ' +
+    cell("x", 0, 0, 10, 4, "(justify right bottom)", "k1") + cell("y", 10, 0, 20, 4, "", "k2") + cell("z", 0, 4, 10, 8, "(justify left top)", "k3") + cell("w", 10, 4, 20, 8, "", "k4") + ")))");
+  const it = doc.items.get("pt1"); assert(it && it.kind === "table"); assert.strictEqual(it.layer, "Cmts.User");
+  const ls = lines(it); assert.strictEqual(ls.length, 8);
+  for (const g of ls) { assert.strictEqual(g.color, "#5994DC"); assert.strictEqual(g.layer, "Cmts.User"); assert.strictEqual(g.z, K.pcbZ("Cmts.User")); }
+  assert.deepStrictEqual(ls.filter((g) => g.dash).map(seg).sort(), [[0, 0, 20, 0], [0, 8, 0, 0], [20, 0, 20, 8], [20, 8, 0, 8]].sort(), "external border: dashed 0.1");
+  assert.deepStrictEqual(ls.filter((g) => !g.dash).map(seg).sort(), [[10, 0, 10, 4], [10, 4, 0, 4], [10, 4, 10, 8], [20, 4, 10, 4]].sort(), "separators: solid 0.05");
+  for (const g of ls) near(g.w, g.dash ? 0.1 : 0.05, 1e-9);
+  const x = texts(it, (g) => g.text === "x")[0]; assert.strictEqual(x.h, "right"); assert.strictEqual(x.v, "bottom"); near(x.x, 9.5, 1e-9); near(x.y, 3.5, 1e-9); assert.strictEqual(x.color, "#5994DC"); assert.strictEqual(x.layer, "Cmts.User");
+  const y = texts(it, (g) => g.text === "y")[0]; assert.strictEqual(y.h, "center"); assert.strictEqual(y.v, "middle"); near(y.x, 15, 1e-9); near(y.y, 2, 1e-9);
+  const z = texts(it, (g) => g.text === "z")[0]; assert.strictEqual(z.h, "left"); assert.strictEqual(z.v, "top"); near(z.x, 0.5, 1e-9); near(z.y, 4.5, 1e-9);
+  assert.strictEqual(K.hitTest(doc, 5, 2, 0), "pt1"); assert.strictEqual(K.movableItems(doc).find((m) => m.id === "pt1").layer, "Cmts.User"); assert.strictEqual(K.typeNameOf(it), "PCB_TABLE");
+  const ch = K.moveItem(doc, it, 100, 100, 1e6); assert.strictEqual(ch.typeName, "PCB_TABLE"); assert(ch.sexpr.startsWith("(table")); assert.deepStrictEqual(seg(lines(it).find((g) => g.dash && g.y1 === 100 && g.y2 === 100)), [100, 100, 120, 100]);
+  const hid = new Set(["Cmts.User"]); const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), { hidden: hid }); assert(!ctx.calls.fillText, "hidden layer hides the table");
+  assert(K.layerList(doc).some((l) => l.key === "Cmts.User"));
+});
+
+// tiny PNG / JPEG builders: enough header for BITMAP_BASE's size/PPI rules
+function pngB64(w, h, ppm) {
+  const chunk = (type, data) => Buffer.concat([Buffer.from([(data.length >>> 24) & 255, (data.length >>> 16) & 255, (data.length >>> 8) & 255, data.length & 255]), Buffer.from(type, "latin1"), data, Buffer.alloc(4)]);
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const parts = [Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), chunk("IHDR", ihdr)];
+  if (ppm) { const p = Buffer.alloc(9); p.writeUInt32BE(ppm, 0); p.writeUInt32BE(ppm, 4); p[8] = 1; parts.push(chunk("pHYs", p)); }
+  parts.push(chunk("IDAT", Buffer.from([0, 0, 0])), chunk("IEND", Buffer.alloc(0)));
+  return Buffer.concat(parts).toString("base64");
+}
+const JPEG_B64 = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x96, 0x00, 0x96, 0x00, 0x00,
+  0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x0A, 0x00, 0x14, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01, 0xFF, 0xD9]).toString("base64");
+const dataAtoms = (b64) => "(data " + b64.match(/.{1,76}/g).map((c) => '"' + c + '"').join(" ") + ")";
+class FakeImage { constructor() { FakeImage.made.push(this); this.naturalWidth = 0; this.naturalHeight = 0; this.onload = null; this.onerror = null; } set src(v) { this._src = v; } get src() { return this._src; } }
+FakeImage.made = [];
+
+test("image headers: PNG IHDR/pHYs and JPEG SOF/JFIF give pixel size and PPI (300 by default)", () => {
+  const png = K.imageInfo(K.base64Bytes(pngB64(4, 2, 3780))); assert.deepStrictEqual(png, { mime: "image/png", w: 4, h: 2, ppi: 96 });
+  assert.deepStrictEqual(K.imageInfo(K.base64Bytes(pngB64(7, 3, 0))), { mime: "image/png", w: 7, h: 3, ppi: 300 });
+  assert.deepStrictEqual(K.imageInfo(K.base64Bytes(JPEG_B64)), { mime: "image/jpeg", w: 20, h: 10, ppi: 150 });
+  assert.deepStrictEqual(K.imageInfo(K.base64Bytes("AAAA")), { mime: "image/png", w: 0, h: 0, ppi: 300 });
+  assert.strictEqual(K.base64Bytes("").length, 0);
+});
+test("schematic image: base64 atoms join, size = px × 25.4/PPI × scale centred on `at`, placeholder until loaded, onAssetLoaded hook, cache", () => {
+  const b64 = pngB64(4, 2, 3780); const body = `(image (at 100 50) (scale 2) (uuid "im1") ${dataAtoms(b64)})`;
+  assert(b64.length > 76 && K.kid(K.parse(body), "data").length >= 3, "data is split across several string atoms");
+  const prevImage = globalThis.Image; globalThis.Image = FakeImage; FakeImage.made.length = 0;
+  const events = []; const prevHook = K.onAssetLoaded;
+  try {
+    const doc = K.parseDoc(SCH_HEAD + body + ")"); const it = doc.items.get("im1"); assert(it && it.kind === "image");
+    const g = it.geom.find((x) => x.t === "image"); assert(g, "image geometry record");
+    const pxMm = 25.4 / 96; near(g.w, 4 * pxMm * 2, 1e-9); near(g.h, 2 * pxMm * 2, 1e-9); near(g.x + g.w / 2, 100, 1e-9); near(g.y + g.h / 2, 50, 1e-9);
+    assert.strictEqual(g.layer, "Images"); assert(g.z < -6, "bitmaps draw under everything"); assert.strictEqual(g.color, K.SCH.notes);
+    assert.strictEqual(g.entry.url, "data:image/png;base64," + b64); assert.strictEqual(FakeImage.made.length, 1); assert.strictEqual(FakeImage.made[0].src, g.entry.url);
+    assert(!g.entry.loaded);
+    // movable + hit-testable, listed on the Images layer
+    const mv = K.movableItems(doc).find((m) => m.id === "im1"); assert(mv && mv.x === 100 && mv.y === 50 && mv.kind === "image");
+    assert.strictEqual(K.hitTest(doc, 100, 50, 0), "im1"); assert.strictEqual(K.hitTest(doc, 100, 60, 0), null); assert.strictEqual(K.typeNameOf(it), "SCH_BITMAP");
+    assert(K.layerList(doc).some((l) => l.key === "Images"));
+    // before the bitmap decodes: a dashed placeholder frame, no drawImage
+    const view = fitView(doc, 800, 600); let ctx = recCtx(800, 600); K.render(doc, ctx, view, {});
+    const ph = ctx.ops.find((o) => o.op === "strokeRect" && o.stroke === K.SCH.notes); assert(ph, "placeholder frame"); assert.deepStrictEqual(ph.dash, [0.6, 0.4]); assert(!ctx.ops.some((o) => o.op === "drawImage"));
+    near(ph.args[2], g.w, 1e-9);
+    // the load hook: called with { id, kind, ok } once the browser has decoded the image
+    K.onAssetLoaded = (info) => events.push(info);
+    FakeImage.made[0].naturalWidth = 4; FakeImage.made[0].naturalHeight = 2; FakeImage.made[0].onload();
+    assert.deepStrictEqual(events, [{ id: "im1", kind: "image", ok: true }]); assert(g.entry.loaded);
+    ctx = recCtx(800, 600); K.render(doc, ctx, view, {});
+    const di = ctx.ops.find((o) => o.op === "drawImage"); assert(di, "decoded image is drawn"); assert.strictEqual(di.args[0], FakeImage.made[0]);
+    near(di.args[1], g.x, 1e-9); near(di.args[2], g.y, 1e-9); near(di.args[3], g.w, 1e-9); near(di.args[4], g.h, 1e-9);
+    assert(!ctx.ops.some((o) => o.op === "strokeRect" && o.dash.length), "no placeholder once loaded");
+    // selection halo and highlight cover the image
+    ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["im1"]) }); assert(ctx.ops.some((o) => o.op === "strokeRect" && o.stroke === "#66B2FF" && o.alpha === 0.55));
+    // a failed decode reports ok: false and keeps the placeholder
+    const doc2 = K.parseDoc(SCH_HEAD + `(image (at 10 10) (uuid "im2") ${dataAtoms(b64)})` + ")"); assert.strictEqual(FakeImage.made.length, 2, "a different item id gets its own entry");
+    FakeImage.made[1].onerror(); assert.deepStrictEqual(events[1], { id: "im2", kind: "image", ok: false });
+    ctx = recCtx(800, 600); K.render(doc2, ctx, fitView(doc2, 800, 600), {}); assert(!ctx.ops.some((o) => o.op === "drawImage")); assert(ctx.ops.some((o) => o.op === "strokeRect" && o.dash.length));
+    near(doc2.items.get("im2").geom[0].w, 4 * pxMm, 1e-9, "scale defaults to 1");
+    // same id + same data: the cache is reused, no new Image and no new load event
+    const doc3 = K.parseDoc(SCH_HEAD + body + ")"); assert.strictEqual(FakeImage.made.length, 2); assert(doc3.items.get("im1").geom[0].entry === g.entry && g.entry.loaded);
+    // the hook is optional
+    K.onAssetLoaded = null; const doc4 = K.parseDoc(SCH_HEAD + `(image (at 10 10) (uuid "im4") ${dataAtoms(pngB64(1, 1, 0))})` + ")"); FakeImage.made[2].onload();
+    near(doc4.items.get("im4").geom[0].w, 25.4 / 300, 1e-9, "no pHYs: 300 PPI"); assert.strictEqual(events.length, 2);
+    // an image whose data is missing still has a 10 mm placeholder and is movable
+    const doc5 = K.parseDoc(SCH_HEAD + '(image (at 20 20) (uuid "im5"))' + ")"); const g5 = doc5.items.get("im5").geom[0]; near(g5.w, 10, 1e-9); assert.strictEqual(K.hitTest(doc5, 20, 20, 0), "im5");
+    const ch = K.moveItem(doc5, doc5.items.get("im5"), 30, 30, 10000); assert.strictEqual(ch.typeName, "SCH_BITMAP"); near(doc5.items.get("im5").geom[0].x + 5, 30, 1e-9);
+  } finally { globalThis.Image = prevImage; K.onAssetLoaded = prevHook; }
+});
+test("board image: layer colour, scale, JPEG density, drawn under every board layer", () => {
+  const prevImage = globalThis.Image; delete globalThis.Image;   // no Image constructor at all (headless): placeholder only, no throw
+  try {
+    const doc = K.parseDoc(PCB_HEAD + `(image (at 50 50) (layer "F.SilkS") (scale 0.5) (uuid "bi1") ${dataAtoms(JPEG_B64)})` + ")");
+    const it = doc.items.get("bi1"); const g = it.geom[0]; assert.strictEqual(g.t, "image");
+    const pxMm = 25.4 / 150; near(g.w, 20 * pxMm * 0.5, 1e-9); near(g.h, 10 * pxMm * 0.5, 1e-9); near(g.x + g.w / 2, 50, 1e-9); near(g.y + g.h / 2, 50, 1e-9);
+    assert.strictEqual(g.layer, "F.SilkS"); assert.strictEqual(g.color, "#F2EDA1"); assert(g.z < K.pcbZ("B.Fab") && g.z < K.pcbZ("B.Cu") - 1);
+    assert.strictEqual(g.entry.mime, "image/jpeg"); assert.strictEqual(g.entry.img, null); assert.strictEqual(it.layer, "F.SilkS"); assert.strictEqual(K.typeNameOf(it), "PCB_REFERENCE_IMAGE");
+    assert.strictEqual(K.hitTest(doc, 50, 50, 0), "bi1"); assert(K.movableItems(doc).some((m) => m.id === "bi1" && m.layer === "F.SilkS"));
+    const ctx = recCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), {}); assert(ctx.ops.some((o) => o.op === "strokeRect" && o.stroke === "#F2EDA1"));
+    const ctx2 = recCtx(800, 600); K.render(doc, ctx2, fitView(doc, 800, 600), { hidden: new Set(["F.SilkS"]) }); assert(!ctx2.ops.some((o) => o.op === "strokeRect" && o.stroke === "#F2EDA1"));
+  } finally { if (prevImage) globalThis.Image = prevImage; }
+});
+test("sheet pins: every side reads into the sheet with the swapped input/output shapes", () => {
+  const pin = (name, type, x, y, r, id) => `(pin "${name}" ${type} (at ${x} ${y} ${r}) (effects (font (size 1.27 1.27)) (justify right)) (uuid "${id}"))`;
+  const doc = K.parseDoc(SCH_HEAD + '(sheet (at 50 50) (size 20 10) (stroke (width 0.1524)) (fill (color 0 0 0 0)) (uuid "s1") (property "Sheetname" "sub" (at 50 49 0) (effects (font (size 1.27 1.27)) (justify left bottom))) (property "Sheetfile" "sub.kicad_sch" (at 50 61 0) (effects (font (size 1.27 1.27)) (justify left top))) ' +
+    pin("R", "input", 70, 55, 0, "p1") + pin("T", "output", 60, 50, 90, "p2") + pin("L", "bidirectional", 50, 55, 180, "p3") + pin("B", "tri_state", 60, 60, 270, "p4") + pin("P", "passive", 65, 60, 270, "p5") + "))");
+  const it = doc.items.get("s1"); const d = 0.15 * 1.27 + 1.27, hs = 0.635;
+  const pins = { R: [70, 55], T: [60, 50], L: [50, 55], B: [60, 60], P: [65, 60] };
+  const shapes = it.geom.filter((g) => g.t === "poly" && g.layer === "Sheets" && g.color === K.SCH.sheetLabel && (g.pts.length === 5 || g.pts.length === 6));
+  assert.strictEqual(shapes.length, 5);
+  const shapeOf = (name) => shapes.find((g) => g.pts.every((p) => Math.hypot(p[0] - pins[name][0], p[1] - pins[name][1]) <= 3 * hs));   // templates reach at most √5·hs from the pin
+  const tR = texts(it, (g) => g.text === "R")[0], tT = texts(it, (g) => g.text === "T")[0], tL = texts(it, (g) => g.text === "L")[0], tB = texts(it, (g) => g.text === "B")[0];
+  // right edge (rot 0): text reads leftwards into the sheet; the input pin shows the hierarchical OUTPUT shape pointing out of the sheet
+  assert.strictEqual(tR.rot, 0); assert.strictEqual(tR.h, "right"); near(tR.x, 70 - d, 1e-9); near(tR.y, 55, 1e-9);
+  let sh = shapeOf("R"); assert.strictEqual(sh.pts.length, 6); assert(sh.pts.every((p) => p[0] <= 70 + 1e-9)); assert(sh.pts.some((p) => Math.abs(p[0] - (70 - 2 * hs)) < 1e-9), "flag tip inside the sheet");
+  // top edge (rot 90): vertical text reading down into the sheet; output pin shows the INPUT shape
+  assert.strictEqual(tT.rot, 90); assert.strictEqual(tT.h, "right"); near(tT.x, 60, 1e-9); near(tT.y, 50 + d, 1e-9);
+  sh = shapeOf("T"); assert.strictEqual(sh.pts.length, 6); assert(sh.pts.every((p) => p[1] >= 50 - 1e-9)); assert(sh.pts.some((p) => Math.abs(p[1] - (50 + 2 * hs)) < 1e-9));
+  // left edge (rot 180): text reads rightwards
+  assert.strictEqual(tL.rot, 0); assert.strictEqual(tL.h, "left"); near(tL.x, 50 + d, 1e-9);
+  sh = shapeOf("L"); assert.strictEqual(sh.pts.length, 5); assert(sh.pts.every((p) => p[0] >= 50 - 1e-9)); assert(sh.pts.some((p) => Math.abs(p[0] - (50 + 2 * hs)) < 1e-9), "bidirectional diamond");
+  // bottom edge (rot 270): vertical text reading up into the sheet
+  assert.strictEqual(tB.rot, 90); assert.strictEqual(tB.h, "left"); near(tB.y, 60 - d, 1e-9);
+  sh = shapeOf("B"); assert.strictEqual(sh.pts.length, 5); assert(sh.pts.every((p) => p[1] <= 60 + 1e-9));
+  sh = shapeOf("P"); assert.strictEqual(sh.pts.length, 5); assert(sh.pts.every((p) => p[1] <= 60 + 1e-9)); assert.strictEqual(sh.pts.filter((p) => Math.abs(p[1] - (60 - 2 * hs)) < 1e-9).length, 2, "passive: a box");
+  for (const g of shapes) { assert.strictEqual(g.layer, "Sheets"); assert(g.w > 0); }
+});
+test("highlight option: the set is drawn brightened with a halo, everything else at 25% alpha", () => {
+  assert.strictEqual(K.brightened("#C83434", 0.5), "#e49a9a"); assert.strictEqual(K.highlightColor("#C83434", true), "#e49a9a"); assert.strictEqual(K.highlightColor("#009600", false), K.SCH.brightened); assert.strictEqual(K.HL_DIM, 0.25);
+  const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")) (label "NET" (at 2 5 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1")))');
+  const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };
+  let ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: new Set(["w1", "j1"]) });
+  const strokes = ctx.ops.filter((o) => o.op === "stroke");
+  assert(strokes.some((o) => o.stroke === K.SCH.brightened && o.alpha === 1), "highlighted wire in LAYER_BRIGHTENED");
+  assert(strokes.some((o) => o.stroke === K.SCH.wire && o.alpha === 0.25), "the other wire is dimmed");
+  assert(ctx.ops.some((o) => o.op === "fill" && o.fill === K.SCH.brightened && o.alpha === 1), "junction fill takes the highlight colour");
+  assert(ctx.ops.some((o) => o.op === "fillText" && o.alpha === 0.25 && o.fill === K.SCH.label), "text of other items is dimmed");
+  assert(strokes.filter((o) => o.stroke === K.SCH.brightened && o.alpha === 0.15).length >= 2, "halo pass around the highlighted geometry");
+  ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: null }); assert(!ctx.ops.some((o) => o.alpha === 0.25 || o.stroke === K.SCH.brightened), "null highlight: normal drawing");
+  ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: new Set() }); assert(!ctx.ops.some((o) => o.alpha === 0.25), "empty set: normal drawing");
+  // boards brighten the item's own colour by the highlight factor
+  const pcb = K.parseDoc(PCB_HEAD + '(segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 0) (uuid "s1")) (segment (start 0 5) (end 10 5) (width 0.25) (layer "B.Cu") (net 0) (uuid "s2")))');
+  ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["s1"]) });
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#e49a9a" && o.alpha === 1)); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#4D7FC4" && o.alpha === 0.25));
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#e49a9a" && o.alpha === 0.35), "board halo");
+  // highlight composes with high-contrast dimming and hidden layers
+  ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["s1"]), hidden: new Set(["F.Cu"]) }); assert(!ctx.ops.some((o) => o.stroke === "#e49a9a"));
+});
+test("selected: a halo for every id in the set; polylines with a fill", () => {
+  const doc = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (wire (pts (xy 0 8) (xy 10 8)) (stroke (width 0) (type default)) (uuid "w3")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")))');
+  const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };
+  let ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["w1", "w2", "w3"]) });
+  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "#66B2FF" && o.alpha === 0.55).length, 3, "one halo stroke per selected wire");
+  ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["w1", "j1", "nope"]) });
+  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "#66B2FF").length, 2); assert.strictEqual(ctx.ops.filter((o) => o.op === "fill" && o.fill === "#66B2FF").length, 1, "filled circle halo");
+  // sheet-level polylines: a closed outline with (fill …) is filled like an SCH_SHAPE (drawPolygon writes these)
+  const poly = (fill, id) => SCH_HEAD + `(polyline (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 0)) (stroke (width 0) (type default)) (fill ${fill}) (uuid "${id}")))`;
+  let it = K.parseDoc(poly("(type background)", "p1")).items.get("p1"); assert.strictEqual(it.geom.length, 2);
+  assert.strictEqual(it.geom[0].fill, K.SCH.body); assert(it.geom[0].close && it.geom[0].noStroke); assert(it.geom[0].z < it.geom[1].z, "background fill below the outline"); assert.strictEqual(it.geom[1].fill, undefined); assert.strictEqual(it.geom[1].color, K.SCH.notes); assert(!it.geom[1].close);
+  it = K.parseDoc(poly("(type outline)", "p2")).items.get("p2"); assert.strictEqual(it.geom[0].fill, K.SCH.notes); assert.strictEqual(it.geom[0].z, it.geom[1].z);
+  it = K.parseDoc(poly("(type color) (color 0 255 0 1)", "p3")).items.get("p3"); assert.strictEqual(it.geom[0].fill, "#00ff00");
+  it = K.parseDoc(poly("(type none)", "p4")).items.get("p4"); assert.strictEqual(it.geom.length, 1);
+  it = K.parseDoc(SCH_HEAD + '(polyline (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (fill (type outline)) (uuid "p5")))').items.get("p5"); assert.strictEqual(it.geom.length, 1, "two points cannot fill");
+  ctx = stubCtx(800, 600); K.render(K.parseDoc(poly("(type background)", "p6")), ctx, view, {}); assert(ctx.calls.fill >= 1);
 });
 
 // ---------------------------------------------------------------- the sample project
