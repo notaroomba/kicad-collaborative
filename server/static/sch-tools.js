@@ -1,1 +1,684 @@
-// sch-tools.js — implemented by the parity program; registers on window.CollabTools
+// sch-tools.js — schematic editing tools for the web editor: wires and buses with
+// KiCad's 90° routing and automatic junctions, bus entries, no-connects, labels,
+// text, symbol placement, rotate / mirror / duplicate, wire-segment drag and
+// delete of the non-symbol items app.js does not select itself.
+//
+// Registers on window.CollabTools.sch; app.js drives the hooks documented at its
+// "editing tools" seam.  Edits are whole-item changes built from a *cloned* node,
+// so commit() can still serialise the untouched original as the undo step.  The
+// DOM is only touched once a stage is handed over, so the logic runs under node.
+(function (root) {
+"use strict";
+const K = root.KiCadCanvas;
+if (!K) throw new Error("sch-tools.js needs kicad-canvas.js loaded first");
+const { kid, kids, num, str, atOf, ptsOf, setPts, setAt, uuidOf } = K;
+
+const CLR = { wire: "#009600", bus: "#0000C2", sel: "#FFB43A", hover: "#4D7FC4" };
+const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
+const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
+const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
+const TOOLS = [
+  { id: "wire", label: "Wire", key: "W", kind: "wire", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10"/>' },
+  { id: "bus", label: "Bus", key: "B", kind: "bus", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10" stroke-width="3.2"/>' },
+  { id: "busentry", label: "Bus entry", key: "Z", cursor: "crosshair", icon: '<path d="M4 20h7l9-9"/><path d="M4 4v16" stroke-width="3.2"/>' },
+  { id: "junction", label: "Junction", key: "J", cursor: "crosshair", icon: '<path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3" fill="currentColor"/>' },
+  { id: "noconnect", label: "No connect", key: "Q", cursor: "crosshair", icon: '<path d="M12 3v9M7 7l10 10M17 7L7 17"/>' },
+  { id: "label", label: "Net label", key: "L", kind: "label", cursor: "crosshair", icon: '<path d="M6 17l5-11 5 11M8.5 13h5M4 21h16"/>' },
+  { id: "glabel", label: "Global label", key: "Shift+L", kind: "global_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3z"/>' },
+  { id: "hlabel", label: "Hierarchical label", key: "Shift+H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
+  { id: "text", label: "Text", key: "T", kind: "text", cursor: "crosshair", icon: '<path d="M5 6h14M12 6v13M9 19h6"/>' },
+  { id: "place", label: "Place symbol", key: "A", cursor: "crosshair", icon: '<rect x="7" y="5" width="10" height="14"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
+];
+const toolOf = (id) => TOOLS.find((t) => t.id === id) || null;
+
+// Module state: one in-progress operation at a time, plus a selection of our own
+// for the items app.js's select tool ignores (everything but symbols).
+const S = { ctx: null, tool: "select", wire: null, carry: null, drag: null, pending: null, sel: null, hover: null,
+  cursor: null, cursorClient: null, prompt: null, picker: null, dom: false };
+
+// ---------------------------------------------------------------- small helpers
+const deep = (n) => JSON.parse(JSON.stringify(n));
+const r4 = (v) => +(+v).toFixed(4);
+const same = (a, b, tol) => Math.abs(a[0] - b[0]) <= (tol || 1e-3) && Math.abs(a[1] - b[1]) <= (tol || 1e-3);
+const area = (b) => b ? Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]) : 0;
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+  let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+function onSegMid(p, a, b) { return !same(p, a) && !same(p, b) && segDist(p, a, b) <= 1e-3; }
+function segs(item) { const p = ptsOf(item.node), out = []; for (let i = 1; i < p.length; i++) out.push([p[i - 1], p[i]]); return out; }
+function replaceKid(node, child) { const i = node.findIndex((c) => Array.isArray(c) && c[0] === child[0]); if (i >= 0) node[i] = child; else node.push(child); }
+function dropKid(node, key) { const i = node.findIndex((c) => Array.isArray(c) && c[0] === key); if (i >= 0) node.splice(i, 1); }
+
+// MODIFIED change from a cloned node: the doc item stays untouched until commit applies it,
+// which is what lets app.js record the pre-edit item as the undo step.
+function modChange(doc, item, node) { return { id: item.id, kind: "MODIFIED", typeName: K.typeNameOf(item), sexpr: K.serializeItem(doc, { kind: item.kind, node }) }; }
+function addNode(doc, node) { const item = K.createItem(doc, node); return { item, change: K.addChange(doc, item) }; }
+// Geometry for a node that is not (yet) part of the document: borrow the canvas builder.
+function ghost(doc, node) { if (!uuidOf(node)) node.push(["uuid", K.newUuid()]); const it = K.addItem(doc, node); if (it) doc.items.delete(it.id); return it; }
+
+// ---------------------------------------------------------------- node builders (KiCad 9 file shapes)
+const fontNode = (size) => ["font", ["size", size, size]];
+function lineNode(kind, a, b) { return [kind, ["pts", ["xy", r4(a[0]), r4(a[1])], ["xy", r4(b[0]), r4(b[1])]], ["stroke", ["width", 0], ["type", "default"]]]; }
+function junctionNode(p) { return ["junction", ["at", r4(p[0]), r4(p[1])], ["diameter", 0], ["color", 0, 0, 0, 0]]; }
+function noConnectNode(p) { return ["no_connect", ["at", r4(p[0]), r4(p[1])]]; }
+function busEntryNode(p, dx, dy) { return ["bus_entry", ["at", r4(p[0]), r4(p[1])], ["size", dx, dy], ["stroke", ["width", 0], ["type", "default"]]]; }
+function labelJustify(kind, rot) {
+  const right = rot === 180 || rot === 270;
+  return kind === "label" || kind === "text" ? ["justify", right ? "right" : "left", "bottom"] : ["justify", right ? "right" : "left"];
+}
+function labelNode(kind, text, p, rot) {
+  rot = ((Math.round(rot || 0) % 360) + 360) % 360;
+  const at = ["at", r4(p[0]), r4(p[1]), rot];
+  if (kind === "label") return ["label", text, at, ["effects", fontNode(1.27), labelJustify(kind, rot)]];
+  if (kind === "text") return ["text", text, ["exclude_from_sim", "no"], at, ["effects", fontNode(1.27), labelJustify(kind, rot)]];
+  const n = [kind, text, ["shape", "input"], at];
+  if (kind === "global_label") n.push(["fields_autoplaced", "yes"]);
+  n.push(["effects", fontNode(1.27), labelJustify(kind, rot)], ["uuid", K.newUuid()]);
+  // KiCad always stores the intersheet-refs field on global labels
+  if (kind === "global_label") n.push(["property", "Intersheetrefs", "${INTERSHEET_REFS}", ["at", r4(p[0]), r4(p[1]), 0], ["hide", "yes"], ["effects", fontNode(1.27), ["justify", "left"]]]);
+  return n;
+}
+const MANDATORY = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
+function symbolNode(doc, libId, p, rot, mirror) {
+  const lib = K.resolveLib(doc, libId);
+  const T = tFrom(rot || 0, mirror || "");
+  const tf = (lx, ly) => [r4(p[0] + T[0] * lx + T[1] * ly), r4(p[1] + T[2] * lx + T[3] * ly)];
+  const n = ["symbol", ["lib_id", libId], ["at", r4(p[0]), r4(p[1]), rot || 0]];
+  if (mirror) n.push(["mirror", mirror]);
+  n.push(["unit", 1], ["body_style", 1], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["uuid", K.newUuid()]);
+  const libProps = lib ? kids(lib, "property").filter((lp) => !str(lp[1]).startsWith("ki_")) : [];
+  const fromLib = (name) => libProps.find((lp) => str(lp[1]) === name);
+  const prop = (name, lp) => {
+    let val = lp ? str(lp[2]) : (name === "Value" ? libId.split(":").pop() : name === "Datasheet" ? "~" : "");
+    if (name === "Reference") val = (val || "U") + "?";                       // the desktop annotates
+    else if (name === "Value" && !val) val = libId.split(":").pop();
+    const [lx, ly, lr] = lp ? atOf(lp) : [0, 0, 0]; const [px, py] = tf(lx, ly);
+    const out = ["property", name, val, ["at", px, py, lr || 0]];
+    const h = lp && kid(lp, "hide");
+    const hidden = lp ? (h ? str(h[1]) !== "no" : lp.includes("hide")) : name !== "Reference" && name !== "Value";
+    if (hidden) out.push(["hide", "yes"]);
+    const ef = lp && kid(lp, "effects"); out.push(ef ? deep(ef) : ["effects", fontNode(1.27)]);
+    return out;
+  };
+  for (const name of MANDATORY) n.push(prop(name, fromLib(name)));
+  for (const lp of libProps) if (!MANDATORY.includes(str(lp[1]))) n.push(prop(str(lp[1]), lp));
+  if (lib) for (const sub of kids(lib, "symbol")) for (const pin of kids(sub, "pin")) { const nn = kid(pin, "number"); n.push(["pin", str(nn ? nn[1] : ""), ["uuid", K.newUuid()]]); }
+  return n;
+}
+
+// ---------------------------------------------------------------- orientation (KiCad's transform algebra)
+// T = [x1, y1, x2, y2] maps library coords (Y up) to screen offsets; mirrors pre-multiply like the parser does.
+const ROT = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
+const MX = [1, 0, 0, -1], MY = [-1, 0, 0, 1], RCCW = [0, 1, -1, 0], RCW = [0, -1, 1, 0];
+const OP_M = { ccw: RCCW, cw: RCW, x: MX, y: MY };
+const SCREEN_OP = { ccw: (dx, dy) => [dy, -dx], cw: (dx, dy) => [-dy, dx], x: (dx, dy) => [dx, -dy], y: (dx, dy) => [-dx, dy] };
+function mul(A, B) { return [A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3], A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3]].map((v) => v || 0); }   // no -0
+function tFrom(rot, mirror) { let T = ROT[((Math.round(rot) % 360) + 360) % 360] || ROT[0]; if (mirror === "y") T = mul(MY, T); if (mirror === "x") T = mul(MX, T); return T; }
+// KiCad's own search order when it writes a transform back out as (at … rot) + (mirror …)
+const ORIENTS = [[0, ""], [90, ""], [180, ""], [270, ""], [0, "x"], [90, "x"], [270, "x"], [0, "y"], [90, "y"], [180, "y"], [270, "y"]];
+function orientOf(T) { for (const [rot, m] of ORIENTS) { const U = tFrom(rot, m); if (U[0] === T[0] && U[1] === T[1] && U[2] === T[2] && U[3] === T[3]) return { rot, mirror: m }; } return { rot: 0, mirror: "" }; }
+function symOrient(node) { const m = kid(node, "mirror"); return { rot: atOf(node)[2], mirror: m ? str(m[1]) : "" }; }
+// Rotate / mirror a symbol node in place: compose the transform, rewrite (at … rot)/(mirror …)
+// and carry the fields around the anchor with the same screen-space map.
+function orientSymbol(node, op) {
+  const { rot, mirror } = symOrient(node); const o = orientOf(mul(OP_M[op], tFrom(rot, mirror)));
+  const [ax, ay] = atOf(node); setAt(node, undefined, undefined, o.rot);
+  dropKid(node, "mirror");
+  if (o.mirror) { const ai = node.findIndex((c) => Array.isArray(c) && c[0] === "at"); node.splice(ai + 1, 0, ["mirror", o.mirror]); }
+  const f = SCREEN_OP[op];
+  for (const p of kids(node, "property")) { const a = kid(p, "at"); if (!a) continue; const [dx, dy] = f(num(a[1]) - ax, num(a[2]) - ay); a[1] = r4(ax + dx); a[2] = r4(ay + dy); }
+  return o;
+}
+function setTextRot(kind, node, rot) {
+  rot = ((rot % 360) + 360) % 360;
+  const a = kid(node, "at"); if (!a) return; if (a.length >= 4) a[3] = rot; else a.push(rot);
+  let ef = kid(node, "effects"); if (!ef) { ef = ["effects", fontNode(1.27)]; node.push(ef); }
+  replaceKid(ef, labelJustify(kind, rot));
+}
+function rotateNode(kind, node, cw) {
+  if (kind === "symbol") return orientSymbol(node, cw ? "cw" : "ccw");
+  if (kind === "bus_entry") { const s = kid(node, "size"); if (!s) return; const [dx, dy] = SCREEN_OP[cw ? "cw" : "ccw"](num(s[1]), num(s[2])); s[1] = r4(dx); s[2] = r4(dy); return true; }
+  if (TEXT_KINDS.has(kind)) { setTextRot(kind, node, atOf(node)[2] + (cw ? 270 : 90)); return true; }
+  return false;
+}
+function mirrorNode(kind, node, axis) {
+  if (kind === "symbol") return orientSymbol(node, axis);
+  if (kind === "bus_entry") { const s = kid(node, "size"); if (!s) return; const [dx, dy] = SCREEN_OP[axis](num(s[1]), num(s[2])); s[1] = r4(dx); s[2] = r4(dy); return true; }
+  if (TEXT_KINDS.has(kind)) {   // labels flip their reading direction instead
+    const rot = atOf(node)[2]; const flip = axis === "y" ? { 0: 180, 180: 0 } : { 90: 270, 270: 90 };
+    if (flip[rot] === undefined) return false; setTextRot(kind, node, flip[rot]); return true;
+  }
+  return false;
+}
+function anchorOf(kind, node) { if (LINE_KINDS.has(kind)) { const p = ptsOf(node); return p[0] || [0, 0]; } const [x, y] = atOf(node); return [x, y]; }
+function shiftNode(kind, node, dx, dy) {
+  if (!dx && !dy) return;
+  if (LINE_KINDS.has(kind)) { setPts(node, ptsOf(node).map(([x, y]) => [x + dx, y + dy])); return; }
+  const [x, y] = atOf(node); setAt(node, r4(x + dx), r4(y + dy));
+  for (const pr of kids(node, "property")) { const a = kid(pr, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
+}
+// A copy with a fresh identity; the desktop re-annotates and rebuilds instance data.
+function cloneNode(item) {
+  const node = deep(item.node);
+  replaceKid(node, ["uuid", K.newUuid()]);
+  for (const pin of kids(node, "pin")) replaceKid(pin, ["uuid", K.newUuid()]);
+  dropKid(node, "instances");
+  return node;
+}
+
+// ---------------------------------------------------------------- connectivity
+function pinsAt(doc, x, y, r) {
+  const out = []; r = r || 0.02;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" || !it.bbox) continue; const b = it.bbox;
+    if (x < b[0] - r || x > b[2] + r || y < b[1] - r || y > b[3] + r) continue;
+    for (const p of K.pinPoints(doc, it)) if (Math.abs(p.x - x) <= r && Math.abs(p.y - y) <= r) out.push({ item: it, x: p.x, y: p.y });
+  }
+  return out;
+}
+function junctionAt(doc, x, y) { for (const it of doc.items.values()) if (it.kind === "junction" && same(atOf(it.node), [x, y])) return it; return null; }
+function lineMidsAt(doc, x, y, kind) { const out = []; for (const it of doc.items.values()) { if (it.kind !== kind) continue; for (const [a, b] of segs(it)) if (onSegMid([x, y], a, b)) { out.push(it); break; } } return out; }
+function lineEndsAt(doc, x, y, kind) { return K.wireEndsAt(doc, x, y, 1e-3).filter((e) => e.item.kind === kind); }
+// KiCad's rule: a junction where a line ends on (or a pin sits on) the middle of another line,
+// where three or more line ends meet, or where two non-collinear line ends share a pin.
+function needsJunction(doc, x, y, kind) {
+  const ends = lineEndsAt(doc, x, y, kind), mids = lineMidsAt(doc, x, y, kind).length;
+  const pins = kind === "wire" ? pinsAt(doc, x, y).length : 0;
+  if (mids > 0 && (ends.length > 0 || pins > 0)) return true;
+  if (ends.length >= 3) return true;
+  if (pins > 0 && ends.length >= 2) {
+    const dirs = ends.map((e) => { const p = ptsOf(e.item.node); const q = p[e.index === 0 ? 1 : e.index - 1] || p[e.index]; return [q[0] - x, q[1] - y]; });
+    for (let i = 0; i < dirs.length; i++) for (let j = i + 1; j < dirs.length; j++) if (Math.abs(dirs[i][0] * dirs[j][1] - dirs[i][1] * dirs[j][0]) > 1e-6) return true;
+  }
+  return false;
+}
+function connectsAt(doc, p, kind) {
+  if (kind === "wire" && pinsAt(doc, p[0], p[1]).length) return true;
+  return lineEndsAt(doc, p[0], p[1], kind).length > 0 || lineMidsAt(doc, p[0], p[1], kind).length > 0;
+}
+// Junction changes for every point in pts that now needs one (items must already be in the doc).
+function junctionChanges(doc, pts, kind) {
+  const out = [];
+  for (const p of pts) if (!junctionAt(doc, p[0], p[1]) && needsJunction(doc, p[0], p[1], kind)) out.push(addNode(doc, junctionNode(p)).change);
+  return out;
+}
+
+// ---------------------------------------------------------------- cursor snapping
+function mmPerPx(ctx) {
+  if (ctx.worldMm && ctx.stage) { try { const a = ctx.worldMm({ clientX: 0, clientY: 0 }), b = ctx.worldMm({ clientX: 100, clientY: 0 }); const v = (b[0] - a[0]) / 100; if (v > 0 && isFinite(v)) return v; } catch (e) { /* no layout yet */ } }
+  return ctx.pxPerMm ? 1 / ctx.pxPerMm : 0.25;
+}
+// Grid snap, but a pin or line end within reach wins (KiCad's connection snapping).
+function snapConn(ctx, mm, kind) {
+  const g = ctx.snap([mm[0], mm[1]]);
+  const r = Math.max((ctx.gridPitch || 1.27) * 0.45, 6 * mmPerPx(ctx));
+  let best = null, bd = r;
+  const take = (x, y) => { const d = Math.hypot(x - mm[0], y - mm[1]); if (d < bd) { bd = d; best = [x, y]; } };
+  if (kind !== "bus") for (const p of pinsAt(ctx.doc, mm[0], mm[1], r)) take(p.x, p.y);
+  for (const it of ctx.doc.items.values()) { if (it.kind !== (kind || "wire")) continue; for (const p of ptsOf(it.node)) if (Math.abs(p[0] - mm[0]) <= r && Math.abs(p[1] - mm[1]) <= r) take(p[0], p[1]); }
+  return best ? [r4(best[0]), r4(best[1])] : [r4(g[0]), r4(g[1])];
+}
+
+// ---------------------------------------------------------------- wires and buses
+// One leg from the last fixed point to the cursor: straight when aligned, else two segments.
+function legPoints(a, c, hFirst) {
+  if (same(a, c)) return [];
+  if (a[0] === c[0] || a[1] === c[1]) return [c];
+  return hFirst ? [[c[0], a[1]], c] : [[a[0], c[1]], c];
+}
+function posture(w) { const a = w.pts[w.pts.length - 1], c = w.cur; const auto = Math.abs(c[0] - a[0]) >= Math.abs(c[1] - a[1]); return w.flip ? !auto : auto; }
+function simplify(pts) {
+  const out = [];
+  for (const p of pts) if (!out.length || !same(out[out.length - 1], p)) out.push(p);
+  for (let i = 1; i < out.length - 1;) {   // merge collinear runs that keep going the same way
+    const a = out[i - 1], b = out[i], c = out[i + 1];
+    const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]), dot = (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]);
+    if (Math.abs(cross) < 1e-6 && dot > 0) out.splice(i, 1); else i++;
+  }
+  return out;
+}
+function startWire(ctx, kind, p) { S.wire = { kind, pts: [p], cur: p, flip: false, legs: [] }; ctx.requestRender(); }
+function wireClick(ctx, p) {
+  const w = S.wire, last = w.pts[w.pts.length - 1];
+  if (same(last, p)) { finishWire(ctx); return; }          // click on the last point (or a double click) ends it
+  w.cur = p; const leg = legPoints(last, p, posture(w)); w.pts.push(...leg); w.legs.push(leg.length);
+  if (connectsAt(ctx.doc, p, w.kind)) finishWire(ctx);     // KiCad ends a wire on reaching a pin or another line
+  else ctx.requestRender();
+}
+function undoLeg(ctx) {
+  const w = S.wire; if (!w) return;
+  if (!w.legs.length) { S.wire = null; ctx.requestRender(); return; }
+  w.pts.length -= w.legs.pop(); ctx.requestRender();
+}
+function finishWire(ctx) {
+  const w = S.wire; S.wire = null; if (!w) return;
+  const pts = simplify(w.pts);
+  if (pts.length < 2) { ctx.requestRender(); return; }
+  const doc = ctx.doc, changes = [];
+  for (let i = 1; i < pts.length; i++) changes.push(addNode(doc, lineNode(w.kind, pts[i - 1], pts[i])).change);
+  changes.push(...junctionChanges(doc, w.pts, w.kind));
+  ctx.commit(changes, w.kind);
+  ctx.requestRender();
+}
+
+// ---------------------------------------------------------------- carried item (ghost that follows the cursor)
+function startCarry(ctx, kind, node, mm) {
+  S.carry = { kind, node, item: null, pos: null };
+  placeCarry(ctx, mm || S.cursor || [ctx.doc.page[0] / 2, ctx.doc.page[1] / 2]);
+}
+function placeCarry(ctx, mm) {
+  const c = S.carry; if (!c) return;
+  const p = c.kind === "symbol" || TEXT_KINDS.has(c.kind) ? ctx.snap([mm[0], mm[1]]).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire");
+  if (c.pos && same(c.pos, p)) return;
+  const a = anchorOf(c.kind, c.node); shiftNode(c.kind, c.node, r4(p[0] - a[0]), r4(p[1] - a[1]));
+  c.pos = p; c.item = ghost(ctx.doc, c.node); ctx.requestRender();
+}
+function refreshCarry(ctx) { const c = S.carry; if (c) { c.item = ghost(ctx.doc, c.node); ctx.requestRender(); } }
+function cancelCarry(ctx) { S.carry = null; ctx.requestRender(); }
+function dropCarry(ctx) {
+  const c = S.carry; if (!c) return null; S.carry = null;
+  const doc = ctx.doc, p = anchorOf(c.kind, c.node);
+  if (c.kind === "junction" && junctionAt(doc, p[0], p[1])) { ctx.toast("There is already a junction here"); ctx.requestRender(); return null; }
+  const { item, change } = addNode(doc, c.node); const changes = [change];
+  if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
+  else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
+  ctx.commit(changes, c.kind === "symbol" ? "place " + (item.ref || "symbol") : c.kind.replace("_", " "));
+  if (c.kind === "symbol") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
+  ctx.requestRender();
+  return item;
+}
+// Create a label/text straight away at p (the inline prompt's Enter).
+function placeText(ctx, kind, text, p, rot) {
+  const doc = ctx.doc; const { item, change } = addNode(doc, labelNode(kind, text, p, rot || 0));
+  ctx.commit([change], kind.replace("_", " "));
+  S.sel = item.id; ctx.setSelected(null); ctx.requestRender();
+  return item;
+}
+
+// ---------------------------------------------------------------- hit testing for non-symbol items
+function fontSize(node) { const e = kid(node, "effects"), f = e && kid(e, "font"), s = f && kid(f, "size"); return s ? num(s[2], num(s[1], 1.27)) : 1.27; }
+// Estimated footprint of a label/text on screen (the canvas only boxes the anchor).
+function textRect(item) {
+  const n = item.node, [x, y, rot] = atOf(n), size = fontSize(n), lines = str(n[1]).split("\n");
+  const longest = Math.max(1, ...lines.map((l) => l.length));
+  let w = longest * size * 0.75 + size * 0.4; if (item.kind !== "label" && item.kind !== "text") w += size * 1.6;
+  const v0 = -size * 1.4, v1 = (lines.length - 1) * size * 1.5 + size * 0.2;
+  const th = (((Math.round(rot) % 360) + 360) % 360) * Math.PI / 180, cs = Math.cos(th), sn = Math.sin(th);
+  const map = (u, v) => [x + u * cs + v * sn, y - u * sn + v * cs];
+  const c = [map(0, v0), map(w, v0), map(w, v1), map(0, v1)];
+  return [Math.min(...c.map((q) => q[0])), Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[0])), Math.max(...c.map((q) => q[1]))];
+}
+function rectOf(item) { return TEXT_KINDS.has(item.kind) ? textRect(item) : item.bbox || (() => { const [x, y] = atOf(item.node); return [x - 0.6, y - 0.6, x + 0.6, y + 0.6]; })(); }
+function hitNonSymbol(doc, x, y, tol) {
+  let best = null, bd = Infinity;
+  for (const it of doc.items.values()) {
+    let d;
+    if (LINE_KINDS.has(it.kind)) { d = Infinity; for (const [a, b] of segs(it)) d = Math.min(d, segDist([x, y], a, b)); d += 0.01; }   // small things on a line win ties
+    else if (it.kind === "bus_entry") { const [ax, ay] = atOf(it.node), s = kid(it.node, "size"); d = segDist([x, y], [ax, ay], [ax + (s ? num(s[1]) : 2.54), ay + (s ? num(s[2]) : 2.54)]); }
+    else if (it.kind === "junction" || it.kind === "no_connect") { const [ax, ay] = atOf(it.node); d = Math.max(0, Math.hypot(ax - x, ay - y) - 0.6); }
+    else if (TEXT_KINDS.has(it.kind)) { const b = textRect(it); d = Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0); }
+    else continue;
+    if (d <= tol && d < bd) { bd = d; best = it; }
+  }
+  return best;
+}
+// Our pick for the select tool; null hands the click back to app.js (symbols, empty space).
+function pickNonSymbol(ctx, mm) {
+  const hit = hitNonSymbol(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (!hit) return null;
+  const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
+  if (symId && !LINE_KINDS.has(hit.kind)) { const sym = ctx.doc.items.get(symId); if (sym && area(sym.bbox) < area(rectOf(hit))) return null; }
+  return hit;
+}
+
+// ---------------------------------------------------------------- drag (KiCad's "drag": attached ends stretch)
+function beginDrag(ctx, item, mm, byPointer) {
+  const doc = ctx.doc, d = { item, kind: item.kind, start: ctx.snap([mm[0], mm[1]]).map(r4), last: [0, 0], moved: false, byPointer: !!byPointer, ends: [], pts: [], axis: "" };
+  if (LINE_KINDS.has(item.kind)) {
+    const pts = ptsOf(item.node); if (pts.length < 2) return null;
+    d.orig = pts.map((p) => p.slice());
+    const horiz = pts.every((p) => Math.abs(p[1] - pts[0][1]) < 1e-3), vert = pts.every((p) => Math.abs(p[0] - pts[0][0]) < 1e-3);
+    d.axis = horiz && !vert ? "y" : vert && !horiz ? "x" : "";   // a straight segment only moves across itself
+    const attach = [pts[0], pts[pts.length - 1]];
+    for (const it of doc.items.values()) {                       // things riding on the segment come along
+      if (!POINT_KINDS.has(it.kind) && !TEXT_KINDS.has(it.kind)) continue;
+      const [ax, ay] = atOf(it.node);
+      if (segs(item).some(([a, b]) => segDist([ax, ay], a, b) <= 1e-3)) { d.pts.push({ item: it, orig: [ax, ay] }); if (it.kind === "junction") attach.push([ax, ay]); }
+    }
+    for (const P of attach) for (const e of K.wireEndsAt(doc, P[0], P[1], 1e-3)) {
+      if (e.item === item || d.ends.some((q) => q.item === e.item && q.index === e.index)) continue;
+      d.ends.push({ item: e.item, index: e.index, orig: ptsOf(e.item.node).map((p) => p.slice()) });
+    }
+  } else if (POINT_KINDS.has(item.kind) || TEXT_KINDS.has(item.kind)) {
+    const [ax, ay] = atOf(item.node); d.pts.push({ item, orig: [ax, ay] });
+  } else return null;
+  S.drag = d; return d;
+}
+function applyDrag(doc, d, dx, dy) {
+  if (d.orig) { setPts(d.item.node, d.orig.map(([x, y]) => [x + dx, y + dy])); K.replaceChange(doc, d.item); }
+  for (const e of d.ends) { const p = e.orig.map((q) => q.slice()); p[e.index] = [p[e.index][0] + dx, p[e.index][1] + dy]; setPts(e.item.node, p); K.replaceChange(doc, e.item); }
+  for (const q of d.pts) { shiftNode(q.item.kind, q.item.node, r4(q.orig[0] + dx - atOf(q.item.node)[0]), r4(q.orig[1] + dy - atOf(q.item.node)[1])); K.replaceChange(doc, q.item); }
+}
+function moveDrag(ctx, mm) {
+  const d = S.drag; if (!d) return;
+  const s = ctx.snap([mm[0], mm[1]]); let dx = r4(s[0] - d.start[0]), dy = r4(s[1] - d.start[1]);
+  if (d.axis === "y") dx = 0; if (d.axis === "x") dy = 0;
+  if (dx === d.last[0] && dy === d.last[1]) return;
+  d.last = [dx, dy]; d.moved = true;
+  applyDrag(ctx.doc, d, dx, dy); ctx.requestRender();
+}
+function endDrag(ctx, commit) {
+  const d = S.drag; S.drag = null; if (!d) return;
+  const [dx, dy] = d.last, doc = ctx.doc;
+  applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
+  if (!commit || !d.moved || (!dx && !dy)) { ctx.requestRender(); return; }
+  const changes = [];
+  if (d.orig) { const n = deep(d.item.node); setPts(n, d.orig.map(([x, y]) => [x + dx, y + dy])); changes.push(modChange(doc, d.item, n)); }
+  for (const e of d.ends) { const n = deep(e.item.node); const p = e.orig.map((q) => q.slice()); p[e.index] = [p[e.index][0] + dx, p[e.index][1] + dy]; setPts(n, p); changes.push(modChange(doc, e.item, n)); }
+  for (const q of d.pts) { const n = deep(q.item.node); shiftNode(q.item.kind, n, dx, dy); changes.push(modChange(doc, q.item, n)); }
+  ctx.commit(changes, d.orig ? "drag" : "move");
+  ctx.requestRender();
+}
+
+// ---------------------------------------------------------------- edits on the current selection
+function selectedItem(ctx) { const id = ctx.selected ? ctx.selected.id : S.sel; return id ? ctx.doc.items.get(id) || null : null; }
+function orientSelected(ctx, op) {
+  const c = S.carry;
+  if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok !== false) refreshCarry(ctx); return true; }
+  const it = selectedItem(ctx); if (!it) return false;
+  const node = deep(it.node);
+  const ok = op === "x" || op === "y" ? mirrorNode(it.kind, node, op) : rotateNode(it.kind, node, op === "cw");
+  if (ok === false) return false;
+  ctx.commit([modChange(ctx.doc, it, node)], op === "x" || op === "y" ? "mirror" : "rotate");
+  return true;
+}
+function deleteSelected(ctx) {
+  const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it) return false;
+  const doc = ctx.doc, changes = [K.removeChange(it)];
+  if (LINE_KINDS.has(it.kind)) {                 // junctions that only existed for this line go too
+    doc.items.delete(it.id);
+    for (const p of ptsOf(it.node)) { const j = junctionAt(doc, p[0], p[1]); if (j && !needsJunction(doc, p[0], p[1], it.kind) && !changes.some((c) => c.id === j.id)) changes.push(K.removeChange(j)); }
+    doc.items.set(it.id, it);
+  }
+  S.sel = null; S.hover = null;
+  ctx.commit(changes, "delete");
+  ctx.requestRender();
+  return true;
+}
+function duplicateSelected(ctx) {
+  const it = selectedItem(ctx); if (!it || it.kind === "sheet") return false;
+  const node = cloneNode(it); shiftNode(it.kind, node, 2.54, 2.54);
+  S.carry = { kind: it.kind, node, item: ghost(ctx.doc, node), pos: anchorOf(it.kind, node) };
+  S.sel = null; ctx.setSelected(null);
+  ctx.setTool("place");                         // onActivate sees the carry and skips the picker
+  ctx.requestRender();
+  return true;
+}
+
+// ---------------------------------------------------------------- DOM: inline prompt, symbol picker, capture hooks
+const hasDom = () => typeof document !== "undefined" && S.ctx && S.ctx.stage;
+function el(tag, css, text) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text !== undefined) e.textContent = text; e.dataset.schtools = "1"; return e; }
+const PANEL_CSS = "position:absolute;z-index:30;background:var(--panel,#fff);color:var(--ink,#1b1b1b);border:1px solid var(--line,#ccc);border-radius:4px;box-shadow:var(--shadow,0 6px 20px #0003);font:12px var(--font,system-ui,sans-serif);";
+const INPUT_CSS = "background:var(--paper,#f5f4ef);color:inherit;border:1px solid var(--line,#ccc);border-radius:3px;padding:3px 6px;font:12px var(--mono,ui-monospace,monospace);outline:none;";
+function placePanel(box, client) {
+  const r = S.ctx.stage.getBoundingClientRect();
+  const x = client ? client[0] - r.left + 10 : 12, y = client ? client[1] - r.top + 10 : 12;
+  box.style.left = Math.max(4, Math.min(r.width - 280, x)) + "px"; box.style.top = Math.max(4, Math.min(r.height - 60, y)) + "px";
+}
+// Positioned <input> over the stage; Enter commits, Escape cancels.  Swappable for tests.
+let promptImpl = function (title, initial, client, done) {
+  if (!hasDom()) { done(null); return; }
+  closePrompt();
+  const box = el("div", PANEL_CSS + "display:flex;gap:6px;align-items:center;padding:5px 8px;");
+  box.appendChild(el("span", "color:var(--ink-2,#666);white-space:nowrap", title));
+  const inp = el("input", INPUT_CSS + "width:170px"); inp.value = initial || ""; inp.spellcheck = false; box.appendChild(inp);
+  let closed = false;
+  const finish = (v) => { if (closed) return; closed = true; closePrompt(); done(v); };
+  inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") finish(inp.value.trim() || null); else if (ev.key === "Escape") finish(null); });
+  inp.addEventListener("blur", () => setTimeout(() => finish(null), 0));
+  placePanel(box, client); S.ctx.stage.appendChild(box); S.prompt = box; inp.focus(); inp.select();
+};
+function closePrompt() { if (S.prompt) { S.prompt.remove(); S.prompt = null; } }
+function openPicker(ctx, client) {
+  if (!hasDom()) return; closePicker();
+  const names = Array.from(ctx.doc.lib.keys()).sort((a, b) => a.localeCompare(b));
+  const box = el("div", PANEL_CSS + "width:260px;padding:6px;display:flex;flex-direction:column;gap:6px;");
+  const head = el("div", "display:flex;gap:6px;align-items:center"); head.appendChild(el("span", "color:var(--ink-2,#666);white-space:nowrap", "Place symbol"));
+  const inp = el("input", INPUT_CSS + "flex:1;min-width:0"); inp.placeholder = "filter…"; inp.spellcheck = false; head.appendChild(inp); box.appendChild(head);
+  const list = el("div", "max-height:240px;overflow:auto;border-top:1px solid var(--line,#ccc)"); box.appendChild(list);
+  const pick = (name) => { closePicker(); startCarry(ctx, "symbol", symbolNode(ctx.doc, name, S.cursor || [0, 0], 0, ""), S.cursor); };
+  const fill = () => {
+    const q = inp.value.trim().toLowerCase(); list.replaceChildren();
+    const shown = names.filter((n) => !q || n.toLowerCase().includes(q));
+    if (!shown.length) list.appendChild(el("div", "padding:6px 8px;color:var(--ink-2,#666)", names.length ? "No match" : "This sheet has no library symbols yet"));
+    for (const n of shown.slice(0, 200)) {
+      const row = el("div", "padding:3px 8px;cursor:pointer;font:12px var(--mono,ui-monospace,monospace);white-space:nowrap;overflow:hidden;text-overflow:ellipsis", n);
+      row.title = n; row.addEventListener("mouseenter", () => row.style.background = "var(--paper,#f5f4ef)"); row.addEventListener("mouseleave", () => row.style.background = "");
+      row.addEventListener("click", () => pick(n)); list.appendChild(row);
+    }
+    list.dataset.first = shown[0] || "";
+  };
+  inp.addEventListener("input", fill);
+  inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter" && list.dataset.first) pick(list.dataset.first); else if (ev.key === "Escape") { closePicker(); } });
+  fill(); placePanel(box, client); ctx.stage.appendChild(box); S.picker = box; inp.focus();
+}
+function closePicker() { if (S.picker) { S.picker.remove(); S.picker = null; } }
+function schActive() { return typeof document === "undefined" || !!document.querySelector('#ltools [data-modtool="wire"]'); }
+function curTool() { if (typeof document !== "undefined") { const b = document.querySelector("#ltools .tb.on"); if (b) return b.dataset.modtool || b.dataset.tool || S.tool; } return S.tool; }
+// app.js owns the stage events; capture-phase listeners let this module see the clicks the
+// select tool would otherwise drop (non-symbol items) and the keys app.js swallows (Escape, Shift+H).
+function installDom(ctx) {
+  if (S.dom || typeof document === "undefined" || !ctx.stage) return; S.dom = true;
+  const stage = ctx.stage;
+  stage.addEventListener("pointerdown", onDownCapture, true);
+  stage.addEventListener("pointermove", onMoveCapture, true);
+  stage.addEventListener("pointerup", onUpCapture, true);
+  stage.addEventListener("dblclick", (ev) => { if (schActive() && toolOf(curTool())) { ev.stopImmediatePropagation(); ev.preventDefault(); } }, true);
+  document.addEventListener("keydown", onKeyCapture, true);
+}
+function onDownCapture(ev) {
+  const ctx = S.ctx; if (!ctx || !schActive()) return;
+  if (ev.target && ev.target.closest && ev.target.closest("[data-schtools]")) { ev.stopImmediatePropagation(); return; }
+  closePrompt(); closePicker();
+  const tool = curTool();
+  if (toolOf(tool)) return;                                  // app.js forwards these to onPointerDown
+  if (tool !== "select" || ev.button !== 0) return;
+  const mm = ctx.worldMm(ev);
+  if (S.drag) { endDrag(ctx, true); ev.stopImmediatePropagation(); ev.preventDefault(); return; }   // a key-started drag is dropped by the click
+  const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm);
+  if (!hit) { if (S.sel) { S.sel = null; ctx.requestRender(); } return; }
+  ev.stopImmediatePropagation(); ev.preventDefault();
+  S.sel = hit.id; S.hover = null; ctx.setSelected(null);
+  S.pending = { item: hit, mm };
+  try { ctx.stage.setPointerCapture(ev.pointerId); } catch (e) { /* not a real pointer */ }
+  ctx.requestRender();
+}
+function onMoveCapture(ev) {
+  const ctx = S.ctx; if (!ctx || !schActive()) return;
+  const mm = ctx.worldMm(ev); S.cursor = mm; S.cursorClient = [ev.clientX, ev.clientY];
+  if (S.drag) { moveDrag(ctx, mm); return; }
+  if (S.pending) {
+    if (Math.hypot(mm[0] - S.pending.mm[0], mm[1] - S.pending.mm[1]) > 0.4) { const p = S.pending; S.pending = null; if (beginDrag(ctx, p.item, p.mm, true)) moveDrag(ctx, mm); }
+    return;
+  }
+  if (curTool() !== "select") { if (S.hover) { S.hover = null; ctx.requestRender(); } return; }
+  const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm), id = hit ? hit.id : null;
+  if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
+}
+function onUpCapture() {
+  const ctx = S.ctx; if (!ctx) return;
+  S.pending = null;
+  if (S.drag && S.drag.byPointer) endDrag(ctx, true);
+}
+function onKeyCapture(ev) {
+  const ctx = S.ctx; if (!ctx || !schActive() || ev.metaKey || ev.ctrlKey) return;
+  const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA") return;
+  if (ev.key === "Escape") {
+    let took = true;
+    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) finishWire(ctx);
+    else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else took = false;
+    if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
+    if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
+  } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
+    ev.stopImmediatePropagation(); ev.preventDefault(); ctx.setTool("hlabel");
+    if (S.cursor) promptFor(ctx, "hierarchical_label", S.cursor, S.cursorClient);
+  }
+}
+function promptFor(ctx, kind, mm, client) {
+  const p = ctx.snap([mm[0], mm[1]]).map(r4);
+  const title = kind === "text" ? "Text" : kind === "label" ? "Net label" : kind === "global_label" ? "Global label" : "Hierarchical label";
+  promptImpl(title, "", client, (text) => { if (text) placeText(ctx, kind, text, p, 0); });
+}
+
+// ---------------------------------------------------------------- overlay painting
+function paint(c, item, alpha, px) {
+  c.save(); c.globalAlpha = alpha;
+  for (const g of item.geom) {
+    const w = Math.max(g.w || g.wd || 0, px);
+    if (g.t === "line") { c.strokeStyle = g.color; c.lineWidth = w; c.beginPath(); c.moveTo(g.x1, g.y1); c.lineTo(g.x2, g.y2); c.stroke(); }
+    else if (g.t === "poly") { if (g.pts.length < 2) continue; c.beginPath(); c.moveTo(g.pts[0][0], g.pts[0][1]); for (let i = 1; i < g.pts.length; i++) c.lineTo(g.pts[i][0], g.pts[i][1]); if (g.close) c.closePath(); if (g.fill) { c.fillStyle = g.fill; c.fill(); } c.strokeStyle = g.color; c.lineWidth = w; c.stroke(); }
+    else if (g.t === "circle") { c.beginPath(); c.arc(g.x, g.y, g.r, 0, Math.PI * 2); if (g.fill) { c.fillStyle = g.fill; c.fill(); } if (g.w > 0 || !g.fill) { c.strokeStyle = g.color; c.lineWidth = w; c.stroke(); } }
+    else if (g.t === "arc") { c.beginPath(); c.arc(g.x, g.y, g.r, g.a0, g.a1, g.anticlockwise); c.strokeStyle = g.color; c.lineWidth = w; c.stroke(); }
+    else if (g.t === "rect") { if (g.fill) { c.fillStyle = g.fill; c.fillRect(g.x, g.y, g.w, g.h); } c.strokeStyle = g.color; c.lineWidth = w; c.strokeRect(g.x, g.y, g.w, g.h); }
+    else if (g.t === "text") {
+      c.save(); c.translate(g.x, g.y); if (g.rot) c.rotate(-g.rot * Math.PI / 180);
+      c.font = `${g.size * 0.92}px "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif`; c.textAlign = g.h; c.textBaseline = g.v === "top" ? "top" : g.v === "bottom" ? "alphabetic" : "middle";
+      c.fillStyle = g.color; c.fillText(g.text, 0, 0); c.restore();
+    }
+  }
+  c.restore();
+}
+function outline(c, item, color, px, width) {
+  c.save(); c.strokeStyle = color; c.lineWidth = width * px; c.globalAlpha = 0.9;
+  if (LINE_KINDS.has(item.kind)) { const p = ptsOf(item.node); if (p.length > 1) { c.lineCap = "round"; c.lineWidth = Math.max(0.5, 5 * px); c.globalAlpha = 0.45; c.beginPath(); c.moveTo(p[0][0], p[0][1]); for (let i = 1; i < p.length; i++) c.lineTo(p[i][0], p[i][1]); c.stroke(); } }
+  else { const b = rectOf(item), pad = 0.4; c.setLineDash([4 * px, 3 * px]); c.strokeRect(b[0] - pad, b[1] - pad, b[2] - b[0] + 2 * pad, b[3] - b[1] + 2 * pad); }
+  c.restore();
+}
+function drawOverlay(c, view, ctx) {
+  S.ctx = ctx; installDom(ctx);
+  const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
+  if (S.hover && S.hover !== S.sel && !S.drag) { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
+  if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
+  if (S.drag) { const it = S.drag.item; if (it) outline(c, it, CLR.sel, px, 2); }
+  const w = S.wire;
+  if (w) {
+    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w)));
+    c.save(); c.strokeStyle = w.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(w.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round";
+    c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); c.stroke();
+    c.fillStyle = CLR.sel; const h = 3 * px; for (const p of w.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+    c.restore();
+  }
+  if (S.carry && S.carry.item) {
+    paint(c, S.carry.item, 0.65, px);
+    const b = S.carry.item.bbox; if (b) { c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.strokeRect(b[0] - 0.3, b[1] - 0.3, b[2] - b[0] + 0.6, b[3] - b[1] + 0.6); c.restore(); }
+  }
+  const t = toolOf(S.tool);
+  if (t && S.cursor && !S.carry) {   // where the next click lands
+    const p = t.kind === "wire" || t.kind === "bus" ? snapConn(ctx, S.cursor, t.kind) : ctx.snap(S.cursor);
+    c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; const h = 5 * px; c.strokeRect(p[0] - h, p[1] - h, 2 * h, 2 * h); c.restore();
+  }
+}
+
+// ---------------------------------------------------------------- hooks (see app.js "editing tools")
+function onActivate(toolId, ctx) {
+  S.ctx = ctx; installDom(ctx);
+  S.tool = toolId;
+  if (S.wire) finishWire(ctx);                    // leaving the wire tool keeps what was drawn
+  closePrompt(); S.pending = null; if (S.drag) endDrag(ctx, false);
+  if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
+  S.sel = null; S.hover = null;
+  if (toolId !== "place") S.carry = null;         // a carried duplicate rides into the place tool
+  if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);
+  else if (toolId === "noconnect") startCarry(ctx, "no_connect", noConnectNode(S.cursor || [0, 0]), S.cursor);
+  else if (toolId === "busentry") startCarry(ctx, "bus_entry", busEntryNode(S.cursor || [0, 0], 2.54, 2.54), S.cursor);
+  else if (toolId === "place" && !S.carry) openPicker(ctx, S.cursorClient);
+  ctx.requestRender();
+}
+function onPointerDown(ev, mm, ctx) {
+  S.ctx = ctx; installDom(ctx);
+  if (ev.button !== undefined && ev.button !== 0) return false;
+  const t = toolOf(S.tool); if (!t) return false;
+  S.cursor = mm; if (ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
+  if (t.kind === "wire" || t.kind === "bus") {
+    const p = snapConn(ctx, mm, t.kind);
+    if (!S.wire) startWire(ctx, t.kind, p); else wireClick(ctx, p);
+    return true;
+  }
+  if (TEXT_KINDS.has(t.kind)) {
+    if (S.carry) dropCarry(ctx); else promptFor(ctx, t.kind, mm, S.cursorClient);
+    return true;
+  }
+  if (t.id === "junction" || t.id === "noconnect" || t.id === "busentry") {
+    if (!S.carry) onActivate(t.id, ctx);
+    placeCarry(ctx, mm); dropCarry(ctx);
+    onActivate(t.id, ctx);                       // the tool stays armed with a fresh ghost
+    return true;
+  }
+  if (t.id === "place") {
+    if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); }
+    else openPicker(ctx, S.cursorClient);
+    return true;
+  }
+  return false;
+}
+function onPointerMove(ev, mm, ctx) {
+  S.ctx = ctx; S.cursor = mm; if (ev && ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
+  if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind); if (!same(S.wire.cur, p)) { S.wire.cur = p; ctx.requestRender(); } return; }
+  if (S.carry) { placeCarry(ctx, mm); return; }
+  if (toolOf(S.tool)) ctx.requestRender();        // cursor marker
+}
+function onPointerUp() { /* clicks are handled on pointerdown, drags in the capture hooks */ }
+function onKey(key, ev, ctx) {
+  S.ctx = ctx; installDom(ctx);
+  if (ctx.viewOnly) return false;
+  const lower = key.length === 1 ? key.toLowerCase() : key;
+  const armTool = (id, kind) => {
+    ctx.setTool(id);
+    if (S.cursor && (kind === "wire" || kind === "bus")) startWire(ctx, kind, snapConn(ctx, S.cursor, kind));   // KiCad starts drawing under the cursor
+    else if (S.cursor && TEXT_KINDS.has(kind)) promptFor(ctx, kind, S.cursor, S.cursorClient);
+    return true;
+  };
+  if (S.wire) {
+    if (key === "/") { S.wire.flip = !S.wire.flip; ctx.requestRender(); return true; }
+    if (key === "Enter" || lower === "k") { finishWire(ctx); return true; }
+    if (key === "Backspace") { undoLeg(ctx); return true; }
+  }
+  switch (key) {
+  case "w": case "W": return armTool("wire", "wire");
+  case "b": case "B": return armTool("bus", "bus");
+  case "z": case "Z": return armTool("busentry");
+  case "j": case "J": return armTool("junction");
+  case "q": case "Q": return armTool("noconnect");
+  case "l": return armTool("label", "label");
+  case "L": return armTool("glabel", "global_label");
+  case "t": case "T": return armTool("text", "text");
+  case "a": case "A": return armTool("place");
+  case "r": return orientSelected(ctx, "ccw");
+  case "R": return orientSelected(ctx, ev && ev.shiftKey ? "cw" : "ccw");
+  case "x": case "X": return orientSelected(ctx, "x");
+  case "y": case "Y": return orientSelected(ctx, "y");
+  case "d": case "D": return duplicateSelected(ctx);
+  case "g": case "G": { const it = S.sel && !S.drag ? ctx.doc.items.get(S.sel) : null; if (!it || !S.cursor) return false; return !!beginDrag(ctx, it, S.cursor, false); }
+  case "Delete": case "Backspace": return deleteSelected(ctx);
+  default: return false;
+  }
+}
+function onDocChanged(ctx) {
+  S.ctx = ctx; installDom(ctx);
+  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null;
+  closePrompt(); closePicker();
+  S.tool = curTool();
+}
+
+root.CollabTools = root.CollabTools || {};
+root.CollabTools.sch = {
+  id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
+  onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged,
+  // for tests and the props panel
+  state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; },
+  _: { lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
+    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
+    beginDrag, moveDrag, endDrag, placeText, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange },
+};
+})(typeof window !== "undefined" ? window : globalThis);
