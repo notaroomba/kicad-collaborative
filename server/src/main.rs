@@ -138,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/app", get(pages::app_page))
         .route("/p/{id}/edit", get(pages::app_page))
         .route("/static/app.js", get(pages::app_js))
+        .route("/static/kicad-canvas.js", get(pages::canvas_js))
         .route("/welcome", get(pages::index))
         .route("/api/projects/{id}/info", get(http::project_info))
         .route("/healthz", get(http::healthz))

@@ -638,6 +638,15 @@ void SCH_COLLAB_SYNC::captureItem( SCH_ITEM* aItem, SCH_ITEM* aBefore, SCH_SCREE
 
     if( !sexpr.empty() )
         wire[ "sexpr" ] = sexpr;
+    else if( change.kind == CHANGE_KIND::MODIFIED && typeSupportsSexprTransfer( aItem ) )
+    {
+        // Clients that mirror the document by re-parsing items (the web editor)
+        // need the whole item, not just the property deltas the desktop applies.
+        std::string full = SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), aScreen, aItem );
+
+        if( !full.empty() )
+            wire[ "itemSexpr" ] = full;
+    }
 
     nlohmann::json& batch = m_batch[ docId ];
 
