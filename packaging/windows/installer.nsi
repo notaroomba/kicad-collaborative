@@ -44,7 +44,7 @@ Section "KiCad Collaborative"
   WriteRegStr HKCR "kicad-collab" "" "URL:KiCad Collaborative Protocol"
   WriteRegStr HKCR "kicad-collab" "URL Protocol" ""
   WriteRegStr HKCR "kicad-collab\DefaultIcon" "" "$INSTDIR\bin\kicad.exe,0"
-  WriteRegStr HKCR "kicad-collab\shell\open\command" "" '"$INSTDIR\bin\kicad.exe" "%1"
+  WriteRegStr HKCR "kicad-collab\shell\open\command" "" '"$INSTDIR\bin\kicad.exe" "%1"'
 
   CreateDirectory "$SMPROGRAMS\KiCad Collaborative"
   CreateShortcut "$SMPROGRAMS\KiCad Collaborative\KiCad Collaborative.lnk" "$INSTDIR\bin\kicad.exe"
