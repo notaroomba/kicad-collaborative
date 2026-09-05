@@ -212,6 +212,71 @@ let layers = {};          // hex -> {name, nodes, visible}
 let renderTimer = 0, renderDirtySince = 0;
 let baseVersion = 0;
 
+// ---- canvas renderer (the document itself, mirrored from the collaboration stream) ----
+const canvas = $("#canvas"), cctx = canvas.getContext("2d");
+let kdoc = null;                 // KiCadCanvas document when the canvas renderer is active
+let hiddenLayers = new Set(), layersSeeded = false;
+let gridOn = true, snapOn = true, gridPitch = 1.27;
+let renderReq = 0;
+const GRID_CHOICES = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
+function requestRender() { if (renderReq || !kdoc) return; renderReq = requestAnimationFrame(() => { renderReq = 0; drawCanvas(); }); }
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1, w = stage.clientWidth, h = stage.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+}
+function drawCanvas() {
+  if (!kdoc) return; sizeCanvas();
+  const ppm = stage.clientWidth / mmW();
+  KiCadCanvas.render(kdoc, cctx, { ppm, zoom, panX, panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 },
+    { hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selected ? new Set([selected.id]) : null });
+}
+function syncItemsFromDoc() {
+  if (!kdoc) return;
+  const mv = KiCadCanvas.movableItems(kdoc);
+  items = mv.filter((m) => m.kind !== "sheet").map((m) => ({ id: m.id, ref: m.ref, value: m.value, lib: m.lib, layer: m.layer, x: Math.round(m.x * IU), y: Math.round(m.y * IU), rot: m.rot, bbox: m.bbox }));
+  sheets = mv.filter((m) => m.kind === "sheet").map((m) => ({ id: m.id, name: m.name, file: m.file, x: m.x * IU, y: m.y * IU, w: m.w * IU, h: m.h * IU }));
+  if (selected) selected = items.find((f) => f.id === selected.id) || null;
+  renderObjects();
+}
+function setDocFromText(text) {
+  let d;
+  try { d = KiCadCanvas.parseDoc(text, DOC_TYPE); } catch (e) { console.warn("document parse failed", e); return false; }
+  kdoc = d; vbPerMm = 1;
+  if (isSch()) vb = [0, 0, kdoc.page[0], kdoc.page[1]];
+  else { const b = kdoc.bbox, m = 5; vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
+  base.replaceChildren(); base.setAttribute("viewBox", vb.join(" ")); overlay.setAttribute("viewBox", vb.join(" "));
+  $("#ovRoot").setAttribute("transform", "scale(1)");
+  if (!layersSeeded) { hiddenLayers = new Set(isSch() ? [] : Array.from(KiCadCanvas.PCB_HIDDEN_DEFAULT)); layersSeeded = true; }
+  renderLayersFromDoc(); syncItemsFromDoc();
+  canvas.style.display = "block"; requestRender();
+  return true;
+}
+function renderLayersFromDoc() {
+  const list = KiCadCanvas.layerList(kdoc);
+  $("#layers").innerHTML = list.map((l) => `<label class="layer"><input type="checkbox" data-lkey="${esc(l.key)}" ${hiddenLayers.has(l.key) ? "" : "checked"}>
+     <span class="sw" style="background:${l.color}"></span><span>${esc(l.name)}</span><span class="cnt">${l.count}</span></label>`).join("") || `<p class="note">Nothing to show yet.</p>`;
+  $$("#layers input").forEach((cb) => cb.addEventListener("change", () => { if (cb.checked) hiddenLayers.delete(cb.dataset.lkey); else hiddenLayers.add(cb.dataset.lkey); requestRender(); }));
+}
+function applyChanges(changes) {
+  if (!kdoc) return;
+  let any = false;
+  for (const c of changes || []) { try { if (KiCadCanvas.applyChange(kdoc, c, IU)) any = true; } catch (e) { console.warn("change not applied", e); } }
+  if (any) { if (!isSch()) KiCadCanvas.computeBBox(kdoc); syncItemsFromDoc(); drawSelection(); requestRender(); }
+}
+function setupGridControls() {
+  const sel = $("#gridSel"); const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
+  sel.innerHTML = choices.map(([v, label]) => `<option value="${v}">${label}</option>`).join("");
+  gridPitch = choices[0][0]; sel.value = String(gridPitch);
+  sel.onchange = () => { gridPitch = Number(sel.value) || gridPitch; requestRender(); updateGridStatus(); };
+  updateGridStatus();
+}
+function updateGridStatus() {
+  $$("[data-act=grid]").forEach((b) => b.classList.toggle("on", gridOn));
+  $$("[data-act=snap]").forEach((b) => b.classList.toggle("on", snapOn));
+  const el = $("#sbGrid"); if (el) el.textContent = `grid ${gridPitch} mm · snap ${snapOn ? "on" : "off"}`;
+}
+function snapMm(mm) { return snapOn ? [KiCadCanvas.snap(mm[0], gridPitch), KiCadCanvas.snap(mm[1], gridPitch)] : mm; }
+
 function leaveEditor() {
   leaveDoc();
   state.doc = null; state.docId = null;
@@ -283,9 +348,11 @@ function renderDocSwitcher() {
 }
 
 function leaveDoc() {
+  connectGen++;   // any connect() still waiting for its ticket must give up
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   clearInterval(renderTimer); renderTimer = 0;
   items = []; sheets = []; selected = null; drag = null; peerState = {}; comments = []; followPeer = null; layers = {};
+  kdoc = null; layersSeeded = false; canvas.style.display = "none"; if (renderReq) { cancelAnimationFrame(renderReq); renderReq = 0; }
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
   cmtPanel.style.display = "none"; objFilter = "";
   const objs = $("#objects"); objs.innerHTML = ""; delete objs.dataset.ready;
@@ -306,20 +373,28 @@ async function openDoc(doc) {
   world.style.width = stage.clientWidth + "px";
   viewTouched = false;
   renderProps(); renderPeers(); renderThreads();
-  // Items and comments don't wait for the render download (a 3 MB sheet
-  // over a slow link must not hold the objects list hostage).
   const docId = doc.docId;
-  const itemsReq = isSch()
-    ? api(`/api/docs/${docId}/items`).then((j) => { if (state.docId !== docId) return;
-        items = (j.symbols || []).map((sy) => ({ ...sy, x: Math.round(sy.x * IU), y: Math.round(sy.y * IU) }));
-        sheets = (j.sheets || []).map((sh) => ({ ...sh, x: sh.x * IU, y: sh.y * IU, w: sh.w * IU, h: sh.h * IU })); renderObjects(); })
-    : api(`/api/projects/${state.project.projectId}/board-items`).then((j) => { if (state.docId !== docId) return; items = j.footprints || []; renderObjects(); });
-  itemsReq.catch(() => {});
+  setupGridControls();
   loadComments();
-  const ok = await loadBase(true);
+  // The document itself, drawn here and kept current by the op stream; the
+  // desktop-pushed render is only a fallback when the file can't be read.
+  let ok = false;
+  try {
+    const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
+    if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; ok = setDocFromText(text); }
+  } catch {}
   if (!ok) {
-    base.replaceChildren();
-    $("#layers").innerHTML = `<p class="note">No render yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session (renders are pushed within a minute).</p>`;
+    const itemsReq = isSch()
+      ? api(`/api/docs/${docId}/items`).then((j) => { if (state.docId !== docId) return;
+          items = (j.symbols || []).map((sy) => ({ ...sy, x: Math.round(sy.x * IU), y: Math.round(sy.y * IU) }));
+          sheets = (j.sheets || []).map((sh) => ({ ...sh, x: sh.x * IU, y: sh.y * IU, w: sh.w * IU, h: sh.h * IU })); renderObjects(); })
+      : api(`/api/projects/${state.project.projectId}/board-items`).then((j) => { if (state.docId !== docId) return; items = j.footprints || []; renderObjects(); });
+    itemsReq.catch(() => {});
+    const okSvg = await loadBase(true);
+    if (!okSvg) {
+      base.replaceChildren();
+      $("#layers").innerHTML = `<p class="note">Nothing to show yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session.</p>`;
+    }
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
   if (canJoin) connect().catch(() => setConn("err", "connection failed"));
@@ -414,8 +489,10 @@ function applyView() {
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).
   drawComments(); drawSelection(); drawPeers(peerState);
+  requestRender();
 }
 function contentBoxMm() {
+  if (kdoc && !isSch()) { const b = kdoc.bbox; return [b[0], b[1], Math.max(1, b[2] - b[0]), Math.max(1, b[3] - b[1])]; }
   if (isSch()) return [mmX0(), mmY0(), mmW(), mmH()];
   // Union of the board outline and copper: what a person means by "the board".
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
@@ -460,7 +537,7 @@ new ResizeObserver(() => {
   if (state.view !== "editor") return;
   const sw = stage.clientWidth;
   if (sw && lastStageW && sw !== lastStageW) {
-    if (!viewTouched && Object.keys(layers).length) { fitView(); return; }
+    if (!viewTouched && (kdoc || Object.keys(layers).length)) { fitView(); return; }
     const r = sw / lastStageW; panX *= r; panY *= r; world.style.width = sw + "px";
   }
   if (sw) lastStageW = sw;
@@ -539,7 +616,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!best) { selected = null; drawSelection(); renderProps(); renderObjects(); return; }
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
-  drag = { fp: best, startMm: [x, y], curMm: [x, y], moved: false };
+  drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU] };
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
 stage.addEventListener("pointermove", (ev) => {
@@ -547,12 +624,16 @@ stage.addEventListener("pointermove", (ev) => {
   $("#sbCursor").textContent = `X ${mm[0].toFixed(3)}  Y ${mm[1].toFixed(3)} mm`;
   if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
   if (!drag) { sendPresence(mm); return; }
-  drag.curMm = mm;
   if (!drag.moved && Math.hypot(mm[0] - drag.startMm[0], mm[1] - drag.startMm[1]) > 0.4) drag.moved = true;
   if (!drag.moved) return;
+  // Keep the grab offset, then snap the item's own anchor to the grid.
+  const off = drag.grabOff || [0, 0];
+  const target = snapMm([mm[0] - off[0], mm[1] - off[1]]);
+  drag.curMm = target;
   drawDrag();
+  if (kdoc) { KiCadCanvas.applyChange(kdoc, moveOp(drag.fp, Math.round(target[0] * IU), Math.round(target[1] * IU)), IU); requestRender(); }
   const now = Date.now();
-  if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp([moveOp(drag.fp, Math.round(mm[0] * IU), Math.round(mm[1] * IU))]); }
+  if (now - lastLiveMove > 150) { lastLiveMove = now; sendOp([moveOp(drag.fp, Math.round(target[0] * IU), Math.round(target[1] * IU))]); }
   const s = 4;
   const g = [[mm[0]-s, mm[1]-s, mm[0]+s, mm[1]-s], [mm[0]+s, mm[1]-s, mm[0]+s, mm[1]+s],
              [mm[0]+s, mm[1]+s, mm[0]-s, mm[1]+s], [mm[0]-s, mm[1]+s, mm[0]-s, mm[1]-s]]
@@ -568,7 +649,7 @@ stage.addEventListener("pointerup", (ev) => {
   sendPresence([nx / IU, ny / IU], []);
   if (!wasMoved) return;
   if (nx !== fp.x || ny !== fp.y) sendOp([moveOp(fp, nx, ny)]);
-  fp.x = nx; fp.y = ny; drawSelection(); renderProps();
+  fp.x = nx; fp.y = ny; if (kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 });
 
 document.addEventListener("keydown", (ev) => {
@@ -582,6 +663,8 @@ document.addEventListener("keydown", (ev) => {
   if (k === "s" || k === "S") { setTool("select"); return; }
   if (k === "h" || k === "H") { setTool("pan"); return; }
   if (k === "c" || k === "C") { setTool("comment"); return; }
+  if (k === "g" || k === "G") { gridOn = !gridOn; updateGridStatus(); requestRender(); return; }
+  if (k === "n" || k === "N") { snapOn = !snapOn; updateGridStatus(); return; }
   if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
   if ((k === "r" || k === "R") && !isSch()) rotateSelected();
   if (k === "Delete" || k === "Backspace") deleteSelected();
@@ -591,12 +674,15 @@ function rotateSelected() {
   const before = selected.rot || 0, after = (before + 90) % 360;
   sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [
     { name: "Orientation", before: { type: "double", v: before }, after: { type: "double", v: after } }] }]);
-  selected.rot = after; drawSelection(); renderProps();
+  selected.rot = after;
+  if (kdoc) applyChanges([{ id: selected.id, kind: "MODIFIED", properties: [{ name: "Orientation", after: { v: after } }] }]);
+  drawSelection(); renderProps();
 }
 function deleteSelected() {
   sendOp([{ id: selected.id, typeName: ITEM_TYPE, kind: "REMOVED", properties: [] }]);
+  if (kdoc) kdoc.items.delete(selected.id);
   items = items.filter((f) => f.id !== selected.id);
-  selected = null; drawSelection(); renderProps(); renderObjects(); toast("Deleted");
+  selected = null; drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
 }
 function moveOp(fp, nx, ny) {
   return { id: fp.id, typeName: ITEM_TYPE, kind: "MODIFIED", properties: [
@@ -604,6 +690,7 @@ function moveOp(fp, nx, ny) {
     { name: "Position Y", before: { type: "int", v: fp.y }, after: { type: "int", v: ny } }] };
 }
 function nearestFootprint(x, y, radiusMm) {
+  if (kdoc) { const id = KiCadCanvas.hitTest(kdoc, x, y, Math.min(radiusMm, 0.5)); return id ? items.find((f) => f.id === id) || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of items) { const d = Math.hypot(fp.x / IU - x, fp.y / IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
@@ -845,33 +932,41 @@ function placeComment(ev) {
 
 // ---- websocket / presence / ops ----
 function setConn(cls, text) { const c = $("#conn"); c.className = "conn " + cls; c.textContent = text || (cls === "live" ? "live" : "offline"); }
+let connectGen = 0;   // bumped by every connect()/leaveDoc(); a stale socket's events are ignored
 async function connect() {
+  const gen = ++connectGen;
   if (!state.me) { setConn("", "sign in to collaborate"); return; }
   // A cookie riding the WS upgrade is unreliable (SameSite / tracking
   // protection / proxies), so authenticate the socket with a token fetched
   // over a normal request and sent in the hello frame, like the desktop.
+  let ticket;
   try {
-    wsToken = (await api("/api/ws-ticket")).token || "";
+    ticket = (await api("/api/ws-ticket")).token || "";
   } catch (e) {
-    setConn("err", "sign-in expired — reload to reconnect");
+    if (gen === connectGen) setConn("err", "sign-in expired — reload to reconnect");
     return;   // a bad ticket would just loop; wait for a reload/re-auth
   }
-  if (state.view !== "editor") return;
+  if (gen !== connectGen || state.view !== "editor") return;   // the document changed while we waited
+  wsToken = ticket;
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { myClientId = "web-" + Math.random().toString(36).slice(2, 10);
-    ws.send(JSON.stringify({ type: "hello", proto: 1, token: wsToken, clientId: myClientId, linkToken: null, client: "web" })); };
-  ws.onclose = () => {
+  const sock = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = sock;
+  sock.onopen = () => { if (ws !== sock) return; myClientId = "web-" + Math.random().toString(36).slice(2, 10);
+    sock.send(JSON.stringify({ type: "hello", proto: 1, token: wsToken, clientId: myClientId, linkToken: null, client: "web" })); };
+  sock.onclose = () => {
+    if (ws !== sock || gen !== connectGen) return;   // superseded: not ours to reconnect
+    ws = null;
     peersG.replaceChildren(); peerState = {}; renderPeers();
     const delay = Math.min(15000, 1000 * Math.pow(2, retries++));
     setConn("err", `reconnecting in ${Math.round(delay / 1000)}s`);
-    setTimeout(() => { if (state.view === "editor") connect().catch(() => {}); }, delay);
+    setTimeout(() => { if (state.view === "editor" && gen === connectGen) connect().catch(() => {}); }, delay);
   };
-  ws.onmessage = (ev) => {
+  sock.onmessage = (ev) => {
+    if (ws !== sock) return;
     const msg = JSON.parse(ev.data);
-    if (msg.type === "hello_ok") { retries = 0; ws.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
+    if (msg.type === "hello_ok") { retries = 0; sock.send(JSON.stringify({ type: "join_doc", docId: state.docId })); }
     if (msg.type === "error" && msg.code === "auth_failed") {
-      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+      sock.onclose = null; sock.close(); if (ws === sock) ws = null;
       setConn("err", "sign-in expired — reload to reconnect");
     }
     if (msg.type === "doc_info") { peerState = {}; setConn("live", viewOnly ? "live · view-only" : "live"); renderPeers(); }
@@ -879,9 +974,14 @@ async function connect() {
       drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
     if (msg.type === "peer_left" && msg.clientId) { delete peerState[msg.clientId]; drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
     if (msg.type === "error" && msg.code === "permission_denied") { viewOnly = true; drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here"); }
+    if (msg.type === "error" && msg.code === "desynced") { sock.send(JSON.stringify({ type: "resync", docId: state.docId })); }
     if (msg.type === "comment") noteCommentMsg(msg);
-    if (msg.type === "op") { editsSeen++; noteRemoteOp(msg); bumpEdits(); scheduleRenderRefresh(); }
-    if (msg.type === "ops") { editsSeen += (msg.ops || []).length; bumpEdits(); scheduleRenderRefresh(); }
+    if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
+      if (setDocFromText(msg.file)) for (const op of msg.thenOps || []) applyChanges(op.changes);
+    }
+    if (msg.type === "op") { editsSeen++; if (kdoc) applyChanges(msg.changes); else noteRemoteOp(msg); bumpEdits(); if (!kdoc) scheduleRenderRefresh(); }
+    if (msg.type === "ops") { editsSeen += (msg.ops || []).length; if (kdoc) for (const op of msg.ops || []) applyChanges(op.changes); bumpEdits(); if (!kdoc) scheduleRenderRefresh(); }
+    if (msg.type === "reset" && msg.docId === state.docId) { sock.send(JSON.stringify({ type: "resync", docId: state.docId })); }
   };
 }
 function bumpEdits() { $("#sbEdits").textContent = editsSeen ? `${editsSeen} edit${editsSeen === 1 ? "" : "s"}` : ""; }
@@ -912,7 +1012,7 @@ function sendPresence(mmPos, ghostSegs) {
 function sendOp(changes) {
   if (!ws || ws.readyState !== 1) { toast("Not connected"); return; }
   ws.send(JSON.stringify({ type: "op", docId: state.docId, clientOpId: `web:${++opN}`, baseSeq: null, changes }));
-  editsSeen++; bumpEdits(); scheduleRenderRefresh();
+  editsSeen++; bumpEdits(); if (!kdoc) scheduleRenderRefresh();
 }
 function scheduleRenderRefresh() {
   renderDirtySince = Date.now();
@@ -931,6 +1031,8 @@ async function runAction(act, el) {
     case "zoomin": zoomBy(1.25); break;
     case "zoomout": zoomBy(0.8); break;
     case "fit": fitView(); break;
+    case "grid": gridOn = !gridOn; updateGridStatus(); requestRender(); break;
+    case "snap": snapOn = !snapOn; updateGridStatus(); break;
     case "tab-appearance": showTab("appearance"); break;
     case "tab-props": showTab("props"); break;
     case "tab-peers": showTab("peers"); break;

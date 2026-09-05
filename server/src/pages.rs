@@ -110,8 +110,37 @@ pub(crate) const STYLE: &str = r#"
 
 /// The single-page web app (home + online editor).  Client-side routed: the
 /// same shell serves `/`, `/app` and `/p/{id}/edit`.
-pub async fn app_page() -> Html<&'static str> {
-    Html(include_str!("../static/app.html"))
+/// Content hash of the client scripts, used as a cache-busting query on their
+/// URLs: Cloudflare edge-caches /static/*.js (and can pin a stale 404 or an old
+/// build for hours regardless of the origin's Cache-Control).
+fn asset_version() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in include_str!("../static/app.js").bytes().chain(include_str!("../static/kicad-canvas.js").bytes()) {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("{:x}", h)
+    })
+}
+
+pub async fn app_page() -> Html<String> {
+    let v = asset_version();
+    Html(
+        include_str!("../static/app.html")
+            .replace("/static/app.js\"", &format!("/static/app.js?v={v}\""))
+            .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\"")),
+    )
+}
+
+pub async fn canvas_js() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+         (header::CACHE_CONTROL, "no-cache")],
+        include_str!("../static/kicad-canvas.js"),
+    )
+        .into_response()
 }
 
 pub async fn app_js() -> Response {

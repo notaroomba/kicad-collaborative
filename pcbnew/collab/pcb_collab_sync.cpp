@@ -726,6 +726,16 @@ void PCB_COLLAB_SYNC::captureItem( BOARD_ITEM* aItem, BOARD_ITEM* aBefore, int a
 
     if( !sexpr.empty() )
         wire[ "sexpr" ] = sexpr;
+    else if( change.kind == CHANGE_KIND::MODIFIED && typeSupportsSexprTransfer( aItem ) )
+    {
+        // Clients that mirror the document by re-parsing items (the web editor)
+        // need the whole item, not just the property deltas the desktop applies.
+        // A different key, so the desktop applier keeps its property-level path.
+        std::string full = PCB_COLLAB::FormatItemSexpr( aItem );
+
+        if( !full.empty() )
+            wire[ "itemSexpr" ] = full;
+    }
 
     // Membership travels by uuid: the sexpr's member ids are board-local
     // pointers on the receiving side and resolve there instead.

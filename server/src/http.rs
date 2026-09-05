@@ -1245,13 +1245,19 @@ pub struct SnapshotQuery {
 /// download when a peer adds a new sheet file mid-session.
 pub async fn doc_content(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    auth::MaybeAuthUser(viewer): auth::MaybeAuthUser,
     Path(doc_id): Path<Uuid>,
 ) -> AppResult<Response> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
-    persist::effective_role(&state.pool, user.id, doc.project_id)
-        .await?
-        .ok_or(AppError::Forbidden)?;
+    // Readable by members, and by anyone for a public project (the web editor
+    // draws the document itself, signed in or not).
+    let project = persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
+    if !project.public {
+        let user = viewer.ok_or(AppError::Unauthorized)?;
+        persist::effective_role(&state.pool, user.id, doc.project_id)
+            .await?
+            .ok_or(AppError::Forbidden)?;
+    }
 
     let Some((seq, content)) = persist::latest_snapshot(&state.pool, doc_id).await? else {
         return Err(AppError::NotFound);
