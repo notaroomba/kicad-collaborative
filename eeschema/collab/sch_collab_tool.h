@@ -195,6 +195,8 @@ private:
     ///< Hover card beside a comment pin (thread + reply box), created lazily.
     class COLLAB_COMMENT_CARD* m_commentCard = nullptr;
     int                       m_cardGrace = 0;
+    bool                      m_mouseWasDown = false; ///< edge detection for pin clicks
+    bool                      m_pinHover = false;     ///< hand cursor shown for a pin
 
     void updateCommentCard();
     void hideCommentCard();

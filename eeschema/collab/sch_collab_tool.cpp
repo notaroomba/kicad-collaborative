@@ -26,6 +26,7 @@
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
+#include <cursors.h>
 #include <dialogs/collab_comment_card.h>
 #include <wx/utils.h>
 #include <widgets/collab_history_panel.h>
@@ -1637,16 +1638,27 @@ void SCH_COLLAB_TOOL::updateCommentCard()
     }
 
     wxPoint   mouse = wxGetMousePosition();
+    bool      down = wxGetMouseState().LeftIsDown();
+    bool      pressed = down && !m_mouseWasDown;   // this tick saw the press
+    m_mouseWasDown = down;
+
+    bool      overCard = m_commentCard && m_commentCard->ContainsScreenPoint( mouse );
     long long root = -1;
 
-    if( m_frame->GetCanvas()->GetScreenRect().Contains( mouse )
-        && !( m_commentCard && m_commentCard->ContainsScreenPoint( mouse ) ) )
+    if( !overCard && m_frame->GetCanvas()->GetScreenRect().Contains( mouse ) )
     {
         VECTOR2I cursor = m_frame->GetCanvas()->GetViewControls()->GetCursorPosition( false );
         root = pinAt( cursor );
     }
 
-    if( root >= 0 )
+    // Hovering a pin only signals that it can be clicked.
+    if( ( root >= 0 ) != m_pinHover )
+    {
+        m_pinHover = root >= 0;
+        m_frame->GetCanvas()->SetCurrentCursor( m_pinHover ? KICURSOR::HAND : KICURSOR::ARROW );
+    }
+
+    if( root >= 0 && pressed )
     {
         if( !m_commentCard )
         {
@@ -1662,31 +1674,18 @@ void SCH_COLLAB_TOOL::updateCommentCard()
                     } );
         }
 
-        if( !m_commentCard->IsShown() || m_commentCard->ThreadId() != root )
-        {
-            VECTOR2D scr = view->ToScreen( VECTOR2D( commentAnchor( root ) ) );
-            wxPoint  anchor = m_frame->GetCanvas()->ClientToScreen(
-                    wxPoint( KiROUND( scr.x ), KiROUND( scr.y ) ) );
-            m_commentCard->ShowThread( docIt->second, root, anchor );
-        }
-
-        m_cardGrace = 0;
+        VECTOR2D scr = view->ToScreen( VECTOR2D( commentAnchor( root ) ) );
+        wxPoint  anchor = m_frame->GetCanvas()->ClientToScreen(
+                wxPoint( KiROUND( scr.x ), KiROUND( scr.y ) ) );
+        m_commentCard->ShowThread( docIt->second, root, anchor );
+        return;
     }
-    else if( m_commentCard && m_commentCard->IsShown() )
+
+    if( m_commentCard && m_commentCard->IsShown() )
     {
-        // Any click outside the card dismisses it (clicking away, like Figma).
-        if( wxGetMouseState().LeftIsDown() && !m_commentCard->ContainsScreenPoint( mouse ) )
-        {
-            hideCommentCard();
-            return;
-        }
-
-        if( m_commentCard->ContainsScreenPoint( mouse ) )
+        if( overCard )
             m_commentCard->ActivateForPointer();
-
-        if( m_commentCard->ContainsScreenPoint( mouse ) || m_commentCard->HasFocusedInput() )
-            m_cardGrace = 0;
-        else if( ++m_cardGrace > 4 )
-            hideCommentCard();
+        else if( pressed )
+            hideCommentCard();   // clicking away closes it
     }
 }

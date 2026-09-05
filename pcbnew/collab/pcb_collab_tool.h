@@ -209,6 +209,8 @@ class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
     ///< Hover card beside a comment pin (thread + reply box), created lazily.
     class COLLAB_COMMENT_CARD* m_commentCard = nullptr;
     int                       m_cardGrace = 0;
+    bool                      m_mouseWasDown = false; ///< edge detection for pin clicks
+    bool                      m_pinHover = false;     ///< hand cursor shown for a pin
 
     ///< Timer tick: show the card for the pin under the pointer, hide it when the
     ///< pointer has left both the pin and the card.
