@@ -506,6 +506,28 @@ std::pair<wxString, wxString> PCB_IO_KICAD_SEXPR_PARSER::parseBoardProperty()
 }
 
 
+void PCB_IO_KICAD_SEXPR_PARSER::parseCustomProperty( EDA_ITEM* aItem )
+{
+    NeedSYMBOL();
+    wxString key = FromUTF8();
+    NeedSYMBOL();
+    wxString value = FromUTF8();
+    aItem->SetCustomProperty( key, value );
+    NeedRIGHT();
+}
+
+
+void PCB_IO_KICAD_SEXPR_PARSER::parseCustomProperty( std::map<wxString, wxString>& aProps )
+{
+    NeedSYMBOL();
+    wxString key = FromUTF8();
+    NeedSYMBOL();
+    wxString value = FromUTF8();
+    aProps[key] = value;
+    NeedRIGHT();
+}
+
+
 void PCB_IO_KICAD_SEXPR_PARSER::parseVariants()
 {
     // (variants
@@ -1371,7 +1393,14 @@ BOARD* PCB_IO_KICAD_SEXPR_PARSER::parseBOARD_unchecked()
 
         case T_embedded_fonts:
         {
-            m_board->GetEmbeddedFiles()->SetAreFontsEmbedded( parseBool() );
+            bool embedFonts = parseBool();
+
+            // An append must not clear the destination's flag; saving with it off deletes the
+            // fonts the destination already embedded
+            if( m_appendToExisting )
+                embedFonts = embedFonts || m_board->GetEmbeddedFiles()->GetAreFontsEmbedded();
+
+            m_board->GetEmbeddedFiles()->SetAreFontsEmbedded( embedFonts );
             NeedRIGHT();
             break;
         }
@@ -1667,6 +1696,7 @@ void PCB_IO_KICAD_SEXPR_PARSER::resolveGroups( BOARD_ITEM* aParent )
         }
 
         group->SetUuidDirect( groupInfo->uuid );
+        group->SetCustomProperties( groupInfo->customProperties );
 
         if( groupInfo->libId.IsValid() )
             group->SetDesignBlockLibId( groupInfo->libId );
@@ -1708,8 +1738,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::resolveGroups( BOARD_ITEM* aParent )
                     group->AddItem( item );
             }
 
-            // For generators, set the layer to match the layer of the contained tracks
-            if( PCB_GENERATOR* gen = dynamic_cast<PCB_GENERATOR*>( group ) )
+            // For generators, set the layer to match the layer of the contained tracks.
+            // GetBoardItems() is unordered, so this may only be done for a generator whose
+            // members all share one layer; one that spans layers keeps its own.
+            if( PCB_GENERATOR* gen = dynamic_cast<PCB_GENERATOR*>( group ); gen && gen->LayerFollowsMembers() )
             {
                 for( BOARD_ITEM* item : gen->GetBoardItems() )
                 {
@@ -4048,6 +4080,10 @@ PCB_SHAPE* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_SHAPE( BOARD_ITEM* aParent )
             break;
         }
 
+        case T_custom_property:
+            parseCustomProperty( shape.get() );
+            break;
+
         default:
             Expecting( "layer, width, fill, tstamp, uuid, locked, net, status, "
                        "solder_mask_margin, center, major_radius, minor_radius, "
@@ -4195,6 +4231,10 @@ PCB_REFERENCE_IMAGE* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_REFERENCE_IMAGE( BOARD_
             NextTok();
             bitmap->SetUuidDirect( CurStrToKIID() );
             NeedRIGHT();
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( bitmap.get() );
             break;
 
         default:
@@ -4408,6 +4448,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::parsePCB_TEXT_effects( PCB_TEXT* aText, PCB_TEXT
             parseRenderCache( static_cast<EDA_TEXT*>( aText ) );
             break;
 
+        case T_custom_property:
+            parseCustomProperty( aText );
+            break;
+
         default:
             if( parentFP )
                 Expecting( "layer, hide, effects, locked, render_cache or tstamp" );
@@ -4575,6 +4619,10 @@ PCB_BARCODE* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_BARCODE( BOARD_ITEM* aParent )
             NeedRIGHT();
             break;
         }
+
+        case T_custom_property:
+            parseCustomProperty( barcode.get() );
+            break;
 
         default:
             Expecting( "at, layer, size, text, text_height, type, ecc_level, locked, hide, knockout, margins or uuid" );
@@ -4774,6 +4822,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::parseTextBoxContent( PCB_TEXTBOX* aTextBox )
             parseRenderCache( static_cast<EDA_TEXT*>( aTextBox ) );
             break;
 
+        case T_custom_property:
+            parseCustomProperty( aTextBox );
+            break;
+
         default:
             if( dynamic_cast<PCB_TABLECELL*>( aTextBox ) != nullptr )
             {
@@ -4961,6 +5013,10 @@ PCB_TABLE* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_TABLE( BOARD_ITEM* aParent )
                 }
             }
 
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( table.get() );
             break;
 
         default:
@@ -5422,6 +5478,10 @@ PCB_DIMENSION_BASE* PCB_IO_KICAD_SEXPR_PARSER::parseDIMENSION( BOARD_ITEM* aPare
             dim->SetLocked( isLocked );
             break;
         }
+
+        case T_custom_property:
+            parseCustomProperty( dim.get() );
+            break;
 
         default:
             Expecting( "layer, tstamp, uuid, gr_text, feature1, feature2, crossbar, arrow1a, "
@@ -6374,6 +6434,10 @@ FOOTPRINT* PCB_IO_KICAD_SEXPR_PARSER::parseFOOTPRINT_unchecked( wxArrayString* a
             parseFootprintVariant( footprint.get() );
             break;
 
+        case T_custom_property:
+            parseCustomProperty( footprint.get() );
+            break;
+
         default:
             Expecting( "at, descr, locked, placed, tedit, tstamp, uuid, variant, "
                        "autoplace_cost90, autoplace_cost180, attr, clearance, "
@@ -7111,6 +7175,10 @@ PAD* PCB_IO_KICAD_SEXPR_PARSER::parsePAD( FOOTPRINT* aParent )
             parsePostMachining( pad->Padstack().BackPostMachining() );
             break;
 
+        case T_custom_property:
+            parseCustomProperty( pad.get() );
+            break;
+
         default:
             Expecting( "at, locked, drill, layers, net, die_length, roundrect_rratio, "
                        "solder_mask_margin, solder_paste_margin, solder_paste_margin_ratio, uuid, "
@@ -7712,6 +7780,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::parseGROUP( BOARD_ITEM* aParent )
             parseGROUP_members( groupInfo );
             break;
 
+        case T_custom_property:
+            parseCustomProperty( groupInfo.customProperties );
+            break;
+
         default:
             Expecting( "uuid, locked, lib_id, or members" );
         }
@@ -7802,6 +7874,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::parseCONSTRAINT( BOARD_ITEM* aParent )
             NeedRIGHT();
             break;
 
+        case T_custom_property:
+            parseCustomProperty( info.customProperties );
+            break;
+
         default:
             Expecting( "type, uuid, members, value, or driving" );
         }
@@ -7861,6 +7937,7 @@ void PCB_IO_KICAD_SEXPR_PARSER::resolveConstraints( BOARD_ITEM* aParent )
         constraint->SetUuidDirect( info.uuid );
         constraint->SetValue( info.value );
         constraint->SetDriving( info.driving );
+        constraint->SetCustomProperties( info.customProperties );
 
         for( const CONSTRAINT_MEMBER& member : info.members )
         {
@@ -7966,6 +8043,10 @@ void PCB_IO_KICAD_SEXPR_PARSER::parseGENERATOR( BOARD_ITEM* aParent )
 
         case T_templates:
             parseGENERATOR_templates( genInfo );
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( genInfo.customProperties );
             break;
 
         default:
@@ -8075,9 +8156,13 @@ void PCB_IO_KICAD_SEXPR_PARSER::parseGENERATOR( BOARD_ITEM* aParent )
         }
     }
 
-    // Previous versions had bugs which could save ghost tuning patterns.  Ignore them.
-    if( genInfo.genType == wxT( "tuning_pattern" ) && genInfo.memberUuids.empty() )
+    // Previous versions had bugs which could save ghost tuning patterns. Ignore them, and
+    // ignore member-less microvia stacks already sitting in files for the same reason.
+    if( genInfo.memberUuids.empty()
+        && ( genInfo.genType == wxT( "tuning_pattern" ) || genInfo.genType == wxT( "via_stack" ) ) )
+    {
         m_generatorInfos.pop_back();
+    }
 }
 
 
@@ -8256,6 +8341,10 @@ PCB_TRACK* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_TRACK()
 
         case T_locked:
             track->SetLocked( parseMaybeAbsentBool( true ) );
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( track.get() );
             break;
 
         default:
@@ -8569,8 +8658,8 @@ PCB_IO_KICAD_SEXPR_PARSER::parseFrontBackOptBool( bool aAllowLegacyFormat )
 {
     T token = NextTok();
 
-    std::optional<bool> front = std::nullopt;
-    std::optional<bool> back = std::nullopt;
+    std::pair<std::optional<bool>, std::optional<bool>> result;
+    auto& [front, back] = result;
 
     if( token != T_LEFT && aAllowLegacyFormat )
     {
@@ -8598,7 +8687,7 @@ PCB_IO_KICAD_SEXPR_PARSER::parseFrontBackOptBool( bool aAllowLegacyFormat )
             token = NextTok();
         }
 
-        return { front, back };
+        return result;
     }
 
     while( token != T_RIGHT )
@@ -8620,7 +8709,7 @@ PCB_IO_KICAD_SEXPR_PARSER::parseFrontBackOptBool( bool aAllowLegacyFormat )
         token = NextTok();
     }
 
-    return { front, back };
+    return result;
 }
 
 
@@ -9410,6 +9499,10 @@ ZONE* PCB_IO_KICAD_SEXPR_PARSER::parseZONE( BOARD_ITEM_CONTAINER* aParent )
             NeedRIGHT();
             break;
 
+        case T_custom_property:
+            parseCustomProperty( zone.get() );
+            break;
+
         default:
             Expecting( "net, layer/layers, tstamp, hatch, priority, connect_pads, min_thickness, "
                        "fill, polygon, filled_polygon, fill_segments, attr, locked, uuid, or name" );
@@ -9581,6 +9674,9 @@ PCB_POINT* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_POINT()
             NeedRIGHT();
             break;
         }
+        case T_custom_property:
+            parseCustomProperty( point.get() );
+            break;
         default: Expecting( "at, size, layer or uuid" );
         }
     }
@@ -9641,6 +9737,10 @@ PCB_TARGET* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_TARGET()
             NextTok();
             target->SetUuidDirect( CurStrToKIID() );
             NeedRIGHT();
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( target.get() );
             break;
 
         default:
@@ -9766,6 +9866,10 @@ PCB_GRIDITEM* PCB_IO_KICAD_SEXPR_PARSER::parsePCB_GRIDITEM()
             NextTok();
             const_cast<KIID&>( griditem->m_Uuid ) = CurStrToKIID();
             NeedRIGHT();
+            break;
+
+        case T_custom_property:
+            parseCustomProperty( griditem.get() );
             break;
 
         default:

@@ -172,6 +172,7 @@ void SCH_LINE::Serialize( google::protobuf::Any &aContainer ) const
     if( GetEndEnding().GetStyle() != LINE_ENDING_STYLE::NONE )
         PackLineEnding( *line.mutable_end_ending(), GetEndEnding(), schIUScale );
 
+    kiapi::common::PackCustomProperties( line.mutable_custom_properties(), *this );
     aContainer.PackFrom( line );
 }
 
@@ -189,6 +190,7 @@ bool SCH_LINE::Deserialize( const google::protobuf::Any &aContainer )
     SetStartPoint( UnpackVector2( line.start(), schIUScale ) );
     SetEndPoint( UnpackVector2( line.end(), schIUScale ) );
     SetLocked( line.locked() == types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( line.custom_properties(), *this );
 
     m_stroke.SetWidth( UnpackDistance( line.stroke().width(), schIUScale ) );
     m_stroke.SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( line.stroke().style() ) );
@@ -782,8 +784,7 @@ bool SCH_LINE::CanConnect( const SCH_ITEM* aItem ) const
 }
 
 
-bool SCH_LINE::HasConnectivityChanges( const SCH_ITEM* aItem,
-                                       const SCH_SHEET_PATH* aInstance ) const
+bool SCH_LINE::HasConnectivityChanges( const SCH_ITEM* aItem, const SCH_SHEET_PATH* aInstance ) const
 {
     // Do not compare to ourself.
     if( aItem == this || !IsConnectable() )
@@ -1020,8 +1021,8 @@ void SCH_LINE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
 
     if( IsGraphicLine() )
     {
-        drawLineBody =
-                EDA_SHAPE::ShortenSegmentForEndings( plotStart, plotEnd, GetStartEnding(), GetEndEnding(), penWidth );
+        drawLineBody = EDA_SHAPE::ShortenSegmentForEndings( plotStart, plotEnd, GetStartEnding(), GetEndEnding(),
+                                                            penWidth );
     }
 
     if( drawLineBody )
@@ -1243,8 +1244,7 @@ bool SCH_LINE::ShouldHopOver( const SCH_LINE* aLine ) const
 }
 
 
-std::vector<VECTOR3I> SCH_LINE::BuildWireWithHopShape( const SCH_SCREEN* aScreen,
-                                                       double aArcRadius ) const
+std::vector<VECTOR3I> SCH_LINE::BuildWireWithHopShape( const SCH_SCREEN* aScreen, double aArcRadius ) const
 {
     // Note: Points are VECTOR3D, with Z coord used as flag
     // for segments: start point and end point have the Z coord = 0

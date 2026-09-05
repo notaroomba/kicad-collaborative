@@ -68,6 +68,7 @@ bool SCH_EDIT_FRAME::LoadProjectSettings()
     GetRenderSettings()->m_TextOffsetRatio = settings.m_TextOffsetRatio;
     GetRenderSettings()->m_PinSymbolSize   = settings.m_PinSymbolSize;
     GetRenderSettings()->m_SymbolLineWidth = settings.m_DefaultLineWidth;
+    GetRenderSettings()->m_ShowDNPMarkers = settings.m_ShowDNPMarkers;
     GetRenderSettings()->SetDashLengthRatio( settings.m_DashedLineDashRatio );
     GetRenderSettings()->SetGapLengthRatio( settings.m_DashedLineGapRatio );
 
@@ -89,6 +90,12 @@ void SCH_EDIT_FRAME::LoadDrawingSheet()
     // If empty, or not existing, the default drawing sheet is loaded.
 
     SCHEMATIC_SETTINGS& settings = Schematic().Settings();
+
+    if( settings.m_SchDrawingSheetFileName == wxS( "empty.kicad_wks" ) )
+    {
+        DS_DATA_MODEL::GetTheInstance().SetEmptyLayout();
+        return;
+    }
 
     wxString msg;
 
@@ -149,6 +156,7 @@ void SCH_EDIT_FRAME::ShowSchematicSetupDialog( const wxString& aInitialPage )
         GetRenderSettings()->m_TextOffsetRatio = Schematic().Settings().m_TextOffsetRatio;
         GetRenderSettings()->m_PinSymbolSize   = Schematic().Settings().m_PinSymbolSize;
         GetRenderSettings()->m_SymbolLineWidth = Schematic().Settings().m_DefaultLineWidth;
+        GetRenderSettings()->m_ShowDNPMarkers = Schematic().Settings().m_ShowDNPMarkers;
 
         GetRenderSettings()->SetDashLengthRatio( Schematic().Settings().m_DashedLineDashRatio );
         GetRenderSettings()->SetGapLengthRatio( Schematic().Settings().m_DashedLineGapRatio );

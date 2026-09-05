@@ -42,6 +42,7 @@ set( QA_COMMON_SRCS
     test_color4d.cpp
     test_commit.cpp
     test_coroutine.cpp
+    test_filter_kruskal.cpp
     test_design_block_io.cpp
     test_design_block_library_adapter.cpp
     test_desktop_app_id.cpp
@@ -50,6 +51,7 @@ set( QA_COMMON_SRCS
     test_eda_text.cpp
     test_editor_tabs_panel.cpp
     test_edit_relations.cpp
+    test_union_find.cpp
     test_unit_binder.cpp
     test_wx_dataviewctrl.cpp
     test_wx_grid.cpp
@@ -103,6 +105,7 @@ set( QA_COMMON_SRCS
     test_template_fieldnames.cpp
     test_text_attributes.cpp
     test_tool_dispatcher.cpp
+    test_tool_prime.cpp
     git/test_libgit_backend.cpp
     git/test_git_compare_handler.cpp
     text_eval/test_text_eval_parser.cpp
@@ -239,14 +242,6 @@ target_link_libraries( qa_common
 
 if( TARGET api_schema_build_copy )
     add_dependencies( qa_common api_schema_build_copy )
-endif()
-
-# The print-to-file reset test reaches into the native GtkPrintSettings on GTK builds.
-# The GTK3 libraries themselves propagate transitively through kiplatform.
-if( KICAD_WX_PORT STREQUAL "gtk" )
-    find_package( PkgConfig REQUIRED )
-    pkg_check_modules( GTK3 REQUIRED gtk+-3.0 )
-    target_include_directories( qa_common SYSTEM PRIVATE ${GTK3_INCLUDE_DIRS} )
 endif()
 
 include_directories(

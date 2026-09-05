@@ -36,6 +36,10 @@ template< class T >
 class CN_RTREE
 {
 public:
+    using TREE = KIRTREE::DYNAMIC_RTREE<T, int, 3>;
+
+    ///< Entry type accepted by BulkLoad().
+    using BULK_ENTRY = typename TREE::BULK_ENTRY;
 
     CN_RTREE() = default;
     ~CN_RTREE() = default;
@@ -87,6 +91,17 @@ public:
     }
 
     /**
+     * Function BulkLoad()
+     * Replaces the tree contents with aEntries, packed bottom-up.  Much cheaper than the
+     * same number of Insert() calls, which each pay for an R*-tree subtree choice and may
+     * cascade into forced reinsertion.
+     */
+    void BulkLoad( std::vector<BULK_ENTRY>& aEntries )
+    {
+        m_tree.BulkLoad( aEntries );
+    }
+
+    /**
      * Function Query()
      * Executes a function object aVisitor for each item whose bounding box intersects
      * with aBounds.
@@ -94,17 +109,15 @@ public:
     template <class Visitor>
     void Query( const BOX2I& aBounds, int aStartLayer, int aEndLayer, Visitor& aVisitor ) const
     {
-        int start_layer = aStartLayer == B_Cu ? INT_MAX : aStartLayer;
-        int end_layer = aEndLayer == B_Cu ? INT_MAX : aEndLayer;
-
-        const int mmin[3] = { start_layer, aBounds.GetX(), aBounds.GetY() };
-        const int mmax[3] = { end_layer, aBounds.GetRight(), aBounds.GetBottom() };
+        // The layer bounds are copper layer ordinals, the same as Insert() stores.
+        const int mmin[3] = { aStartLayer, aBounds.GetX(), aBounds.GetY() };
+        const int mmax[3] = { aEndLayer, aBounds.GetRight(), aBounds.GetBottom() };
 
         m_tree.Search( mmin, mmax, aVisitor );
     }
 
 private:
-    KIRTREE::DYNAMIC_RTREE<T, int, 3> m_tree;
+    TREE m_tree;
 };
 
 

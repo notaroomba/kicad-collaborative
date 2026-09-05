@@ -20,7 +20,6 @@
 
 
 #include <cstdarg>
-#include <exception>
 #include <config.h> // HAVE_FGETC_NOLOCK
 
 #include <kiplatform/io.h>
@@ -415,31 +414,35 @@ int OUTPUTFORMATTER::sprint( const char* fmt, ... )
 }
 
 
-int OUTPUTFORMATTER::Print( int nestLevel, const char* fmt, ... )
+int OUTPUTFORMATTER::Indent( int aNestLevel )
 {
 #define NESTWIDTH           2   ///< how many spaces per nestLevel
 
+    int total = 0;
+
+    for( int i = 0; i < aNestLevel; ++i )
+    {
+        // no error checking needed, an exception indicates an error.
+        total += sprint( "%*c", NESTWIDTH, ' ' );
+    }
+
+    return total;
+}
+
+
+int OUTPUTFORMATTER::Print( int nestLevel, const char* fmt, ... )
+{
     va_list     args;
 
     va_start( args, fmt );
 
-    int result = 0;
-    int total  = 0;
-
-    for( int i = 0; i < nestLevel; ++i )
-    {
-        // no error checking needed, an exception indicates an error.
-        result = sprint( "%*c", NESTWIDTH, ' ' );
-
-        total += result;
-    }
+    int total = Indent( nestLevel );
 
     // no error checking needed, an exception indicates an error.
-    result = vprint( fmt, args );
+    total += vprint( fmt, args );
 
     va_end( args );
 
-    total += result;
     return total;
 }
 
@@ -538,34 +541,73 @@ void STRING_FORMATTER::StripUseless()
 // Both file-output formatters below write to a sibling temp file and atomically rename
 // over the target on Finish(). A crash, throw, or power loss before commit leaves the
 // final target byte-identical to its prior contents.
+//
+// Finish() is the only thing that promotes the temp. A destructor cannot report a commit
+// failure, and it cannot tell a caller that forgot Finish() from one that abandoned the
+// save after handling an error, so it always discards.
 
 namespace
 {
-void atomicCommit( FILE*& aFp, const wxString& aTempPath, const wxString& aFinalPath )
+// Some fails threw, which could leave the file to be attempted for removal twice.  This
+// will neatly suppress errors saying that you can't remove a non-existant file and use the
+// filename as the flag to check if we were successful last time
+void removeTempFile( wxString& aTempPath )
 {
+    if( aTempPath.IsEmpty() )
+        return;
+
+    bool removed = false;
+
+    {
+        wxLogNull suppressExpectedAbsence;
+        removed = wxRemoveFile( aTempPath );
+    }
+
+    if( removed || !wxFileName::FileExists( aTempPath ) )
+        aTempPath.clear();
+}
+
+
+void atomicCommit( FILE*& aFp, wxString& aTempPath, const wxString& aFinalPath )
+{
+    // Removal clears the path, so keep a copy for the diagnostics below
+    const wxString failedPath = aTempPath;
+
     if( !KIPLATFORM::IO::FlushToDisk( aFp ) )
     {
         int err = errno;
         fclose( aFp );
         aFp = nullptr;
-        wxRemoveFile( aTempPath );
-        THROW_IO_ERRORF( _( "Cannot flush '%s' to disk: %s" ), aTempPath, wxString::FromUTF8( strerror( err ) ) );
+        removeTempFile( aTempPath );
+        THROW_IO_ERRORF( _( "Cannot flush '%s' to disk: %s" ), failedPath, wxString::FromUTF8( strerror( err ) ) );
     }
 
-    fclose( aFp );
+    // Buffered writes on NFS and quota'd volumes surface their errors here, not at write time,
+    // so an unchecked close can commit a short file
+    if( fclose( aFp ) != 0 )
+    {
+        int err = errno;
+        aFp = nullptr;
+        removeTempFile( aTempPath );
+        THROW_IO_ERRORF( _( "Cannot close '%s': %s" ), failedPath, wxString::FromUTF8( strerror( err ) ) );
+    }
+
     aFp = nullptr;
 
     wxString commitError;
 
     if( !KIPLATFORM::IO::CommitTempFile( aTempPath, aFinalPath, &commitError ) )
     {
-        wxRemoveFile( aTempPath );
+        removeTempFile( aTempPath );
         THROW_IO_ERROR( commitError );
     }
+
+    // The rename consumed the temp
+    aTempPath.clear();
 }
 
 
-void discardTempFile( FILE*& aFp, const wxString& aTempPath )
+void discardTempFile( FILE*& aFp, wxString& aTempPath )
 {
     if( aFp )
     {
@@ -573,43 +615,10 @@ void discardTempFile( FILE*& aFp, const wxString& aTempPath )
         aFp = nullptr;
     }
 
-    if( !aTempPath.IsEmpty() )
-        wxRemoveFile( aTempPath );
+    removeTempFile( aTempPath );
 }
 
 
-// Shared destructor body for the atomic-commit formatters. Throwing from a destructor
-// while another exception is in flight calls std::terminate, so during stack unwinding
-// we discard the temp and let the original exception propagate. When no exception is in
-// flight we fall back to a best-effort commit for callers that have not been migrated to
-// explicit Finish() yet. Explicit Finish() is the contract for anything that cares about
-// data-loss detection; destructor-path failures are surfaced as wxLogError because we
-// cannot throw safely from here.
-template <typename FinishFn>
-void finalizeFormatter( FILE*& aFp, const wxString& aTempPath, const wxString& aFilename,
-                        bool aCommitted, FinishFn aFinish )
-{
-    if( aCommitted )
-        return;
-
-    if( std::uncaught_exceptions() > 0 )
-    {
-        discardTempFile( aFp, aTempPath );
-        return;
-    }
-
-    try
-    {
-        aFinish();
-    }
-    catch( const std::exception& e )
-    {
-        wxLogError( _( "Failed to commit save of '%s': %s. "
-                       "The file on disk has not been modified." ),
-                    aFilename, wxString::FromUTF8( e.what() ) );
-        discardTempFile( aFp, aTempPath );
-    }
-}
 } // anonymous namespace
 
 
@@ -629,7 +638,8 @@ FILE_OUTPUTFORMATTER::FILE_OUTPUTFORMATTER( const wxString& aFileName, const wxC
 
 FILE_OUTPUTFORMATTER::~FILE_OUTPUTFORMATTER()
 {
-    finalizeFormatter( m_fp, m_tempPath, m_filename, m_committed, [this] { Finish(); } );
+    if( !m_committed )
+        discardTempFile( m_fp, m_tempPath );
 }
 
 
@@ -640,9 +650,7 @@ bool FILE_OUTPUTFORMATTER::Finish()
 
     if( !m_fp )
     {
-        if( !m_tempPath.IsEmpty() )
-            wxRemoveFile( m_tempPath );
-
+        removeTempFile( m_tempPath );
         return false;
     }
 
@@ -682,8 +690,8 @@ PRETTIFIED_FILE_OUTPUTFORMATTER::PRETTIFIED_FILE_OUTPUTFORMATTER( const wxString
 
 PRETTIFIED_FILE_OUTPUTFORMATTER::~PRETTIFIED_FILE_OUTPUTFORMATTER()
 {
-    finalizeFormatter( m_fp, m_tempPath, m_filename, m_committed,
-                       [this] { PRETTIFIED_FILE_OUTPUTFORMATTER::Finish(); } );
+    if( !m_committed )
+        discardTempFile( m_fp, m_tempPath );
 }
 
 
@@ -694,9 +702,7 @@ bool PRETTIFIED_FILE_OUTPUTFORMATTER::Finish()
 
     if( !m_fp )
     {
-        if( !m_tempPath.IsEmpty() )
-            wxRemoveFile( m_tempPath );
-
+        removeTempFile( m_tempPath );
         return false;
     }
 
@@ -704,11 +710,13 @@ bool PRETTIFIED_FILE_OUTPUTFORMATTER::Finish()
 
     if( !m_buf.empty() && fwrite( m_buf.c_str(), m_buf.length(), 1, m_fp ) != 1 )
     {
-        int err = errno;
+        int            err = errno;
+        const wxString failedPath = m_tempPath;
+
         fclose( m_fp );
         m_fp = nullptr;
-        wxRemoveFile( m_tempPath );
-        THROW_IO_ERRORF( _( "Write failed to '%s': %s" ), m_tempPath, wxString::FromUTF8( strerror( err ) ) );
+        removeTempFile( m_tempPath );
+        THROW_IO_ERRORF( _( "Write failed to '%s': %s" ), failedPath, wxString::FromUTF8( strerror( err ) ) );
     }
 
     atomicCommit( m_fp, m_tempPath, m_filename );

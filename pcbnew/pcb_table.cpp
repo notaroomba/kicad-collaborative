@@ -116,7 +116,7 @@ BOARD_ITEM* PCB_TABLE::Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit )
     BOARD_ITEM* dupe = static_cast<BOARD_ITEM*>( Clone() );
     dupe->ResetUuid();
 
-    RunOnChildren( []( BOARD_ITEM* aChild )
+    dupe->RunOnChildren( []( BOARD_ITEM* aChild )
                    {
                        aChild->ResetUuid();
                    },
@@ -171,6 +171,7 @@ void PCB_TABLE::Serialize( google::protobuf::Any& aContainer ) const
     else if( const BOARD* board = GetBoard() )
         table.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
 
+    kiapi::common::PackCustomProperties( table.mutable_custom_properties(), *this );
     aContainer.PackFrom( table );
 }
 
@@ -189,6 +190,7 @@ bool PCB_TABLE::Deserialize( const google::protobuf::Any& aContainer )
     SetUuidDirect( KIID( table.id().value() ) );
     SetLayer( FromProtoEnum<PCB_LAYER_ID, types::BoardLayer>( table.layer() ) );
     SetLocked( table.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( table.custom_properties(), *this );
 
     ClearCells();
     m_colWidths.clear();
@@ -260,6 +262,8 @@ void PCB_TABLE::swapData( BOARD_ITEM* aImage )
 
     for( PCB_TABLECELL* cell : table->m_cells )
         cell->SetParent( table );
+
+    std::swap( m_customProperties, table->m_customProperties );
 }
 
 
@@ -582,11 +586,16 @@ void PCB_TABLE::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     // because rotate-then-LR-flip equals TB-flip.
     PCB_LAYER_ID              origLayer = GetLayer();
     std::vector<PCB_LAYER_ID> origCellLayers;
+    std::vector<bool>         origMirrorSettings;
 
     origCellLayers.reserve( m_cells.size() );
+    origMirrorSettings.reserve( m_cells.size() );
 
     for( PCB_TABLECELL* cell : m_cells )
+    {
         origCellLayers.push_back( cell->GetLayer() );
+        origMirrorSettings.push_back( cell->IsMirrored() );
+    }
 
     if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
         Rotate( aCentre, ANGLE_180 );
@@ -596,7 +605,10 @@ void PCB_TABLE::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     SetLayer( origLayer );
 
     for( size_t i = 0; i < m_cells.size(); ++i )
+    {
         m_cells[i]->SetLayer( origCellLayers[i] );
+        m_cells[i]->SetMirrored( origMirrorSettings[i] );
+    }
 }
 
 
@@ -1050,44 +1062,44 @@ static struct PCB_TABLE_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, bool>( _HKI( "External Border" ),
                     &PCB_TABLE::SetStrokeExternal, &PCB_TABLE::StrokeExternal ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, bool>( _HKI( "Header Border" ),
                     &PCB_TABLE::SetStrokeHeaderSeparator, &PCB_TABLE::StrokeHeaderSeparator ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, int>( _HKI( "Border Width" ),
                     &PCB_TABLE::SetBorderWidth, &PCB_TABLE::GetBorderWidth,
                     PROPERTY_DISPLAY::PT_SIZE ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_TABLE, LINE_STYLE>( _HKI( "Border Style" ),
                     &PCB_TABLE::SetBorderStyle, &PCB_TABLE::GetBorderStyle ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, COLOR4D>( _HKI( "Border Color" ),
                     &PCB_TABLE::SetBorderColor, &PCB_TABLE::GetBorderColor ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, bool>( _HKI( "Row Separators" ),
                     &PCB_TABLE::SetStrokeRows, &PCB_TABLE::StrokeRows ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, bool>( _HKI( "Cell Separators" ),
                     &PCB_TABLE::SetStrokeColumns, &PCB_TABLE::StrokeColumns ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, int>( _HKI( "Separators Width" ),
                     &PCB_TABLE::SetSeparatorsWidth, &PCB_TABLE::GetSeparatorsWidth,
                     PROPERTY_DISPLAY::PT_SIZE ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_TABLE, LINE_STYLE>( _HKI( "Separators Style" ),
                     &PCB_TABLE::SetSeparatorsStyle, &PCB_TABLE::GetSeparatorsStyle ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TABLE, COLOR4D>( _HKI( "Separators Color" ),
                     &PCB_TABLE::SetSeparatorsColor, &PCB_TABLE::GetSeparatorsColor ),
-                    tableProps );
+                    tableProps ).SetIsCopyable();
     }
 } _PCB_TABLE_DESC;

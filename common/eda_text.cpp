@@ -729,7 +729,8 @@ void EDA_TEXT::AddRenderCacheGlyph( const SHAPE_POLY_SET& aPoly )
 
 int EDA_TEXT::GetInterline( const RENDER_SETTINGS* aSettings ) const
 {
-    return KiROUND( GetDrawFont( aSettings )->GetInterline( GetTextHeight(), getFontMetrics() ) );
+    return KiROUND( GetDrawFont( aSettings )->GetInterline( GetTextHeight(), getFontMetrics() )
+                    * GetLineSpacing() );
 }
 
 
@@ -780,8 +781,10 @@ BOX2I EDA_TEXT::GetTextBox( const RENDER_SETTINGS* aSettings, int aLine ) const
     if( font->IsStroke() )
         textsize.y += fudgeFactor;
 
+    int interline = KiROUND( font->GetInterline( fontSize.y, getFontMetrics() ) * GetLineSpacing() );
+
     if( IsMultilineAllowed() && aLine > 0 && aLine < (int) strings.GetCount() )
-        pos.y -= KiROUND( aLine * font->GetInterline( fontSize.y, getFontMetrics() ) );
+        pos.y -= aLine * interline;
 
     if( text.Contains( wxT( "~{" ) ) )
         overbarOffset = extents.y / 6;
@@ -800,7 +803,7 @@ BOX2I EDA_TEXT::GetTextBox( const RENDER_SETTINGS* aSettings, int aLine ) const
 
         // interline spacing is only *between* lines, so total height is the height of the first
         // line plus the interline distance (with interline spacing) for all subsequent lines
-        textsize.y += KiROUND( ( strings.GetCount() - 1 ) * font->GetInterline( fontSize.y, getFontMetrics() ) );
+        textsize.y += ( strings.GetCount() - 1 ) * interline;
     }
 
     textsize.y += overbarOffset;
@@ -821,14 +824,19 @@ BOX2I EDA_TEXT::GetTextBox( const RENDER_SETTINGS* aSettings, int aLine ) const
 
         break;
 
-    case GR_TEXT_H_ALIGN_CENTER: bbox.SetX( bbox.GetX() - ( bbox.GetWidth() - italicOffset ) / 2 ); break;
+    case GR_TEXT_H_ALIGN_CENTER:
+        bbox.SetX( bbox.GetX() - ( bbox.GetWidth() - italicOffset ) / 2 );
+        break;
 
     case GR_TEXT_H_ALIGN_RIGHT:
         if( !IsMirrored() )
             bbox.SetX( bbox.GetX() - ( bbox.GetWidth() - italicOffset ) );
+
         break;
 
-    case GR_TEXT_H_ALIGN_INDETERMINATE: wxFAIL_MSG( wxT( "Indeterminate state legal only in dialogs." ) ); break;
+    case GR_TEXT_H_ALIGN_INDETERMINATE:
+        wxFAIL_MSG( wxT( "Indeterminate state legal only in dialogs." ) );
+        break;
     }
 
     switch( GetVertJustify() )
@@ -1372,20 +1380,20 @@ static struct EDA_TEXT_DESC
                                 fonts.Add( wxString( fontName ) );
 
                             return fonts;
-                        } );
+                        } ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, bool>( _HKI( "Auto Thickness" ),
                     &EDA_TEXT::SetAutoThickness, &EDA_TEXT::GetAutoThickness ),
                     textProps );
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, int>( _HKI( "Thickness" ),
                     &EDA_TEXT::SetTextThickness, &EDA_TEXT::GetTextThicknessProperty, PROPERTY_DISPLAY::PT_SIZE ),
-                    textProps );
+                    textProps ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, bool>( _HKI( "Italic" ),
                     &EDA_TEXT::SetItalic, &EDA_TEXT::IsItalic ),
-                    textProps );
+                    textProps ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, bool>( _HKI( "Bold" ),
                     &EDA_TEXT::SetBold, &EDA_TEXT::IsBold ),
-                    textProps );
+                    textProps ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, bool>( _HKI( "Mirrored" ),
                     &EDA_TEXT::SetMirrored, &EDA_TEXT::IsMirrored ),
                     textProps );
@@ -1402,22 +1410,22 @@ static struct EDA_TEXT_DESC
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, bool>( _HKI( "Visible" ),
                     &EDA_TEXT::SetVisible, &EDA_TEXT::IsVisible ),
                     textProps )
-                .SetAvailableFunc( isField );
+                .SetAvailableFunc( isField ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, int>( _HKI( "Width" ),
                     &EDA_TEXT::SetTextWidth, &EDA_TEXT::GetTextWidth, PROPERTY_DISPLAY::PT_SIZE ),
-                    textProps );
+                    textProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, int>( _HKI( "Height" ),
                     &EDA_TEXT::SetTextHeight, &EDA_TEXT::GetTextHeight, PROPERTY_DISPLAY::PT_SIZE ),
-                    textProps );
+                    textProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<EDA_TEXT, GR_TEXT_H_ALIGN_T>( _HKI( "Horizontal Justification" ),
                     &EDA_TEXT::SetHorizJustify, &EDA_TEXT::GetHorizJustify ),
-                    textProps );
+                    textProps ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<EDA_TEXT, GR_TEXT_V_ALIGN_T>( _HKI( "Vertical Justification" ),
                     &EDA_TEXT::SetVertJustify, &EDA_TEXT::GetVertJustify ),
-                    textProps );
+                    textProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_TEXT, COLOR4D>( _HKI( "Color" ),
                     &EDA_TEXT::SetTextColor, &EDA_TEXT::GetTextColor ),

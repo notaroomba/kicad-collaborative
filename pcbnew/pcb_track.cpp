@@ -33,6 +33,8 @@
 #include <length_delay_calculation/length_delay_calculation.h>
 #include <lset.h>
 #include <cstdlib>
+#include <map>
+#include <set>
 #include <string_utils.h>
 #include <view/view.h>
 #include <settings/color_settings.h>
@@ -425,6 +427,7 @@ void PCB_TRACK::Serialize( google::protobuf::Any &aContainer ) const
             sm->mutable_solder_mask_margin()->set_value_nm( GetLocalSolderMaskMargin().value() );
     }
 
+    kiapi::common::PackCustomProperties( track.mutable_custom_properties(), *this );
     aContainer.PackFrom( track );
 }
 
@@ -443,6 +446,7 @@ bool PCB_TRACK::Deserialize( const google::protobuf::Any &aContainer )
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( track.layer() ) );
     UnpackNet( track.net() );
     SetLocked( track.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( track.custom_properties(), *this );
 
     if( track.has_solder_mask() )
     {
@@ -492,6 +496,7 @@ void PCB_ARC::Serialize( google::protobuf::Any &aContainer ) const
             sm->mutable_solder_mask_margin()->set_value_nm( GetLocalSolderMaskMargin().value() );
     }
 
+    kiapi::common::PackCustomProperties( arc.mutable_custom_properties(), *this );
     aContainer.PackFrom( arc );
 }
 
@@ -511,6 +516,7 @@ bool PCB_ARC::Deserialize( const google::protobuf::Any &aContainer )
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( arc.layer() ) );
     UnpackNet( arc.net() );
     SetLocked( arc.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( arc.custom_properties(), *this );
 
     if( arc.has_solder_mask() )
     {
@@ -564,6 +570,7 @@ void PCB_VIA::Serialize( google::protobuf::Any &aContainer ) const
         kiapi::board::PackZoneLayerOverrides( via.mutable_zone_layer_overrides(), m_zoneLayerOverrides );
     }
 
+    kiapi::common::PackCustomProperties( via.mutable_custom_properties(), *this );
     aContainer.PackFrom( via );
 }
 
@@ -591,6 +598,7 @@ bool PCB_VIA::Deserialize( const google::protobuf::Any &aContainer )
     SetViaType( FromProtoEnum<VIATYPE>( via.type() ) );
     UnpackNet( via.net() );
     SetLocked( via.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( via.custom_properties(), *this );
 
     if( via.has_teardrop() )
         kiapi::board::UnpackTeardropSettings( GetTeardropParams(), via.teardrop() );
@@ -760,6 +768,141 @@ void PCB_VIA::SetPrimaryDrillCapped( const std::optional<bool>& aCapped )
 void PCB_VIA::SetPrimaryDrillCappedFlag( bool aCapped )
 {
     m_padStack.Drill().is_capped = aCapped;
+}
+
+
+// Two microvias belong to one structure when the upper one lands on the lower one. Exact
+// concentricity is only the extreme case of that, so the test is hole overlap.
+std::vector<std::vector<PCB_VIA*>> PCB_VIA::CollectMicroviaColumns( BOARD* aBoard )
+{
+    std::map<int, int> ordinals;
+    int                n = 0;
+
+    for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, aBoard->GetCopperLayerCount() ) )
+        ordinals[layer] = n++;
+
+    std::vector<PCB_VIA*> microvias;
+
+    for( PCB_TRACK* track : aBoard->Tracks() )
+    {
+        if( track->Type() != PCB_VIA_T )
+            continue;
+
+        PCB_VIA* via = static_cast<PCB_VIA*>( track );
+
+        if( via->GetViaType() != VIATYPE::MICROVIA )
+            continue;
+
+        // A via on a single layer lands on nothing.
+        if( via->TopLayer() == via->BottomLayer() )
+            continue;
+
+        if( ordinals.count( via->TopLayer() ) && ordinals.count( via->BottomLayer() ) )
+            microvias.push_back( via );
+    }
+
+    auto upper = [&]( PCB_VIA* aVia )
+    {
+        return std::min( ordinals[aVia->TopLayer()], ordinals[aVia->BottomLayer()] );
+    };
+
+    auto lower = [&]( PCB_VIA* aVia )
+    {
+        return std::max( ordinals[aVia->TopLayer()], ordinals[aVia->BottomLayer()] );
+    };
+
+    // Touching holes have no wall between them, so they count as one column too.
+    auto overlaps = []( PCB_VIA* aFirst, PCB_VIA* aSecond )
+    {
+        double reach = ( aFirst->GetDrillValue() + aSecond->GetDrillValue() ) / 2.0;
+
+        return ( aFirst->GetPosition() - aSecond->GetPosition() ).EuclideanNorm() <= reach;
+    };
+
+    // Overlap needs the centres closer than the largest hole, so bucket the vias by landing
+    // layer and position and only the neighbouring buckets have to be looked at.
+    int cellSize = 1;
+
+    for( PCB_VIA* via : microvias )
+        cellSize = std::max( cellSize, via->GetDrillValue() );
+
+    auto cellOf = [&]( int aCoord )
+    {
+        return (int) std::floor( (double) aCoord / cellSize );
+    };
+
+    std::map<std::tuple<int, int, int>, std::vector<PCB_VIA*>> byCell;
+
+    for( PCB_VIA* via : microvias )
+    {
+        VECTOR2I pos = via->GetPosition();
+        byCell[{ upper( via ), cellOf( pos.x ), cellOf( pos.y ) }].push_back( via );
+    }
+
+    // The via a given one lands on, if any.
+    auto below = [&]( PCB_VIA* aVia ) -> PCB_VIA*
+    {
+        VECTOR2I pos = aVia->GetPosition();
+
+        for( int dx = -1; dx <= 1; ++dx )
+        {
+            for( int dy = -1; dy <= 1; ++dy )
+            {
+                auto it = byCell.find( { lower( aVia ), cellOf( pos.x ) + dx, cellOf( pos.y ) + dy } );
+
+                if( it == byCell.end() )
+                    continue;
+
+                for( PCB_VIA* other : it->second )
+                {
+                    if( other != aVia && overlaps( aVia, other ) )
+                        return other;
+                }
+            }
+        }
+
+        return nullptr;
+    };
+
+    std::set<PCB_VIA*> carried;
+
+    for( PCB_VIA* via : microvias )
+    {
+        if( PCB_VIA* under = below( via ) )
+            carried.insert( under );
+    }
+
+    std::vector<std::vector<PCB_VIA*>> columns;
+    std::set<PCB_VIA*>                 taken;
+
+    for( PCB_VIA* via : microvias )
+    {
+        // Walk down from the top of each structure so every one is built once.
+        if( carried.count( via ) )
+            continue;
+
+        std::vector<PCB_VIA*> column;
+        bool                  landsOnAnother = false;
+
+        for( PCB_VIA* step = via; step; step = below( step ) )
+        {
+            if( !taken.insert( step ).second )
+            {
+                landsOnAnother = true;
+                break;
+            }
+
+            column.push_back( step );
+
+            if( column.size() > ordinals.size() )
+                break;
+        }
+
+        if( column.size() > 1 || landsOnAnother )
+            columns.push_back( std::move( column ) );
+    }
+
+    return columns;
 }
 
 
@@ -3205,7 +3348,7 @@ static struct TRACK_VIA_DESC
         propMgr.InheritsAfter( TYPE_HASH( PCB_TRACK ), TYPE_HASH( BOARD_CONNECTED_ITEM ) );
 
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, int>( _HKI( "Width" ),
-                    &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) ).SetIsCopyable();
         propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Position X" ),
                     new PROPERTY<PCB_TRACK, int>( _HKI( "Start X" ),
                                 &PCB_TRACK::SetStartX, &PCB_TRACK::GetStartX, PROPERTY_DISPLAY::PT_COORD,
@@ -3234,12 +3377,12 @@ static struct TRACK_VIA_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, bool>( _HKI( "Soldermask" ),
                     &PCB_TRACK::SetHasSolderMask, &PCB_TRACK::HasSolderMask ), groupTechLayers )
-                .SetAvailableFunc( isExternalLayerTrack );
+                .SetAvailableFunc( isExternalLayerTrack ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, std::optional<int>>( _HKI( "Soldermask Margin Override" ),
                     &PCB_TRACK::SetLocalSolderMaskMargin, &PCB_TRACK::GetLocalSolderMaskMargin,
                     PROPERTY_DISPLAY::PT_SIZE ),
                     groupTechLayers )
-                .SetAvailableFunc( isExternalLayerTrack );
+                .SetAvailableFunc( isExternalLayerTrack ).SetIsCopyable();
 
         // Arc
         REGISTER_TYPE( PCB_ARC );
@@ -3255,15 +3398,18 @@ static struct TRACK_VIA_DESC
 
         propMgr.Mask( TYPE_HASH( PCB_VIA ), TYPE_HASH( BOARD_CONNECTED_ITEM ), _HKI( "Layer" ) );
 
+        propMgr.AddProperty( new PROPERTY<PCB_VIA, bool>( _HKI( "Automatically Update Net" ),
+                    &PCB_VIA::SetIsNotFree, &PCB_VIA::GetIsNotFree ) );
+
         // clang-format off: the suggestion is less readable
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Diameter" ),
                     &PCB_VIA::SetFrontWidth, &PCB_VIA::GetFrontWidth, PROPERTY_DISPLAY::PT_SIZE ),
                     groupVia )
-                .SetValidator( viaDiameterPropertyValidator );
+                .SetValidator( viaDiameterPropertyValidator ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Hole" ),
                     &PCB_VIA::SetDrill, &PCB_VIA::GetDrillValue, PROPERTY_DISPLAY::PT_SIZE ),
                     groupVia )
-                .SetValidator( viaDrillPropertyValidator );
+                .SetValidator( viaDrillPropertyValidator ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PCB_LAYER_ID>( _HKI( "Layer Top" ),
                     &PCB_VIA::SetTopLayer, &PCB_VIA::GetLayer ),
                     groupVia )
@@ -3275,47 +3421,47 @@ static struct TRACK_VIA_DESC
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, VIATYPE>( _HKI( "Via Type" ),
                     &PCB_VIA::SetViaType, &PCB_VIA::GetViaType ),
                     groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Front tenting" ),
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Front Tenting" ),
                     &PCB_VIA::SetFrontTentingMode, &PCB_VIA::GetFrontTentingMode ),
-                    groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Back tenting" ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Back Tenting" ),
                     &PCB_VIA::SetBackTentingMode, &PCB_VIA::GetBackTentingMode ),
-                    groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Front covering" ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Front Covering" ),
                     &PCB_VIA::SetFrontCoveringMode, &PCB_VIA::GetFrontCoveringMode ),
-                    groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Back covering" ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Back Covering" ),
                     &PCB_VIA::SetBackCoveringMode, &PCB_VIA::GetBackCoveringMode ),
-                    groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Front plugging" ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Front Plugging" ),
                     &PCB_VIA::SetFrontPluggingMode, &PCB_VIA::GetFrontPluggingMode ),
-                    groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Back plugging" ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Back Plugging" ),
                     &PCB_VIA::SetBackPluggingMode, &PCB_VIA::GetBackPluggingMode ),
-                    groupVia );
+                    groupVia ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, CAPPING_MODE>( _HKI( "Capping" ),
                     &PCB_VIA::SetCappingMode, &PCB_VIA::GetCappingMode ),
-                    groupVia );
+                    groupVia ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, FILLING_MODE>( _HKI( "Filling" ),
                     &PCB_VIA::SetFillingMode, &PCB_VIA::GetFillingMode ),
-                    groupVia );
+                    groupVia ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, BACKDRILL_MODE>( _HKI( "Backdrill Mode" ),
                     &PCB_VIA::SetBackdrillMode, &PCB_VIA::GetBackdrillMode ),
                     groupBackdrill )
-        .SetAvailableFunc( []( INSPECTABLE* aItem )
-                           {
-                               if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                               {
-                                   if( via->GetViaType() == VIATYPE::THROUGH )
-                                       return true;
+                .SetAvailableFunc( []( INSPECTABLE* aItem )
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           if( via->GetViaType() == VIATYPE::THROUGH )
+                                               return true;
 
-                                   if( via->Padstack().GetBackdrillMode() != BACKDRILL_MODE::NO_BACKDRILL )
-                                       return true;
-                               }
+                                           if( via->Padstack().GetBackdrillMode() != BACKDRILL_MODE::NO_BACKDRILL )
+                                               return true;
+                                       }
 
-                               return false;
-                           } );
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, std::optional<int>>( _HKI( "Bottom Backdrill Size" ),
                     &PCB_VIA::SetBottomBackdrillSize, &PCB_VIA::GetBottomBackdrillSize, PROPERTY_DISPLAY::PT_SIZE ),

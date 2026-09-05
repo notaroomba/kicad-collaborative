@@ -1251,6 +1251,22 @@ std::vector<PATH_CONNECTION> CU_SHAPE_SEGMENT::Paths( const BE_SHAPE_CIRCLE& aS2
             result.push_back( pc );
         }
     }
+    else if( projectedPos1 < 0 && projectedPos2 > length )
+    {
+        // The circle projects past both ends of the track, so neither tangent lands on the
+        // track flank and each end cap carries one side of the path
+        CU_SHAPE_CIRCLE              cscStart( start, halfWidth );
+        std::vector<PATH_CONNECTION> startPcs = cscStart.Paths( aS2, aMaxWeight, aMaxSquaredWeight );
+
+        if( startPcs.size() >= 2 )
+            result.push_back( startPcs.at( trackSide == 1 ? 0 : 1 ) );
+
+        CU_SHAPE_CIRCLE              cscEnd( end, halfWidth );
+        std::vector<PATH_CONNECTION> endPcs = cscEnd.Paths( aS2, aMaxWeight, aMaxSquaredWeight );
+
+        if( endPcs.size() >= 2 )
+            result.push_back( endPcs.at( trackSide == 1 ? 1 : 0 ) );
+    }
 
     return result;
 }
@@ -1766,7 +1782,11 @@ std::vector<PATH_CONNECTION> CU_SHAPE_CIRCLE::Paths( const BE_SHAPE_CIRCLE& aS2,
     VECTOR2I center2 = aS2.GetPos();
     double   dist = ( center1 - center2 ).EuclideanNorm();
 
-    if( dist > aMaxWeight || dist == 0 )
+    // Prune on the tangent sqrt(dist^2 - R2^2) - R1, which is much shorter than the centre
+    // distance beside a large hole
+    double reach = aMaxWeight + R1;
+
+    if( dist == 0 || dist * dist > reach * reach + R2 * R2 )
         return result;
 
     double circleAngle = EDA_ANGLE( center2 - center1 ).AsRadians();

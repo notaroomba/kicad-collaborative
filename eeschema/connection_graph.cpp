@@ -4648,14 +4648,12 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
             bool     asGoodPath      = subgraph->m_sheet.size() <= bestDriver->m_sheet.size();
 
             // Pick a better driving subgraph if it:
-            // a) has a power pin or global driver
-            // b) is a strong driver and we're a weak driver
-            // c) is a higher priority strong driver
-            // d) matches our priority, is a strong driver, and has a shorter path
-            // e) matches our strength and is at least as short, and is alphabetically lower
+            // a) is a strong driver and we're a weak driver
+            // b) is a higher priority strong driver
+            // c) matches our priority, is a strong driver, and has a shorter path
+            // d) matches our strength and is at least as short, and is alphabetically lower
 
-            if( ( priority >= CONNECTION_SUBGRAPH::PRIORITY::GLOBAL_POWER_PIN ) ||
-                ( !bestIsStrong && candidateStrong ) ||
+            if( ( !bestIsStrong && candidateStrong ) ||
                 ( priority > highest && candidateStrong ) ||
                 ( priority == highest && candidateStrong && shorterPath ) ||
                 ( ( bestIsStrong == candidateStrong ) && asGoodPath && ( priority == highest ) &&
@@ -5892,6 +5890,12 @@ bool CONNECTION_GRAPH::ercCheckFloatingWires( const CONNECTION_SUBGRAPH* aSubgra
 void CONNECTION_GRAPH::collectBusMemberSiblings( const CONNECTION_SUBGRAPH* aBusParent, const wxString& aMemberName,
                                                  std::unordered_set<const CONNECTION_SUBGRAPH*>& aOut ) const
 {
+    while( aBusParent && aBusParent->m_absorbed )
+        aBusParent = aBusParent->m_absorbed_by;
+
+    if( !aBusParent || !aBusParent->m_driver_connection )
+        return;
+
     auto busBucket = m_net_name_to_subgraphs_map.find( aBusParent->m_driver_connection->Name() );
 
     if( busBucket == m_net_name_to_subgraphs_map.end() )

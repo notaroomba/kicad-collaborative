@@ -142,7 +142,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     auto envVarsParam = m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "environment.vars",
             [&]() -> nlohmann::json
             {
-                nlohmann::json ret = {};
+                nlohmann::json ret = nlohmann::json::object();
 
                 for( const std::pair<wxString, ENV_VAR_ITEM> entry : m_Env.vars )
                 {
@@ -276,6 +276,16 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "input.zoom_speed_auto",
             &m_Input.zoom_speed_auto, true ) );
+
+#ifdef __WXMSW__
+    constexpr TOUCHPAD_MODE defaultTouchpadMode = TOUCHPAD_MODE::NATIVE_GESTURES;
+#else
+    constexpr TOUCHPAD_MODE defaultTouchpadMode = TOUCHPAD_MODE::SCROLL_GESTURES;
+#endif
+
+    m_params.emplace_back( new PARAM_ENUM<TOUCHPAD_MODE>( "input.touchpad_mode",
+            &m_Input.touchpad_mode, defaultTouchpadMode, TOUCHPAD_MODE::NATIVE_GESTURES,
+            TOUCHPAD_MODE::SCROLL_GESTURES ) );
 
     m_params.emplace_back( new PARAM<int>( "input.scroll_modifier_zoom",
             &m_Input.scroll_modifier_zoom, 0 ) );
@@ -437,7 +447,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "git.repositories",
             [&]() -> nlohmann::json
             {
-                nlohmann::json ret = {};
+                nlohmann::json ret = nlohmann::json::array();
 
                 for( const GIT_REPOSITORY& repo : m_Git.repositories )
                 {
@@ -534,6 +544,8 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
             },
             nlohmann::json::object() ) );
 
+    // Let the save drop entries for dialogs and controls that no longer exist
+    m_params.back()->SetClearUnknownKeys();
 
     registerMigration( 0, 1, std::bind( &COMMON_SETTINGS::migrateSchema0to1, this ) );
     registerMigration( 1, 2, std::bind( &COMMON_SETTINGS::migrateSchema1to2, this ) );

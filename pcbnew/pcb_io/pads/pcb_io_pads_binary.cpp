@@ -268,8 +268,10 @@ void PCB_IO_PADS_BINARY::loadNets()
             netSettings->SetNetclass( className, kicadClass );
         }
 
+        // Label assignments are rebuilt from schematic labels on every connectivity pass, so a
+        // board-side membership has to be a pattern assignment to survive
         for( const std::string& net : nc.nets )
-            netSettings->SetNetclassLabelAssignment( PADS_COMMON::ConvertInvertedNetName( net ), { className } );
+            netSettings->SetNetclassPatternAssignment( PADS_COMMON::ConvertInvertedNetName( net ), className );
     }
 
     // Each differential pair becomes one DiffPair_<name> net class.
@@ -422,7 +424,7 @@ void PCB_IO_PADS_BINARY::loadFootprints()
             {
                 if( pad->GetAttribute() == PAD_ATTRIB::PTH && pad->Padstack().Mode() == PADSTACK::MODE::NORMAL )
                 {
-                    pad->SetLayerSet( LSET::AllCuMask() );
+                    pad->SetLayerSet( PAD::PTHMask() | ( pad->GetLayerSet() & LSET( { F_Paste, B_Paste } ) ) );
                 }
             }
         }
@@ -459,8 +461,13 @@ void PCB_IO_PADS_BINARY::buildPad( FOOTPRINT* aFootprint, const PADS_IO::PART_DE
         std::set<int> serializedLayers;
         bool          ambiguousLayers = false;
 
+        // A relief or anti-pad row repeats the layer ordinal of the copper row it qualifies, so
+        // counting it here would read every plane-relief padstack as ambiguous
         for( auto it = std::next( stack.begin() ); it != stack.end(); ++it )
-            ambiguousLayers |= !serializedLayers.insert( it->layer ).second;
+        {
+            if( PADS_IO::IsCopperPadRow( *it ) )
+                ambiguousLayers |= !serializedLayers.insert( it->layer ).second;
+        }
 
         bool modernZeroDefaultSmd = m_parser->GetVersion() == 0x2024 && layerDef.drill == 0 && layerDef.sizeA <= 0;
         bool legacyZeroDefaultSmd = m_parser->GetVersion() == 0x2022 && layerDef.drill == 0
@@ -496,13 +503,13 @@ void PCB_IO_PADS_BINARY::buildPad( FOOTPRINT* aFootprint, const PADS_IO::PART_DE
                 // clearances. Neither is pad copper, so they must not reach the shape below.
                 // KiCad derives the relief geometry from the zone, so an RT/ST row only says
                 // that this pad connects through spokes rather than solid copper.
-                if( stackLayer.shape == "RT" || stackLayer.shape == "ST" )
+                if( PADS_IO::IsThermalReliefPadRow( stackLayer ) )
                 {
                     pad->SetLocalZoneConnection( ZONE_CONNECTION::THERMAL );
                     continue;
                 }
 
-                if( stackLayer.shape == "RA" || stackLayer.shape == "SA" )
+                if( PADS_IO::IsAntiPadRow( stackLayer ) )
                     continue;
 
                 if( modernZeroDefaultSmd && stackLayer.layer == 0 )
@@ -637,20 +644,22 @@ void PCB_IO_PADS_BINARY::buildPad( FOOTPRINT* aFootprint, const PADS_IO::PART_DE
         }
         else
         {
+            // Keep whatever mask and paste rows the stack carried, the way the ASCII path does
+            LSET maskPasteBits = layerSet & LSET( { F_Mask, B_Mask, F_Paste, B_Paste } );
+
+            pad->Padstack().SetMode( PADSTACK::MODE::NORMAL );
+            applyPadShape( pad, layerDef, F_Cu );
+
             if( layerDef.plated )
             {
                 pad->SetAttribute( PAD_ATTRIB::PTH );
-                pad->Padstack().SetMode( PADSTACK::MODE::NORMAL );
-                applyPadShape( pad, layerDef, F_Cu );
-                pad->SetLayerSet( LSET::AllCuMask() );
+                pad->SetLayerSet( PAD::PTHMask() | maskPasteBits );
             }
             else
             {
                 pad->SetAttribute( PAD_ATTRIB::NPTH );
                 pad->SetNumber( wxString() );
-                pad->Padstack().SetMode( PADSTACK::MODE::NORMAL );
-                applyPadShape( pad, layerDef, F_Cu );
-                pad->SetLayerSet( LSET::AllCuMask() );
+                pad->SetLayerSet( PAD::UnplatedHoleMask() | maskPasteBits );
             }
         }
     }
@@ -661,8 +670,12 @@ void PCB_IO_PADS_BINARY::buildPad( FOOTPRINT* aFootprint, const PADS_IO::PART_DE
         pad->SetSize( F_Cu, VECTOR2I( defaultPad, defaultPad ) );
         pad->SetShape( F_Cu, PAD_SHAPE::CIRCLE );
         pad->SetAttribute( PAD_ATTRIB::PTH );
-        pad->SetLayerSet( LSET::AllCuMask() );
+        pad->SetLayerSet( PAD::PTHMask() );
     }
+
+    // An unplated hole is mechanical; joining it to a net pulls ratsnest to a mounting hole
+    if( pad->GetAttribute() == PAD_ATTRIB::NPTH )
+        return;
 
     auto netIt = m_pinToNetMap.find( aFootprint->GetReference() + wxT( "." )
                                      + PADS_COMMON::ConvertText( term.name ) );
@@ -1050,7 +1063,7 @@ void PCB_IO_PADS_BINARY::loadTracksAndVias()
 
             for( const PADS_IO::PAD_STACK_LAYER& layer : via_def.stack )
             {
-                if( layer.sizeA <= 0 )
+                if( layer.sizeA <= 0 || !PADS_IO::IsCopperPadRow( layer ) )
                     continue;
 
                 int width = scaleSize( layer.sizeA );

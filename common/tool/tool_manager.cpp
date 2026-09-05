@@ -454,7 +454,11 @@ bool TOOL_MANAGER::invokeTool( TOOL_BASE* aTool )
     wxASSERT( aTool != nullptr );
 
     TOOL_EVENT evt( TC_COMMAND, TA_ACTIVATE, aTool->GetName() );
-    evt.SetMousePosition( GetCursorPosition() );
+
+    // Attach the cursor position if there is a canvas to query
+    if( m_viewControls )
+        evt.SetMousePosition( GetCursorPosition() );
+
     processEvent( evt );
 
     if( TOOL_STATE* active = GetCurrentToolState() )
@@ -1191,11 +1195,21 @@ bool TOOL_MANAGER::processEvent( const TOOL_EVENT& aEvent )
     // the position at keypress time rather than polling a potentially stale position later in the
     // dispatch chain.  The scoped guard restores any prior value so a nested hotkey dispatch does
     // not clobber the outer position.
-    std::optional<VECTOR2D> hotKeyPos = aEvent.HasPosition() && aEvent.Action() == TA_KEY_PRESSED
-                                                ? std::make_optional( aEvent.Position() )
-                                                : m_hotKeyPos;
+    std::optional<VECTOR2D> hotKeyPos = m_hotKeyPos;
 
+    if( aEvent.HasPosition() && aEvent.Action() == TA_KEY_PRESSED )
+        hotKeyPos = aEvent.Position();
+
+    // The guard's restore vectorises into an unconditional load of the optional's payload, which
+    // GCC then reports as an uninitialized read on the disengaged path it can never observe.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
     SCOPED_SET_RESET<std::optional<VECTOR2D>> scopedHotKeyPos( m_hotKeyPos, hotKeyPos );
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic pop
+#endif
 
     // First try to dispatch the action associated with the event if it is a key press event
     bool handled = DispatchHotKey( aEvent );

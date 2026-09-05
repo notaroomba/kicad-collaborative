@@ -49,11 +49,14 @@ set( QA_PCBNEW_SRCS
     test_clip_line_to_pad.cpp
     test_clip_line_to_via.cpp
     test_component_classes.cpp
+    test_connectivity_clusters.cpp
     test_via_validation.cpp
     test_convert_tool.cpp
     test_generator_load_save.cpp
     test_glb_utils.cpp
     test_graphics_load_save.cpp
+    test_graphic_extend.cpp
+    test_graphic_trim.cpp
     test_graphics_import_mgr.cpp
     test_group_load_save.cpp
     test_group_mirror.cpp
@@ -67,6 +70,7 @@ set( QA_PCBNEW_SRCS
     test_footprint_library_adapter.cpp
     test_footprint_load_save.cpp
     test_footprint_realignment.cpp
+    test_cross_probe_selection.cpp
     test_footprint_transform_sync.cpp
     test_footprint_rescue_layer.cpp
     test_issue24735.cpp
@@ -81,6 +85,7 @@ set( QA_PCBNEW_SRCS
     test_active_layer_update.cpp
     test_line_ending_load_save.cpp
     test_lset.cpp
+    test_match_properties.cpp
     test_meander_corner_radius.cpp
     test_odb_dimension_export.cpp
     test_odb_soldermask_shape_export.cpp
@@ -125,6 +130,7 @@ set( QA_PCBNEW_SRCS
     test_pcb_grid_helper.cpp
     test_save_load.cpp
     test_stacked_pin_netlist.cpp
+    test_teardrop_shorts.cpp
     test_teardrop_uuid.cpp
     test_tracks_cleaner.cpp
     test_triangulation.cpp
@@ -139,6 +145,7 @@ set( QA_PCBNEW_SRCS
     test_zone.cpp
     test_zone_filler.cpp
     test_poly_simplify.cpp
+    test_pcb_dynamic_properties.cpp
 
     # Net chain roundtrip tests
     net_chains/test_net_chain_terminal_pads.cpp
@@ -218,12 +225,15 @@ set( QA_PCBNEW_SRCS
     drc/test_drc_creepage_issue24853.cpp
     drc/test_drc_creepage_issue24875.cpp
     drc/test_drc_creepage_issue24885.cpp
+    drc/test_drc_creepage_issue25439.cpp
+    drc/test_drc_creepage_circle_prune.cpp
     drc/test_creepage_engine_parity.cpp
     drc/test_creepage_engine_incremental.cpp
     drc/test_drc_invalid_outline_issue24078.cpp
     drc/test_drc_invalid_outline_issue24241.cpp
     drc/test_drc_silk_rule_area_issue24177.cpp
     drc/test_drc_annular_overlap_issue24340.cpp
+    drc/test_drc_via_stack.cpp
     drc/test_drc_hole_clearance_issue24355.cpp
     drc/test_drc_hole_to_hole_npth_slot_issue24541.cpp
     drc/test_drc_npth_slot_clearance_issue24799.cpp
@@ -276,6 +286,8 @@ set( QA_PCBNEW_SRCS
     pcb_io/odbpp/test_odbpp_netlist.cpp
 
     group_saveload.cpp
+    test_via_stack_saveload.cpp
+    test_via_stack_selection.cpp
 
     # Geometric constraint solver (planegcs adapter)
     constraints/test_planegcs_smoke.cpp

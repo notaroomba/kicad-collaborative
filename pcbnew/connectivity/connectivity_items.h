@@ -25,6 +25,7 @@
 #ifndef PCBNEW_CONNECTIVITY_ITEMS_H
 #define PCBNEW_CONNECTIVITY_ITEMS_H
 
+#include <geometry/rtree/packed_rtree.h>
 #include <geometry/shape_poly_set.h>
 
 #include <algorithm>
@@ -162,16 +163,12 @@ public:
      */
     void SetLayers( int aStartLayer, int aEndLayer )
     {
-        // B_Cu is nominally layer 2 but we reset it to INT_MAX to ensure that it is
-        // always greater than any other layer in the RTree
-        if( aStartLayer == B_Cu )
-            aStartLayer = std::numeric_limits<int>::max();
-
-        if( aEndLayer == B_Cu )
-            aEndLayer = std::numeric_limits<int>::max();
-
-        m_start_layer = aStartLayer;
-        m_end_layer = aEndLayer;
+        // Copper layer ids do not run in stack order, so store the ordinal.  The R-tree keys
+        // on this, and an ordinal keeps a through item's span 31 wide rather than INT_MAX
+        // wide.  A span that large overflows the int64 volume the tree splits on, which
+        // wrecks the split and leaves queries walking most of the tree.
+        m_start_layer = static_cast<int>( CopperLayerToOrdinal( ToLAYER_ID( aStartLayer ) ) );
+        m_end_layer = static_cast<int>( CopperLayerToOrdinal( ToLAYER_ID( aEndLayer ) ) );
     }
 
     /**
@@ -187,27 +184,27 @@ public:
 
     /**
      * Return the item's layer, for single-layered items only.
-     * N.B. This should only be used inside connectivity as B_Cu
-     * is mapped to a large int
+     * N.B. This is a copper layer ordinal and not a PCB_LAYER_ID.
      */
     virtual int Layer() const
     {
         return StartLayer();
     }
 
-    /**
-     * When using CN_ITEM layers to compare against board items,
-     * use this function which correctly remaps the B_Cu layer
-    */
-    PCB_LAYER_ID GetBoardLayer() const
+    ///< Convert a copper layer ordinal back to the board layer it stands for.
+    static PCB_LAYER_ID BoardLayerFromOrdinal( int aOrdinal )
     {
-        int layer = Layer();
+        if( aOrdinal <= 0 )
+            return F_Cu;
 
-        if( layer == std::numeric_limits<int>::max() )
-            layer = B_Cu;
+        if( aOrdinal >= MAX_CU_LAYERS - 1 )
+            return B_Cu;
 
-        return ToLAYER_ID( layer );
+        return ToLAYER_ID( B_Cu + 2 * aOrdinal );
     }
+
+    ///< @return the board layer of a single-layered item.
+    PCB_LAYER_ID GetBoardLayer() const { return BoardLayerFromOrdinal( Layer() ); }
 
     const BOX2I& BBox()
     {
@@ -254,6 +251,14 @@ public:
         return ( !m_parent || !m_valid ) ? -1 : m_parent->GetNetCode();
     }
 
+    /**
+     * Position of this item in its owning CN_LIST.  Maintained by the list, which is the only
+     * thing allowed to set it, so that readers -- notably SearchClusters(), which several DRC
+     * threads may be inside at once -- can map an item to an array slot without a lookup.
+     */
+    void SetListIndex( int aIndex ) { m_listIndex = aIndex; }
+    int  ListIndex() const { return m_listIndex; }
+
 protected:
     std::atomic<bool> m_dirty;       ///< used to identify recently added item not yet
                                      ///< scanned into the connectivity search
@@ -271,6 +276,8 @@ private:
 
     bool            m_valid;         ///< used to identify garbage items (we use lazy removal)
 
+    int             m_listIndex = -1;    ///< position in the owning CN_LIST, see SetListIndex()
+
     std::mutex      m_listLock;      ///< mutex protecting this item's connected_items set to
 };
 
@@ -281,6 +288,8 @@ private:
  */
 class CN_ZONE_LAYER : public CN_ITEM
 {
+    using TRI_RTREE = KIRTREE::PACKED_RTREE<const SHAPE*, int, 2>;
+
 public:
     CN_ZONE_LAYER( ZONE* aParent, PCB_LAYER_ID aLayer, int aSubpolyIndex ) :
             CN_ITEM( aParent, false ),
@@ -302,12 +311,14 @@ public:
             return;
 
         m_triangulatedPolys.clear();
-        m_rTree.RemoveAll();
+        m_rTree = TRI_RTREE();
 
         std::shared_ptr<SHAPE_POLY_SET> fillPoly = m_zone->GetFilledPolysList( m_layer );
 
         if( !fillPoly )
             return;
+
+        size_t triangleCount = 0;
 
         for( unsigned int ii = 0; ii < fillPoly->TriangulatedPolyCount(); ++ii )
         {
@@ -321,19 +332,36 @@ public:
             // triangles remain valid even if the zone is refilled on another thread.
             m_triangulatedPolys.push_back(
                     std::make_unique<SHAPE_POLY_SET::TRIANGULATED_POLYGON>( *triangleSet ) );
+
+            triangleCount += m_triangulatedPolys.back()->GetTriangleCount();
         }
+
+        // A fill is triangulated once and then only queried, so pack the index in one pass
+        // rather than run the R*-tree subtree choice once per triangle
+        TRI_RTREE::Builder builder;
+        builder.Reserve( triangleCount );
 
         for( const auto& triPoly : m_triangulatedPolys )
         {
+            const std::deque<VECTOR2I>& verts = triPoly->Vertices();
+
             for( const SHAPE_POLY_SET::TRIANGULATED_POLYGON::TRI& tri : triPoly->Triangles() )
             {
-                BOX2I     bbox = tri.BBox();
-                const int mmin[2] = { bbox.GetX(), bbox.GetY() };
-                const int mmax[2] = { bbox.GetRight(), bbox.GetBottom() };
+                const VECTOR2I& va = verts[tri.a];
+                const VECTOR2I& vb = verts[tri.b];
+                const VECTOR2I& vc = verts[tri.c];
 
-                m_rTree.Insert( mmin, mmax, &tri );
+                // The box TRI::BBox() returns, without its out-of-line virtual call
+                const int mmin[2] = { std::min( { va.x, vb.x, vc.x } ),
+                                      std::min( { va.y, vb.y, vc.y } ) };
+                const int mmax[2] = { std::max( { va.x, vb.x, vc.x } ),
+                                      std::max( { va.y, vb.y, vc.y } ) };
+
+                builder.Add( mmin, mmax, &tri );
             }
         }
+
+        m_rTree = builder.Build();
     }
 
     int SubpolyIndex() const { return m_subpolyIndex; }
@@ -433,7 +461,7 @@ private:
     SHAPE_LINE_CHAIN                    m_outline;       ///< Cached copy of the zone outline
     ///< Owned deep copies of triangulated polygons (includes vertex storage that TRI references)
     std::vector<std::unique_ptr<SHAPE_POLY_SET::TRIANGULATED_POLYGON>> m_triangulatedPolys;
-    KIRTREE::DYNAMIC_RTREE<const SHAPE*, int, 2> m_rTree;
+    TRI_RTREE                                                          m_rTree;
 };
 
 
@@ -455,7 +483,71 @@ public:
 
         m_items.clear();
         m_index.RemoveAll();
+        m_bulkAdd = false;
     }
+
+    /**
+     * Defer spatial indexing until FinishBulkAdd(), which packs the index in one pass.
+     *
+     * Only legal on an empty list, because the bulk load replaces the whole index.  Prefer
+     * BULK_ADD_SCOPE to calling this directly.
+     *
+     * @return true if the list entered bulk mode, false to keep indexing as usual.
+     */
+    bool StartBulkAdd()
+    {
+        if( !m_items.empty() || m_hasInvalid )
+            return false;
+
+        m_bulkAdd = true;
+        return true;
+    }
+
+    ///< Index everything queued since StartBulkAdd().  A no-op outside bulk mode.
+    void FinishBulkAdd()
+    {
+        if( !m_bulkAdd )
+            return;
+
+        m_bulkAdd = false;
+
+        std::vector<CN_RTREE<CN_ITEM*>::BULK_ENTRY> entries;
+        entries.reserve( m_items.size() );
+
+        for( CN_ITEM* item : m_items )
+        {
+            // BBox() clears the dirty flag that Add() deliberately leaves set
+            bool         dirty = item->Dirty();
+            const BOX2I& bbox = item->BBox();
+
+            entries.push_back( { { item->StartLayer(), bbox.GetX(), bbox.GetY() },
+                                 { item->EndLayer(), bbox.GetRight(), bbox.GetBottom() },
+                                 item } );
+
+            item->SetDirty( dirty );
+        }
+
+        m_index.BulkLoad( entries );
+    }
+
+    /**
+     * Hold bulk mode for a scope.
+     *
+     * A list left in bulk mode indexes nothing it is given afterwards, so the board comes up
+     * missing connectivity instead of failing.  Tie the exit to the scope, not to a return.
+     */
+    class BULK_ADD_SCOPE
+    {
+    public:
+        explicit BULK_ADD_SCOPE( CN_LIST& aList ) : m_list( aList ) { m_list.StartBulkAdd(); }
+        ~BULK_ADD_SCOPE() { m_list.FinishBulkAdd(); }
+
+        BULK_ADD_SCOPE( const BULK_ADD_SCOPE& ) = delete;
+        BULK_ADD_SCOPE& operator=( const BULK_ADD_SCOPE& ) = delete;
+
+    private:
+        CN_LIST& m_list;
+    };
 
     std::vector<CN_ITEM*>::iterator begin() { return m_items.begin(); };
     std::vector<CN_ITEM*>::iterator end() { return m_items.end(); };
@@ -500,7 +592,15 @@ public:
 protected:
     void addItemtoTree( CN_ITEM* item )
     {
-        m_index.Insert( item );
+        if( !m_bulkAdd )
+            m_index.Insert( item );
+    }
+
+    ///< The sole place CN_ITEM list numbering is assigned.
+    void appendItem( CN_ITEM* aItem )
+    {
+        aItem->SetListIndex( static_cast<int>( m_items.size() ) );
+        m_items.push_back( aItem );
     }
 
 protected:
@@ -509,6 +609,7 @@ protected:
 private:
     bool                  m_dirty;
     bool                  m_hasInvalid;
+    bool                  m_bulkAdd = false;   ///< see StartBulkAdd()
     CN_RTREE<CN_ITEM*>    m_index;
 };
 

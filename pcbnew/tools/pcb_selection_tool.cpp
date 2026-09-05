@@ -1003,36 +1003,26 @@ bool PCB_SELECTION_TOOL::ctrlClickHighlights()
 bool PCB_SELECTION_TOOL::selectPoint( const VECTOR2I& aWhere, bool aOnDrag, bool* aSelectionCancelledFlag,
                                       CLIENT_SELECTION_FILTER aClientFilter )
 {
-    GENERAL_COLLECTORS_GUIDE   guide = getCollectorsGuide();
-    GENERAL_COLLECTOR          collector;
-    const PCB_DISPLAY_OPTIONS& displayOpts = m_frame->GetDisplayOptions();
+    GENERAL_COLLECTOR            collector;
+    PCB_SELECTION_FILTER_OPTIONS rejected;
+    POINT_COLLECT                options;
 
-    guide.SetIgnoreZoneFills( displayOpts.m_ZoneDisplayMode != ZONE_DISPLAY_MODE::SHOW_FILLED );
+    rejected.SetAll( false );
+    options.m_OnDrag = aOnDrag;
+    options.m_SelectedOnly = m_subtractive;
+    options.m_Rejected = &rejected;
 
     if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) )
         ExitGroup();
 
-    collector.Collect( board(), m_isFootprintEditor ? GENERAL_COLLECTOR::FootprintItems
-                                                    : GENERAL_COLLECTOR::AllBoardItems,
-                       aWhere, guide );
-
-    // Remove unselectable items
-    for( int i = collector.GetCount() - 1; i >= 0; --i )
-    {
-        if( !Selectable( collector[ i ] ) || ( aOnDrag && collector[i]->IsLocked() ) )
-            collector.Remove( i );
-    }
-
     m_selection.ClearReferencePoint();
 
-    size_t preFilterCount = collector.GetCount();
-    PCB_SELECTION_FILTER_OPTIONS rejected;
-    rejected.SetAll( false );
+    if( !collectAtPoint( aWhere, collector, options, aClientFilter ) )
+        return false;
 
-    // Apply the stateful filter (remove items disabled by the Selection Filter)
-    FilterCollectedItems( collector, false, &rejected );
-
-    if( collector.GetCount() == 0 && preFilterCount > 0 )
+    // Nothing survived a filter that had something to take.  Every step after it leaves an
+    // empty collector alone, so this reads the same here as it did before them.
+    if( collector.GetCount() == 0 && options.m_PreFilterCount > 0 )
     {
         if( PCB_BASE_EDIT_FRAME* editFrame = dynamic_cast<PCB_BASE_EDIT_FRAME*>( m_frame ) )
             editFrame->HighlightSelectionFilter( rejected );
@@ -1041,44 +1031,9 @@ bool PCB_SELECTION_TOOL::selectPoint( const VECTOR2I& aWhere, bool aOnDrag, bool
         {
             ClearSelection( true /*quiet mode*/ );
             m_toolMgr->ProcessEvent( EVENTS::UnselectedEvent );
-            return false;
         }
 
         return false;
-    }
-
-    // Allow the client to do tool- or action-specific filtering to see if we can get down
-    // to a single item
-    if( aClientFilter )
-        aClientFilter( aWhere, collector, this );
-
-    FilterCollectorForHierarchy( collector, false );
-
-    FilterCollectorForFootprints( collector, aWhere );
-
-    // For subtracting, we only want items that are selected
-    if( m_subtractive )
-    {
-        for( int i = collector.GetCount() - 1; i >= 0; --i )
-        {
-            if( !collector[i]->IsSelected() )
-                collector.Remove( i );
-        }
-    }
-
-    // Apply some ugly heuristics to avoid disambiguation menus whenever possible
-    if( collector.GetCount() > 1 && !m_skip_heuristics )
-    {
-        try
-        {
-            GuessSelectionCandidates( collector, aWhere );
-        }
-        catch( const std::exception& exc )
-        {
-            wxLogWarning( wxS( "Exception '%s' occurred attempting to guess selection candidates." ),
-                          exc.what() );
-            return false;
-        }
     }
 
     // If still more than one item we're going to have to ask the user.
@@ -1479,6 +1434,12 @@ bool PCB_SELECTION_TOOL::selectTableCells( PCB_TABLE* aTable )
 
 int PCB_SELECTION_TOOL::SelectRectArea( const TOOL_EVENT& aEvent )
 {
+    return DragSelectionArea( *this );
+}
+
+
+bool PCB_SELECTION_TOOL::DragSelectionArea( TOOL_INTERACTIVE& aTool, AREA_PREVIEW aPreview )
+{
     bool cancelled = false;     // Was the tool canceled while it was running?
     m_multiple = true;          // Multiple selection mode is active
     KIGFX::VIEW*   view = getView();
@@ -1486,8 +1447,15 @@ int PCB_SELECTION_TOOL::SelectRectArea( const TOOL_EVENT& aEvent )
     KIGFX::PREVIEW::SELECTION_AREA area;
     view->Add( &area );
 
-    while( TOOL_EVENT* evt = Wait() )
+    while( TOOL_EVENT* evt = aTool.Wait() )
     {
+        // Main() is not pumping events while another tool drives this loop.  Track modifiers
+        // here.  On our own path Main() is awake and already latched them from the drag.  Per
+        // event there would drop a modifier released before the button.  Command events carry
+        // none.
+        if( &aTool != this )
+            setModifiersState( evt->Modifier( MD_SHIFT ), evt->Modifier( MD_CTRL ), evt->Modifier( MD_ALT ) );
+
         /* Selection mode depends on direction of drag-selection:
         * Left > Right : Select objects that are fully enclosed by selection
         * Right > Left : Select objects that are crossed by selection
@@ -1528,6 +1496,9 @@ int PCB_SELECTION_TOOL::SelectRectArea( const TOOL_EVENT& aEvent )
             view->SetVisible( &area, true );
             view->Update( &area );
             getViewControls()->SetAutoPan( true );
+
+            if( aPreview )
+                aPreview( area );
         }
 
         if( evt->IsMouseUp( BUT_LEFT ) )
@@ -1678,13 +1649,87 @@ int PCB_SELECTION_TOOL::SelectPolyArea( const TOOL_EVENT& aEvent )
 }
 
 
-void PCB_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, bool aSubtractive,
-                                         bool aExclusiveOr )
+bool PCB_SELECTION_TOOL::collectAtPoint( const VECTOR2I& aWhere, GENERAL_COLLECTOR& aCollector,
+                                        POINT_COLLECT& aOptions, CLIENT_SELECTION_FILTER aClientFilter )
+{
+    GENERAL_COLLECTORS_GUIDE   guide = getCollectorsGuide();
+    const PCB_DISPLAY_OPTIONS& displayOpts = m_frame->GetDisplayOptions();
+
+    // Without this a zone's fill answers for every point inside it, and nothing on top of a
+    // zone can ever be picked.
+    guide.SetIgnoreZoneFills( displayOpts.m_ZoneDisplayMode != ZONE_DISPLAY_MODE::SHOW_FILLED );
+
+    aCollector.Collect( board(), m_isFootprintEditor ? GENERAL_COLLECTOR::FootprintItems
+                                                     : GENERAL_COLLECTOR::AllBoardItems,
+                        aWhere, guide );
+
+    for( int i = aCollector.GetCount() - 1; i >= 0; --i )
+    {
+        if( !Selectable( aCollector[i] ) || ( aOptions.m_OnDrag && aCollector[i]->IsLocked() ) )
+            aCollector.Remove( i );
+    }
+
+    aOptions.m_PreFilterCount = aCollector.GetCount();
+
+    FilterCollectedItems( aCollector, false, aOptions.m_Rejected );
+
+    // Narrow to what the caller can use before the heuristics run, so that they choose among
+    // usable items rather than picking one the caller then has to throw away.
+    if( aClientFilter )
+        aClientFilter( aWhere, aCollector, this );
+
+    FilterCollectorForHierarchy( aCollector, false );
+    FilterCollectorForFootprints( aCollector, aWhere );
+
+    if( aOptions.m_SelectedOnly )
+    {
+        for( int i = aCollector.GetCount() - 1; i >= 0; --i )
+        {
+            if( !aCollector[i]->IsSelected() )
+                aCollector.Remove( i );
+        }
+    }
+
+    // Apply some ugly heuristics to avoid disambiguation menus whenever possible
+    if( aCollector.GetCount() > 1 && !m_skip_heuristics )
+    {
+        try
+        {
+            GuessSelectionCandidates( aCollector, aWhere );
+        }
+        catch( const std::exception& exc )
+        {
+            wxLogWarning( wxS( "Exception '%s' occurred attempting to guess selection candidates." ),
+                          exc.what() );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+std::vector<BOARD_ITEM*> PCB_SELECTION_TOOL::CollectPoint( const VECTOR2I&         aWhere,
+                                                           CLIENT_SELECTION_FILTER aClientFilter )
+{
+    GENERAL_COLLECTOR collector;
+    POINT_COLLECT     options;
+
+    // A hover shows what it can even when the heuristics gave up narrowing.
+    collectAtPoint( aWhere, collector, options, aClientFilter );
+
+    std::vector<BOARD_ITEM*> items;
+
+    for( int i = 0; i < collector.GetCount(); ++i )
+        items.push_back( collector[i] );
+
+    return items;
+}
+
+
+std::vector<BOARD_ITEM*> PCB_SELECTION_TOOL::CollectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea )
 {
     KIGFX::VIEW* view = getView();
-
-    bool anyAdded = false;
-    bool anySubtracted = false;
 
     SELECTION_MODE selectionMode = aArea.GetMode();
     bool containedMode = (    selectionMode == SELECTION_MODE::INSIDE_RECTANGLE
@@ -1784,13 +1829,26 @@ void PCB_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
                    return aPos.y < bPos.y;
                } );
 
+    std::vector<BOARD_ITEM*> items;
+
     for( EDA_ITEM* i : collector )
     {
-        if( !i->IsBOARD_ITEM() )
-            continue;
+        if( i->IsBOARD_ITEM() )
+            items.push_back( static_cast<BOARD_ITEM*>( i ) );
+    }
 
-        BOARD_ITEM* item = static_cast<BOARD_ITEM*>( i );
+    return items;
+}
 
+
+void PCB_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, bool aSubtractive,
+                                         bool aExclusiveOr )
+{
+    bool anyAdded = false;
+    bool anySubtracted = false;
+
+    for( BOARD_ITEM* item : CollectMultiple( aArea ) )
+    {
         if( aSubtractive || ( aExclusiveOr && item->IsSelected() ) )
         {
             unselect( item );
@@ -2361,7 +2419,7 @@ void PCB_SELECTION_TOOL::selectAllConnectedTracks( const std::vector<BOARD_CONNE
     for( BOARD_CONNECTED_ITEM* startItem : aStartItems )
     {
         std::map<VECTOR2I, std::vector<PCB_TRACK*>> trackMap;
-        std::map<VECTOR2I, PCB_VIA*>                viaMap;
+        std::map<VECTOR2I, std::vector<PCB_VIA*>>   viaMap;
         std::map<VECTOR2I, PAD*>                    padMap;
         std::map<VECTOR2I, std::vector<PCB_SHAPE*>> shapeMap;
         std::vector<std::pair<VECTOR2I, LSET>>      activePts;
@@ -2388,7 +2446,10 @@ void PCB_SELECTION_TOOL::selectAllConnectedTracks( const std::vector<BOARD_CONNE
             case PCB_VIA_T:
             {
                 PCB_VIA* via = static_cast<PCB_VIA*>( item );
-                viaMap[via->GetStart()] = via;
+
+                // The hops of a stacked microvia stack are coaxial, so one position can hold
+                // several vias.
+                viaMap[via->GetStart()].push_back( via );
                 break;
             }
 
@@ -2464,40 +2525,63 @@ void PCB_SELECTION_TOOL::selectAllConnectedTracks( const std::vector<BOARD_CONNE
 
                 PCB_VIA* hitVia = nullptr;
 
+                // Prefer an unvisited via so a stack is walked hop by hop.
+                auto better = [&]( PCB_VIA* aCandidate )
+                {
+                    return !hitVia || ( hitVia->HasFlag( SKIP_STRUCT ) && !aCandidate->HasFlag( SKIP_STRUCT ) );
+                };
+
+                // An unvisited hit is the best there is, so stop looking for one.
+                auto settled = [&]()
+                {
+                    return hitVia && !hitVia->HasFlag( SKIP_STRUCT );
+                };
+
                 // exact position match (common case)
                 auto exactIt = viaMap.find( pt );
 
-                if( exactIt != viaMap.end() && ( exactIt->second->GetLayerSet() & layerSetCu ).any() )
+                if( exactIt != viaMap.end() )
                 {
-                    hitVia = exactIt->second;
+                    for( PCB_VIA* via : exactIt->second )
+                    {
+                        if( ( via->GetLayerSet() & layerSetCu ).any() && better( via ) )
+                            hitVia = via;
+
+                        if( settled() )
+                            break;
+                    }
                 }
-                else
+
+                if( !hitVia )
                 {
                     // off-center VIA connection
-                    for( auto& [pos, via] : viaMap )
+                    for( auto& [pos, vias] : viaMap )
                     {
-                        if( !( via->GetLayerSet() & layerSetCu ).any() )
-                            continue;
-
-                        bool hit = false;
-
-                        for( PCB_LAYER_ID layer : LSET( via->GetLayerSet() & layerSetCu ).CuStack() )
+                        for( PCB_VIA* via : vias )
                         {
-                            int     radius = via->GetWidth( layer ) / 2;
-                            int64_t radiusSq = static_cast<int64_t>( radius ) * radius;
+                            if( !( via->GetLayerSet() & layerSetCu ).any() || !better( via ) )
+                                continue;
 
-                            if( ( pt - pos ).SquaredEuclideanNorm() <= radiusSq )
+                            for( PCB_LAYER_ID layer : LSET( via->GetLayerSet() & layerSetCu ).CuStack() )
                             {
-                                hit = true;
-                                break;
+                                int     radius = via->GetWidth( layer ) / 2;
+                                int64_t radiusSq = static_cast<int64_t>( radius ) * radius;
+
+                                if( ( pt - pos ).SquaredEuclideanNorm() <= radiusSq )
+                                {
+                                    hitVia = via;
+                                    break;
+                                }
                             }
+
+                            if( settled() )
+                                break;
                         }
 
-                        if( hit )
-                        {
-                            hitVia = via;
+                        // The walk reaches the next hop by re-opening this position, so there is
+                        // no reason to keep scanning once something covers the point.
+                        if( hitVia )
                             break;
-                        }
                     }
                 }
 
@@ -2660,6 +2744,9 @@ void PCB_SELECTION_TOOL::selectAllConnectedTracks( const std::vector<BOARD_CONNE
                             if( inside )
                                 activePts.push_back( { trkPt, hitVia->GetLayerSet() } );
                         }
+
+                        // Re-open this position so the next hop of a stack is found.
+                        activePts.push_back( { viaPos, hitVia->GetLayerSet() } );
 
                         if( aStopCondition != STOP_AT_SEGMENT )
                             expand = true;
@@ -2845,10 +2932,9 @@ int PCB_SELECTION_TOOL::selectUnconnected( const TOOL_EVENT& aEvent )
 
 int PCB_SELECTION_TOOL::grabUnconnected( const TOOL_EVENT& aEvent )
 {
-    PCB_SELECTION originalSelection = m_selection;
-
     // Get all connected items that can represent the source side of the ratsnest.
     std::vector<BOARD_CONNECTED_ITEM*> sourceItems;
+    std::vector<FOOTPRINT*>            nearestFootprints;
 
     for( EDA_ITEM* item : m_selection.GetItems() )
     {
@@ -2862,8 +2948,6 @@ int PCB_SELECTION_TOOL::grabUnconnected( const TOOL_EVENT& aEvent )
             sourceItems.push_back( connItem );
         }
     }
-
-    ClearSelection();
 
     std::shared_ptr<CONNECTIVITY_DATA> conn = board()->GetConnectivity();
     std::shared_ptr<CN_CONNECTIVITY_ALGO> connAlgo = conn->GetConnectivityAlgo();
@@ -2936,8 +3020,16 @@ int PCB_SELECTION_TOOL::grabUnconnected( const TOOL_EVENT& aEvent )
         }
 
         if( nearest != nullptr )
-            select( nearest );
+            nearestFootprints.push_back( nearest );
     }
+
+    if( nearestFootprints.empty() )
+        return 0;
+
+    ClearSelection();
+
+    for( FOOTPRINT* footprint : nearestFootprints )
+        select( footprint );
 
     m_toolMgr->RunAction( PCB_ACTIONS::moveIndividually );
 

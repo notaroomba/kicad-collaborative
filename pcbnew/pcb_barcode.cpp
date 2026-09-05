@@ -206,6 +206,7 @@ void PCB_BARCODE::Serialize( google::protobuf::Any& aContainer ) const
     barcode.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                    : kiapi::common::types::LockedState::LS_UNLOCKED );
 
+    kiapi::common::PackCustomProperties( barcode.mutable_custom_properties(), *this );
     aContainer.PackFrom( barcode );
 }
 
@@ -270,6 +271,8 @@ bool PCB_BARCODE::Deserialize( const google::protobuf::Any& aContainer )
     m_margin = kiapi::common::UnpackVector2( barcode.knockout_margin() );
     BOARD_ITEM::SetIsKnockout( barcode.knockout() );
     SetLocked( barcode.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+
+    kiapi::common::UnpackCustomProperties( barcode.custom_properties(), *this );
 
     AssembleBarcode();
 
@@ -469,6 +472,9 @@ void PCB_BARCODE::AssembleBarcode() const
 
 void PCB_BARCODE::ComputeTextPoly() const
 {
+    if( !m_cache )
+        m_cache = std::make_unique<PCB_BARCODE_CACHE>();
+
     m_cache->textPoly.RemoveAllContours();
 
     if( !m_text.IsVisible() )
@@ -515,6 +521,9 @@ void PCB_BARCODE::ComputeTextPoly() const
 
 void PCB_BARCODE::ComputeBarcode() const
 {
+    if( !m_cache )
+        m_cache = std::make_unique<PCB_BARCODE_CACHE>();
+
     m_cache->symbolPoly.RemoveAllContours();
     m_cache->lastError.clear();
 
@@ -918,6 +927,7 @@ void PCB_BARCODE::swapData( BOARD_ITEM* aImage )
     std::swap( m_libAngle, other->m_libAngle );
     std::swap( m_errorCorrection, other->m_errorCorrection );
     std::swap( m_cache, other->m_cache );
+    std::swap( m_customProperties, other->m_customProperties );
 
     m_text.SetParent( this );
     other->m_text.SetParent( other );
@@ -1053,7 +1063,7 @@ static struct PCB_BARCODE_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, bool>( _HKI( "Show Text" ),
                     &PCB_BARCODE::SetShowText, &PCB_BARCODE::GetShowText ),
-                    groupBarcode );
+                    groupBarcode ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, int>( _HKI( "Text Size" ),
                     &PCB_BARCODE::SetTextSize, &PCB_BARCODE::GetTextSize, PROPERTY_DISPLAY::PT_COORD ),
@@ -1061,11 +1071,11 @@ static struct PCB_BARCODE_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, int>( _HKI( "Width" ),
                     &PCB_BARCODE::SetBarcodeWidth, &PCB_BARCODE::GetWidth, PROPERTY_DISPLAY::PT_COORD ),
-                    groupBarcode );
+                    groupBarcode ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, int>( _HKI( "Height" ),
                     &PCB_BARCODE::SetBarcodeHeight, &PCB_BARCODE::GetHeight, PROPERTY_DISPLAY::PT_COORD ),
-                    groupBarcode );
+                    groupBarcode ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, double>( _HKI( "Orientation" ),
                     &PCB_BARCODE::SetOrientation, &PCB_BARCODE::GetOrientation ),
@@ -1106,7 +1116,7 @@ static struct PCB_BARCODE_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, bool>( _HKI( "Knockout" ),
                     &PCB_BARCODE::SetIsKnockout, &PCB_BARCODE::IsKnockout ),
-                    groupBarcode );
+                    groupBarcode ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_BARCODE, int>( _HKI( "Margin X" ),
                     &PCB_BARCODE::SetMarginX, &PCB_BARCODE::GetMarginX, PROPERTY_DISPLAY::PT_COORD ),

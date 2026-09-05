@@ -35,6 +35,8 @@ message SchematicField
   bool show_name = 5;
   bool allow_auto_place = 6;
   bool is_private = 7;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 8;
 }
 
 enum SchematicLineType
@@ -56,6 +58,8 @@ message SchematicLine
   kiapi.common.types.LockedState locked = 6;
   kiapi.common.types.LineEnding start_ending = 7;
   kiapi.common.types.LineEnding end_ending   = 8;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 9;
 }
 
 message Junction
@@ -65,6 +69,8 @@ message Junction
   kiapi.common.types.Distance diameter = 3;
   kiapi.common.types.Color color = 4;
   kiapi.common.types.LockedState locked = 5;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 6;
 }
 
 message NoConnectMarker
@@ -73,6 +79,8 @@ message NoConnectMarker
   kiapi.common.types.Vector2 position = 2;
   kiapi.common.types.Distance size = 3;
   kiapi.common.types.LockedState locked = 4;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 5;
 }
 
 enum BusEntryType
@@ -90,6 +98,8 @@ message BusEntry
   kiapi.common.types.StrokeAttributes stroke = 4;
   kiapi.common.types.LockedState locked = 5;
   BusEntryType type = 6;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
 }
 
 message SchematicText
@@ -98,6 +108,8 @@ message SchematicText
   kiapi.common.types.Text text = 2;
   kiapi.common.types.LockedState locked = 3;
   bool exclude_from_sim = 4;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 5;
 }
 
 message SchematicTextBox
@@ -111,6 +123,8 @@ message SchematicTextBox
   kiapi.common.types.Distance margin_top = 7;
   kiapi.common.types.Distance margin_right = 8;
   kiapi.common.types.Distance margin_bottom = 9;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 10;
 }
 
 message SchematicGraphicShape
@@ -118,6 +132,8 @@ message SchematicGraphicShape
   kiapi.common.types.GraphicShape shape = 1;
   kiapi.common.types.KIID id = 2;
   kiapi.common.types.LockedState locked = 3;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 4;
 }
 
 message SchematicImage
@@ -128,6 +144,8 @@ message SchematicImage
   kiapi.common.types.Ratio image_scale = 4;
   bytes image_data = 5;
   kiapi.common.types.LockedState locked = 6;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
 }
 
 enum SchematicLabelShape
@@ -162,6 +180,8 @@ message LocalLabel
   repeated SchematicField fields = 5;
   kiapi.common.types.LockedState locked = 6;
   bool fields_autoplaced = 7;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 8;
 }
 
 message GlobalLabel
@@ -175,6 +195,8 @@ message GlobalLabel
   kiapi.common.types.LockedState locked = 7;
   SchematicField intersheet_refs_field = 8;
   bool fields_autoplaced = 9;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 10;
 }
 
 message HierarchicalLabel
@@ -187,6 +209,8 @@ message HierarchicalLabel
   repeated SchematicField fields = 6;
   kiapi.common.types.LockedState locked = 7;
   bool fields_autoplaced = 8;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 9;
 }
 
 message DirectiveLabel
@@ -201,6 +225,8 @@ message DirectiveLabel
   kiapi.common.types.Distance pin_length = 8;
   kiapi.common.types.Distance symbol_size = 9;
   bool fields_autoplaced = 10;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 11;
 }
 
 message Group
@@ -209,6 +235,8 @@ message Group
   string name = 2;
   repeated kiapi.common.types.KIID items = 3;
   kiapi.common.types.LockedState locked = 4;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 5;
 }
 
 message SchematicRuleArea
@@ -221,6 +249,8 @@ message SchematicRuleArea
   bool exclude_from_bom = 5;
   bool exclude_from_board = 6;
   bool dnp = 7;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 8;
 }
 
 enum SheetSide
@@ -255,17 +285,27 @@ message SheetSymbol
   SchematicField filename_field = 8;
   repeated SchematicField user_fields = 9;
   repeated SheetPin pins = 10;
+
+  // attributes shared by every instance of this sheet
   bool exclude_from_sim = 11;
   bool exclude_from_bom = 12;
   bool exclude_from_board = 13;
   bool dnp = 14;
 
-  // For existing sheets, gives the path to the subsheet instance.  Leave blank for new sheets.
+  // The sheet that contains this instance.
+  //
+  // On a create or update request the targeted sheet comes from the request header, and this
+  // field reports the sheet the returned instance was read from.
   kiapi.common.types.SheetPath path = 15;
 
   // Page numbers in KiCad are arbitrary user data and don't have to be numeric
   string page_number = 16;
   bool fields_autoplaced = 17;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 18;
+
+  // The variants carried by this instance.
+  SheetVariants variants = 19;
 }
 
 enum SchematicSymbolType
@@ -335,6 +375,8 @@ message SchematicPin
 
   repeated SchematicPinAlternate alternates = 12;
   optional string active_alternate = 13;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 14;
 }
 
 message SchematicSymbolUnit
@@ -371,15 +413,50 @@ message SchematicSymbolAttributes
   bool do_not_populate = 5;
 }
 
-// Data that can change between design variants
+// What one design variant changes about a placed symbol.
 message SchematicSymbolVariant
 {
   string name = 1;
-  string description = 2;
 
+  // override description for this variant
+  optional string description = 2;
+
+  // complete set of attributes for a symbol with this variant
   SchematicSymbolAttributes attributes = 3;
 
+  // The fields this variant overrides, keyed by field name.  Fields left out resolve to the
+  // symbol's own value.
   map<string, string> fields = 4;
+}
+
+// All variants for a symbol
+message SchematicSymbolVariants
+{
+  repeated SchematicSymbolVariant variants = 1;
+}
+
+// What one design variant changes about a placed sheet.
+message SheetVariant
+{
+  string name = 1;
+
+  // The variant's description override
+  optional string description = 2;
+
+  // The attributes in effect for this variant.
+  optional bool exclude_from_sim = 3;
+  optional bool exclude_from_bom = 4;
+  optional bool dnp = 5;
+
+  // The fields this variant overrides, keyed by field name.
+  map<string, string> fields = 6;
+}
+
+// The complete set of variants carried by one instance of a sheet.  Update semantics match
+// SchematicSymbolVariants.
+message SheetVariants
+{
+  repeated SheetVariant variants = 1;
 }
 
 message PinMapEntry
@@ -505,6 +582,9 @@ message SchematicSymbolInstance
   // Symbol instances may refer to the same graphical symbol from multiple different sheets
   // in a hierarchical schematic.  Each instance will have its own reference designator, and
   // may also have a different selected unit and other attributes.
+  //
+  // On a create or update request the targeted sheet comes from the request header, and this
+  // field reports the sheet the returned instance was read from.
   kiapi.common.types.SheetPath path = 2;
 
   kiapi.common.types.Vector2 position = 3;
@@ -519,6 +599,8 @@ message SchematicSymbolInstance
   SchematicField datasheet_field = 10;
   SchematicField description_field = 11;
 
+  // The attributes of the default variant, shared by every instance of this symbol.  Give one
+  // instance its own attributes through a named variant instead.
   SchematicSymbolAttributes attributes = 12;
 
   SchematicSymbolUnit unit = 13;
@@ -527,7 +609,7 @@ message SchematicSymbolInstance
   bool show_pin_numbers = 16;
   kiapi.common.types.Distance pin_name_offset = 17;
 
-  repeated SchematicSymbolVariant variants = 18;
+  reserved 18;   // repeated SchematicSymbolVariant, superseded by the SchematicSymbolVariants set
 
   repeated SchematicField user_fields = 19;
   PinMapInstanceOverride pin_map_override = 20;
@@ -537,6 +619,11 @@ message SchematicSymbolInstance
   string lib_name = 22;
 
   SchematicPassthroughMode passthrough = 23;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 24;
+
+  // The variants carried by this instance.
+  SchematicSymbolVariants variants = 25;
 }
 
 message SheetInstance
@@ -568,6 +655,8 @@ message SchematicTableCell
   SchematicTextBox text_box = 1;
   int32 column_span = 2;
   int32 row_span = 3;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 4;
 }
 
 enum TableStrokeMode
@@ -596,4 +685,6 @@ message SchematicTable
   TableStrokeMode row_separators = 10;
   TableStrokeMode column_separators = 11;
   kiapi.common.types.StrokeAttributes separators_stroke = 12;
+
+  repeated kiapi.common.types.CustomProperty custom_properties = 13;
 }

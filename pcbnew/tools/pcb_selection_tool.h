@@ -62,6 +62,9 @@ namespace KIGFX
 class PCB_SELECTION_TOOL : public SELECTION_TOOL
 {
 public:
+    /// Called with the drag box every time it changes, before anything is selected.
+    using AREA_PREVIEW = std::function<void( KIGFX::PREVIEW::SELECTION_AREA& aArea )>;
+
     PCB_SELECTION_TOOL();
     ~PCB_SELECTION_TOOL();
 
@@ -126,12 +129,44 @@ public:
     int SelectRectArea( const TOOL_EVENT& aEvent );
 
     /**
+     * Drive the rectangle drag-selection loop from another tool's event loop.
+     *
+     * Wait() suspends the coroutine of the tool it is invoked on, so a tool that owns the
+     * event stream must pump this loop itself rather than call SelectRectArea().
+     *
+     * @param aTool is the tool currently owning the event stream.
+     * @param aPreview is called with the box each time it changes.
+     * @return true if the operation was canceled (i.e. a CancelEvent was received).
+     */
+    bool DragSelectionArea( TOOL_INTERACTIVE& aTool, AREA_PREVIEW aPreview = nullptr );
+
+    /**
      * Handles drawing a lasso selection area that allows multiple items to be selected
      * simultaneously.
      *
      * @return true if the operation was canceled (i.e. a CancelEvent was received).
      */
     int SelectPolyArea( const TOOL_EVENT& aEvent );
+
+    /**
+     * The items a click at aWhere would consider, best first.
+     *
+     * Runs the same guide, filters and heuristics as selectPoint() but changes nothing, so a
+     * tool that shows what a click would take cannot drift from what it does.
+     *
+     * @param aWhere is the point to test, in board coordinates.
+     * @param aClientFilter narrows the candidates before the heuristics run.
+     */
+    std::vector<BOARD_ITEM*> CollectPoint( const VECTOR2I& aWhere,
+                                           CLIENT_SELECTION_FILTER aClientFilter = nullptr );
+
+    /**
+     * The items a drag over aArea would take, in the order SelectMultiple() would take them.
+     *
+     * Splitting this out keeps a live drag preview honest: whatever shows this way is what the
+     * mouse-up actually selects, however the group, pad and hierarchy filters fall.
+     */
+    std::vector<BOARD_ITEM*> CollectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea );
 
     /**
      * Selects multiple PCB items within a specified area.
@@ -351,6 +386,30 @@ private:
     bool selectPoint( const VECTOR2I& aWhere, bool aOnDrag = false,
                       bool* aSelectionCancelledFlag = nullptr,
                       CLIENT_SELECTION_FILTER aClientFilter = nullptr );
+
+    /// What one point collection needs beyond the point, and the one count it reports back.
+    struct POINT_COLLECT
+    {
+        bool                          m_OnDrag = false;        ///< Locked items cannot be dragged.
+        bool                          m_SelectedOnly = false;  ///< Subtracting takes only selected.
+        PCB_SELECTION_FILTER_OPTIONS* m_Rejected = nullptr;    ///< What the Selection Filter took.
+        size_t                        m_PreFilterCount = 0;    ///< Count before that filter, out.
+    };
+
+    /**
+     * Collect the items at aWhere and narrow them the way a click does.
+     *
+     * Shared by selectPoint() and CollectPoint() so that what a hover shows and what a click
+     * takes cannot drift apart.
+     *
+     * @param aWhere is the point to test, in board coordinates.
+     * @param aCollector receives the surviving candidates, best first.
+     * @param aOptions carries the caller's variations and returns the pre-filter count.
+     * @param aClientFilter narrows the candidates before the heuristics run.
+     * @return false if the disambiguation heuristics threw.
+     */
+    bool collectAtPoint( const VECTOR2I& aWhere, GENERAL_COLLECTOR& aCollector,
+                         POINT_COLLECT& aOptions, CLIENT_SELECTION_FILTER aClientFilter );
 
     /**
      * Select an item under the cursor unless there is something already selected.

@@ -378,7 +378,8 @@ ZONE_FILLER::ZONE_FILLER( BOARD* aBoard, COMMIT* aCommit ) :
         m_brdOutlinesValid( false ),
         m_commit( aCommit ),
         m_progressReporter( nullptr ),
-        m_worstClearance( 0 )
+        m_worstClearance( 0 ),
+        m_maxZoneCornerRadius( 0 )
 {
     m_maxError = aBoard->GetDesignSettings().m_MaxError;
     m_zoneKnockoutSlack = pcbIUScale.mmToIU( ADVANCED_CFG::GetCfg().m_ExtraClearance ) + m_maxError;
@@ -396,6 +397,150 @@ ZONE_FILLER::~ZONE_FILLER()
 void ZONE_FILLER::SetProgressReporter( PROGRESS_REPORTER* aReporter )
 {
     m_progressReporter = aReporter;
+}
+
+
+void ZONE_FILLER::queryIndex( const ITEM_RTREE& aIndex, const BOX2I& aBBox,
+                              std::vector<INDEXED_ITEM>& aResult )
+{
+    aResult.clear();
+
+    if( aIndex.empty() )
+        return;
+
+    const int min[2] = { aBBox.GetLeft(), aBBox.GetTop() };
+    const int max[2] = { aBBox.GetRight(), aBBox.GetBottom() };
+
+    auto visitor =
+            [&]( const INDEXED_ITEM& aEntry ) -> bool
+            {
+                aResult.push_back( aEntry );
+                return true;
+            };
+
+    aIndex.Search( min, max, visitor );
+
+    std::sort( aResult.begin(), aResult.end(),
+               []( const INDEXED_ITEM& a, const INDEXED_ITEM& b )
+               {
+                   return a.m_seq < b.m_seq;
+               } );
+}
+
+
+void ZONE_FILLER::buildItemIndexes()
+{
+    auto add =
+            []( ITEM_RTREE::Builder& aBuilder, BOARD_ITEM* aItem, FOOTPRINT* aOwner, int aSeq )
+            {
+                BOX2I     bbox = aItem->GetBoundingBox();
+                const int min[2] = { bbox.GetLeft(), bbox.GetTop() };
+                const int max[2] = { bbox.GetRight(), bbox.GetBottom() };
+
+                aBuilder.Add( min, max, INDEXED_ITEM{ aItem, aOwner, aSeq } );
+            };
+
+    m_maxZoneCornerRadius = 0;
+
+    forEachBoardAndFootprintZone( m_board,
+                                  [&]( ZONE* zone )
+                                  {
+                                      m_maxZoneCornerRadius = std::max( m_maxZoneCornerRadius,
+                                                                        (int) zone->GetCornerRadius() );
+                                  } );
+
+    ITEM_RTREE::Builder graphics;
+    ITEM_RTREE::Builder footprints;
+    ITEM_RTREE::Builder pads;
+    int                 seq = 0;
+    int                 padSeq = 0;
+
+    // Keep the walk order of the linear scans this replaces.
+    for( FOOTPRINT* footprint : m_board->Footprints() )
+    {
+        add( footprints, footprint, footprint, seq );
+        add( graphics, &footprint->Reference(), footprint, seq++ );
+        add( graphics, &footprint->Value(), footprint, seq++ );
+
+        for( BOARD_ITEM* item : footprint->GraphicalItems() )
+            add( graphics, item, footprint, seq++ );
+
+        for( PAD* pad : footprint->Pads() )
+            add( pads, pad, footprint, padSeq++ );
+    }
+
+    for( BOARD_ITEM* item : m_board->Drawings() )
+        add( graphics, item, nullptr, seq++ );
+
+    m_graphicIndex = graphics.Build();
+    m_footprintIndex = footprints.Build();
+    m_padIndex = pads.Build();
+
+    LSET boardCu = LSET::AllCuMask( m_board->GetCopperLayerCount() );
+
+    std::map<PCB_LAYER_ID, ITEM_RTREE::Builder> tracks;
+    seq = 0;
+
+    for( PCB_TRACK* track : m_board->Tracks() )
+    {
+        LSET trackLayers = track->GetLayerSet() & boardCu;
+
+        for( PCB_LAYER_ID layer : trackLayers )
+            add( tracks[layer], track, nullptr, seq );
+
+        seq++;
+    }
+
+    m_trackIndex.clear();
+
+    for( auto& [layer, builder] : tracks )
+        m_trackIndex.emplace( layer, builder.Build() );
+
+    std::map<PCB_LAYER_ID, ITEM_RTREE::Builder> zones;
+    seq = 0;
+
+    forEachBoardAndFootprintZone( m_board,
+                                  [&]( ZONE* zone )
+                                  {
+                                      for( PCB_LAYER_ID layer : zone->GetLayerSet() )
+                                          add( zones[layer], zone, nullptr, seq );
+
+                                      seq++;
+                                  } );
+
+    m_zoneIndex.clear();
+
+    for( auto& [layer, builder] : zones )
+        m_zoneIndex.emplace( layer, builder.Build() );
+}
+
+
+bool ZONE_FILLER::mayHoldOutOfBoardCopper( const ZONE* aZone ) const
+{
+    if( !m_brdOutlinesValid )
+        return true;
+
+    // BuildSmoothedPoly() clips to the board outline and then smooths, and it closes against the
+    // zone extents. Only a chamfer or a fillet can put copper back outside the edge.
+    if( aZone->IsTeardropArea() )
+        return false;
+
+    return aZone->GetCornerSmoothingType() == ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER
+           || aZone->GetCornerSmoothingType() == ZONE_SETTINGS::CORNER_SMOOTHING::FILLET;
+}
+
+
+BOX2I ZONE_FILLER::zoneKnockoutQueryBox( const ZONE* aZone ) const
+{
+    // The candidate corner radius is unknown here, so use the board maximum.
+    int reach = m_worstClearance + m_zoneKnockoutSlack + aZone->GetMinThickness();
+
+    if( m_board->GetDesignSettings().m_ZoneKeepExternalFillets )
+        reach += (int) aZone->GetCornerRadius() + m_maxZoneCornerRadius;
+
+    BOX2I bbox = aZone->GetBoundingBox();
+    bbox.Inflate( reach );
+    return bbox;
 }
 
 
@@ -527,6 +672,8 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
         footprint->BuildCourtyardCaches();
         footprint->BuildNetTieCache();
     }
+
+    buildItemIndexes();
 
     LSET boardCuMask = LSET::AllCuMask( m_board->GetCopperLayerCount() );
 
@@ -768,8 +915,9 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
 
             // Copper-thieving fills are intentionally disconnected stamps; do not
             // track them through the isolated-islands pass or every stamp gets
-            // classified as removable.
-            if( !zone->IsCopperThieving() )
+            // classified as removable.  A teardrop sits on the track and pad it fillets, so it
+            // is connected by construction and is ISLAND_REMOVAL_MODE::NEVER.
+            if( !zone->IsCopperThieving() && !zone->IsTeardropArea() )
                 isolatedIslandsMap[zone][layer] = ISOLATED_ISLANDS();
         }
 
@@ -891,17 +1039,26 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                 // Skip the O(N²) dependency scan when the caller guarantees no deps.
                 if( aAnyDependencies )
                 {
-                    for( size_t i = 0; i < count; ++i )
-                    {
-                        for( size_t j = 0; j < count; ++j )
-                        {
-                            if( i == j )
-                                continue;
+                    // Two items can only depend on each other on a shared layer.
+                    std::map<PCB_LAYER_ID, std::vector<size_t>> byLayer;
 
-                            if( aHasDependency( aFillItems[j], aFillItems[i] ) )
+                    for( size_t i = 0; i < count; ++i )
+                        byLayer[aFillItems[i].second].push_back( i );
+
+                    for( const auto& [layer, items] : byLayer )
+                    {
+                        for( size_t i : items )
+                        {
+                            for( size_t j : items )
                             {
-                                successors[i].push_back( j );
-                                inDegree[j].fetch_add( 1, std::memory_order_relaxed );
+                                if( i == j )
+                                    continue;
+
+                                if( aHasDependency( aFillItems[j], aFillItems[i] ) )
+                                {
+                                    successors[i].push_back( j );
+                                    inDegree[j].fetch_add( 1, std::memory_order_relaxed );
+                                }
                             }
                         }
                     }
@@ -909,7 +1066,25 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
 
                 std::atomic<int> remaining( (int) count );
 
+                // This fill's own outstanding tasks.  The wrapper decrements rather than
+                // process() so that process() has unwound before the count can reach zero.
+                std::atomic<int> inFlight( 0 );
+
                 std::function<void( size_t )> process;
+
+                auto dispatch =
+                        [&]( size_t idx )
+                        {
+                            inFlight.fetch_add( 1, std::memory_order_relaxed );
+
+                            tp.detach_task(
+                                    [&process, &inFlight, idx]()
+                                    {
+                                        process( idx );
+                                        inFlight.fetch_sub( 1, std::memory_order_acq_rel );
+                                    } );
+                        };
+
                 process =
                         [&]( size_t idx )
                         {
@@ -919,7 +1094,7 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                             for( size_t succ : successors[idx] )
                             {
                                 if( inDegree[succ].fetch_sub( 1, std::memory_order_acq_rel ) == 1 )
-                                    tp.detach_task( [&process, succ]() { process( succ ); } );
+                                    dispatch( succ );
                             }
 
                             if( filled != 0 && !cancelled.load() )
@@ -928,12 +1103,17 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                             remaining.fetch_sub( 1, std::memory_order_acq_rel );
                         };
 
-                // Seed the pool with every dependency-free item.
+                std::vector<size_t> roots;
+
+                // Avoid decrementing while loading to prevnt double-decrement
                 for( size_t i = 0; i < count; ++i )
                 {
                     if( inDegree[i].load( std::memory_order_relaxed ) == 0 )
-                        tp.detach_task( [&process, i]() { process( i ); } );
+                        roots.push_back( i );
                 }
+
+                for( size_t idx : roots )
+                    dispatch( idx );
 
                 // Drain the DAG, keeping the UI responsive and honoring cancellation.
                 while( remaining.load( std::memory_order_acquire ) > 0 )
@@ -952,8 +1132,9 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                 // remaining hits zero inside the final task, before it has unwound.  The detached
                 // tasks capture process/successors/inDegree by reference, so we must let every
                 // worker fully exit before those locals leave scope or a straggler dereferences
-                // freed state (issue 24758).
-                tp.wait();
+                // freed state (issue 24758).  Not tp.wait(), which waits on the whole pool.
+                while( inFlight.load( std::memory_order_acquire ) > 0 )
+                    std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
             };
 
     run_fill_waves( toFill, fill_lambda, tesselate_lambda, fill_item_dependency, true );
@@ -968,6 +1149,14 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
         m_progressReporter->AdvancePhase();
         m_progressReporter->Report( _( "Removing isolated copper islands..." ) );
         m_progressReporter->KeepRefreshing();
+    }
+
+    // The islands map is what re-adds a zone to the connectivity graph, and teardrops are no
+    // longer in it. Their fill is final here, so one pass keeps the graph correct.
+    for( ZONE* zone : aZones )
+    {
+        if( zone->IsTeardropArea() )
+            connectivity->Update( zone );
     }
 
     connectivity->SetProgressReporter( m_progressReporter );
@@ -1177,6 +1366,11 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                     if( zone->GetIsRuleArea() )
                         continue;
 
+                    // Nothing that can shrink outranks a teardrop, so no refill frees space for
+                    // one. A refill would restore the fill it already has.
+                    if( zone->IsTeardropArea() )
+                        continue;
+
                     if( !zone->GetLayerSet().test( changedLayer ) )
                         continue;
 
@@ -1308,10 +1502,8 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                 if( m_debugZoneFiller && LSET::InternalCuMask().Contains( layer ) )
                     continue;
 
-                // Mirrors the initial isolatedIslandsMap build above: thieving stamps
-                // are intentionally disconnected and must not be tracked as islands,
-                // or the iterative refill will delete them on the next pass.
-                if( zone->IsCopperThieving() )
+                // Mirrors the initial isolatedIslandsMap build above.
+                if( zone->IsCopperThieving() || zone->IsTeardropArea() )
                     continue;
 
                 refillIslandsMap[zone][layer] = ISOLATED_ISLANDS();
@@ -1422,6 +1614,9 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
 
     for( ZONE* zone : aZones )
     {
+        if( !mayHoldOutOfBoardCopper( zone ) )
+            continue;
+
         // Don't check for connections on layers that only exist in the zone but
         // were disabled in the board
         BOARD* board = zone->GetBoard();
@@ -1849,10 +2044,18 @@ void ZONE_FILLER::knockoutThermalReliefs( const ZONE* aZone, PCB_LAYER_ID aLayer
     std::unordered_set<PAD_KNOCKOUT_KEY, PAD_KNOCKOUT_KEY_HASH> processedPads;
     std::unordered_set<VIA_KNOCKOUT_KEY, VIA_KNOCKOUT_KEY_HASH> processedVias;
 
-    for( FOOTPRINT* footprint : m_board->Footprints() )
+    // Inflating the query window is equivalent to inflating each pad box below.
+    BOX2I padQueryBox = aZone->GetBoundingBox();
+    padQueryBox.Inflate( m_worstClearance );
+
+    std::vector<INDEXED_ITEM> padHits;
+    queryIndex( m_padIndex, padQueryBox, padHits );
+
+    for( const INDEXED_ITEM& padHit : padHits )
     {
-        for( PAD* pad : footprint->Pads() )
         {
+            PAD* pad = static_cast<PAD*>( padHit.m_item );
+
             // NPTH pads with a drill hole affect all copper layers even when they carry no copper
             // on that layer (e.g. layers limited to "*.Mask"). The physical hole still requires
             // a clearance knockout, so skip only pads that are truly irrelevant to this layer.
@@ -2351,8 +2554,15 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
                 }
             };
 
-    for( PCB_TRACK* track : m_board->Tracks() )
+    std::vector<INDEXED_ITEM> hits;
+
+    if( auto trackIt = m_trackIndex.find( aLayer ); trackIt != m_trackIndex.end() )
+        queryIndex( trackIt->second, zone_boundingbox, hits );
+
+    for( const INDEXED_ITEM& hit : hits )
     {
+        PCB_TRACK* track = static_cast<PCB_TRACK*>( hit.m_item );
+
         if( !track->IsOnLayer( aLayer ) )
             continue;
 
@@ -2453,56 +2663,79 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
                 }
             };
 
-    for( FOOTPRINT* footprint : m_board->Footprints() )
-    {
-        knockoutCourtyardClearance( footprint );
-        knockoutGraphicClearance( &footprint->Reference() );
-        knockoutGraphicClearance( &footprint->Value() );
+    // Don't knock out holes for graphic items which implement a net-tie to the zone's net
+    // on the layer being filled.  Net-tie footprints are rare, so build the set on first use.
+    std::map<FOOTPRINT*, std::set<PAD*>> netTiePads;
 
-        std::set<PAD*> allowedNetTiePads;
-
-        // Don't knock out holes for graphic items which implement a net-tie to the zone's net
-        // on the layer being filled.
-        if( footprint->IsNetTie() )
-        {
-            for( PAD* pad : footprint->Pads() )
+    auto allowedNetTiePads =
+            [&]( FOOTPRINT* aFootprint ) -> const std::set<PAD*>&
             {
-                bool sameNet = pad->GetNetCode() == aZone->GetNetCode();
+                auto [it, inserted] = netTiePads.try_emplace( aFootprint );
 
-                if( !aZone->IsTeardropArea() && aZone->GetNetCode() == 0 )
-                    sameNet = false;
+                if( !inserted || !aFootprint->IsNetTie() )
+                    return it->second;
 
-                if( sameNet )
+                for( PAD* pad : aFootprint->Pads() )
                 {
-                    if( pad->IsOnLayer( aLayer ) )
-                        allowedNetTiePads.insert( pad );
+                    bool sameNet = pad->GetNetCode() == aZone->GetNetCode();
 
-                    for( PAD* other : footprint->GetNetTiePads( pad ) )
+                    if( !aZone->IsTeardropArea() && aZone->GetNetCode() == 0 )
+                        sameNet = false;
+
+                    if( sameNet )
                     {
-                        if( other->IsOnLayer( aLayer ) )
-                            allowedNetTiePads.insert( other );
+                        if( pad->IsOnLayer( aLayer ) )
+                            it->second.insert( pad );
+
+                        for( PAD* other : aFootprint->GetNetTiePads( pad ) )
+                        {
+                            if( other->IsOnLayer( aLayer ) )
+                                it->second.insert( other );
+                        }
                     }
                 }
-            }
+
+                return it->second;
+            };
+
+    std::vector<INDEXED_ITEM> gfxHits;
+    std::vector<INDEXED_ITEM> fpHits;
+
+    queryIndex( m_graphicIndex, zone_boundingbox, gfxHits );
+    queryIndex( m_footprintIndex, zone_boundingbox, fpHits );
+
+    // Merge back into the original order: each footprint courtyard, then its graphics.
+    size_t gi = 0;
+    size_t fi = 0;
+
+    while( gi < gfxHits.size() || fi < fpHits.size() )
+    {
+        if( checkForCancel( m_progressReporter ) )
+            return;
+
+        if( fi < fpHits.size() && ( gi >= gfxHits.size() || fpHits[fi].m_seq <= gfxHits[gi].m_seq ) )
+        {
+            knockoutCourtyardClearance( static_cast<FOOTPRINT*>( fpHits[fi++].m_item ) );
+            continue;
         }
 
-        for( BOARD_ITEM* item : footprint->GraphicalItems() )
+        const INDEXED_ITEM& hit = gfxHits[gi++];
+        BOARD_ITEM*         item = hit.m_item;
+        FOOTPRINT*          owner = hit.m_owner;
+        bool                skipItem = false;
+
+        // Only a footprint's own graphics can form the net tie.
+        if( owner && item != &owner->Reference() && item != &owner->Value()
+                && item->IsOnLayer( aLayer ) )
         {
-            if( checkForCancel( m_progressReporter ) )
-                return;
+            const std::set<PAD*>& allowed = allowedNetTiePads( owner );
 
-            BOX2I itemBBox = item->GetBoundingBox();
-
-            if( !zone_boundingbox.Intersects( itemBBox ) )
-                continue;
-
-            bool skipItem = false;
-
-            if( item->IsOnLayer( aLayer ) )
+            if( !allowed.empty() )
             {
+                BOX2I                  itemBBox = item->GetBoundingBox();
                 std::shared_ptr<SHAPE> itemShape = item->GetEffectiveShape();
 
-                for( PAD* pad : allowedNetTiePads )
+                for( PAD* pad : allowed )
                 {
                     if( pad->GetBoundingBox().Intersects( itemBBox )
                             && pad->GetEffectiveShape( aLayer )->Collide( itemShape.get() ) )
@@ -2512,18 +2745,10 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
                     }
                 }
             }
-
-            if( !skipItem )
-                knockoutGraphicClearance( item );
         }
-    }
 
-    for( BOARD_ITEM* item : m_board->Drawings() )
-    {
-        if( checkForCancel( m_progressReporter ) )
-            return;
-
-        knockoutGraphicClearance( item );
+        if( !skipItem )
+            knockoutGraphicClearance( item );
     }
 
     // Add non-connected zone clearances
@@ -2561,25 +2786,24 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
                 }
             };
 
-    if( aIncludeZoneClearances )
+    if( auto it = m_zoneIndex.find( aLayer ); it != m_zoneIndex.end() )
     {
-        for( ZONE* otherZone : m_board->Zones() )
+        // The knockout reach is the wider of the two windows tested above.
+        queryIndex( it->second, zoneKnockoutQueryBox( aZone ), hits );
+
+        for( const INDEXED_ITEM& hit : hits )
         {
             if( checkForCancel( m_progressReporter ) )
                 return;
 
+            ZONE* otherZone = static_cast<ZONE*>( hit.m_item );
+
+            // Zone knockouts are deferred past the min-width cycle so the refill can cache the
+            // fill before them. A teardrop cannot move, so knock it out here with the tracks.
+            if( !aIncludeZoneClearances && !otherZone->IsTeardropArea() )
+                continue;
+
             knockoutZoneClearance( otherZone );
-        }
-
-        for( FOOTPRINT* footprint : m_board->Footprints() )
-        {
-            for( ZONE* otherZone : footprint->Zones() )
-            {
-                if( checkForCancel( m_progressReporter ) )
-                    return;
-
-                knockoutZoneClearance( otherZone );
-            }
         }
     }
 
@@ -2618,6 +2842,10 @@ void ZONE_FILLER::buildDifferentNetZoneClearances( const ZONE* aZone, PCB_LAYER_
                 if( aKnockout->GetIsRuleArea() )
                     return;
 
+                // buildCopperItemClearances() knocks teardrops out before the min-width cycle.
+                if( aKnockout->IsTeardropArea() )
+                    return;
+
                 if( !aKnockout->GetLayerSet().test( aLayer ) )
                     return;
 
@@ -2637,7 +2865,14 @@ void ZONE_FILLER::buildDifferentNetZoneClearances( const ZONE* aZone, PCB_LAYER_
                 }
             };
 
-    forEachBoardAndFootprintZone( m_board, knockoutZoneClearance );
+    if( auto it = m_zoneIndex.find( aLayer ); it != m_zoneIndex.end() )
+    {
+        std::vector<INDEXED_ITEM> hits;
+        queryIndex( it->second, zoneKnockoutQueryBox( aZone ), hits );
+
+        for( const INDEXED_ITEM& hit : hits )
+            knockoutZoneClearance( static_cast<ZONE*>( hit.m_item ) );
+    }
 
     aHoles.Simplify();
 }
@@ -2662,19 +2897,25 @@ void ZONE_FILLER::subtractHigherPriorityZones( const ZONE* aZone, PCB_LAYER_ID a
                     appendZoneOutlineWithoutArcs( aKnockout, knockouts );
             };
 
-    forEachBoardAndFootprintZone(
-            m_board,
-            [&]( ZONE* otherZone )
-            {
-                // Don't use `HigherPriority()` here because we only want explicitly-higher
-                // priorities, not equal-priority zones.
-                bool higherPrioritySameNet =
-                        otherZone->SameNet( aZone )
-                        && otherZone->GetAssignedPriority() > aZone->GetAssignedPriority();
+    if( auto it = m_zoneIndex.find( aLayer ); it != m_zoneIndex.end() )
+    {
+        std::vector<INDEXED_ITEM> hits;
+        queryIndex( it->second, zoneBBox, hits );
 
-                if( higherPrioritySameNet && !otherZone->IsTeardropArea() )
-                    collectZoneOutline( otherZone );
-            } );
+        for( const INDEXED_ITEM& hit : hits )
+        {
+            ZONE* otherZone = static_cast<ZONE*>( hit.m_item );
+
+            // Don't use `HigherPriority()` here because we only want explicitly-higher
+            // priorities, not equal-priority zones.
+            bool higherPrioritySameNet =
+                    otherZone->SameNet( aZone )
+                    && otherZone->GetAssignedPriority() > aZone->GetAssignedPriority();
+
+            if( higherPrioritySameNet && !otherZone->IsTeardropArea() )
+                collectZoneOutline( otherZone );
+        }
+    }
 
     if( knockouts.OutlineCount() > 0 )
         aRawFill.BooleanSubtract( knockouts );
@@ -2924,11 +3165,6 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
     if( m_progressReporter && m_progressReporter->IsCancelled() )
         return false;
 
-    // Create a temporary zone that we can hit-test spoke-ends against.  It's only temporary
-    // because the "real" subtract-clearance-holes has to be done after the spokes are added.
-    SHAPE_POLY_SET testAreas = aFillPolys.CloneDropTriangulation();
-    testAreas.BooleanSubtract( clearanceHoles );
-
     // When iterative refill is enabled, zone-to-zone clearances are not included in
     // clearanceHoles (they're applied later to allow pre-knockout caching).  But we still
     // need to account for them when testing spoke endpoints, otherwise spokes will be kept
@@ -2936,72 +3172,80 @@ bool ZONE_FILLER::fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LA
     SHAPE_POLY_SET zoneClearances;
 
     if( iterativeRefill )
-    {
         buildDifferentNetZoneClearances( aZone, aLayer, zoneClearances );
-
-        if( zoneClearances.OutlineCount() > 0 )
-            testAreas.BooleanSubtract( zoneClearances );
-    }
-
-    DUMP_POLYS_TO_COPPER_LAYER( testAreas, In4_Cu, wxT( "minus-clearance-holes" ) );
-
-    // Prune features that don't meet minimum-width criteria
-    if( half_min_width - epsilon > epsilon )
-    {
-        testAreas.Deflate( half_min_width - epsilon, fastCornerStrategy, m_maxError );
-        DUMP_POLYS_TO_COPPER_LAYER( testAreas, In5_Cu, wxT( "spoke-test-deflated" ) );
-
-        testAreas.Inflate( half_min_width - epsilon, fastCornerStrategy, m_maxError );
-        DUMP_POLYS_TO_COPPER_LAYER( testAreas, In6_Cu, wxT( "spoke-test-reinflated" ) );
-    }
-
-    if( m_progressReporter && m_progressReporter->IsCancelled() )
-        return false;
-
-    // Build a Y-stripe spatial index for O(sqrt(V)) spoke endpoint containment queries
-    // instead of O(V) brute-force ray-casting with bbox caches.
-    POLY_YSTRIPES_INDEX spokeTestIndex;
-    spokeTestIndex.Build( testAreas );
-    int interval = 0;
 
     SHAPE_POLY_SET debugSpokes;
 
-    for( const SHAPE_LINE_CHAIN& spoke : thermalSpokes )
+    // The spoke test area costs a clone, two booleans and a deflate/inflate cycle. Build it
+    // only when a spoke exists. The debug filler still needs the intermediate dumps.
+    if( !thermalSpokes.empty() || m_debugZoneFiller )
     {
-        const VECTOR2I& testPt = spoke.CPoint( 3 );
+        // Create a temporary zone that we can hit-test spoke-ends against.  It's only temporary
+        // because the "real" subtract-clearance-holes has to be done after the spokes are added.
+        SHAPE_POLY_SET testAreas = aFillPolys.CloneDropTriangulation();
+        testAreas.BooleanSubtract( clearanceHoles );
 
-        // Hit-test against zone body
-        if( spokeTestIndex.Contains( testPt, 1 ) )
+        if( zoneClearances.OutlineCount() > 0 )
+            testAreas.BooleanSubtract( zoneClearances );
+
+        DUMP_POLYS_TO_COPPER_LAYER( testAreas, In4_Cu, wxT( "minus-clearance-holes" ) );
+
+        // Prune features that don't meet minimum-width criteria
+        if( half_min_width - epsilon > epsilon )
         {
-            if( m_debugZoneFiller )
-                debugSpokes.AddOutline( spoke );
+            testAreas.Deflate( half_min_width - epsilon, fastCornerStrategy, m_maxError );
+            DUMP_POLYS_TO_COPPER_LAYER( testAreas, In5_Cu, wxT( "spoke-test-deflated" ) );
 
-            aFillPolys.AddOutline( spoke );
-            continue;
+            testAreas.Inflate( half_min_width - epsilon, fastCornerStrategy, m_maxError );
+            DUMP_POLYS_TO_COPPER_LAYER( testAreas, In6_Cu, wxT( "spoke-test-reinflated" ) );
         }
 
-        if( interval++ > 400 )
-        {
-            if( m_progressReporter && m_progressReporter->IsCancelled() )
-                return false;
+        if( m_progressReporter && m_progressReporter->IsCancelled() )
+            return false;
 
-            interval = 0;
-        }
+        // Build a Y-stripe spatial index for O(sqrt(V)) spoke endpoint containment queries
+        // instead of O(V) brute-force ray-casting with bbox caches.
+        POLY_YSTRIPES_INDEX spokeTestIndex;
+        spokeTestIndex.Build( testAreas );
+        int interval = 0;
 
-        // Hit-test against other spokes
-        for( const SHAPE_LINE_CHAIN& other : thermalSpokes )
+        for( const SHAPE_LINE_CHAIN& spoke : thermalSpokes )
         {
-            // Hit test in both directions to avoid interactions with round-off errors.
-            // (See https://gitlab.com/kicad/code/kicad/-/issues/13316.)
-            if( &other != &spoke
-                && other.PointInside( testPt, 1 )
-                && spoke.PointInside( other.CPoint( 3 ), 1 ) )
+            const VECTOR2I& testPt = spoke.CPoint( 3 );
+
+            // Hit-test against zone body
+            if( spokeTestIndex.Contains( testPt, 1 ) )
             {
                 if( m_debugZoneFiller )
                     debugSpokes.AddOutline( spoke );
 
                 aFillPolys.AddOutline( spoke );
-                break;
+                continue;
+            }
+
+            if( interval++ > 400 )
+            {
+                if( m_progressReporter && m_progressReporter->IsCancelled() )
+                    return false;
+
+                interval = 0;
+            }
+
+            // Hit-test against other spokes
+            for( const SHAPE_LINE_CHAIN& other : thermalSpokes )
+            {
+                // Hit test in both directions to avoid interactions with round-off errors.
+                // (See https://gitlab.com/kicad/code/kicad/-/issues/13316.)
+                if( &other != &spoke
+                    && other.PointInside( testPt, 1 )
+                    && spoke.PointInside( other.CPoint( 3 ), 1 ) )
+                {
+                    if( m_debugZoneFiller )
+                        debugSpokes.AddOutline( spoke );
+
+                    aFillPolys.AddOutline( spoke );
+                    break;
+                }
             }
         }
     }
@@ -4339,7 +4583,8 @@ bool ZONE_FILLER::refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_P
                 if( !otherZone->GetLayerSet().test( aLayer ) )
                     return;
 
-                if( otherZone->IsTeardropArea() && otherZone->SameNet( aZone ) )
+                // The cached pre-knockout fill already holds the teardrop knockouts.
+                if( otherZone->IsTeardropArea() )
                     return;
 
                 if( !otherZone->HigherPriority( aZone ) )
@@ -4416,7 +4661,14 @@ bool ZONE_FILLER::refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_P
                 }
             };
 
-    forEachBoardAndFootprintZone( m_board, collectZoneKnockout );
+    if( auto it = m_zoneIndex.find( aLayer ); it != m_zoneIndex.end() )
+    {
+        std::vector<INDEXED_ITEM> hits;
+        queryIndex( it->second, zoneKnockoutQueryBox( aZone ), hits );
+
+        for( const INDEXED_ITEM& hit : hits )
+            collectZoneKnockout( static_cast<ZONE*>( hit.m_item ) );
+    }
 
     // Refill output is a pure function of the (fill-constant) pre-knockout fill and these
     // knockouts; hash them and skip the subtract + min-width prune below on a cache hit.

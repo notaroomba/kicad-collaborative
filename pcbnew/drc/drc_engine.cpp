@@ -617,7 +617,7 @@ void DRC_ENGINE::loadImplicitRules()
                 rule->m_ImplicitItemId = zone->m_Uuid;
                 rule->m_ImplicitItem = zone;
 
-                rule->m_Condition = new DRC_RULE_CONDITION( wxString::Format( wxT( "A.intersectsArea('%s')" ),
+                rule->m_Condition = new DRC_RULE_CONDITION( wxString::Format( wxT( "A.intersectsKeepout('%s')" ),
                                                                               zone->m_Uuid.AsString() ) );
 
                 rule->m_LayerCondition = zone->GetLayerSet();
@@ -794,8 +794,8 @@ void DRC_ENGINE::InitEngine( const std::shared_ptr<DRC_RULE>& rule )
     {
         for( PCB_MARKER* marker : m_board->Markers() )
         {
-            DRC_ITEM* drcItem = static_cast<DRC_ITEM*>( marker->GetRCItem().get() );
-            drcItem->SetViolatingRule( nullptr );
+            if( DRC_ITEM* drcItem = static_cast<DRC_ITEM*>( marker->GetRCItem().get() ) )
+                drcItem->SetViolatingRule( nullptr );
         }
     }
 
@@ -849,8 +849,8 @@ void DRC_ENGINE::InitEngine( const wxFileName& aRulePath )
     {
         for( PCB_MARKER* marker : m_board->Markers() )
         {
-            DRC_ITEM* drcItem = static_cast<DRC_ITEM*>( marker->GetRCItem().get() );
-            drcItem->SetViolatingRule( nullptr );
+            if( DRC_ITEM* drcItem = static_cast<DRC_ITEM*>( marker->GetRCItem().get() ) )
+                drcItem->SetViolatingRule( nullptr );
         }
     }
 
@@ -1446,6 +1446,18 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
                     REPORT( wxString::Format( _( "Checking %s min spoke count: %s." ),
                                               EscapeHTML( c->constraint.GetName() ),
                                               MessageTextFromUnscaledValue( c->constraint.m_Value.Min() ) ) )
+                    break;
+
+                case MICROVIA_STACK_DEPTH_CONSTRAINT:
+                    REPORT( wxString::Format( _( "Checking %s max microvia stack depth: %s." ),
+                                              EscapeHTML( c->constraint.GetName() ),
+                                              MessageTextFromUnscaledValue( c->constraint.m_Value.Max() ) ) )
+                    break;
+
+                case MICROVIA_ASPECT_RATIO_CONSTRAINT:
+                    REPORT( wxString::Format( _( "Checking %s max microvia aspect ratio: %.3f." ),
+                                              EscapeHTML( c->constraint.GetName() ),
+                                              c->constraint.m_Value.Max() / 1000.0 ) )
                     break;
 
                 case ZONE_CONNECTION_CONSTRAINT:
@@ -2720,7 +2732,9 @@ SHOWMATCH_DOMAIN_SPEC getShowMatchDomainSpec( DRC_CONSTRAINT_T aConstraint )
     case SKEW_CONSTRAINT: return { SHOWMATCH_DOMAIN::ROUTING_ITEMS };
 
     case VIA_DIAMETER_CONSTRAINT:
-    case VIA_COUNT_CONSTRAINT: return { SHOWMATCH_DOMAIN::VIAS };
+    case VIA_COUNT_CONSTRAINT:
+    case MICROVIA_STACK_DEPTH_CONSTRAINT:
+    case MICROVIA_ASPECT_RATIO_CONSTRAINT: return { SHOWMATCH_DOMAIN::VIAS };
 
     case HOLE_SIZE_CONSTRAINT: return { SHOWMATCH_DOMAIN::HOLE_ITEMS };
 

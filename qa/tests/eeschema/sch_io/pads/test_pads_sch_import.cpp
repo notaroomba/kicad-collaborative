@@ -25,8 +25,10 @@
 #include <base_units.h>
 #include <bitmap_base.h>
 #include <connection_graph.h>
+#include <default_values.h>
 #include <drawing_sheet/ds_data_model.h>
 #include <embedded_files.h>
+#include <gr_text.h>
 #include <lib_symbol.h>
 #include <netlist_exporter_pads.h>
 #include <reporter.h>
@@ -57,6 +59,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1163,7 +1166,16 @@ static void checkTextPresentation( const EDA_TEXT&                              
     }
 
     if( aPresentation.width > 0 )
-        BOOST_CHECK_EQUAL( aText.GetTextThickness(), schIUScale.MilsToIU( aPresentation.width / 2.0 ) );
+    {
+        // PADS gives the stroke it renders. Bold is an independent flag in KiCad that multiplies
+        // the stored thickness, so the import has to store the pre-multiplied value.
+        const int imported = schIUScale.MilsToIU( aPresentation.width / 2.0 );
+        const int rendered = aText.GetEffectiveTextPenWidth();
+        const int expected = ClampTextPenSize( imported, aText.GetTextSize() );
+
+        BOOST_CHECK_MESSAGE( std::abs( rendered - expected ) <= 2,
+                             "rendered stroke " << rendered << " does not match the imported " << expected );
+    }
 
     BOOST_CHECK( aText.GetHorizJustify() == horizontalJustification( aPresentation.horizontalJustification ) );
     BOOST_CHECK( aText.GetVertJustify() == verticalJustification( aPresentation.verticalJustification ) );
@@ -3098,10 +3110,11 @@ BOOST_AUTO_TEST_CASE( BinaryConnectivityAndGraphics )
     const VECTOR2I entryDelta = entryEnd - entryStart;
     const int      entrySpan = std::max( std::abs( entryDelta.x ), std::abs( entryDelta.y ) );
     const int      shortSpan = std::min( entrySpan, schIUScale.MilsToIU( DEFAULT_SCH_ENTRY_SIZE ) );
-    const VECTOR2I shortEntryEnd = entrySpan == 0 ? entryEnd
-                                                  : entryStart
-                                                            + VECTOR2I( entryDelta.x * shortSpan / entrySpan,
-                                                                        entryDelta.y * shortSpan / entrySpan );
+    const VECTOR2I shortEntryEnd =
+            entrySpan == 0 ? entryEnd
+                           : entryStart
+                                     + VECTOR2I( int64_t( entryDelta.x ) * shortSpan / entrySpan,
+                                                 int64_t( entryDelta.y ) * shortSpan / entrySpan );
     size_t         coincidentWireSegments = 0;
     bool           exactEntry = false;
 
@@ -3890,6 +3903,267 @@ BOOST_AUTO_TEST_CASE( BinaryAppendPowerReferencesSkipExisting )
                                        {
                                            return aMessage.Contains( wxS( "#PWR" ) );
                                        } ) );
+}
+
+
+// The clamp that shortens a bus-entry stub to the KiCad default entry size scales the direction
+// vector. In 32-bit that product overflows once the stub passes a third of an inch, and the entry
+// plus its compensating wire are drawn from the wrapped result.
+BOOST_AUTO_TEST_CASE( BinaryLongBusEntryStaysOnTheWire )
+{
+    using namespace PADS_SCH_BINARY;
+
+    auto samePoint = []( const SOURCE_POINT& aLeft, const SOURCE_POINT& aRight )
+    {
+        return aLeft.x == aRight.x && aLeft.y == aRight.y;
+    };
+
+    PADS_SCH_MODEL model = parseBinaryFixture( wxS( "connectivity_topology" ) );
+    BOOST_REQUIRE( !model.buses.empty() );
+
+    // 4000 half-mils is a two inch stub, ordinary on a real sheet and well past the clamp
+    const int stub = 4000;
+    size_t    stretched = 0;
+
+    for( const MODEL_BUS& bus : model.buses )
+    {
+        for( const MODEL_BUS_ENTRY& entry : bus.entries )
+        {
+            auto net = std::ranges::find( model.nets, entry.memberNet.id, &MODEL_NET::id );
+            BOOST_REQUIRE( net != model.nets.end() );
+
+            for( MODEL_CONNECTION& connection : net->connections )
+            {
+                if( connection.vertices.size() < 2 )
+                    continue;
+
+                SOURCE_POINT* farPt = nullptr;
+
+                if( samePoint( connection.vertices.front(), entry.position ) )
+                    farPt = &connection.vertices[1];
+                else if( samePoint( connection.vertices.back(), entry.position ) )
+                    farPt = &connection.vertices[connection.vertices.size() - 2];
+
+                if( !farPt )
+                    continue;
+
+                farPt->x = entry.position.x + stub;
+                farPt->y = entry.position.y + stub;
+                ++stretched;
+            }
+        }
+    }
+
+    BOOST_REQUIRE_GT( stretched, 0u );
+
+    PADS_SCH_BINARY_BUILDER builder;
+    builder.Build( model, &m_schematic, nullptr, binaryFixture( wxS( "connectivity_topology" ) ) );
+
+    SCH_SHEET* root = m_schematic.GetTopLevelSheet();
+    BOOST_REQUIRE( root );
+    const int pageHeight = root->GetScreen()->GetPageSettings().GetHeightIU( schIUScale.IU_PER_MILS );
+    size_t    checked = 0;
+
+    for( const MODEL_BUS& bus : model.buses )
+    {
+        for( const MODEL_BUS_ENTRY& entry : bus.entries )
+        {
+            auto net = std::ranges::find( model.nets, entry.memberNet.id, &MODEL_NET::id );
+            BOOST_REQUIRE( net != model.nets.end() );
+            std::vector<SOURCE_POINT> adjacent;
+
+            for( const MODEL_CONNECTION& connection : net->connections )
+            {
+                if( connection.vertices.size() < 2 )
+                    continue;
+
+                if( samePoint( connection.vertices.front(), entry.position ) )
+                    adjacent.push_back( connection.vertices[1] );
+                else if( samePoint( connection.vertices.back(), entry.position ) )
+                    adjacent.push_back( connection.vertices[connection.vertices.size() - 2] );
+            }
+
+            BOOST_REQUIRE_EQUAL( adjacent.size(), 1u );
+
+            const VECTOR2I start = pagePoint( entry.position, pageHeight );
+            const VECTOR2I end = pagePoint( adjacent.front(), pageHeight );
+            const VECTOR2I run = end - start;
+            const int64_t  span = std::max( std::abs( run.x ), std::abs( run.y ) );
+            const int64_t  entrySpan = std::min<int64_t>( span, schIUScale.MilsToIU( DEFAULT_SCH_ENTRY_SIZE ) );
+
+            for( SCH_ITEM* item : root->GetScreen()->Items().OfType( SCH_BUS_WIRE_ENTRY_T ) )
+            {
+                if( item->GetPosition() != start )
+                    continue;
+
+                const VECTOR2I size = static_cast<SCH_BUS_WIRE_ENTRY*>( item )->GetSize();
+
+                BOOST_CHECK_MESSAGE( std::abs( size.x - int64_t( run.x ) * entrySpan / span ) <= 1,
+                                     "bus entry " << entry.source.recordIndex << " x is " << size.x );
+                BOOST_CHECK_MESSAGE( std::abs( size.y - int64_t( run.y ) * entrySpan / span ) <= 1,
+                                     "bus entry " << entry.source.recordIndex << " y is " << size.y );
+                ++checked;
+            }
+        }
+    }
+
+    BOOST_REQUIRE_GT( checked, 0u );
+}
+
+
+// PADS gives the stroke width it renders. KiCad multiplies a stored thickness by the bold factor,
+// so importing the PADS width verbatim onto a bold text renders it 1.6x too thick.
+BOOST_AUTO_TEST_CASE( BinaryBoldTextKeepsTheRenderedStrokeWidth )
+{
+    using namespace PADS_SCH_BINARY;
+
+    PADS_SCH_MODEL model = parseBinaryFixture( wxS( "text_encoding" ) );
+    BOOST_REQUIRE_EQUAL( model.texts.size(), 1u );
+    BOOST_REQUIRE_GT( model.texts.front().presentation.width, 0 );
+    model.texts.front().presentation.bold = true;
+
+    PADS_SCH_BINARY_BUILDER builder;
+    builder.Build( model, &m_schematic, nullptr, binaryFixture( wxS( "text_encoding" ) ) );
+
+    SCH_SHEET* root = m_schematic.GetTopLevelSheet();
+    BOOST_REQUIRE( root );
+    SCH_TEXT* built = nullptr;
+
+    for( SCH_ITEM* item : root->GetScreen()->Items().OfType( SCH_TEXT_T ) )
+        built = static_cast<SCH_TEXT*>( item );
+
+    BOOST_REQUIRE( built );
+    BOOST_REQUIRE( built->IsBold() );
+    checkTextPresentation( *built, model.texts.front().presentation );
+}
+
+
+// A LIB_ID is what the saved file keys lib_symbols on. Two placements of one part type that build
+// different symbols must not share it, or one variant wins the save and the reload differs from
+// the import.
+BOOST_AUTO_TEST_CASE( BinaryPlacementVariantsGetDistinctLibIds )
+{
+    using namespace PADS_SCH_BINARY;
+
+    PADS_SCH_MODEL model = parseBinaryFixture( wxS( "connectivity_topology" ) );
+    BOOST_REQUIRE( !model.placements.empty() );
+
+    // A second placement of the same part type that hides its pin numbers is a different symbol
+    uint32_t nextId = 0;
+
+    for( const MODEL_PLACEMENT& placement : model.placements )
+        nextId = std::max( nextId, placement.id.Value() + 1 );
+
+    MODEL_PLACEMENT copy = model.placements.front();
+    copy.id = PLACEMENT_ID( nextId );
+    copy.fields.clear();
+    copy.reference.text = model.placements.front().reference.text + wxS( "X" );
+    copy.pinNumbersVisible = !model.placements.front().pinNumbersVisible;
+    copy.position.x += 4000;
+    model.placements.push_back( copy );
+
+    const MODEL_PLACEMENT* first = &model.placements.front();
+    const MODEL_PLACEMENT* second = &model.placements.back();
+
+    PADS_SCH_BINARY_BUILDER builder;
+    builder.Build( model, &m_schematic, nullptr, binaryFixture( wxS( "connectivity_topology" ) ) );
+
+    SCH_SHEET* root = m_schematic.GetTopLevelSheet();
+    BOOST_REQUIRE( root );
+    SCH_SHEET_PATH path = m_schematic.CurrentSheet();
+
+    auto libIdFor = [&]( const wxString& aReference ) -> wxString
+    {
+        for( SCH_ITEM* item : root->GetScreen()->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            auto* symbol = static_cast<SCH_SYMBOL*>( item );
+
+            if( symbol->GetRef( &path ) == aReference )
+                return symbol->GetLibId().GetLibItemName();
+        }
+
+        return wxString();
+    };
+
+    const wxString firstId = libIdFor( first->reference.text );
+    const wxString secondId = libIdFor( second->reference.text );
+
+    BOOST_REQUIRE( !firstId.IsEmpty() );
+    BOOST_REQUIRE( !secondId.IsEmpty() );
+    BOOST_CHECK_MESSAGE( firstId != secondId, "both placements resolved to " << firstId );
+}
+
+
+// KiCad's schematic format carries no visibility for a plain text and the reader forces every one
+// visible, so a hidden PADS note has to be reported rather than imported into a state the first
+// save discards.
+BOOST_AUTO_TEST_CASE( BinaryHiddenFreeTextIsReportedNotImported )
+{
+    using namespace PADS_SCH_BINARY;
+
+    PADS_SCH_MODEL model = parseBinaryFixture( wxS( "text_encoding" ) );
+    BOOST_REQUIRE_EQUAL( model.texts.size(), 1u );
+    model.texts.front().presentation.visible = false;
+
+    PADS_SCH_BINARY_BUILDER builder;
+    BUILD_RESULT result = builder.Build( model, &m_schematic, nullptr, binaryFixture( wxS( "text_encoding" ) ) );
+
+    SCH_SHEET* root = m_schematic.GetTopLevelSheet();
+    BOOST_REQUIRE( root );
+    SCH_TEXT* built = nullptr;
+
+    for( SCH_ITEM* item : root->GetScreen()->Items().OfType( SCH_TEXT_T ) )
+        built = static_cast<SCH_TEXT*>( item );
+
+    BOOST_REQUIRE( built );
+    BOOST_CHECK( built->IsVisible() );
+
+    BOOST_CHECK( std::ranges::any_of( result.diagnostics,
+                                      []( const PARSER_DIAGNOSTIC& aDiagnostic )
+                                      {
+                                          return aDiagnostic.message.Contains( wxS( "hidden PADS text" ) );
+                                      } ) );
+}
+
+
+// The gate decal name is a lookup key, not the part's identity. Overwriting the part type with it
+// renames every power symbol whose decal is named differently.
+BOOST_AUTO_TEST_CASE( AsciiPowerSymbolValueIsThePartType )
+{
+    SCH_IO_PADS plugin;
+    wxString    path = wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() )
+                    + wxS( "/plugins/pads/power_gate_decal.txt" );
+
+    SCH_SHEET* root = plugin.LoadSchematicFile( path, &m_schematic, nullptr, nullptr );
+    BOOST_REQUIRE( root );
+    BOOST_REQUIRE( root->GetScreen() );
+
+    SCH_SYMBOL* symbol = nullptr;
+
+    for( SCH_ITEM* item : root->GetScreen()->Items().OfType( SCH_SYMBOL_T ) )
+        symbol = static_cast<SCH_SYMBOL*>( item );
+
+    BOOST_REQUIRE( symbol );
+    BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetText(), wxS( "+5V" ) );
+}
+
+
+
+// Adopting a whole document cannot satisfy the hierarchical-sheet loader's ownership contract, and
+// the ASCII branch replaces the live schematic's top-level sheets before it can find that out.
+BOOST_AUTO_TEST_CASE( AsciiHierarchicalSheetLoadIsRefused )
+{
+    SCH_IO_PADS                 plugin;
+    std::map<std::string, UTF8> properties;
+    properties["hierarchical_sheet_load"] = "1";
+
+    wxString path = wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() ) + wxS( "/plugins/pads/parts_schematic.txt" );
+
+    SCH_SHEET* existing = m_schematic.GetTopLevelSheet();
+    BOOST_REQUIRE( existing );
+
+    BOOST_CHECK_THROW( plugin.LoadSchematicFile( path, &m_schematic, nullptr, &properties ), IO_ERROR );
+    BOOST_CHECK_EQUAL( m_schematic.GetTopLevelSheet(), existing );
 }
 
 

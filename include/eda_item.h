@@ -24,6 +24,8 @@
 #define EDA_ITEM_H
 
 #include <deque>
+#include <map>
+#include <memory>
 #include <set>
 
 #include <api/serializable.h>
@@ -95,7 +97,7 @@ typedef const INSPECTOR_FUNC& INSPECTOR;
 class EDA_ITEM : public KIGFX::VIEW_ITEM, public SERIALIZABLE
 {
 public:
-    virtual ~EDA_ITEM() = default;
+    virtual ~EDA_ITEM();
 
     /**
      * Returns the type of object.
@@ -219,6 +221,60 @@ public:
      */
     void SetForceVisible( bool aEnable ) { m_forceVisible = aEnable; }
     bool IsForceVisible() const { return m_forceVisible; }
+
+    /**
+     * Custom user-defined string key/value properties attached to this item.
+     *
+     * Keys and values are arbitrary strings; their meaning is defined by the user.
+     * The only constraint is that keys may not duplicate a built-in property (or field name,
+     * for items that have fields).
+     */
+    const std::map<wxString, wxString>& GetCustomProperties() const
+    {
+        return m_customProperties;
+    }
+
+    void SetCustomProperties( const std::map<wxString, wxString>& aProps )
+    {
+        m_customProperties.clear();
+
+        for( const auto& [ key, value ] : aProps )
+            SetCustomProperty( key, value );
+    }
+
+    void SetCustomProperty( const wxString& aKey, const wxString& aValue )
+    {
+        for( auto& [ key, value ] : m_customProperties )
+        {
+            if( key.CmpNoCase( aKey ) == 0 )
+            {
+                value = aValue;
+                return;
+            }
+        }
+
+        m_customProperties.emplace( aKey, aValue );
+    }
+
+    bool HasCustomProperties() const { return !m_customProperties.empty(); }
+    void ClearCustomProperties() { m_customProperties.clear(); }
+
+    void RemoveCustomProperty( const wxString& aKey );
+
+    /**
+     * Remove custom properties whose keys collide with an existing field or built-in property
+     * name (matched case-insensitively).  Returns the keys removed, if any.
+     */
+    std::vector<wxString> RemoveConflictingCustomProperties();
+
+    /**
+     * @return true if \a aKey is present and \a aValue was filled
+     */
+    bool GetCustomProperty( const wxString& aKey, wxString& aValue ) const;
+
+    std::vector<PROPERTY_BASE*> GetCustomPropertiesAsInspectables() const;
+
+    std::vector<PROPERTY_BASE*> GetDynamicProperties() const override;
 
     /**
      * Populate \a aList of #MSG_PANEL_ITEM objects with it's internal state for display
@@ -544,6 +600,14 @@ protected:
     VECTOR2I m_rolloverPos;
     bool     m_isRollover;
     bool     m_forceVisible;
+
+    std::map<wxString, wxString> m_customProperties;
+
+    /// Per-key cache of dynamic property descriptors for m_customProperties,
+    /// owned by this object. Mirrors the per-object field-property caches used
+    /// by FOOTPRINT / SCH_SYMBOL / SCH_SHEET; entries linger after a key is
+    /// removed but are simply not enumerated.
+    mutable std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_dynamicCustomPropsCache;
 };
 
 

@@ -284,11 +284,6 @@ DIALOG_FOOTPRINT_FIELDS_TABLE::~DIALOG_FOOTPRINT_FIELDS_TABLE()
                           &DIALOG_FOOTPRINT_FIELDS_TABLE::OnCurrentSchematicSheetChanged, this );
     }
 
-    if( savePresets( !m_job ) )
-    {
-        m_parent->OnModify();
-    }
-
     SavePanelLayout();
     SaveColumnWidths();
 
@@ -727,6 +722,9 @@ void DIALOG_FOOTPRINT_FIELDS_TABLE::OnClose( wxCloseEvent& aEvent )
         }
     }
 
+    if( savePresets( true ) )
+        m_parent->OnModify();
+
     // Stop listening to board events
     m_parent->GetBoard()->RemoveListener( this );
     m_parent->ClearFocus();
@@ -761,7 +759,7 @@ void DIALOG_FOOTPRINT_FIELDS_TABLE::OnBoardItemsAdded( BOARD& aPcb, std::vector<
         for( PCB_FIELD* field : ref.GetFootprint().GetFields() )
         {
             if( !field->IsMandatory() && !field->IsPrivate() )
-                AddField( field->GetUntranslatedName(), field->GetName(), true, false, true );
+                AddField( field->GetUntranslatedName(), field->GetName(), true, false, false );
         }
     }
 
@@ -808,7 +806,7 @@ void DIALOG_FOOTPRINT_FIELDS_TABLE::OnBoardItemsChanged( BOARD& aPcb, std::vecto
         for( PCB_FIELD* field : ref.GetFootprint().GetFields() )
         {
             if( !field->IsMandatory() && !field->IsPrivate() )
-                AddField( field->GetUntranslatedName(), field->GetName(), true, false, true );
+                AddField( field->GetUntranslatedName(), field->GetName(), true, false, false );
         }
     }
 

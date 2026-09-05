@@ -31,6 +31,15 @@ class EDA_ITEM;
 class SELECTION;
 class PROPERTY_BASE;
 class wxStaticText;
+class wxMenu;
+
+enum PROPERTIES_PANEL_CONTEXT_MENU_IDS
+{
+    ID_CTX_ADD_FIELD = wxID_HIGHEST + 1000,
+    ID_CTX_ADD_CUSTOM_PROPERTY,
+    ID_CTX_REMOVE_FIELD,
+    ID_CTX_REMOVE_CUSTOM_PROPERTY,
+};
 
 class PROPERTIES_PANEL : public wxPanel
 {
@@ -81,6 +90,19 @@ protected:
 
     virtual void OnLanguageChanged( wxCommandEvent& aEvent );
 
+    virtual bool isKeyEditable( const wxPGProperty* aPGProp ) const { return false; }
+    virtual bool isKeyNameInUse( const wxString& aName ) const { return false; }
+    virtual void onKeyRenamed( const wxString& aOldName, const wxString& aNewName ) {}
+
+    virtual void onLabelEditBegin( wxPropertyGridEvent& aEvent );
+    virtual void onLabelEditEnding( wxPropertyGridEvent& aEvent );
+
+    virtual bool buildContextMenu( wxMenu& aMenu, wxPGProperty* aPGProp ) { return false; }
+    virtual void onNewItemLeftBlank( const wxString& aKey ) {}
+    void onRightClick( wxPropertyGridEvent& aEvent );
+
+    void beginLabelEdit( const wxString& aKey, bool aStartBlank = false );
+
     /**
      * Utility to fetch a property value and convert to wxVariant
      * Precondition: aItem is known to have property aProperty
@@ -111,6 +133,13 @@ protected:
 
     /// Proportion of the grid column splitter that is used for the key column (0.0 - 1.0)
     float m_splitter_key_proportion;
+
+    wxString m_editingOriginalLabel;
+
+    wxString m_contextMenuPropertyName;
+
+    /// Key of a freshly-added blank field/custom property awaiting a name from the user.
+    wxString m_pendingNewKey;
 };
 
 class SUPPRESS_GRID_CHANGED_EVENTS

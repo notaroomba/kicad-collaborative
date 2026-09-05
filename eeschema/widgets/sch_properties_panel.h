@@ -22,7 +22,6 @@
 #pragma once
 
 #include <widgets/properties_panel.h>
-#include <set>
 
 class wxButton;
 class wxCommandEvent;
@@ -60,6 +59,19 @@ protected:
 
     void valueChanging( wxPropertyGridEvent& aEvent ) override;
     void valueChanged( wxPropertyGridEvent& aEvent ) override;
+
+    bool isKeyEditable( const wxPGProperty* aPGProp ) const override;
+    bool isKeyNameInUse( const wxString& aName ) const override;
+    void onKeyRenamed( const wxString& aOldName, const wxString& aNewName ) override;
+
+    bool buildContextMenu( wxMenu& aMenu, wxPGProperty* aPGProp ) override;
+    void onNewItemLeftBlank( const wxString& aKey ) override;
+
+    void addBlankField();
+    void addBlankCustomProperty();
+    void removeField( const wxString& aName );
+    void removeCustomProperty( const wxString& aName );
+    void onContextMenu( wxCommandEvent& aEvent );
 
     bool handleSheetFilenameChange( SCH_EDIT_FRAME* aFrame, SCH_SHEET* aSheet,
                                     SCH_COMMIT& aChanges, const wxString& aNewFilename );
@@ -104,12 +116,8 @@ protected:
     static bool               m_selContainsJunctions;
     static bool               m_selContainsWiresOrBuses;
 
-    static std::set<wxString> m_currentSymbolFieldNames;
-    static std::set<wxString> m_currentSheetFieldNames;
-
-    /// Distinct pin numbers of the selected pin-mapped symbol, gating the per-pin table rows.
-    static std::set<wxString> m_currentPinMapPinNumbers;
     wxPGChoices               m_nets;
 
     wxButton* m_editPinMapButton;
+    wxButton* m_addCustomPropertyButton;
 };

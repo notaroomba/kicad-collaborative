@@ -314,7 +314,7 @@ void PCB_IO_PADS::loadFootprints()
         }
 
         LIB_ID fpid;
-        fpid.SetLibItemName( wxString::FromUTF8( decal_name ) );
+        fpid.SetLibItemName( PADS_COMMON::ConvertText( decal_name ) );
         footprint->SetFPID( fpid );
 
         footprint->SetValue( pads_part.decal );
@@ -328,7 +328,7 @@ void PCB_IO_PADS::loadFootprints()
                 if( i > 0 )
                     alternates += wxT( ", " );
 
-                alternates += wxString::FromUTF8( pads_part.alternate_decals[i] );
+                alternates += PADS_COMMON::ConvertText( pads_part.alternate_decals[i] );
             }
 
             PCB_FIELD* field = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "PADS_Alternate_Decals" ) );
@@ -430,8 +430,8 @@ void PCB_IO_PADS::loadFootprints()
                             if( !attrValue.empty() )
                             {
                                 field = new PCB_FIELD( footprint, FIELD_T::USER,
-                                                       wxString::FromUTF8( attr.name ) );
-                                field->SetText( wxString::FromUTF8( attrValue ) );
+                                                       PADS_COMMON::ConvertText( attr.name ) );
+                                field->SetText( PADS_COMMON::ConvertText( attrValue ) );
 
                                 // Footprint text fields on copper layers are almost always documentation
                                 // labels. Redirect to the corresponding silkscreen layer.
@@ -552,7 +552,7 @@ void PCB_IO_PADS::loadFootprints()
             PCB_FIELD* blockField = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "PADS_Reuse_Block" ) );
             blockField->SetLayer( Cmts_User );
             blockField->SetVisible( false );
-            blockField->SetText( wxString::FromUTF8( blockIt->second ) );
+            blockField->SetText( PADS_COMMON::ConvertText( blockIt->second ) );
             footprint->Add( blockField );
         }
 
@@ -801,11 +801,8 @@ void PCB_IO_PADS::loadFootprints()
                             if( layer_def.sizeA <= 0 )
                                 continue;
 
-                            if( layer_def.shape == "RT" || layer_def.shape == "ST"
-                                || layer_def.shape == "RA" || layer_def.shape == "SA" )
-                            {
+                            if( !PADS_IO::IsCopperPadRow( layer_def ) )
                                 continue;
-                            }
 
                             PCB_LAYER_ID mapped = mapPadsLayer( layer_def.layer );
 
@@ -862,7 +859,7 @@ void PCB_IO_PADS::loadFootprints()
                         // these to avoid overwriting the actual pad shape.  However,
                         // the presence of RT/ST indicates this pad should have thermal
                         // relief rather than a solid connection to copper pours.
-                        if( layer_def.shape == "RT" || layer_def.shape == "ST" )
+                        if( PADS_IO::IsThermalReliefPadRow( layer_def ) )
                         {
                             pad->SetLocalZoneConnection( ZONE_CONNECTION::THERMAL );
 
@@ -886,7 +883,7 @@ void PCB_IO_PADS::loadFootprints()
                             continue;
                         }
 
-                        if( layer_def.shape == "RA" || layer_def.shape == "SA" )
+                        if( PADS_IO::IsAntiPadRow( layer_def ) )
                             continue;
 
                         PCB_LAYER_ID kicad_layer = mapPadsLayer( layer_def.layer );
@@ -1007,15 +1004,22 @@ void PCB_IO_PADS::loadFootprints()
                     }
                     else
                     {
-                        if( plated )
-                            pad->SetAttribute( PAD_ATTRIB::PTH );
-                        else
-                            pad->SetAttribute( PAD_ATTRIB::NPTH );
-
                         // Preserve any explicit mask/paste layer bits accumulated
                         // during stack iteration before expanding to all copper layers.
                         LSET mask_paste_bits = layer_set & LSET( { F_Mask, B_Mask, F_Paste, B_Paste } );
-                        layer_set = LSET::AllCuMask() | mask_paste_bits;
+
+                        // A stack with no mask row still opens the mask; only an unplated hole
+                        // is mechanical, and it carries no inner copper
+                        if( plated )
+                        {
+                            pad->SetAttribute( PAD_ATTRIB::PTH );
+                            layer_set = PAD::PTHMask() | mask_paste_bits;
+                        }
+                        else
+                        {
+                            pad->SetAttribute( PAD_ATTRIB::NPTH );
+                            layer_set = PAD::UnplatedHoleMask() | mask_paste_bits;
+                        }
                     }
 
                     pad->SetLayerSet( layer_set );
@@ -1026,18 +1030,24 @@ void PCB_IO_PADS::loadFootprints()
                     pad->SetSize( F_Cu, VECTOR2I( fallbackSize, fallbackSize ) );
                     pad->SetShape( F_Cu, PAD_SHAPE::CIRCLE );
                     pad->SetAttribute( PAD_ATTRIB::PTH );
-                    pad->SetLayerSet( LSET::AllCuMask() );
+                    pad->SetLayerSet( PAD::PTHMask() );
                 }
 
-                std::string pinKey = pads_part.name + "." + term.name;
-                auto netIt = m_pinToNetMap.find( pinKey );
-
-                if( netIt != m_pinToNetMap.end() )
+                // An unplated hole is mechanical; joining it to a net pulls ratsnest to a
+                // mounting hole
+                if( pad->GetAttribute() != PAD_ATTRIB::NPTH )
                 {
-                    NETINFO_ITEM* net = m_loadBoard->FindNet( PADS_COMMON::ConvertInvertedNetName( netIt->second ) );
+                    std::string pinKey = pads_part.name + "." + term.name;
+                    auto        netIt = m_pinToNetMap.find( pinKey );
 
-                    if( net )
-                        pad->SetNet( net );
+                    if( netIt != m_pinToNetMap.end() )
+                    {
+                        NETINFO_ITEM* net =
+                                m_loadBoard->FindNet( PADS_COMMON::ConvertInvertedNetName( netIt->second ) );
+
+                        if( net )
+                            pad->SetNet( net );
+                    }
                 }
             }
 
@@ -1237,7 +1247,7 @@ void PCB_IO_PADS::loadReuseBlockGroups()
         if( !block.instances.empty() || !block.part_names.empty() )
         {
             PCB_GROUP* group = new PCB_GROUP( m_loadBoard );
-            group->SetName( wxString::FromUTF8( blockName ) );
+            group->SetName( PADS_COMMON::ConvertText( blockName ) );
             m_loadBoard->Add( group );
             blockGroups[blockName] = group;
         }
@@ -1273,7 +1283,7 @@ void PCB_IO_PADS::loadTestPoints()
 
         wxString refDes = wxString::Format( wxT( "TP%d" ), m_testPointIndex++ );
         footprint->SetReference( refDes );
-        footprint->SetValue( wxString::FromUTF8( tp.symbol_name ) );
+        footprint->SetValue( PADS_COMMON::ConvertText( tp.symbol_name ) );
 
         VECTOR2I pos( scaleCoord( tp.x, true ), scaleCoord( tp.y, false ) );
         footprint->SetPosition( pos );
@@ -1364,7 +1374,7 @@ void PCB_IO_PADS::loadTestPoints()
         PCB_FIELD* tpField = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "Test_Point" ) );
         tpField->SetLayer( Cmts_User );
         tpField->SetVisible( false );
-        tpField->SetText( wxString::FromUTF8( tp.type ) );
+        tpField->SetText( PADS_COMMON::ConvertText( tp.type ) );
         footprint->Add( tpField );
 
         m_loadBoard->Add( footprint );
@@ -1797,7 +1807,7 @@ void PCB_IO_PADS::loadClusterGroups()
     for( const PADS_IO::CLUSTER& cluster : clusters )
     {
         PCB_GROUP* group = new PCB_GROUP( m_loadBoard );
-        group->SetName( wxString::FromUTF8( cluster.name ) );
+        group->SetName( PADS_COMMON::ConvertText( cluster.name ) );
         m_loadBoard->Add( group );
         clusterGroups[cluster.id] = group;
     }
@@ -2287,7 +2297,7 @@ void PCB_IO_PADS::loadBoardSetup()
         if( nc.name.empty() )
             continue;
 
-        wxString ncName = wxString::FromUTF8( nc.name );
+        wxString ncName = PADS_COMMON::ConvertText( nc.name );
         std::shared_ptr<NETCLASS> netclass = std::make_shared<NETCLASS>( ncName );
 
         if( nc.clearance > 0 )
@@ -2324,7 +2334,7 @@ void PCB_IO_PADS::loadBoardSetup()
         if( dp.name.empty() )
             continue;
 
-        wxString dpClassName = wxString::Format( wxT( "DiffPair_%s" ), wxString::FromUTF8( dp.name ) );
+        wxString dpClassName = wxString::Format( wxT( "DiffPair_%s" ), PADS_COMMON::ConvertText( dp.name ) );
         std::shared_ptr<NETCLASS> dpNetclass = std::make_shared<NETCLASS>( dpClassName );
 
         if( dp.gap > 0 )

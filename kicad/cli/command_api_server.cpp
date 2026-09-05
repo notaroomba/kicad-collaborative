@@ -168,7 +168,7 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
             }
 
             KIFACE::DOCUMENT_SPEC spec;
-            spec.kind = KIFACE::DOCUMENT_SPEC::KIND::FPID;
+            spec.kind = KIFACE::DOCUMENT_SPEC::KIND::FPID_KIND;
             spec.libId = fpid;
 
             if( openProjectPath )
@@ -217,6 +217,14 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
         {
             if( !openProjectPath )
             {
+                if( !openDocuments.empty() )
+                {
+                    auto closeResult = closeAllDocuments( commands::CloseAllDocuments() );
+
+                    if( !closeResult )
+                        return tl::unexpected( closeResult.error() );
+                }
+
                 if( !Pgm().GetSettingsManager().LoadProject( projectPath.GetFullPath(), true ) )
                 {
                     wxLogTrace( traceApi, "Warning: no project file found for %s", inputPath );
@@ -285,7 +293,7 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
         }
 
         KIFACE::DOCUMENT_SPEC spec;
-        spec.kind = KIFACE::DOCUMENT_SPEC::KIND::FILE;
+        spec.kind = KIFACE::DOCUMENT_SPEC::KIND::FILE_KIND;
         spec.path = projectPath.GetFullPath();
 
         wxString error;
@@ -405,9 +413,7 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
 
         if( it->type == types::DOCTYPE_PROJECT )
         {
-            PROJECT& project = Pgm().GetSettingsManager().Prj();
-            Pgm().GetSettingsManager().UnloadProject( &project, false );
-            openProjectPath.reset();
+            return closeAllDocuments( commands::CloseAllDocuments() );
         }
         else
         {

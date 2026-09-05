@@ -65,6 +65,7 @@ void PCB_TABLECELL::Serialize( kiapi::board::types::TableCell& cell ) const
 
     PCB_TEXTBOX::Serialize( *cell.mutable_text_box() );
 
+    kiapi::common::PackCustomProperties( cell.mutable_custom_properties(), *this );
 }
 
 
@@ -89,6 +90,8 @@ bool PCB_TABLECELL::Deserialize( const kiapi::board::types::TableCell& cell )
 
     SetColSpan( cell.column_span() );
     SetRowSpan( cell.row_span() );
+
+    kiapi::common::UnpackCustomProperties( cell.custom_properties(), *this );
 
     return true;
 }
@@ -156,37 +159,38 @@ wxString PCB_TABLECELL::GetShownText( bool aAllowExtraText, int aDepth ) const
     const FOOTPRINT* parentFootprint = GetParentFootprint();
     const BOARD*     board = GetBoard();
 
-    std::function<bool( wxString* )> tableCellResolver = [&]( wxString* token ) -> bool
-    {
-        if( token->IsSameAs( wxT( "ROW" ) ) )
-        {
-            *token = wxString::Format( wxT( "%d" ), GetRow() + 1 ); // 1-based
-            return true;
-        }
-        else if( token->IsSameAs( wxT( "COL" ) ) )
-        {
-            *token = wxString::Format( wxT( "%d" ), GetColumn() + 1 ); // 1-based
-            return true;
-        }
-        else if( token->IsSameAs( wxT( "ADDR" ) ) )
-        {
-            *token = GetAddr();
-            return true;
-        }
-        else if( token->IsSameAs( wxT( "LAYER" ) ) )
-        {
-            *token = GetLayerName();
-            return true;
-        }
+    std::function<bool( wxString* )> tableCellResolver =
+            [&]( wxString* token ) -> bool
+            {
+                if( token->IsSameAs( wxT( "ROW" ) ) )
+                {
+                    *token = wxString::Format( wxT( "%d" ), GetRow() + 1 ); // 1-based
+                    return true;
+                }
+                else if( token->IsSameAs( wxT( "COL" ) ) )
+                {
+                    *token = wxString::Format( wxT( "%d" ), GetColumn() + 1 ); // 1-based
+                    return true;
+                }
+                else if( token->IsSameAs( wxT( "ADDR" ) ) )
+                {
+                    *token = GetAddr();
+                    return true;
+                }
+                else if( token->IsSameAs( wxT( "LAYER" ) ) )
+                {
+                    *token = GetLayerName();
+                    return true;
+                }
 
-        if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        if( board->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                if( board->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        return false;
-    };
+                return false;
+            };
 
     wxString text = EDA_TEXT::GetShownText( aAllowExtraText, aDepth );
 

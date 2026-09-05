@@ -181,7 +181,7 @@ static wxString filterFootprints( const wxString& aFilterJson )
                 // Pin count filter
                 if( pinCount > 0 )
                 {
-                    int fpPadCount = fp->GetUniquePadCount( DO_NOT_INCLUDE_NPTH );
+                    int fpPadCount = fp->GetNumberedPadCount();
 
                     if( fpPadCount != pinCount )
                         continue;
@@ -883,7 +883,7 @@ bool IFACE::HandleApiOpenDocument( const DOCUMENT_SPEC& aSpec, KICAD_API_SERVER*
 {
     wxCHECK( aServer, false );
 
-    if( aSpec.kind == DOCUMENT_SPEC::KIND::FPID )
+    if( aSpec.kind == DOCUMENT_SPEC::KIND::FPID_KIND )
         return handleOpenFootprint( aSpec.path, aSpec.libId.GetUniStringLibId(), aServer, aError );
 
     if( aSpec.path.IsEmpty() )

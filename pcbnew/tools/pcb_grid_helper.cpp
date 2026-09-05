@@ -42,6 +42,7 @@
 #include <zone.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <geometry/intersection.h>
+#include <tools/board_item_geometry.h>
 #include <geometry/nearest.h>
 #include <geometry/oval.h>
 #include <geometry/shape_circle.h>
@@ -66,66 +67,6 @@
 namespace
 {
 /**
- * Get the INTERSECTABLE_GEOM for a BOARD_ITEM if it's supported.
- *
- * This is the idealised geometry, e.g. a zero-width line or circle.
- */
-std::optional<INTERSECTABLE_GEOM> GetBoardIntersectable( const BOARD_ITEM& aItem )
-{
-    switch( aItem.Type() )
-    {
-    case PCB_SHAPE_T:
-    {
-        const PCB_SHAPE& shape = static_cast<const PCB_SHAPE&>( aItem );
-
-        switch( shape.GetShape() )
-        {
-        case SHAPE_T::SEGMENT:   return SEG{ shape.GetStart(), shape.GetEnd() };
-        case SHAPE_T::CIRCLE:    return CIRCLE{ shape.GetCenter(), shape.GetRadius() };
-        case SHAPE_T::ARC:       return SHAPE_ARC{ shape.GetStart(), shape.GetArcMid(), shape.GetEnd(), 0 };
-        case SHAPE_T::RECTANGLE: return BOX2I::ByCorners( shape.GetStart(), shape.GetEnd() );
-
-        case SHAPE_T::ELLIPSE:
-            return SHAPE_ELLIPSE{ shape.GetEllipseCenter(), shape.GetEllipseMajorRadius(),
-                                  shape.GetEllipseMinorRadius(), shape.GetEllipseRotation() };
-
-        case SHAPE_T::ELLIPSE_ARC:
-            return SHAPE_ELLIPSE{ shape.GetEllipseCenter(),      shape.GetEllipseMajorRadius(),
-                                  shape.GetEllipseMinorRadius(), shape.GetEllipseRotation(),
-                                  shape.GetEllipseStartAngle(),  shape.GetEllipseEndAngle() };
-
-        default:                 break;
-        }
-
-        break;
-    }
-
-    case PCB_TRACE_T:
-    {
-        const PCB_TRACK& track = static_cast<const PCB_TRACK&>( aItem );
-        return SEG{ track.GetStart(), track.GetEnd() };
-    }
-
-    case PCB_ARC_T:
-    {
-        const PCB_ARC& arc = static_cast<const PCB_ARC&>( aItem );
-        return SHAPE_ARC{ arc.GetStart(), arc.GetMid(), arc.GetEnd(), 0 };
-    }
-
-    case PCB_REFERENCE_IMAGE_T:
-    {
-        const PCB_REFERENCE_IMAGE& refImage = static_cast<const PCB_REFERENCE_IMAGE&>( aItem );
-        return refImage.GetBoundingBox();
-    }
-
-    default:
-        break;
-    }
-
-    return std::nullopt;
-}
-
-/**
  * Find the closest point on a BOARD_ITEM to a given point.
  *
  * Only works for items that have a NEARABLE_GEOM defined, it's
@@ -136,7 +77,7 @@ std::optional<INTERSECTABLE_GEOM> GetBoardIntersectable( const BOARD_ITEM& aItem
  */
 std::optional<int64_t> FindSquareDistanceToItem( const BOARD_ITEM& item, const VECTOR2I& aPos )
 {
-    std::optional<INTERSECTABLE_GEOM> intersectable = GetBoardIntersectable( item );
+    std::optional<INTERSECTABLE_GEOM> intersectable = BoardItemIntersectable( item );
     std::optional<NEARABLE_GEOM>      nearable;
 
     if( intersectable )
@@ -223,6 +164,9 @@ PCB_GRID_HELPER::~PCB_GRID_HELPER()
 
 void PCB_GRID_HELPER::AddConstructionItems( std::vector<BOARD_ITEM*> aItems, bool aExtensionOnly, bool aIsPersistent )
 {
+    if( !m_constructionGeometryEnabled )
+        return;
+
     if( !ADVANCED_CFG::GetCfg().m_EnableExtensionSnaps )
         return;
 
@@ -621,8 +565,18 @@ SNAP_INFERENCE_SETTINGS PCB_GRID_HELPER::snapInferenceSettings() const
 {
     SNAP_INFERENCE_SETTINGS settings;
 
+    // The caller's own switch wins over the user's preference, so apply it after the read.
+    auto applyOverride =
+            [&]() -> SNAP_INFERENCE_SETTINGS
+            {
+                if( !m_constructionGeometryEnabled )
+                    settings.constructionExtensions = false;
+
+                return settings;
+            };
+
     if( !m_toolMgr )
-        return settings;
+        return applyOverride();
 
     if( PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( m_toolMgr->GetToolHolder() ) )
     {
@@ -642,7 +596,7 @@ SNAP_INFERENCE_SETTINGS PCB_GRID_HELPER::snapInferenceSettings() const
         settings = cfg->m_SnapInference;
     }
 
-    return settings;
+    return applyOverride();
 }
 
 
@@ -886,7 +840,7 @@ SNAP_RESULT PCB_GRID_HELPER::ResolveSnap( const VECTOR2I& aOrigin, const LSET& a
             if( !geometryEnabled )
                 continue;
 
-            std::optional<INTERSECTABLE_GEOM> geometry = GetBoardIntersectable( *item );
+            std::optional<INTERSECTABLE_GEOM> geometry = BoardItemIntersectable( *item );
 
             if( !geometry )
                 continue;
@@ -1276,6 +1230,17 @@ SNAP_RESULT PCB_GRID_HELPER::ResolveSnap( const VECTOR2I& aOrigin, const LSET& a
     if( !frame.retainedId && m_retainedAngleBranch )
         frame.retainedId = m_retainedAngleBranch;
 
+    // A caller that reads meaning from where between two items the pointer lands cannot use
+    // the snaps that sit exactly between them.
+    if( !m_suppressedSnapSubtypes.empty() )
+    {
+        std::erase_if( frame.candidates,
+                       [&]( const SNAP_CANDIDATE& aCandidate )
+                       {
+                           return m_suppressedSnapSubtypes.contains( aCandidate.subtype );
+                       } );
+    }
+
     SNAP_FRAME_OUTPUT<PRESENTATION> output = ResolveSnapFrame( std::move( frame ) );
     SNAP_RESULT&                    result = output.result;
     retainAcceptedSnaps( result );
@@ -1464,6 +1429,8 @@ std::vector<BOARD_ITEM*> PCB_GRID_HELPER::queryVisible( std::initializer_list<BO
     const std::set<int>& activeLayers = settings->GetHighContrastLayers();
     bool                 isHighContrast = settings->GetHighContrast();
 
+    view->SyncLayerVisibilityCache();   // Required for ViewGetLOD() calls.
+
     for( const BOX2I& area : aAreas )
     {
         if( area.GetWidth() > 0 && area.GetHeight() > 0 )
@@ -1588,11 +1555,11 @@ void PCB_GRID_HELPER::computeAnchors( const std::vector<BOARD_ITEM*>& aItems, co
                     if( !excludeGraphics
                         && ( item.Type() == PCB_SHAPE_T || item.Type() == PCB_REFERENCE_IMAGE_T ) )
                     {
-                        intersectableGeom = GetBoardIntersectable( item );
+                        intersectableGeom = BoardItemIntersectable( item );
                     }
                     else if( !excludeTracks && ( item.Type() == PCB_TRACE_T || item.Type() == PCB_ARC_T ) )
                     {
-                        intersectableGeom = GetBoardIntersectable( item );
+                        intersectableGeom = BoardItemIntersectable( item );
                     }
 
                     if( intersectableGeom )
@@ -1767,6 +1734,8 @@ void PCB_GRID_HELPER::computeAnchors( BOARD_ITEM* aItem, const VECTOR2I& aRefPos
     const std::set<int>& activeLayers = settings->GetHighContrastLayers();
     const PCB_LAYER_ID   activeHighContrastPrimaryLayer = settings->GetPrimaryHighContrastLayer();
     bool                 isHighContrast = settings->GetHighContrast();
+
+    view->SyncLayerVisibilityCache();   // Required for ViewGetLOD() calls.
 
     const auto checkVisibility =
             [&]( const BOARD_ITEM* item )

@@ -185,9 +185,16 @@ protected:
         std::shared_ptr<LIBRARY_TABLE> child = std::make_shared<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::GLOBAL,
                                                                                 LIBRARY_TABLE_TYPE::FOOTPRINT );
 
-        Pgm().GetLibraryManager().ApplyLibOverrides( *child );
+        if( !child->IsOk() )
+        {
+            wxMessageBox( _( "Unable to load library table." ) );
+        }
+        else
+        {
+            Pgm().GetLibraryManager().ApplyLibOverrides( *child );
 
-        m_panel->OpenTable( child, aRow.Nickname() );
+            m_panel->OpenTable( child, aRow.Nickname() );
+        }
     }
 
     wxString getTablePreamble() override
@@ -214,7 +221,12 @@ void PANEL_FP_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTable
 
     for( int ii = 2; ii < (int) m_notebook->GetPageCount(); ++ii )
     {
-        if( m_notebook->GetPageText( ii ) == tabTitle )
+        wxString candidate = m_notebook->GetPageText( ii );
+
+        if( candidate.EndsWith( " *" ) )
+            candidate = candidate.Left( candidate.Length() - 2 );
+
+        if( candidate == tabTitle )
         {
             // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
             // results in a re-entrant call where the second call is one page behind.
@@ -387,32 +399,6 @@ PANEL_FP_LIB_TABLE::PANEL_FP_LIB_TABLE( DIALOG_EDIT_LIBRARY_TABLES* aParent, PRO
     m_notebook->Bind( wxEVT_AUINOTEBOOK_PAGE_CHANGING, &PANEL_FP_LIB_TABLE::onNotebookPageChangeRequest, this );
     // This is the button only press for the browse button instead of the menu
     m_browseButton->Bind( wxEVT_BUTTON, &PANEL_FP_LIB_TABLE::browseLibrariesHandler, this );
-
-    m_parent->SetCanCloseCheck(
-            [this]()
-            {
-                for( int ii = 0; ii < (int) m_notebook->GetPageCount(); ++ii )
-                {
-                    LIB_TABLE_NOTEBOOK_PANEL* panel =
-                            static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( ii ) );
-
-                    if( panel->GetClosable() )
-                    {
-                        bool wasDirty = panel->TableModified();
-
-                        if( !panel->GetCanClose() )
-                            return false;
-
-                        if( wasDirty && !panel->TableModified() )
-                        {
-                            m_parent->m_GlobalTableChanged = true;
-                            m_parent->m_ProjectTableChanged = true;
-                        }
-                    }
-                }
-
-                return true;
-            } );
 }
 
 
@@ -852,6 +838,15 @@ void PANEL_FP_LIB_TABLE::onReset( wxCommandEvent& event )
                                                       lastGlobalLibDir, wxEmptyString, m_supportedFpFiles ),
                     true /* take ownership */ );
 
+    LIB_TABLE_NOTEBOOK_PANEL* panel0 = static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( 0 ) );
+    panel0->ClearDirty();
+
+    static_cast<LIB_TABLE_GRID_DATA_MODEL*>( grid->GetTable() )->SetChangeCallback(
+            [panel0]()
+            {
+                panel0->MarkDirty();
+            } );
+
     m_parent->m_GlobalTableChanged = true;
 
     grid->Thaw();
@@ -1002,10 +997,11 @@ void InvokePcbLibTableEditor( KIWAY* aKiway, wxWindow* aCaller )
     DIALOG_EDIT_LIBRARY_TABLES dlg( aCaller, _( "Footprint Libraries" ) );
     dlg.SetKiway( &dlg, aKiway );
 
-    dlg.InstallPanel( new PANEL_FP_LIB_TABLE( &dlg, &aKiway->Prj() ) );
+    PANEL_FP_LIB_TABLE* panel = new PANEL_FP_LIB_TABLE( &dlg, &aKiway->Prj() );
+    dlg.InstallPanel( panel, panel->GetNotebook() );
 
-    if( dlg.ShowModal() == wxID_CANCEL )
-        return;
+    // User can choose to save changes on a Cancel, so don't exit on wxID_CANCEL.
+    dlg.ShowModal();
 
     if( dlg.m_GlobalTableChanged )
         Pgm().GetLibraryManager().LoadGlobalTables( { LIBRARY_TABLE_TYPE::FOOTPRINT } );

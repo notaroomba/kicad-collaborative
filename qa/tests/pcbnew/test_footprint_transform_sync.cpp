@@ -341,6 +341,33 @@ BOOST_FIXTURE_TEST_CASE( UndoRedoRestoresFootprintAndPadState, BOARD_FIXTURE )
 }
 
 
+BOOST_FIXTURE_TEST_CASE( FlippedFootprintMatchesLibraryCopy, BOARD_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue18", m_board );
+
+    for( FOOTPRINT* fp : m_board->Footprints() )
+    {
+        std::unique_ptr<FOOTPRINT> libCopy( static_cast<FOOTPRINT*>( fp->Clone() ) );
+
+        BOOST_REQUIRE_MESSAGE( !fp->FootprintNeedsUpdate( libCopy.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ),
+                               "footprint " << fp->GetReference() << " differs from its own clone" );
+
+        fp->Flip( fp->GetPosition(), FLIP_DIRECTION::TOP_BOTTOM );
+
+        BOOST_CHECK_MESSAGE( !fp->FootprintNeedsUpdate( libCopy.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ),
+                             "footprint " << fp->GetReference()
+                                          << " flipped top-bottom reported as differing from library" );
+
+        fp->Flip( fp->GetPosition(), FLIP_DIRECTION::TOP_BOTTOM );
+        fp->Flip( fp->GetPosition(), FLIP_DIRECTION::LEFT_RIGHT );
+
+        BOOST_CHECK_MESSAGE( !fp->FootprintNeedsUpdate( libCopy.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ),
+                             "footprint " << fp->GetReference()
+                                          << " flipped left-right reported as differing from library" );
+    }
+}
+
+
 // Stored lib start and the derived FP-relative pos must agree within 1 IU.
 static void CHECK_SHAPE_LIBPOS_MIRROR( const FOOTPRINT& aFp )
 {
@@ -1857,6 +1884,39 @@ BOOST_AUTO_TEST_CASE( PadPrimitiveFlipStaysPadLocal )
     // Effective and lib coords stay 1:1 for pad-local primitives.
     BOOST_CHECK_EQUAL( prim->GetLibraryEnd().x, prim->GetEnd().x );
     BOOST_CHECK_EQUAL( prim->GetLibraryEnd().y, prim->GetEnd().y );
+}
+
+
+BOOST_AUTO_TEST_CASE( PadPrimitiveFlipSurvivesNonUniformScale )
+{
+    BOARD      board;
+    FOOTPRINT* fp = new FOOTPRINT( &board );
+    fp->SetPosition( VECTOR2I( 0, 0 ) );
+    board.Add( fp );
+
+    PAD* pad = new PAD( fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CUSTOM );
+    pad->SetPosition( VECTOR2I( 0, 0 ) );
+    fp->Add( pad, ADD_MODE::APPEND );
+
+    PCB_SHAPE* prim = new PCB_SHAPE( pad, SHAPE_T::CIRCLE );
+    prim->SetStart( VECTOR2I( 0, 600000 ) );
+    prim->SetEnd( VECTOR2I( 0, 1100000 ) );
+    pad->AddPrimitive( PADSTACK::ALL_LAYERS, prim );
+
+    fp->SetTransformScale( 2.0, 1.0 );
+
+    BOOST_REQUIRE_EQUAL( static_cast<int>( prim->GetShape() ), static_cast<int>( SHAPE_T::ELLIPSE ) );
+    BOOST_REQUIRE_EQUAL( static_cast<int>( prim->GetLibraryShape() ), static_cast<int>( SHAPE_T::CIRCLE ) );
+
+    fp->Flip( fp->GetPosition(), FLIP_DIRECTION::TOP_BOTTOM );
+
+    BOOST_CHECK_EQUAL( prim->GetLibraryStart().y, -600000 );
+    BOOST_CHECK_EQUAL( prim->GetEllipseCenter().y, -600000 );
+
+    fp->SetTransformScale( 3.0, 1.0 );
+    BOOST_CHECK_EQUAL( prim->GetEllipseCenter().y, -600000 );
 }
 
 

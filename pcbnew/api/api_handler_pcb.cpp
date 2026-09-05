@@ -598,11 +598,14 @@ HANDLER_RESULT<BoardEnabledLayersResponse> API_HANDLER_PCB::handleSetBoardEnable
             modified |= board->RemoveAllItemsOnLayer( layer_id );
     }
 
-    if( enabled != previousEnabled )
-        frame()->UpdateUserInterface();
+    if( frame() )
+    {
+        if( enabled != previousEnabled )
+            frame()->UpdateUserInterface();
 
-    if( modified )
-        frame()->OnModify();
+        if( modified )
+            frame()->OnModify();
+    }
 
     BoardEnabledLayersResponse response;
 
@@ -1256,14 +1259,23 @@ HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetBoardOrigin(
     {
         PCB_EDIT_FRAME* f = frame();
 
-        frame()->CallAfter( [f, origin]()
-                            {
-                                // gridSetOrigin takes ownership and frees this
-                                VECTOR2D* dorigin = new VECTOR2D( origin );
-                                TOOL_MANAGER* mgr = f->GetToolManager();
-                                mgr->RunAction( PCB_ACTIONS::gridSetOrigin, dorigin );
-                                f->Refresh();
-                            } );
+        if( f )
+        {
+            frame()->CallAfter(
+                    [f, origin]()
+                    {
+                        // gridSetOrigin takes ownership and frees this
+                        VECTOR2D*     dorigin = new VECTOR2D( origin );
+                        TOOL_MANAGER* mgr = f->GetToolManager();
+                        mgr->RunAction( PCB_ACTIONS::gridSetOrigin, dorigin );
+                        f->Refresh();
+                    } );
+        }
+        else
+        {
+            board()->GetDesignSettings().SetGridOrigin( origin );
+        }
+
         break;
     }
 
@@ -1271,12 +1283,21 @@ HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetBoardOrigin(
     {
         PCB_EDIT_FRAME* f = frame();
 
-        frame()->CallAfter( [f, origin]()
-                            {
-                                TOOL_MANAGER* mgr = f->GetToolManager();
-                                mgr->RunAction( PCB_ACTIONS::drillSetOrigin, origin );
-                                f->Refresh();
-                            } );
+        if( f )
+        {
+            frame()->CallAfter(
+                    [f, origin]()
+                    {
+                        TOOL_MANAGER* mgr = f->GetToolManager();
+                        mgr->RunAction( PCB_ACTIONS::drillSetOrigin, origin );
+                        f->Refresh();
+                    } );
+        }
+        else
+        {
+            board()->GetDesignSettings().SetAuxOrigin( origin );
+        }
+
         break;
     }
 
@@ -2704,86 +2725,10 @@ HANDLER_RESULT<CrossProbeAnnounceResponse> API_HANDLER_PCB::handleCrossProbeAnno
 }
 
 
-using google::protobuf::RepeatedPtrField;
-
-static std::vector<BOARD_ITEM*> findItemsFromSyncSelection( const BOARD* aBoard,
-                                                            const RepeatedPtrField<SelectionSpec>& aItems )
-{
-    std::vector<std::pair<int, BOARD_ITEM*>> orderPairs;
-    wxCHECK( aBoard, {} );
-
-    for( FOOTPRINT* footprint : aBoard->Footprints() )
-    {
-        wxString fpRef = footprint->GetReference();
-
-        for( int index = 0; index < aItems.size(); ++index )
-        {
-            const SelectionSpec& spec = aItems[index];
-
-            switch( spec.spec_case() )
-            {
-            case SelectionSpec::SpecCase::kFootprint:
-            {
-                if( fpRef == wxString::FromUTF8( spec.footprint().reference() ) )
-                    orderPairs.emplace_back( index, footprint );
-
-                break;
-            }
-
-            case SelectionSpec::SpecCase::kPad:
-            {
-                if( fpRef == wxString::FromUTF8( spec.footprint().reference() ) )
-                {
-                    wxString padNumber = wxString::FromUTF8( spec.pad().number() );
-
-                    for( PAD* pad : footprint->Pads() )
-                    {
-                        if( padNumber == pad->GetNumber() )
-                            orderPairs.emplace_back( index, pad );
-                    }
-                }
-
-                break;
-            }
-
-            case SelectionSpec::SpecCase::kSheetPath:
-            {
-                KIID_PATH fpSheetPath = footprint->GetPath();
-
-                if( fpSheetPath.IsContainedWithin( kiapi::common::UnpackSheetPath( spec.sheet_path() ) ) )
-                    orderPairs.emplace_back( index, footprint );
-
-                break;
-            }
-
-            default: break;
-            }
-        }
-    }
-
-    std::ranges::sort( orderPairs,
-                       []( const std::pair<int, BOARD_ITEM*>& a, const std::pair<int, BOARD_ITEM*>& b ) -> bool
-                       {
-                           return a.first < b.first;
-                       } );
-
-    std::vector<BOARD_ITEM*> items;
-    items.reserve( orderPairs.size() );
-
-    for( BOARD_ITEM* val : orderPairs | std::views::values )
-        items.push_back( val );
-
-    return items;
-}
-
-
 HANDLER_RESULT<SyncSelectionResponse> API_HANDLER_PCB::handleSyncSelection( const HANDLER_CONTEXT<SyncSelection>& aCtx )
 {
     if( std::optional<ApiResponseStatus> headless = checkForHeadless( "SyncSelection" ) )
         return tl::unexpected( *headless );
-
-    std::string req = aCtx.Request.SerializeAsString();
-    frame()->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, req );
 
     SyncSelectionResponse response;
 
@@ -2796,7 +2741,8 @@ HANDLER_RESULT<SyncSelectionResponse> API_HANDLER_PCB::handleSyncSelection( cons
         return response;
     }
 
-    std::vector<BOARD_ITEM*> items = findItemsFromSyncSelection( board(), aCtx.Request.items() );
+    std::vector<BOARD_ITEM*> items =
+            kiapi::board::FindItemsFromSyncSelection( board(), aCtx.Request.items() );
 
     frame()->m_ProbingSchToPcb = true; // recursion guard
 

@@ -144,6 +144,7 @@ set( QA_EESCHEMA_SRCS
     test_issue25112_shared_sheet_field_scope.cpp
     test_issue25209_derived_body_styles.cpp
     test_issue25280_pin_sync_units.cpp
+    test_issue25223_rule_area_netclass_stale.cpp
     test_issue24360_root_sheetname.cpp
     test_unique_sheet_name.cpp
     test_unique_group_name.cpp
@@ -243,6 +244,7 @@ set( QA_EESCHEMA_SRCS
     test_netlist_exporter_xml_terminal_pins.cpp
     test_netlist_exporter_xml_nested_groups.cpp
     test_resolve_drivers.cpp
+    test_hierarchy_driver_ranking.cpp
     test_saveas_copy_subsheets.cpp
     test_update_items_connectivity.cpp
     test_design_block_duplicate.cpp
@@ -255,6 +257,7 @@ set( QA_EESCHEMA_SRCS
     test_field_case_conflicts.cpp
     test_variant_symbol_compatibility.cpp
     test_variant_field_resolution.cpp
+    test_sch_dynamic_properties.cpp
 
     # Net Chains test suite
     net_chains/test_net_chains.cpp
