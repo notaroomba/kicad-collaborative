@@ -30,6 +30,7 @@
 #include <wx/statbmp.h>
 #include <wx/gdicmn.h>
 #include <wx/panel.h>
+#include <wx/scrolwin.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
@@ -197,6 +198,15 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
     const CARD_THEME theme = cardTheme();
     m_panel->SetBackgroundColour( theme.bg );
 
+    // Long threads scroll inside the card instead of growing past the screen.
+    m_thread = new wxScrolledWindow( m_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                     wxVSCROLL | wxBORDER_NONE );
+    m_thread->SetBackgroundColour( theme.bg );
+    m_thread->SetScrollRate( 0, 8 );
+    m_threadSizer = new wxBoxSizer( wxVERTICAL );
+    m_thread->SetSizer( m_threadSizer );
+    m_sizer->Add( m_thread, 1, wxEXPAND );
+
     const nlohmann::json*              root = nullptr;
     std::vector<const nlohmann::json*> replies;
 
@@ -226,20 +236,20 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
     {
         if( !aFirst )
         {
-            wxStaticLine* rule = new wxStaticLine( m_panel );
+            wxStaticLine* rule = new wxStaticLine( m_thread );
             rule->SetBackgroundColour( theme.border );
-            m_sizer->Add( rule, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
+            m_threadSizer->Add( rule, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
         }
 
         wxString login = wxString::FromUTF8( c.value( "authorLogin", "" ) );
 
         wxBoxSizer*     head = new wxBoxSizer( wxHORIZONTAL );
-        wxStaticBitmap* avatar = new wxStaticBitmap( m_panel, wxID_ANY, avatarBitmap( login, 24, theme ) );
-        wxStaticText*   who = new wxStaticText( m_panel, wxID_ANY, login );
+        wxStaticBitmap* avatar = new wxStaticBitmap( m_thread, wxID_ANY, avatarBitmap( login, 24, theme ) );
+        wxStaticText*   who = new wxStaticText( m_thread, wxID_ANY, login );
         who->SetFont( who->GetFont().Bold() );
         who->SetForegroundColour( theme.text );
 
-        wxStaticText* when = new wxStaticText( m_panel, wxID_ANY,
+        wxStaticText* when = new wxStaticText( m_thread, wxID_ANY,
                                                relativeTime( c.value( "createdAt", "" ) ) );
         when->SetFont( small );
         when->SetForegroundColour( theme.muted );
@@ -255,7 +265,7 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
             // Figma keeps the resolve action at the thread's top-right corner.
             head->AddStretchSpacer();
             wxBitmapButton* resolve = new wxBitmapButton(
-                    m_panel, wxID_ANY, iconBitmap( wxS( "check" ), 22, m_resolved ? wxColour( 0x3D, 0xBE, 0x3D ) : theme.muted, theme.bg ),
+                    m_thread, wxID_ANY, iconBitmap( wxS( "check" ), 22, m_resolved ? wxColour( 0x3D, 0xBE, 0x3D ) : theme.muted, theme.bg ),
                     wxDefaultPosition, wxDefaultSize, wxBORDER_NONE );
             resolve->SetBackgroundColour( theme.bg );
             resolve->SetToolTip( m_resolved ? _( "Reopen" ) : _( "Resolve" ) );
@@ -263,7 +273,7 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
             head->Add( resolve, 0, wxALIGN_CENTER_VERTICAL );
         }
 
-        wxStaticText* body = new wxStaticText( m_panel, wxID_ANY,
+        wxStaticText* body = new wxStaticText( m_thread, wxID_ANY,
                                                wxString::FromUTF8( c.value( "body", "" ) ) );
         body->SetForegroundColour( theme.text );
         body->Wrap( CARD_WIDTH - 2 * pad - 32 );
@@ -273,8 +283,8 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
         bodyRow->AddSpacer( 32 );
         bodyRow->Add( body, 1 );
 
-        m_sizer->Add( head, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
-        m_sizer->Add( bodyRow, 0, wxEXPAND | wxLEFT | wxRIGHT, pad );
+        m_threadSizer->Add( head, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, pad );
+        m_threadSizer->Add( bodyRow, 0, wxEXPAND | wxLEFT | wxRIGHT, pad );
     };
 
     addComment( *root, true );
@@ -284,10 +294,10 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
 
     if( m_resolved )
     {
-        wxStaticText* tag = new wxStaticText( m_panel, wxID_ANY, _( "\u2713 Resolved" ) );
+        wxStaticText* tag = new wxStaticText( m_thread, wxID_ANY, _( "\u2713 Resolved" ) );
         tag->SetFont( small );
         tag->SetForegroundColour( wxColour( 0x3D, 0xBE, 0x3D ) );
-        m_sizer->Add( tag, 0, wxLEFT | wxRIGHT | wxTOP, pad );
+        m_threadSizer->Add( tag, 0, wxLEFT | wxRIGHT | wxTOP, pad );
     }
 
     // Reply row: the field with a round send button, Figma style.
@@ -310,6 +320,13 @@ void COLLAB_COMMENT_CARD::rebuild( const nlohmann::json& aComments )
     row->AddSpacer( 8 );
     row->Add( send, 0, wxALIGN_CENTER_VERTICAL );
     m_sizer->Add( row, 0, wxEXPAND | wxALL, pad );
+
+    m_thread->Layout();
+    wxSize threadSz = m_threadSizer->ComputeFittingClientSize( m_thread );
+    threadSz.x = CARD_WIDTH;
+    threadSz.y = std::min( threadSz.y, 280 );
+    m_thread->SetMinSize( threadSz );
+    m_thread->FitInside();
 
     m_panel->Layout();
     wxSize sz = m_sizer->ComputeFittingClientSize( m_panel );
@@ -360,8 +377,19 @@ void COLLAB_COMMENT_CARD::ShowThread( const nlohmann::json& aComments, long long
     Show();
 #endif
 
+    m_raised = false;
     m_animStart = wxGetUTCTimeMillis();
     m_anim.Start( 16 );
+}
+
+
+void COLLAB_COMMENT_CARD::ActivateForPointer()
+{
+    if( m_raised || !IsShown() )
+        return;
+
+    m_raised = true;
+    Raise();   // makes the card key so its buttons take the next click directly
 }
 
 
@@ -409,6 +437,11 @@ void COLLAB_COMMENT_CARD::HideCard()
     m_anim.Stop();
     Hide();
     m_rootId = -1;
+    m_raised = false;
+
+    // Give the keyboard back to the editor (the card may have been activated).
+    if( wxWindow* parent = GetParent() )
+        parent->SetFocus();
 }
 
 
@@ -426,7 +459,9 @@ bool COLLAB_COMMENT_CARD::ContainsScreenPoint( const wxPoint& aPt ) const
 
 bool COLLAB_COMMENT_CARD::HasFocusedInput() const
 {
-    return IsShown() && m_input && ( m_input->HasFocus() || !m_input->IsEmpty() );
+    // A draft in progress keeps the card; mere focus must not (it would pin the
+    // card open forever after a click into it).
+    return IsShown() && m_input && !m_input->IsEmpty();
 }
 
 
@@ -450,6 +485,13 @@ void COLLAB_COMMENT_CARD::onReply( wxCommandEvent& aEvent )
 
 void COLLAB_COMMENT_CARD::onResolve( wxCommandEvent& aEvent )
 {
-    if( m_rootId >= 0 && m_resolve )
-        m_resolve( m_rootId, !m_resolved );
+    if( m_rootId < 0 || !m_resolve )
+        return;
+
+    bool resolved = !m_resolved;
+    m_resolve( m_rootId, resolved );
+
+    // Resolving closes the thread, as in Figma; reopening just refreshes.
+    if( resolved )
+        HideCard();
 }

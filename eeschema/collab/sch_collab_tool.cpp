@@ -27,6 +27,7 @@
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
 #include <dialogs/collab_comment_card.h>
+#include <wx/utils.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
 #include <math/util.h>
@@ -530,6 +531,12 @@ wxString SCH_COLLAB_TOOL::currentDocId() const
 
 int SCH_COLLAB_TOOL::onSelectionChange( const TOOL_EVENT& aEvent )
 {
+    if( m_commentCard && m_commentCard->IsShown()
+        && !m_commentCard->ContainsScreenPoint( wxGetMousePosition() ) )
+    {
+        hideCommentCard();
+    }
+
     m_presenceDirty = true;
 
     // A click that selected nothing may be a comment-pin or peer-cursor hit:
@@ -1667,9 +1674,19 @@ void SCH_COLLAB_TOOL::updateCommentCard()
     }
     else if( m_commentCard && m_commentCard->IsShown() )
     {
+        // Any click outside the card dismisses it (clicking away, like Figma).
+        if( wxGetMouseState().LeftIsDown() && !m_commentCard->ContainsScreenPoint( mouse ) )
+        {
+            hideCommentCard();
+            return;
+        }
+
+        if( m_commentCard->ContainsScreenPoint( mouse ) )
+            m_commentCard->ActivateForPointer();
+
         if( m_commentCard->ContainsScreenPoint( mouse ) || m_commentCard->HasFocusedInput() )
             m_cardGrace = 0;
-        else if( ++m_cardGrace > 5 )
+        else if( ++m_cardGrace > 4 )
             hideCommentCard();
     }
 }
