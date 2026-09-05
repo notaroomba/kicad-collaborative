@@ -206,6 +206,18 @@ private:
     ///< The open comments dialog, if any (modeless; owned by wx).
 class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
 
+    ///< Hover card beside a comment pin (thread + reply box), created lazily.
+    class COLLAB_COMMENT_CARD* m_commentCard = nullptr;
+    int                       m_cardGrace = 0;
+
+    ///< Timer tick: show the card for the pin under the pointer, hide it when the
+    ///< pointer has left both the pin and the card.
+    void updateCommentCard();
+    void hideCommentCard();
+
+    ///< World position of a thread's root comment (its pin).
+    VECTOR2I commentAnchor( long long aRootId ) const;
+
     ///< The version-history sidebar pane (created lazily; owned by AUI).
     class COLLAB_HISTORY_PANEL* m_historyPanel = nullptr;
 
