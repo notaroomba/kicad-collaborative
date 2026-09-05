@@ -243,7 +243,12 @@ async function openEditor(id) {
   renderDocSwitcher();
   loadHistory();
   const wanted = new URLSearchParams(location.search).get("doc");
-  const doc = state.docs.find((d) => d.docId === wanted) || state.docs.find((d) => d.docType === "kicad_pcb") || rootSchematic() || null;
+  // Open what has something to show: a rendered board first, else the root
+  // schematic (a schematic-only project has an empty placeholder board).
+  const doc = state.docs.find((d) => d.docId === wanted)
+    || state.docs.find((d) => d.docType === "kicad_pcb" && d.hasPreview)
+    || (rootSchematic() && rootSchematic().hasPreview ? rootSchematic() : null)
+    || state.docs.find((d) => d.docType === "kicad_pcb") || rootSchematic() || null;
   if (!doc) {
     base.replaceChildren(); $("#layers").innerHTML = `<p class="note">This project has no board or schematic yet. Open it in the desktop app.</p>`;
     setConn("err", "nothing to show"); return;
