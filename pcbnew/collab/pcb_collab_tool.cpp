@@ -26,7 +26,7 @@
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
-#include <cursors.h>
+#include <gal/cursors.h>
 #include <dialogs/collab_comment_card.h>
 #include <wx/utils.h>
 #include <widgets/collab_history_panel.h>
