@@ -110,6 +110,7 @@ void PCB_REFERENCE_IMAGE::swapData( BOARD_ITEM* aItem )
     std::swap( m_flags, item->m_flags );
     std::swap( m_parent, item->m_parent );
     std::swap( m_forceVisible, item->m_forceVisible );
+    std::swap( m_customProperties, item->m_customProperties );
     m_referenceImage.SwapData( item->m_referenceImage );
 }
 
@@ -193,6 +194,7 @@ void PCB_REFERENCE_IMAGE::Serialize( google::protobuf::Any& aContainer ) const
 
     m_referenceImage.PackToBytes( *refImage.mutable_image_data() );
 
+    kiapi::common::PackCustomProperties( refImage.mutable_custom_properties(), *this );
     aContainer.PackFrom( refImage );
 }
 
@@ -221,6 +223,7 @@ bool PCB_REFERENCE_IMAGE::Deserialize( const google::protobuf::Any& aContainer )
         m_referenceImage.SetImageScale( refImage.image_scale().value() );
 
     SetLocked( refImage.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( refImage.custom_properties(), *this );
     return true;
 }
 
@@ -239,6 +242,13 @@ void PCB_REFERENCE_IMAGE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDir
 void PCB_REFERENCE_IMAGE::Rotate( const VECTOR2I& aCenter, const EDA_ANGLE& aAngle )
 {
     m_referenceImage.Rotate( aCenter, aAngle );
+}
+
+
+void PCB_REFERENCE_IMAGE::Mirror( const VECTOR2I& aMirrorRef, FLIP_DIRECTION aFlipDirection )
+{
+    // Mirror the content about the axis through aMirrorRef without changing layers.
+    m_referenceImage.Flip( aMirrorRef, aFlipDirection );
 }
 
 
@@ -417,7 +427,7 @@ static struct PCB_REFERENCE_IMAGE_DESC
 
         propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Layer" ),
                     new PROPERTY_ENUM<PCB_REFERENCE_IMAGE, PCB_LAYER_ID, BOARD_ITEM>( _HKI( "Associated Layer" ),
-                                &PCB_REFERENCE_IMAGE::SetLayer, &PCB_REFERENCE_IMAGE::GetLayer ) );
+                                &PCB_REFERENCE_IMAGE::SetLayer, &PCB_REFERENCE_IMAGE::GetLayer ) ).SetIsCopyable();
 
         const wxString groupImage = _HKI( "Image Properties" );
 

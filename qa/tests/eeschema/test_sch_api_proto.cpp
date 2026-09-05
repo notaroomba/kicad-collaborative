@@ -1,7 +1,6 @@
 /*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
- * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
  * @author Jon Evans <jon@craftyjon.com>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -36,8 +35,10 @@
 #include <sch_line.h>
 #include <sch_no_connect.h>
 #include <sch_rule_area.h>
+#include <sch_screen.h>
 #include <sch_shape.h>
 #include <sch_sheet.h>
+#include <sch_sheet_path.h>
 #include <sch_symbol.h>
 #include <sch_table.h>
 #include <sch_text.h>
@@ -223,8 +224,15 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
 
                 std::unique_ptr<SCH_SYMBOL> output = std::make_unique<SCH_SYMBOL>();
 
+                // A symbol reaches its schematic through the screen it sits on, which is where
+                // the variant registry lives.
+                output->SetParent( m_schematic->RootScreen() );
+
                 BOOST_REQUIRE_NO_THROW( result = UnpackSymbol( output.get(), symbolProto ) );
                 BOOST_REQUIRE_MESSAGE( result, "Deserialization failed" );
+
+                BOOST_REQUIRE_NO_THROW( ApplySymbolInstance( output.get(), symbolProto, path,
+                                                             m_schematic.get() ) );
 
                 kiapi::schematic::types::SchematicSymbolInstance outputProto;
                 BOOST_REQUIRE_NO_THROW( result = PackSymbol( &outputProto, output.get(), path ) );
@@ -248,6 +256,227 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
             break;
         }
     }
+}
+
+
+BOOST_AUTO_TEST_CASE( PerPlacementAttributes )
+{
+    wxFileName fn( KI_TEST::GetEeschemaTestDataDir(), wxS( "api_kitchen_sink.kicad_sch" ) );
+    LoadSchematic( fn );
+    SCH_SHEET_PATH path = m_schematic->CurrentSheet();
+
+    SCH_SYMBOL* symbol = nullptr;
+
+    for( SCH_ITEM* item : m_schematic->RootScreen()->Items().OfType( SCH_SYMBOL_T ) )
+    {
+        symbol = static_cast<SCH_SYMBOL*>( item );
+        break;
+    }
+
+    BOOST_REQUIRE( symbol );
+
+    const wxString variantName( wxS( "api-variant" ) );
+    const bool     baseDNP = symbol->GetDNP();
+
+    kiapi::schematic::types::SchematicSymbolInstance proto;
+    BOOST_REQUIRE( PackSymbol( &proto, symbol, path ) );
+
+    kiapi::schematic::types::SchematicSymbolVariant* variant =
+            proto.mutable_variants()->add_variants();
+    variant->set_name( variantName.ToUTF8() );
+    variant->mutable_attributes()->set_do_not_populate( !baseDNP );
+
+    ApplySymbolInstance( symbol, proto, path, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( symbol->GetDNP( &path, variantName ), !baseDNP );
+    BOOST_CHECK_EQUAL( symbol->GetDNP(), baseDNP );
+    BOOST_CHECK( m_schematic->GetVariantNames().count( variantName ) );
+
+    // An unset variant set leaves the placement's variants alone.
+    kiapi::schematic::types::SchematicSymbolInstance untouched;
+    untouched.mutable_reference_field()->mutable_text()->set_text(
+            symbol->GetRef( &path ).ToUTF8() );
+
+    ApplySymbolInstance( symbol, untouched, path, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( symbol->GetDNP( &path, variantName ), !baseDNP );
+
+    // Sending the set back without a variant removes it from this placement, while the variant
+    // itself stays registered with the schematic.
+    kiapi::schematic::types::SchematicSymbolInstance cleared;
+    BOOST_REQUIRE( PackSymbol( &cleared, symbol, path ) );
+    BOOST_REQUIRE_EQUAL( cleared.variants().variants_size(), 1 );
+    cleared.mutable_variants()->clear_variants();
+
+    ApplySymbolInstance( symbol, cleared, path, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( symbol->GetDNP( &path, variantName ), baseDNP );
+    BOOST_CHECK( m_schematic->GetVariantNames().count( variantName ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( PerPlacementFieldOverride )
+{
+    wxFileName fn( KI_TEST::GetEeschemaTestDataDir(), wxS( "api_kitchen_sink.kicad_sch" ) );
+    LoadSchematic( fn );
+    SCH_SHEET_PATH path = m_schematic->CurrentSheet();
+
+    SCH_SYMBOL* symbol = nullptr;
+
+    for( SCH_ITEM* item : m_schematic->RootScreen()->Items().OfType( SCH_SYMBOL_T ) )
+    {
+        symbol = static_cast<SCH_SYMBOL*>( item );
+        break;
+    }
+
+    BOOST_REQUIRE( symbol );
+
+    const wxString variantName( wxS( "api-variant" ) );
+    const wxString fieldName = symbol->GetField( FIELD_T::VALUE )->GetName();
+    const wxString baseValue = symbol->GetFieldText( fieldName, &path );
+    const wxString overrideValue( wxS( "Override" ) );
+
+    kiapi::schematic::types::SchematicSymbolInstance proto;
+    BOOST_REQUIRE( PackSymbol( &proto, symbol, path ) );
+
+    kiapi::schematic::types::SchematicSymbolVariant* variant = proto.mutable_variants()->add_variants();
+    variant->set_name( variantName.ToUTF8() );
+    variant->mutable_attributes()->set_do_not_populate( true );
+    ( *variant->mutable_fields() )[std::string( fieldName.ToUTF8() )] = overrideValue.ToUTF8();
+
+    ApplySymbolInstance( symbol, proto, path, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( symbol->GetFieldText( fieldName, &path, variantName ), overrideValue );
+    BOOST_CHECK( symbol->GetDNP( &path, variantName ) );
+
+    kiapi::schematic::types::SchematicSymbolInstance withoutField;
+    BOOST_REQUIRE( PackSymbol( &withoutField, symbol, path ) );
+    BOOST_REQUIRE_EQUAL( withoutField.variants().variants_size(), 1 );
+
+    withoutField.mutable_variants()->mutable_variants( 0 )->clear_fields();
+
+    ApplySymbolInstance( symbol, withoutField, path, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( symbol->GetFieldText( fieldName, &path, variantName ), baseValue );
+    BOOST_CHECK( symbol->GetDNP( &path, variantName ) );
+
+    kiapi::schematic::types::SchematicSymbolInstance cleared;
+    BOOST_REQUIRE( PackSymbol( &cleared, symbol, path ) );
+    cleared.mutable_variants()->clear_variants();
+
+    ApplySymbolInstance( symbol, cleared, path, m_schematic.get() );
+
+    BOOST_CHECK( !symbol->GetDNP( &path, variantName ) );
+    BOOST_CHECK( m_schematic->GetVariantNames().count( variantName ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SheetInstanceRoundTrip )
+{
+    wxFileName fn( KI_TEST::GetEeschemaTestDataDir() );
+    fn.AppendDir( wxS( "variants" ) );
+    fn.SetName( wxS( "variants" ) );
+    fn.SetExt( wxS( "kicad_sch" ) );
+    LoadSchematic( fn );
+
+    SCH_SHEET* sheet = nullptr;
+
+    for( SCH_ITEM* item : m_schematic->RootScreen()->Items().OfType( SCH_SHEET_T ) )
+    {
+        sheet = static_cast<SCH_SHEET*>( item );
+        break;
+    }
+
+    BOOST_REQUIRE( sheet );
+
+    SCH_SHEET_PATH parentPath = m_schematic->CurrentSheet();
+
+    kiapi::schematic::types::SheetSymbol proto;
+    BOOST_REQUIRE( PackSheet( &proto, sheet, parentPath ) );
+
+    BOOST_CHECK_EQUAL( proto.page_number(), "2" );
+    BOOST_REQUIRE_EQUAL( proto.variants().variants_size(), 1 );
+
+    const kiapi::schematic::types::SheetVariant& variant = proto.variants().variants( 0 );
+    BOOST_CHECK_EQUAL( variant.name(), "Variant 1" );
+    BOOST_CHECK( variant.exclude_from_sim() );
+
+    std::unique_ptr<SCH_SHEET> output = std::make_unique<SCH_SHEET>( m_schematic->RootScreen() );
+    output->SetParent( m_schematic->RootScreen() );
+    output->SetScreen( new SCH_SCREEN( m_schematic.get() ) );
+
+    BOOST_REQUIRE( UnpackSheet( output.get(), proto ).has_value() );
+    ApplySheetInstance( output.get(), proto, parentPath, m_schematic.get() );
+
+    SCH_SHEET_PATH childPath( parentPath );
+    childPath.push_back( output.get() );
+
+    BOOST_CHECK_EQUAL( childPath.GetPageNumber(), "2" );
+    BOOST_CHECK( output->GetExcludedFromSim( &parentPath, wxS( "Variant 1" ) ) );
+
+    kiapi::schematic::types::SheetSymbol outputProto;
+    BOOST_REQUIRE( PackSheet( &outputProto, output.get(), parentPath ) );
+
+    BOOST_CHECK_EQUAL( outputProto.page_number(), proto.page_number() );
+    BOOST_REQUIRE_EQUAL( outputProto.variants().variants_size(), 1 );
+    BOOST_CHECK_EQUAL( outputProto.variants().variants( 0 ).name(), "Variant 1" );
+    BOOST_CHECK_EQUAL( outputProto.variants().variants( 0 ).exclude_from_sim(),
+                       proto.variants().variants( 0 ).exclude_from_sim() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SheetVariantManagement )
+{
+    wxFileName fn( KI_TEST::GetEeschemaTestDataDir(), wxS( "api_kitchen_sink.kicad_sch" ) );
+    LoadSchematic( fn );
+
+    SCH_SHEET* sheet = nullptr;
+
+    for( SCH_ITEM* item : m_schematic->RootScreen()->Items().OfType( SCH_SHEET_T ) )
+    {
+        sheet = static_cast<SCH_SHEET*>( item );
+        break;
+    }
+
+    BOOST_REQUIRE( sheet );
+
+    SCH_SHEET_PATH parentPath = m_schematic->CurrentSheet();
+    const wxString variantName( wxS( "api-sheet-variant" ) );
+    const bool     baseDNP = sheet->GetDNP( &parentPath );
+
+    kiapi::schematic::types::SheetSymbol proto;
+    BOOST_REQUIRE( PackSheet( &proto, sheet, parentPath ) );
+
+    kiapi::schematic::types::SheetVariant* variant = proto.mutable_variants()->add_variants();
+    variant->set_name( variantName.ToUTF8() );
+    variant->set_dnp( !baseDNP );
+
+    ApplySheetInstance( sheet, proto, parentPath, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( sheet->GetDNP( &parentPath, variantName ), !baseDNP );
+    BOOST_CHECK_EQUAL( sheet->GetDNP( &parentPath ), baseDNP );
+    BOOST_CHECK( m_schematic->GetVariantNames().count( variantName ) );
+
+    kiapi::schematic::types::SheetSymbol untouched;
+    BOOST_REQUIRE( PackSheet( &untouched, sheet, parentPath ) );
+    untouched.clear_variants();
+
+    if( untouched.page_number().empty() )
+        untouched.set_page_number( "1" );
+
+    ApplySheetInstance( sheet, untouched, parentPath, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( sheet->GetDNP( &parentPath, variantName ), !baseDNP );
+
+    kiapi::schematic::types::SheetSymbol cleared;
+    BOOST_REQUIRE( PackSheet( &cleared, sheet, parentPath ) );
+    BOOST_REQUIRE_EQUAL( cleared.variants().variants_size(), 1 );
+    cleared.mutable_variants()->clear_variants();
+
+    ApplySheetInstance( sheet, cleared, parentPath, m_schematic.get() );
+
+    BOOST_CHECK_EQUAL( sheet->GetDNP( &parentPath, variantName ), baseDNP );
+    BOOST_CHECK( m_schematic->GetVariantNames().count( variantName ) );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

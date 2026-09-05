@@ -599,6 +599,22 @@ TOOL_ACTION PCB_ACTIONS::drawVia( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_via )
         .Flags( AF_ACTIVATE ) );
 
+TOOL_ACTION PCB_ACTIONS::placeViaStack( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.viaStack" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Place Microvia Stack" ) )
+        .Tooltip( _( "Place a stacked or staggered microvia stack" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_via_stack )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::makeViaStack( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Generator.makeViaStack" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Create Stack from Selection" ) )
+        .Tooltip( _( "Wrap the selected microvias and traces into a microvia stack" ) )
+        .Icon( BITMAPS::add_via_stack ) );
+
 TOOL_ACTION PCB_ACTIONS::drawRuleArea( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.ruleArea" )
         .Scope( AS_GLOBAL )
@@ -1072,6 +1088,20 @@ TOOL_ACTION PCB_ACTIONS::extendLines( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Extend Lines to Meet" ) )
         .Tooltip( _( "Extend lines to meet each other" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::extendGraphic( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.GraphicEdit.extend" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Extend Line or Arc" ) )
+        .Tooltip( _( "Hover a graphical line or arc to extend it until it meets another" ) )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::trimGraphic( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.GraphicEdit.trim" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Trim Shape" ) )
+        .Tooltip( _( "Hover the part of a graphical shape to remove between the nearest crossings" ) )
+        .Flags( AF_ACTIVATE ) );
+
 TOOL_ACTION PCB_ACTIONS::mergePolygons( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveEdit.mergePolygons" )
         .Scope( AS_GLOBAL )
@@ -1111,6 +1141,21 @@ TOOL_ACTION PCB_ACTIONS::properties( TOOL_ACTION_ARGS()
         .LegacyHotkeyName( "Edit Item" )
         .FriendlyName( _( "Properties..." ) )
         .Icon( BITMAPS::edit ) );
+
+TOOL_ACTION PCB_ACTIONS::matchProperties( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.MatchProperties.match" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Match Properties" ) )
+        .Tooltip( _( "Copy selected properties from a source item to compatible target items" ) )
+        .Flags( AF_ACTIVATE ) );
+
+// Context scope so the hotkey only takes over from Preferences while the tool has the pointer.
+TOOL_ACTION PCB_ACTIONS::matchPropertiesSettings( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.MatchProperties.settings" )
+        .Scope( AS_CONTEXT )
+        .DefaultHotkey( MD_CTRL + ',' )
+        .FriendlyName( _( "Match Properties Settings..." ) )
+        .Tooltip( _( "Choose the properties copied by Match Properties" ) ) );
 
 // ARRAY
 //
@@ -3051,9 +3096,10 @@ TOOL_ACTION PCB_ACTIONS::routerAutorouteSelected( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::routerOptimizeSelected( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveRouter.OptimizeSelected" )
         .Scope( AS_GLOBAL )
-        .DefaultHotkey( MD_SHIFT + 'O' )
+        .DefaultHotkey( MD_SHIFT + 'T' )
         .FriendlyName( _( "Optimize Selected Track(s)" ) )
         .Tooltip( _( "Simplify selected routed track(s)." ) )
+        .Flags( AF_ACTIVATE )
         .Parameter( PNS::PNS_MODE_ROUTE_SINGLE ) );
 
 TOOL_ACTION PCB_ACTIONS::cancelCurrentItem( TOOL_ACTION_ARGS()

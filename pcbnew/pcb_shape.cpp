@@ -245,6 +245,7 @@ void PCB_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
             sm->mutable_solder_mask_margin()->set_value_nm( GetLocalSolderMaskMargin().value() );
     }
 
+    kiapi::common::PackCustomProperties( msg.mutable_custom_properties(), *this );
     aContainer.PackFrom( msg );
 }
 
@@ -275,6 +276,7 @@ bool PCB_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
     SetLocked( msg.locked() == types::LS_LOCKED );
     SetLayer( FromProtoEnum<PCB_LAYER_ID, BoardLayer>( msg.layer() ) );
     UnpackNet( msg.net() );
+    kiapi::common::UnpackCustomProperties( msg.custom_properties(), *this );
 
     EDA_SHAPE::Deserialize( msg.shape(), pcbIUScale );
 
@@ -805,22 +807,38 @@ void PCB_SHAPE::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 
 void PCB_SHAPE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
-    // Null for pad-local primitives, which mirror directly rather than through the FP transform.
     const FOOTPRINT* fp = transformFp();
 
-    if( fp
+    TRANSFORM_TRS xform;
+    bool          mirrorLib = false;
+
+    if( fp )
+    {
+        xform = fp->GetTransform();
+        mirrorLib = true;
+    }
+    else if( GetParent() && GetParent()->Type() == PCB_PAD_T && m_shape != m_libShape )
+    {
+        double sx = 1.0, sy = 1.0;
+        static_cast<const PAD*>( static_cast<const BOARD_ITEM*>( GetParent() ) )->GetPrimitiveLibScale( sx, sy );
+        xform.SetScale( sx, sy );
+        mirrorLib = true;
+    }
+
+    if( mirrorLib
         && ( m_libShape == SHAPE_T::SEGMENT || m_libShape == SHAPE_T::CIRCLE || m_libShape == SHAPE_T::ARC
              || m_libShape == SHAPE_T::RECTANGLE || m_libShape == SHAPE_T::BEZIER || m_libShape == SHAPE_T::POLY ) )
     {
-        const VECTOR2I libCenter = fp->GetTransform().InverseApply( aCentre );
+        const VECTOR2I libCenter = xform.InverseApply( aCentre );
 
-        auto mirrorPt = [&]( VECTOR2I& p )
-        {
-            if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
-                p.x = 2 * libCenter.x - p.x;
-            else
-                p.y = 2 * libCenter.y - p.y;
-        };
+        auto mirrorPt =
+                [&]( VECTOR2I& p )
+                {
+                    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+                        p.x = 2 * libCenter.x - p.x;
+                    else
+                        p.y = 2 * libCenter.y - p.y;
+                };
 
         if( m_libShape == SHAPE_T::ARC )
         {
@@ -852,13 +870,13 @@ void PCB_SHAPE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
         }
 
         SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
-        RebakeFromLib();
+        rebakeFromTransform( xform );
         return;
     }
 
-    if( fp && ( m_libShape == SHAPE_T::ELLIPSE || m_libShape == SHAPE_T::ELLIPSE_ARC ) )
+    if( mirrorLib && ( m_libShape == SHAPE_T::ELLIPSE || m_libShape == SHAPE_T::ELLIPSE_ARC ) )
     {
-        const VECTOR2I libCenter = fp->GetTransform().InverseApply( aCentre );
+        const VECTOR2I libCenter = xform.InverseApply( aCentre );
 
         if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
             m_libEllipseCenter.x = 2 * libCenter.x - m_libEllipseCenter.x;
@@ -882,7 +900,7 @@ void PCB_SHAPE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
         }
 
         SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
-        RebakeFromLib();
+        rebakeFromTransform( xform );
         return;
     }
 
@@ -1693,6 +1711,7 @@ void PCB_SHAPE::swapData( BOARD_ITEM* aImage )
     std::swap( m_netinfo, image->m_netinfo );
     std::swap( m_hasSolderMask, image->m_hasSolderMask );
     std::swap( m_solderMaskMargin, image->m_solderMaskMargin );
+    std::swap( m_customProperties, image->m_customProperties );
 }
 
 
@@ -1847,7 +1866,7 @@ static struct PCB_SHAPE_DESC
 
         propMgr.ReplaceProperty( TYPE_HASH( BOARD_CONNECTED_ITEM ), _HKI( "Layer" ),
                     new PROPERTY_ENUM<PCB_SHAPE, PCB_LAYER_ID>( _HKI( "Layer" ),
-                                shapeLayerSetter, shapeLayerGetter ) );
+                                shapeLayerSetter, shapeLayerGetter ) ).SetIsCopyable();
 
         auto isPolygonOrEllipse =
                 []( INSPECTABLE* aItem ) -> bool
@@ -2002,12 +2021,12 @@ static struct PCB_SHAPE_DESC
         propMgr.AddProperty( new PROPERTY<PCB_SHAPE, bool>( _HKI( "Soldermask" ),
                     &PCB_SHAPE::SetHasSolderMask, &PCB_SHAPE::HasSolderMask ),
                     groupTechLayers )
-                .SetAvailableFunc( isExternalCuLayer );
+                .SetAvailableFunc( isExternalCuLayer ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_SHAPE, std::optional<int>>( _HKI( "Soldermask Margin Override" ),
                     &PCB_SHAPE::SetLocalSolderMaskMargin, &PCB_SHAPE::GetLocalSolderMaskMargin,
                     PROPERTY_DISPLAY::PT_SIZE ),
                     groupTechLayers )
-                .SetAvailableFunc( isExternalCuLayer );
+                .SetAvailableFunc( isExternalCuLayer ).SetIsCopyable();
     }
 } _PCB_SHAPE_DESC;

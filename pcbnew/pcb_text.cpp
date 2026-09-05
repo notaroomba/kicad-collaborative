@@ -132,6 +132,7 @@ void PCB_TEXT::Serialize( kiapi::board::types::BoardText& boardText ) const
     else if( const BOARD* board = GetBoard() )
         boardText.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
 
+    kiapi::common::PackCustomProperties( boardText.mutable_custom_properties(), *this );
 }
 
 
@@ -147,7 +148,6 @@ bool PCB_TEXT::Deserialize( const kiapi::board::types::BoardText& boardText )
 {
     using namespace kiapi::common;
 
-
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( boardText.layer() ) );
     SetUuidDirect( KIID( boardText.id().value() ) );
     SetIsKnockout( boardText.knockout() );
@@ -158,6 +158,7 @@ bool PCB_TEXT::Deserialize( const kiapi::board::types::BoardText& boardText )
     const types::Text& text = boardText.text();
 
     SetPosition( UnpackVector2( text.position() ) );
+    kiapi::common::UnpackCustomProperties( boardText.custom_properties(), *this );
 
     return true;
 }
@@ -179,23 +180,24 @@ wxString PCB_TEXT::GetShownText( bool aAllowExtraText, int aDepth ) const
     const FOOTPRINT* parentFootprint = GetParentFootprint();
     const BOARD*     board = GetBoard();
 
-    std::function<bool( wxString* )> resolver = [&]( wxString* token ) -> bool
-    {
-        if( token->IsSameAs( wxT( "LAYER" ) ) )
-        {
-            *token = GetLayerName();
-            return true;
-        }
+    std::function<bool( wxString* )> resolver =
+            [&]( wxString* token ) -> bool
+            {
+                if( token->IsSameAs( wxT( "LAYER" ) ) )
+                {
+                    *token = GetLayerName();
+                    return true;
+                }
 
-        if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        // board can be null in some cases when saving a footprint in FP editor
-        if( board && board->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
+                // board can be null in some cases when saving a footprint in FP editor
+                if( board && board->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
 
-        return false;
-    };
+                return false;
+            };
 
     wxString text = EDA_TEXT::GetShownText( aAllowExtraText, aDepth );
 
@@ -921,11 +923,11 @@ static struct PCB_TEXT_DESC
 
         propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, BOARD_ITEM>( _HKI( "Knockout" ),
                     &BOARD_ITEM::SetIsKnockout, &BOARD_ITEM::IsKnockout ),
-                    _HKI( "Text Properties" ) );
+                    _HKI( "Text Properties" ) ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, EDA_TEXT>( _HKI( "Keep Upright" ),
                     &PCB_TEXT::SetKeepUpright, &PCB_TEXT::IsKeepUpright ),
-                    _HKI( "Text Properties" ) );
+                    _HKI( "Text Properties" ) ).SetIsCopyable();
 
         auto isFootprintText =
                 []( INSPECTABLE* aItem ) -> bool

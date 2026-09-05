@@ -28,6 +28,7 @@
 #include <ranges>
 
 #include <connectivity/connectivity_algo.h>
+#include <core/union_find.h>
 #include <progress_reporter.h>
 #include <geometry/geometry_utils.h>
 #include <board.h>
@@ -282,44 +283,32 @@ void CN_CONNECTIVITY_ALGO::searchConnections()
 
     if( m_itemList.IsDirty() )
     {
-        std::vector<std::future<size_t>> returns( dirtyItems.size() );
-
         // Collect deferred net code changes to avoid data races in parallel search.
         // Vias connected to zones have their net codes updated after all parallel work
         // completes, but only if the via has no higher-priority connections (tracks, pads).
         std::vector<std::pair<CN_ITEM*, int>> deferredNetCodes;
         std::mutex deferredNetCodesMutex;
 
-        for( size_t ii = 0; ii < dirtyItems.size(); ++ii )
+        // One task per item made the queue and its futures cost more than the searches they
+        // carried, so hand the pool blocks of items instead.
+        auto returns = tp.submit_loop( size_t( 0 ), dirtyItems.size(),
+                [&dirtyItems, this, &deferredNetCodes, &deferredNetCodesMutex]( const size_t ii )
+                {
+                    if( m_progressReporter && m_progressReporter->IsCancelled() )
+                        return;
+
+                    CN_VISITOR visitor( dirtyItems[ii], &deferredNetCodes, &deferredNetCodesMutex );
+                    m_itemList.FindNearby( dirtyItems[ii], visitor );
+
+                    if( m_progressReporter )
+                        m_progressReporter->AdvanceProgress();
+                } );
+
+        // Here we balance returns with a 250ms timeout to allow UI updating
+        while( !returns.wait_for( std::chrono::milliseconds( 250 ) ) )
         {
-            returns[ii] = tp.submit_task(
-                    [&dirtyItems, ii, this, &deferredNetCodes, &deferredNetCodesMutex] () ->size_t
-                    {
-                        if( m_progressReporter && m_progressReporter->IsCancelled() )
-                            return 0;
-
-                        CN_VISITOR visitor( dirtyItems[ii], &deferredNetCodes, &deferredNetCodesMutex );
-                        m_itemList.FindNearby( dirtyItems[ii], visitor );
-
-                        if( m_progressReporter )
-                            m_progressReporter->AdvanceProgress();
-
-                        return 1;
-                    } );
-        }
-
-        for( const std::future<size_t>& ret : returns )
-        {
-            // Here we balance returns with a 250ms timeout to allow UI updating
-            std::future_status status = ret.wait_for( std::chrono::milliseconds( 250 ) );
-
-            while( status != std::future_status::ready )
-            {
-                if( m_progressReporter )
-                    m_progressReporter->KeepRefreshing();
-
-                status = ret.wait_for( std::chrono::milliseconds( 250 ) );
-            }
+            if( m_progressReporter )
+                m_progressReporter->KeepRefreshing();
         }
 
         // Apply deferred zone net changes, but only for vias that have no non-zone
@@ -403,85 +392,109 @@ CN_CONNECTIVITY_ALGO::SearchClusters( CLUSTER_SEARCH_MODE aMode, bool aExcludeZo
 {
     bool withinAnyNet = ( aMode != CSM_PROPAGATE );
 
-    std::deque<CN_ITEM*> Q;
-    std::set<CN_ITEM*> item_set;
-
     CLUSTERS clusters;
 
     if( m_itemList.IsDirty() )
         searchConnections();
 
-    std::set<CN_ITEM*> visited;
+    // Numbering stays local rather than stamped on the items because several DRC threads can
+    // be inside this function at once, each with a different view of who takes part
+    std::vector<CN_ITEM*> members;
+    std::vector<int>      memberOf( m_itemList.Size(), -1 );
 
-    auto addToSearchList =
-            [&item_set, withinAnyNet, aSingleNet, &aExcludeZones]( CN_ITEM *aItem )
-            {
-                if( withinAnyNet && aItem->Net() <= 0 )
-                    return;
+    members.reserve( m_itemList.Size() );
 
-                if( !aItem->Valid() )
-                    return;
+    // aSingleNet restricts which items may seed a cluster, not which may be reached, since
+    // propagation mode crosses nets once started.  Hold the net test back for the emit
+    std::vector<bool> selected;
+    selected.reserve( m_itemList.Size() );
 
-                if( aSingleNet >=0 && aItem->Net() != aSingleNet )
-                    return;
-
-                if( aExcludeZones && aItem->Parent()->Type() == PCB_ZONE_T )
-                    return;
-
-                item_set.insert( aItem );
-            };
-
-    std::for_each( m_itemList.begin(), m_itemList.end(), addToSearchList );
-
-    if( m_progressReporter && m_progressReporter->IsCancelled() )
-        return CLUSTERS();
-
-    while( !item_set.empty() )
+    for( CN_ITEM* item : m_itemList )
     {
-        std::shared_ptr<CN_CLUSTER> cluster = std::make_shared<CN_CLUSTER>();
-        CN_ITEM*                    root;
-        auto                        it = item_set.begin();
+        bool participates = item->Valid()
+                            && !( withinAnyNet && item->Net() <= 0 )
+                            && !( withinAnyNet && aSingleNet >= 0 && item->Net() != aSingleNet )
+                            && !( aExcludeZones && item->Parent()->Type() == PCB_ZONE_T );
 
-        while( it != item_set.end() && visited.contains( *it ) )
-            it = item_set.erase( item_set.begin() );
-
-        if( it == item_set.end() )
-            break;
-
-        root = *it;
-        visited.insert( root );
-
-        Q.clear();
-        Q.push_back( root );
-
-        while( Q.size() )
+        if( participates )
         {
-            CN_ITEM* current = Q.front();
-
-            Q.pop_front();
-            cluster->Add( current );
-
-            for( CN_ITEM* n : current->ConnectedItems() )
-            {
-                if( withinAnyNet && n->Net() != root->Net() )
-                    continue;
-
-                if( aExcludeZones && n->Parent()->Type() == PCB_ZONE_T )
-                    continue;
-
-                if( !visited.contains( n ) && n->Valid() )
-                {
-                    visited.insert( n );
-                    Q.push_back( n );
-                }
-            }
+            memberOf[item->ListIndex()] = static_cast<int>( members.size() );
+            members.push_back( item );
+            selected.push_back( aSingleNet < 0 || item->Net() == aSingleNet );
         }
-
-        clusters.push_back( std::move( cluster ) );
     }
 
     if( m_progressReporter && m_progressReporter->IsCancelled() )
         return CLUSTERS();
+
+    // Every member of a cluster carries the cluster's net, so gating a neighbour on the near
+    // end's net selects the same edges as gating it on the component root's
+    KI_UNION_FIND forest( members.size() );
+
+    // Stays serial although Unite() is lock-free, because DRC enters here from inside a
+    // thread pool task and feeding work back to a pool we already occupy deadlocks it
+    for( size_t ii = 0; ii < members.size(); ++ii )
+    {
+        CN_ITEM* item = members[ii];
+
+        for( CN_ITEM* neighbour : item->ConnectedItems() )
+        {
+            int listIndex = neighbour->ListIndex();
+
+            // An adjacency that outlived its item would otherwise index the map out of range
+            if( listIndex < 0 || listIndex >= (int) memberOf.size() )
+                continue;
+
+            int index = memberOf[listIndex];
+
+            if( index < 0 )
+                continue;
+
+            if( withinAnyNet && neighbour->Net() != item->Net() )
+                continue;
+
+            forest.Unite( ii, static_cast<size_t>( index ) );
+        }
+    }
+
+    if( m_progressReporter && m_progressReporter->IsCancelled() )
+        return CLUSTERS();
+
+    // Index order makes cluster contents a function of the item list alone, so the origin pad
+    // elected on a cluster spanning several nets no longer follows the heap layout
+    std::vector<int>  clusterOf( members.size(), -1 );
+    std::vector<bool> clusterSelected;
+
+    for( size_t ii = 0; ii < members.size(); ++ii )
+    {
+        size_t root = forest.FindCompress( ii );
+
+        if( clusterOf[root] < 0 )
+        {
+            clusterOf[root] = static_cast<int>( clusters.size() );
+            clusters.push_back( std::make_shared<CN_CLUSTER>() );
+            clusterSelected.push_back( false );
+        }
+
+        clusters[clusterOf[root]]->Add( members[ii] );
+
+        if( selected[ii] )
+            clusterSelected[clusterOf[root]] = true;
+    }
+
+    // A component reached only from items outside aSingleNet was never a result
+    if( aSingleNet >= 0 )
+    {
+        CLUSTERS keep;
+
+        for( size_t ii = 0; ii < clusters.size(); ++ii )
+        {
+            if( clusterSelected[ii] )
+                keep.push_back( std::move( clusters[ii] ) );
+        }
+
+        clusters = std::move( keep );
+    }
 
     std::sort( clusters.begin(), clusters.end(),
                []( const std::shared_ptr<CN_CLUSTER>& a, const std::shared_ptr<CN_CLUSTER>& b )
@@ -495,6 +508,10 @@ CN_CONNECTIVITY_ALGO::SearchClusters( CLUSTER_SEARCH_MODE aMode, bool aExcludeZo
 
 void CN_CONNECTIVITY_ALGO::Build( BOARD* aBoard, PROGRESS_REPORTER* aReporter )
 {
+    // Nothing queries the index until searchConnections(), so index the board in one packed
+    // load rather than run the R*-tree insertion heuristic once per item
+    CN_LIST::BULK_ADD_SCOPE bulkAdd( m_itemList );
+
     // Generate CN_ZONE_LAYERs for each island on each layer of each zone
     //
     std::vector<CN_ZONE_LAYER*> zitems;
@@ -750,29 +767,56 @@ void CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap( std::map<ZONE*, std::map<PCB_
 
     m_connClusters = SearchClusters( CSM_CONNECTIVITY_CHECK );
 
+    // Bucket the zone items in one pass. A search per zone layer is O(zone layers x items).
+    // Keep the cluster and item order, which sets the recorded outline order.
+    struct ZONE_CLUSTER_ITEM
+    {
+        CN_ZONE_LAYER* m_item;
+        bool           m_orphaned;
+    };
+
+    std::unordered_map<const BOARD_ITEM*, std::map<PCB_LAYER_ID, std::vector<ZONE_CLUSTER_ITEM>>>
+            zoneItems;
+
+    for( const auto& [ zone, zoneIslands ] : aMap )
+        zoneItems[zone];
+
+    for( const std::shared_ptr<CN_CLUSTER>& cluster : m_connClusters )
+    {
+        const bool orphaned = cluster->IsOrphaned();
+
+        for( CN_ITEM* item : *cluster )
+        {
+            auto it = zoneItems.find( item->Parent() );
+
+            if( it != zoneItems.end() )
+            {
+                it->second[item->GetBoardLayer()].push_back(
+                        { static_cast<CN_ZONE_LAYER*>( item ), orphaned } );
+            }
+        }
+    }
+
     for( auto& [ zone, zoneIslands ] : aMap )
     {
+        const auto& layerItems = zoneItems[zone];
+
         for( auto& [ layer, layerIslands ] : zoneIslands )
         {
             if( zone->GetFilledPolysList( layer )->IsEmpty() )
                 continue;
 
-            bool notInConnectivity = true;
+            auto layerIt = layerItems.find( layer );
+            bool notInConnectivity = layerIt == layerItems.end();
 
-            for( const std::shared_ptr<CN_CLUSTER>& cluster : m_connClusters )
+            if( !notInConnectivity )
             {
-                for( CN_ITEM* item : *cluster )
+                for( const ZONE_CLUSTER_ITEM& entry : layerIt->second )
                 {
-                    if( item->Parent() == zone && item->GetBoardLayer() == layer )
-                    {
-                        CN_ZONE_LAYER* z = static_cast<CN_ZONE_LAYER*>( item );
-                        notInConnectivity = false;
-
-                        if( cluster->IsOrphaned() )
-                            layerIslands.m_IsolatedOutlines.push_back( z->SubpolyIndex() );
-                        else if( z->HasSingleConnection() )
-                            layerIslands.m_SingleConnectionOutlines.push_back( z->SubpolyIndex() );
-                    }
+                    if( entry.m_orphaned )
+                        layerIslands.m_IsolatedOutlines.push_back( entry.m_item->SubpolyIndex() );
+                    else if( entry.m_item->HasSingleConnection() )
+                        layerIslands.m_SingleConnectionOutlines.push_back( entry.m_item->SubpolyIndex() );
                 }
             }
 

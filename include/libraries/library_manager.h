@@ -50,7 +50,7 @@ enum class LOAD_STATUS
 struct KICOMMON_API LIB_STATUS
 {
     LOAD_STATUS                  load_status = LOAD_STATUS::INVALID;
-    std::optional<LIBRARY_ERROR> error;
+    std::optional<LIBRARY_ERROR> error = std::nullopt;
 };
 
 
@@ -195,7 +195,7 @@ public:
 
     virtual bool SupportsConfigurationDialog( const wxString& aNickname ) const { return false; }
 
-    virtual void ShowConfigurationDialog( const wxString& aNickname, wxWindow* aParent ) const {};
+    virtual int ShowConfigurationDialog( const wxString& aNickname, wxWindow* aParent ) const { return wxID_CANCEL; }
 
     virtual std::optional<LIBRARY_ERROR> LibraryError( const wxString& aNickname ) const;
 
@@ -253,7 +253,9 @@ protected:
     /// and tree refreshes. Keyed by nickname, a safe over-approximation of the real resource (the
     /// plugin instance): sharing one mutex across two distinct resources can only over-serialize,
     /// never under-protect. Static because global-library plugins are shared process-wide.
-    static std::mutex& pluginMutex( const wxString& aNickname );
+    /// Recursive because database/http libraries resolve references back through the adapter into
+    /// other plugins' LoadSymbol paths while already holding their own mutex.
+    static std::recursive_mutex& pluginMutex( const wxString& aNickname );
 
     LIBRARY_MANAGER& m_manager;
 

@@ -1420,6 +1420,50 @@ BOOST_AUTO_TEST_CASE( RuleLoaderNumericConstraints )
 }
 
 
+// A ratio is stored scaled by 1000, so the editor has to scale it back. The depth beside it is
+// a plain count and must come through untouched.
+BOOST_AUTO_TEST_CASE( RuleLoaderMicroviaRatioRoundTrip )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"Ratio\"\n"
+                        "    (constraint microvia_aspect_ratio (max 1.0)))\n"
+                        "(rule \"Depth\"\n"
+                        "    (constraint microvia_stack_depth (max 3)))";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 2 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, MICROVIA_ASPECT_RATIO );
+    BOOST_CHECK_EQUAL( entries[1].panelType, MICROVIA_STACK_DEPTH );
+
+    auto ratio = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( entries[0].constraintData );
+    auto depth = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( entries[1].constraintData );
+
+    BOOST_REQUIRE( ratio );
+    BOOST_REQUIRE( depth );
+    BOOST_CHECK_CLOSE( ratio->GetNumericInputValue(), 1.0, 0.0001 );
+    BOOST_CHECK_CLOSE( depth->GetNumericInputValue(), 3.0, 0.0001 );
+
+    entries[0].wasEdited = true;
+    entries[1].wasEdited = true;
+
+    DRC_RULE_SAVER                         saver;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> reloaded =
+            loader.LoadFromString( saver.GenerateRulesText( entries, nullptr ) );
+
+    BOOST_REQUIRE_EQUAL( reloaded.size(), 2 );
+
+    auto ratioAgain = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( reloaded[0].constraintData );
+    auto depthAgain = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( reloaded[1].constraintData );
+
+    BOOST_REQUIRE( ratioAgain );
+    BOOST_REQUIRE( depthAgain );
+    BOOST_CHECK_CLOSE( ratioAgain->GetNumericInputValue(), 1.0, 0.0001 );
+    BOOST_CHECK_CLOSE( depthAgain->GetNumericInputValue(), 3.0, 0.0001 );
+}
+
+
 // ============================================================================
 // Rule Saver Tests (Phase 3)
 // ============================================================================
@@ -2531,6 +2575,64 @@ BOOST_AUTO_TEST_CASE( RuleLoaderPermittedLayersStandardLoadsStructured )
     BOOST_REQUIRE( layerData );
     BOOST_CHECK( layerData->GetTopLayerEnabled() );
     BOOST_CHECK( layerData->GetBottomLayerEnabled() );
+}
+
+
+BOOST_AUTO_TEST_CASE( CustomPropertyHelperMatches )
+{
+    BOARD board;
+
+    FOOTPRINT* vendorFp = new FOOTPRINT( &board );
+    vendorFp->SetReference( wxT( "U1" ) );
+    vendorFp->SetCustomProperty( wxT( "Vendor" ), wxT( "ACME" ) );
+    board.Add( vendorFp );
+
+    FOOTPRINT* otherFp = new FOOTPRINT( &board );
+    otherFp->SetReference( wxT( "U2" ) );
+    board.Add( otherFp );
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "Custom property" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.customProperty('Vendor') == 'ACME'" ) );
+    BOOST_REQUIRE( rule->m_Condition->Compile( nullptr ) );
+
+    DRC_CONSTRAINT constraint( COURTYARD_CLEARANCE_CONSTRAINT );
+    rule->AddConstraint( constraint );
+
+    DRC_ENGINE engine( &board, &board.GetDesignSettings() );
+
+    std::vector<BOARD_ITEM*> matches = engine.GetItemsMatchingRule( rule, nullptr );
+
+    BOOST_REQUIRE_EQUAL( matches.size(), 1u );
+    BOOST_CHECK( matches.front() == vendorFp );
+}
+
+
+BOOST_AUTO_TEST_CASE( HasCustomPropertyHelperMatches )
+{
+    BOARD board;
+
+    FOOTPRINT* vendorFp = new FOOTPRINT( &board );
+    vendorFp->SetReference( wxT( "U1" ) );
+    vendorFp->SetCustomProperty( wxT( "Vendor" ), wxT( "ACME" ) );
+    board.Add( vendorFp );
+
+    FOOTPRINT* otherFp = new FOOTPRINT( &board );
+    otherFp->SetReference( wxT( "U2" ) );
+    board.Add( otherFp );
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "Has custom property" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.hasCustomProperty('Vendor')" ) );
+    BOOST_REQUIRE( rule->m_Condition->Compile( nullptr ) );
+
+    DRC_CONSTRAINT constraint( COURTYARD_CLEARANCE_CONSTRAINT );
+    rule->AddConstraint( constraint );
+
+    DRC_ENGINE engine( &board, &board.GetDesignSettings() );
+
+    std::vector<BOARD_ITEM*> matches = engine.GetItemsMatchingRule( rule, nullptr );
+
+    BOOST_REQUIRE_EQUAL( matches.size(), 1u );
+    BOOST_CHECK( matches.front() == vendorFp );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

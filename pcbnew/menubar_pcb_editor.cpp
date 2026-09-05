@@ -246,6 +246,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     editMenu->Add( PCB_ACTIONS::findByProperties );
 
     editMenu->AppendSeparator();
+    editMenu->Add( PCB_ACTIONS::extendGraphic );
+    editMenu->Add( PCB_ACTIONS::trimGraphic );
     editMenu->Add( PCB_ACTIONS::editTracksAndVias );
     editMenu->Add( PCB_ACTIONS::editTextAndGraphics );
     editMenu->Add( PCB_ACTIONS::editTeardrops );
@@ -341,6 +343,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     placeMenu->Add( PCB_ACTIONS::placeFootprint );
     placeMenu->Add( PCB_ACTIONS::drawVia );
+    placeMenu->Add( PCB_ACTIONS::placeViaStack );
+    placeMenu->Add( PCB_ACTIONS::makeViaStack );
     placeMenu->Add( PCB_ACTIONS::drawZone );
     placeMenu->Add( PCB_ACTIONS::drawCopperThievingZone );
     placeMenu->Add( PCB_ACTIONS::drawRuleArea );

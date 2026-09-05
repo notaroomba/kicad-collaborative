@@ -28,6 +28,7 @@
 #include <template_fieldnames.h>
 #include "string_utils.h"
 #include <trace_helpers.h>
+#include <validators.h>
 
 #include "lib_fields_data_model.h"
 
@@ -608,10 +609,11 @@ wxString LIB_FIELDS_EDITOR_GRID_DATA_MODEL::getFieldResolvedLiveValue( LIB_SYMBO
     {
         int depth = 0;
 
-        std::function<bool( wxString* )> libSymbolResolver = [&]( wxString* token ) -> bool
-        {
-            return aRef->ResolveTextVar( token, depth + 1 );
-        };
+        std::function<bool( wxString* )> libSymbolResolver =
+                [&]( wxString* token ) -> bool
+                {
+                    return aRef->ResolveTextVar( token, depth + 1 );
+                };
 
         return ResolveTextVars( aFieldName, &libSymbolResolver, depth );
     }
@@ -628,10 +630,11 @@ wxString LIB_FIELDS_EDITOR_GRID_DATA_MODEL::resolveTextVars( LIB_SYMBOL* const& 
     // For instance, if you have "My value is ${VALUE}" in the description field,
     // ${VALUE} will be resolved against the symbol's live value, not the Value field
     // stored in the data store.
-    std::function<bool( wxString* )> libSymbolResolver = [&]( wxString* token ) -> bool
-    {
-        return aLibSymbol->ResolveTextVar( token );
-    };
+    std::function<bool( wxString* )> libSymbolResolver =
+            [&]( wxString* token ) -> bool
+            {
+                return aLibSymbol->ResolveTextVar( token );
+            };
 
     int depth = 0;
     return ResolveTextVars( aText, &libSymbolResolver, depth );
@@ -810,6 +813,32 @@ void LIB_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( std::function<void( LIB_SYMBO
     // Call post-apply handler if provided (for library operations and tree refresh)
     if( postApplyHandler )
         postApplyHandler();
+}
+
+
+bool LIB_FIELDS_EDITOR_GRID_DATA_MODEL::ValidateReferences( wxString& aSymbolName, wxString& aErrorMessage ) const
+{
+    const wxString referenceFieldName = GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED );
+
+    for( LIB_SYMBOL* symbol : m_symbolsList )
+    {
+        wxString reference;
+        getStoredFieldValue( symbol, referenceFieldName, reference );
+
+        // An empty reference on a derived symbol inherits the parent's reference.
+        if( symbol->IsDerived() && reference.IsEmpty() )
+            continue;
+
+        aErrorMessage = GetFieldValidationErrorMessage( FIELD_T::REFERENCE, reference );
+
+        if( !aErrorMessage.IsEmpty() )
+        {
+            aSymbolName = UnescapeString( symbol->GetName() );
+            return false;
+        }
+    }
+
+    return true;
 }
 
 

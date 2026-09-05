@@ -36,6 +36,7 @@
 #include <constraints/constraint_copy.h>
 #include <constraints/pcb_constraint.h>
 #include <pcb_point.h>
+#include <pcb_reference_image.h>
 #include <pcb_target.h>
 #include <pcb_textbox.h>
 #include <pcb_table.h>
@@ -53,6 +54,7 @@
 #include <tools/pcb_selection_tool.h>
 #include <tools/constraint_edit_tool.h>
 #include <tools/edit_tool.h>
+#include <tools/graphic_edit.h>
 #include <tools/item_modification_routine.h>
 #include <tools/pcb_picker_tool.h>
 #include <tools/pcb_point_editor.h>
@@ -134,7 +136,7 @@ static const std::vector<KICAD_T> routableTypes = { PCB_TRACE_T, PCB_ARC_T, PCB_
 // Types with no Mirror() override, which would fall through to the warning-dialog
 // BOARD_ITEM::Mirror. Free pads are handled specially by the tool but not by PCB_GROUP::Mirror.
 static const std::vector<KICAD_T> nonMirrorableTypes = {
-    PCB_FOOTPRINT_T, PCB_PAD_T, PCB_TARGET_T, PCB_REFERENCE_IMAGE_T,
+    PCB_FOOTPRINT_T, PCB_PAD_T, PCB_TARGET_T,
 };
 
 
@@ -343,6 +345,9 @@ static std::shared_ptr<CONDITIONAL_MENU> makeShapeModificationMenu( TOOL_INTERAC
     menu->AddItem( PCB_ACTIONS::dogboneCorners, SELECTION_CONDITIONS::OnlyTypes( filletChamferTypes ) );
     menu->AddItem( PCB_ACTIONS::extendLines,    SELECTION_CONDITIONS::OnlyTypes( lineExtendTypes )
                                                     && SELECTION_CONDITIONS::Count( 2 ) );
+    // Both pick their own shape from under the pointer, so the selection says nothing about them.
+    menu->AddItem( PCB_ACTIONS::extendGraphic,  SELECTION_CONDITIONS::ShowAlways );
+    menu->AddItem( PCB_ACTIONS::trimGraphic,    SELECTION_CONDITIONS::ShowAlways );
 
     menu->AddSeparator( SELECTION_CONDITIONS::Count( 1 ) );
 
@@ -2344,7 +2349,7 @@ int EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
         if( !frame()->GetPropertiesPanel()->IsShownOnScreen() )
         {
             infobar->AddLink( _( "Show Properties panel" ),
-                    [this]( wxHyperlinkEvent& aEvent )
+                    [this]( wxHyperlinkEvent& aHyperlinkEvent )
                     {
                         frame()->ToggleProperties();
                     } );
@@ -2674,7 +2679,7 @@ static void mirrorPad( PAD& aPad, const VECTOR2I& aMirrorPoint, FLIP_DIRECTION a
 
 const std::vector<KICAD_T> EDIT_TOOL::MirrorableItems = {
     PCB_SHAPE_T, PCB_FIELD_T, PCB_TEXT_T,  PCB_TEXTBOX_T,   PCB_ZONE_T,  PCB_PAD_T,   PCB_TRACE_T,
-    PCB_ARC_T,   PCB_VIA_T,   PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T, PCB_TABLE_T,
+    PCB_ARC_T,   PCB_VIA_T,   PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T, PCB_TABLE_T, PCB_REFERENCE_IMAGE_T,
 };
 
 
@@ -2777,6 +2782,10 @@ int EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
         case PCB_POINT_T:
 
             static_cast<PCB_POINT*>( item )->Mirror( mirrorPoint, flipDirection ); break;
+
+        case PCB_REFERENCE_IMAGE_T:
+            static_cast<PCB_REFERENCE_IMAGE*>( item )->Mirror( mirrorPoint, flipDirection );
+            break;
 
         default:
             // it's likely the commit object is wrong if you get here
@@ -3231,10 +3240,7 @@ int EDIT_TOOL::Remove( const TOOL_EVENT& aEvent )
         m_selectionTool->ReportFilteredLockedItems();
 
         if( hadInitialSelection && selectionCopy.Empty() )
-        {
-            editFrame->PopTool( aEvent );
             return 0;
-        }
 
         size_t beforeFPCount = selectionCopy.CountType( PCB_FOOTPRINT_T );
 
@@ -3389,9 +3395,15 @@ int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
     if( selection.Empty() )
         return 0;
 
-    // Duplicating tuning patterns alone is not supported
-    if( selection.Size() == 1 && selection.CountType( PCB_GENERATOR_T ) )
-        return 0;
+    // Some generators cannot be duplicated on their own.
+    if( selection.Size() == 1 )
+    {
+        if( PCB_GENERATOR* generator = dynamic_cast<PCB_GENERATOR*>( selection.Front() ) )
+        {
+            if( !generator->CanDuplicate() )
+                return 0;
+        }
+    }
 
     // we have a selection to work on now, so start the tool process
     PCB_BASE_EDIT_FRAME* editFrame = getEditFrame<PCB_BASE_EDIT_FRAME>();

@@ -371,6 +371,7 @@ void PCB_DIMENSION_BASE::Serialize( google::protobuf::Any &aContainer ) const
             ToProtoEnum<DIM_TEXT_POSITION, DimensionTextPosition>( m_textPosition ) );
     dimension.set_keep_text_aligned( m_keepTextAligned );
 
+    kiapi::common::PackCustomProperties( dimension.mutable_custom_properties(), *this );
     aContainer.PackFrom( dimension );
 }
 
@@ -405,6 +406,8 @@ bool PCB_DIMENSION_BASE::Deserialize( const google::protobuf::Any &aContainer )
     SetExtensionOffset( dimension.extension_offset().value_nm() );
     SetTextPositionMode( FromProtoEnum<DIM_TEXT_POSITION>( dimension.text_position() ) );
     SetKeepTextAligned( dimension.keep_text_aligned() );
+
+    kiapi::common::UnpackCustomProperties( dimension.custom_properties(), *this );
 
     Update();
 
@@ -2239,24 +2242,24 @@ static struct DIMENSION_DESC
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_UNITS_MODE>( _HKI( "Units" ),
                     &PCB_DIMENSION_BASE::ChangeUnitsMode, &PCB_DIMENSION_BASE::GetUnitsMode ),
                     groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_UNITS_FORMAT>( _HKI( "Units Format" ),
                     &PCB_DIMENSION_BASE::ChangeUnitsFormat, &PCB_DIMENSION_BASE::GetUnitsFormat ),
                     groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_PRECISION>( _HKI( "Precision" ),
                     &PCB_DIMENSION_BASE::ChangePrecision, &PCB_DIMENSION_BASE::GetPrecision ),
                     groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, bool>( _HKI( "Suppress Trailing Zeroes" ),
                     &PCB_DIMENSION_BASE::ChangeSuppressZeroes, &PCB_DIMENSION_BASE::GetSuppressZeroes ),
                     groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_ARROW_DIRECTION>( _HKI( "Arrow Direction"),
                     &PCB_DIMENSION_BASE::ChangeArrowDirection, &PCB_DIMENSION_BASE::GetArrowDirection ),
                     groupDimension )
-                .SetAvailableFunc( isMultiArrowDirection );
+                .SetAvailableFunc( isMultiArrowDirection ).SetIsCopyable();
 
         const wxString groupText = _HKI( "Text Properties" );
 

@@ -22,6 +22,8 @@
 #define FOOTPRINT_H
 
 #include <deque>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
@@ -57,6 +59,7 @@ class MSG_PANEL_ITEM;
 class SHAPE;
 class REPORTER;
 class COMPONENT_CLASS_CACHE_PROXY;
+class PCB_FOOTPRINT_FIELD_PROPERTY;
 class PCB_POINT;
 
 namespace KIGFX {
@@ -66,12 +69,6 @@ class VIEW;
 namespace KIFONT {
 class OUTLINE_FONT;
 }
-
-enum INCLUDE_NPTH_T
-{
-    DO_NOT_INCLUDE_NPTH = false,
-    INCLUDE_NPTH = true
-};
 
 /**
  * The set of attributes allowed within a FOOTPRINT, using FOOTPRINT::SetAttributes()
@@ -490,6 +487,17 @@ public:
 
     const KIID_PATH& GetPath() const { return m_path; }
     void SetPath( const KIID_PATH& aPath ) { m_path = aPath; }
+
+    /**
+     * Test whether this footprint's symbol lives on \a aSheetPath or any sheet below it.
+     *
+     * @param aSheetPath is a schematic sheet path as returned by SCH_SHEET_PATH::Path(), which
+     *                   leads with the root sheet UUID.  Board paths never record the root sheet,
+     *                   so it is stripped before comparing.
+     * @return true if the footprint's path is at or below \a aSheetPath, false if \a aSheetPath
+     *         is empty.
+     */
+    bool IsWithinSchematicSheet( const KIID_PATH& aSheetPath ) const;
 
     wxString GetSheetname() const { return m_sheetname; }
     void SetSheetname( const wxString& aSheetname ) { m_sheetname = aSheetname; }
@@ -1156,6 +1164,8 @@ public:
     void SetFileFormatVersionAtLoad( int aVersion ) { m_fileFormatVersionAtLoad = aVersion; }
     int GetFileFormatVersionAtLoad() const { return m_fileFormatVersionAtLoad; }
 
+    std::vector<PROPERTY_BASE*> GetDynamicProperties() const override;
+
     /**
      * Return a #PAD with a matching number.
      *
@@ -1181,31 +1191,17 @@ public:
     std::vector<const PAD*> GetPads( const wxString& aPadNumber, const PAD* aIgnore = nullptr ) const;
 
     /**
-     * Return the number of pads.
-     *
-     * @param aIncludeNPTH includes non-plated through holes when true.  Does not include
-     *                     non-plated through holes when false.
-     * @return the number of pads according to \a aIncludeNPTH.
+     * @return the number of pads.
      */
-    unsigned GetPadCount( INCLUDE_NPTH_T aIncludeNPTH = INCLUDE_NPTH_T(INCLUDE_NPTH) ) const;
+    unsigned GetPadCount() const;
 
     /**
-     * Return the number of unique non-blank pads.
-     *
      * A complex pad can be built with many pads having the same pad name to create a complex
      * shape or fragmented solder paste areas.
      *
-     * @param aIncludeNPTH includes non-plated through holes when true.  Does not include
-     *                     non-plated through holes when false.
-     * @return the number of unique pads according to \a aIncludeNPTH.
+     * @return the names of the unique, non-blank pads.
      */
-    unsigned GetUniquePadCount( INCLUDE_NPTH_T aIncludeNPTH = INCLUDE_NPTH_T(INCLUDE_NPTH) ) const;
-
-    /**
-     * Return the names of the unique, non-blank pads.
-     */
-    std::set<wxString>
-    GetUniquePadNumbers( INCLUDE_NPTH_T aIncludeNPTH = INCLUDE_NPTH_T(INCLUDE_NPTH) ) const;
+    std::set<wxString> GetUniquePadNumbers() const;
 
     /**
      * Return the number of unique pads whose pad number represents an electrical pin.
@@ -1218,11 +1214,7 @@ public:
     unsigned GetNumberedPadCount() const;
 
     /**
-     * Return the next available pad number in the footprint.
-     *
-     * @param aFillSequenceGaps true if the numbering should "fill in" gaps in the sequence,
-     *                          else return the highest value + 1
-     * @return the next available pad number
+     * @return the next available pad number in the footprint.
      */
     wxString GetNextPadNumber( const wxString& aLastPadName ) const;
 
@@ -1511,6 +1503,8 @@ private:
     // fragile.
     mutable std::mutex                                     m_geometry_cache_mutex;
     mutable std::unique_ptr<FOOTPRINT_GEOMETRY_CACHE_DATA> m_geometry_cache;
+
+    mutable std::map<wxString, std::unique_ptr<PCB_FOOTPRINT_FIELD_PROPERTY>> m_dynamicPropertyCache;
 
     // A list of pad groups, each of which is allowed to short nets within their group.
     // A pad group is a comma-separated list of pad numbers.

@@ -21,8 +21,11 @@
 #include "altium_pcb.h"
 #include "altium_parser_pcb.h"
 #include <altium_pcb_compound_file.h>
+#include <io/altium/altium_ascii_parser.h>
 #include <io/altium/altium_binary_parser.h>
 #include <io/altium/altium_parser_utils.h>
+#include <io/altium/altium_props_utils.h>
+#include <io/io_utils.h>
 #include <io/altium/altium_project_variants.h>
 
 #include <board.h>
@@ -71,6 +74,13 @@
 
 
 constexpr double BOLD_FACTOR = 1.75;    // CSS font-weight-normal is 400; bold is 700
+
+// Slots in an Altium padstack's per-layer arrays, which run top, mid 1 through 30, bottom
+constexpr int ALTIUM_TOP_PADSTACK_IDX    = 0;
+constexpr int ALTIUM_MID1_PADSTACK_IDX   = 1;
+constexpr int ALTIUM_MID2_PADSTACK_IDX   = 2;
+constexpr int ALTIUM_BOTTOM_PADSTACK_IDX = 31;
+constexpr int ALTIUM_PADSTACK_IDX_COUNT  = 32;
 
 
 bool IsAltiumLayerCopper( ALTIUM_LAYER aLayer )
@@ -488,9 +498,13 @@ void ALTIUM_PCB::checkpoint()
     }
 }
 
-void ALTIUM_PCB::Parse( const ALTIUM_PCB_COMPOUND_FILE&                  altiumPcbFile,
-                        const std::map<ALTIUM_PCB_DIR, std::string>& aFileMapping )
+void ALTIUM_PCB::Parse( const ALTIUM_PCB_COMPOUND_FILE&              altiumPcbFile,
+                        const std::map<ALTIUM_PCB_DIR, std::string>& aFileMapping,
+                        const std::map<std::string, UTF8>*           aProperties )
 {
+    if( aProperties )
+        MapSchematicNetNames( *aProperties );
+
     // this vector simply declares in which order which functions to call.
     const std::vector<std::tuple<bool, ALTIUM_PCB_DIR, PARSE_FUNCTION_POINTER_fp>> parserOrder = {
         { true, ALTIUM_PCB_DIR::FILE_HEADER,
@@ -1293,9 +1307,44 @@ void ALTIUM_PCB::ParseBoard6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcb
                             RPT_SEVERITY_ERROR );
     }
 
+    HelperBuildPadstackLayerIndex();
     HelperCreateBoardOutline( elem.board_vertices );
     m_board->GetDesignSettings().SetBoardThickness( stackup.BuildBoardThicknessFromStackup() );
     designSettings.m_HasStackup = true;
+}
+
+
+void ALTIUM_PCB::HelperBuildPadstackLayerIndex()
+{
+    m_padstackLayerIndex.clear();
+
+    for( const auto& [altiumLayer, kicadLayer] : m_layermap )
+    {
+        if( altiumLayer < ALTIUM_LAYER::TOP_LAYER || altiumLayer > ALTIUM_LAYER::BOTTOM_LAYER )
+            continue;
+
+        if( IsCopperLayer( kicadLayer ) )
+        {
+            m_padstackLayerIndex[kicadLayer] = static_cast<int>( altiumLayer )
+                                               - static_cast<int>( ALTIUM_LAYER::TOP_LAYER );
+        }
+    }
+}
+
+
+int ALTIUM_PCB::HelperGetPadstackLayerIndex( PCB_LAYER_ID aLayer ) const
+{
+    // Footprint libraries carry no stackup, so Altium's mid layer N is KiCad's In N
+    if( m_padstackLayerIndex.empty() )
+    {
+        size_t ordinal = CopperLayerToOrdinal( aLayer );
+
+        return ordinal < ALTIUM_PADSTACK_IDX_COUNT ? static_cast<int>( ordinal ) : -1;
+    }
+
+    auto it = m_padstackLayerIndex.find( aLayer );
+
+    return it == m_padstackLayerIndex.end() ? -1 : it->second;
 }
 
 
@@ -1630,8 +1679,8 @@ void ALTIUM_PCB::ParseClasses6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumP
 
             for( const wxString& name : elem.names )
             {
-                m_board->GetDesignSettings().m_NetSettings->SetNetclassPatternAssignment(
-                        name, nc->GetName() );
+                m_board->GetDesignSettings().m_NetSettings->SetNetclassPatternAssignment( SchematicCasedNetName( name ),
+                                                                                          nc->GetName() );
             }
 
             if( m_board->GetDesignSettings().m_NetSettings->HasNetclass( nc->GetName() ) )
@@ -2478,6 +2527,101 @@ void ALTIUM_PCB::ParseModelsData( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcb
 }
 
 
+static void altiumCollectSchematicNetNames( const wxString& aFileName, std::map<wxString, wxString>& aNames,
+                                            std::set<wxString>& aAmbiguous )
+{
+    auto collect = [&]( const std::map<wxString, wxString>& aProps )
+    {
+        int      record = ALTIUM_PROPS_UTILS::ReadInt( aProps, wxT( "RECORD" ), 0 );
+        wxString name;
+
+        switch( record )
+        {
+        case 16: // sheet entry
+        case 18: // port
+            name = ALTIUM_PROPS_UTILS::ReadString( aProps, wxT( "NAME" ), wxT( "" ) );
+            break;
+
+        case 17: // power port
+        case 25: // net label
+            name = ALTIUM_PROPS_UTILS::ReadString( aProps, wxT( "TEXT" ), wxT( "" ) );
+            break;
+
+        default: return;
+        }
+
+        if( name.IsEmpty() )
+            return;
+
+        wxString key = name.Upper();
+        auto     it = aNames.find( key );
+
+        if( it == aNames.end() )
+            aNames.emplace( key, name );
+        else if( it->second != name )
+            aAmbiguous.insert( key );
+    };
+
+    if( IO_UTILS::fileHasBinaryHeader( aFileName, IO_UTILS::COMPOUND_FILE_HEADER ) )
+    {
+        ALTIUM_COMPOUND_FILE            schFile( aFileName );
+        const CFB::COMPOUND_FILE_ENTRY* header = schFile.FindStream( { "FileHeader" } );
+
+        if( !header )
+            return;
+
+        ALTIUM_BINARY_PARSER reader( schFile, header );
+
+        while( reader.GetRemainingBytes() > 0 )
+            collect( reader.ReadProperties() );
+    }
+    else
+    {
+        ALTIUM_ASCII_PARSER reader( aFileName );
+
+        while( reader.CanRead() )
+            collect( reader.ReadProperties() );
+    }
+}
+
+
+void ALTIUM_PCB::MapSchematicNetNames( const std::map<std::string, UTF8>& aProperties )
+{
+    std::set<wxString> ambiguous;
+
+    for( int i = 0;; i++ )
+    {
+        auto it = aProperties.find( "sch" + std::to_string( i ) );
+
+        if( it == aProperties.end() )
+            break;
+
+        try
+        {
+            altiumCollectSchematicNetNames( it->second.wx_str(), m_schematicNetNames, ambiguous );
+        }
+        catch( ... )
+        {
+            // an unreadable schematic must not break the board import
+        }
+    }
+
+    for( const wxString& key : ambiguous )
+        m_schematicNetNames.erase( key );
+}
+
+
+wxString ALTIUM_PCB::SchematicCasedNetName( const wxString& aNetName ) const
+{
+    auto it = m_schematicNetNames.find( aNetName.Upper() );
+
+    if( it != m_schematicNetNames.end() )
+        return it->second;
+
+    return aNetName;
+}
+
+
 void ALTIUM_PCB::ParseNets6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                                  const CFB::COMPOUND_FILE_ENTRY* aEntry )
 {
@@ -2495,7 +2639,7 @@ void ALTIUM_PCB::ParseNets6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbF
         checkpoint();
         ANET6 elem( reader );
 
-        wxString netName = elem.name;
+        wxString netName = SchematicCasedNetName( elem.name );
 
         if( netName.IsEmpty() )
         {
@@ -3690,8 +3834,7 @@ void ALTIUM_PCB::ConvertPads6ToBoardItem( const APAD6& aElem )
 
         // This wrapper exists only to carry a free-standing pad; it has no schematic symbol and
         // nothing to buy or place, so keep it out of the BOM and the placement files.
-        footprint->SetAttributes( FP_BOARD_ONLY | FP_EXCLUDE_FROM_BOM
-                                  | FP_EXCLUDE_FROM_POS_FILES );
+        footprint->SetAttributes( FP_BOARD_ONLY | FP_EXCLUDE_FROM_BOM | FP_EXCLUDE_FROM_POS_FILES );
 
         ConvertPads6ToFootprintItemOnCopper( footprint.get(), aElem );
 
@@ -3725,13 +3868,17 @@ void ALTIUM_PCB::ConvertVias6ToFootprintItem( FOOTPRINT* aFootprint, const AVIA6
     {
         pad->Padstack().SetMode( PADSTACK::MODE::FRONT_INNER_BACK );
 
-        pad->SetSize( F_Cu, VECTOR2I( aElem.diameter_by_layer[0], aElem.diameter_by_layer[0] ) );
+        int top = aElem.diameter_by_layer[ALTIUM_TOP_PADSTACK_IDX];
+        int mid = aElem.diameter_by_layer[ALTIUM_MID1_PADSTACK_IDX];
+        int bot = aElem.diameter_by_layer[ALTIUM_BOTTOM_PADSTACK_IDX];
+
+        pad->SetSize( F_Cu, VECTOR2I( top, top ) );
         pad->SetShape( F_Cu, PAD_SHAPE::CIRCLE );
 
-        pad->SetSize( PADSTACK::INNER_LAYERS, VECTOR2I( aElem.diameter_by_layer[1], aElem.diameter_by_layer[1] ) );
+        pad->SetSize( PADSTACK::INNER_LAYERS, VECTOR2I( mid, mid ) );
         pad->SetShape( PADSTACK::INNER_LAYERS, PAD_SHAPE::CIRCLE );
 
-        pad->SetSize( B_Cu, VECTOR2I( aElem.diameter_by_layer[31], aElem.diameter_by_layer[31] ) );
+        pad->SetSize( B_Cu, VECTOR2I( bot, bot ) );
         pad->SetShape( B_Cu, PAD_SHAPE::CIRCLE );
     }
     else
@@ -3745,14 +3892,13 @@ void ALTIUM_PCB::ConvertVias6ToFootprintItem( FOOTPRINT* aFootprint, const AVIA6
 
         for( PCB_LAYER_ID layer : cuLayers )
         {
-            int altiumIdx = CopperLayerToOrdinal( layer );
+            int altiumIdx = HelperGetPadstackLayerIndex( layer );
 
-            if( altiumIdx < 32 )
-            {
-                pad->SetSize( layer, VECTOR2I( aElem.diameter_by_layer[altiumIdx],
-                                                   aElem.diameter_by_layer[altiumIdx] ) );
-                pad->SetShape( layer, PAD_SHAPE::CIRCLE );
-            }
+            // Internal planes carry no padstack entry; the via keeps its nominal land there
+            int diameter = altiumIdx < 0 ? aElem.diameter : aElem.diameter_by_layer[altiumIdx];
+
+            pad->SetSize( layer, VECTOR2I( diameter, diameter ) );
+            pad->SetShape( layer, PAD_SHAPE::CIRCLE );
         }
     }
 
@@ -3982,14 +4128,16 @@ void ALTIUM_PCB::ConvertPads6ToFootprintItemOnCopper( FOOTPRINT* aFootprint, con
     PADSTACK& ps = pad->Padstack();
 
     auto setCopperGeometry =
-            [&]( PCB_LAYER_ID aLayer, ALTIUM_PAD_SHAPE aShape, const VECTOR2I& aSize )
+            [&]( PCB_LAYER_ID aLayer, int aAltiumIdx, ALTIUM_PAD_SHAPE aShape,
+                 const VECTOR2I& aSize )
             {
-                int altLayer = CopperLayerToOrdinal( aLayer );
+                bool hasAltiumEntry = aElem.sizeAndShape && aAltiumIdx >= 0
+                                      && aAltiumIdx < ALTIUM_PADSTACK_IDX_COUNT;
 
                 ps.SetSize( aSize, aLayer );
 
-                if( aElem.holesize != 0 && aElem.sizeAndShape )
-                    ps.SetOffset( aElem.sizeAndShape->holeoffset[altLayer], aLayer );
+                if( aElem.holesize != 0 && hasAltiumEntry )
+                    ps.SetOffset( aElem.sizeAndShape->holeoffset[aAltiumIdx], aLayer );
 
                 switch( aShape )
                 {
@@ -3998,11 +4146,11 @@ void ALTIUM_PCB::ConvertPads6ToFootprintItemOnCopper( FOOTPRINT* aFootprint, con
                     break;
 
                 case ALTIUM_PAD_SHAPE::CIRCLE:
-                    if( aElem.sizeAndShape
-                        && aElem.sizeAndShape->alt_shape[altLayer] == ALTIUM_PAD_SHAPE_ALT::ROUNDRECT )
+                    if( hasAltiumEntry
+                        && aElem.sizeAndShape->alt_shape[aAltiumIdx] == ALTIUM_PAD_SHAPE_ALT::ROUNDRECT )
                     {
                         ps.SetShape( PAD_SHAPE::ROUNDRECT, aLayer ); // 100 = round, 0 = rectangular
-                        double ratio = aElem.sizeAndShape->cornerradius[altLayer] / 200.;
+                        double ratio = aElem.sizeAndShape->cornerradius[aAltiumIdx] / 200.;
                         ps.SetRoundRectRadiusRatio( ratio, aLayer );
                     }
                     else if( aSize.x == aSize.y )
@@ -4056,41 +4204,53 @@ void ALTIUM_PCB::ConvertPads6ToFootprintItemOnCopper( FOOTPRINT* aFootprint, con
     {
     case ALTIUM_PAD_MODE::SIMPLE:
         ps.SetMode( PADSTACK::MODE::NORMAL );
-        setCopperGeometry( PADSTACK::ALL_LAYERS, aElem.topshape, aElem.topsize );
+        setCopperGeometry( PADSTACK::ALL_LAYERS, ALTIUM_TOP_PADSTACK_IDX, aElem.topshape,
+                           aElem.topsize );
         break;
 
     case ALTIUM_PAD_MODE::TOP_MIDDLE_BOTTOM:
         ps.SetMode( PADSTACK::MODE::FRONT_INNER_BACK );
-        setCopperGeometry( F_Cu, aElem.topshape, aElem.topsize );
-        setCopperGeometry( PADSTACK::INNER_LAYERS, aElem.midshape, aElem.midsize );
-        setCopperGeometry( B_Cu, aElem.botshape, aElem.botsize );
+        setCopperGeometry( F_Cu, ALTIUM_TOP_PADSTACK_IDX, aElem.topshape, aElem.topsize );
+        setCopperGeometry( PADSTACK::INNER_LAYERS, ALTIUM_MID1_PADSTACK_IDX, aElem.midshape,
+                           aElem.midsize );
+        setCopperGeometry( B_Cu, ALTIUM_BOTTOM_PADSTACK_IDX, aElem.botshape, aElem.botsize );
         break;
 
     case ALTIUM_PAD_MODE::FULL_STACK:
+    {
         ps.SetMode( PADSTACK::MODE::CUSTOM );
 
-        setCopperGeometry( F_Cu, aElem.topshape, aElem.topsize );
-        setCopperGeometry( B_Cu, aElem.botshape, aElem.botsize );
-        setCopperGeometry( In1_Cu, aElem.midshape, aElem.midsize );
+        setCopperGeometry( F_Cu, HelperGetPadstackLayerIndex( F_Cu ), aElem.topshape,
+                           aElem.topsize );
+        setCopperGeometry( B_Cu, HelperGetPadstackLayerIndex( B_Cu ), aElem.botshape,
+                           aElem.botsize );
 
-        if( aElem.sizeAndShape )
+        LSET intLayers = aFootprint->BoardLayerSet() & LSET::InternalCuMask();
+
+        for( PCB_LAYER_ID layer : intLayers )
         {
-            size_t i = 0;
+            int idx = HelperGetPadstackLayerIndex( layer );
+            int inner = idx - ALTIUM_MID2_PADSTACK_IDX;
 
-            LSET intLayers = aFootprint->BoardLayerSet();
-            intLayers &= LSET::InternalCuMask();
-            intLayers.set( In1_Cu, false ); // Already handled above
-
-            for( PCB_LAYER_ID layer : intLayers )
+            // Mid layer 1 is carried in the record itself, and internal planes have no entry at
+            // all, so both fall back to it
+            if( !aElem.sizeAndShape || inner < 0
+                || inner >= static_cast<int>( std::size( aElem.sizeAndShape->inner_size ) ) )
             {
-                setCopperGeometry( layer, aElem.sizeAndShape->inner_shape[i],
-                                   VECTOR2I( aElem.sizeAndShape->inner_size[i].x,
-                                             aElem.sizeAndShape->inner_size[i].y ) );
-                i++;
+                setCopperGeometry( layer, idx, aElem.midshape, aElem.midsize );
+            }
+            else
+            {
+                const APAD6_SIZE_AND_SHAPE& shape = *aElem.sizeAndShape;
+
+                setCopperGeometry( layer, idx, shape.inner_shape[inner],
+                                   VECTOR2I( shape.inner_size[inner].x,
+                                             shape.inner_size[inner].y ) );
             }
         }
 
         break;
+    }
     }
 
     switch( aElem.layer )
@@ -4465,9 +4625,9 @@ void ALTIUM_PCB::ParseVias6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbF
 
         case ALTIUM_PAD_MODE::TOP_MIDDLE_BOTTOM:
             via->Padstack().SetMode( PADSTACK::MODE::FRONT_INNER_BACK );
-            via->SetWidth( F_Cu, elem.diameter_by_layer[0] );
-            via->SetWidth( PADSTACK::INNER_LAYERS, elem.diameter_by_layer[1] );
-            via->SetWidth( B_Cu, elem.diameter_by_layer[31] );
+            via->SetWidth( F_Cu, elem.diameter_by_layer[ALTIUM_TOP_PADSTACK_IDX] );
+            via->SetWidth( PADSTACK::INNER_LAYERS, elem.diameter_by_layer[ALTIUM_MID1_PADSTACK_IDX] );
+            via->SetWidth( B_Cu, elem.diameter_by_layer[ALTIUM_BOTTOM_PADSTACK_IDX] );
             break;
 
         case ALTIUM_PAD_MODE::FULL_STACK:
@@ -4478,11 +4638,11 @@ void ALTIUM_PCB::ParseVias6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbF
 
             for( PCB_LAYER_ID layer : cuLayers )
             {
-                int altiumLayer = CopperLayerToOrdinal( layer );
-                wxCHECK2_MSG( altiumLayer < 32, break,
-                              "Altium importer expects 32 or fewer copper layers" );
+                int altiumLayer = HelperGetPadstackLayerIndex( layer );
 
-                via->SetWidth( layer, elem.diameter_by_layer[altiumLayer] );
+                // Internal planes carry no padstack entry; the via keeps its nominal land there
+                via->SetWidth( layer, altiumLayer < 0 ? elem.diameter
+                                                      : elem.diameter_by_layer[altiumLayer] );
             }
 
             break;

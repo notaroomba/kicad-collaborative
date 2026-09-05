@@ -81,7 +81,8 @@ class SCH_IO_KICAD_SEXPR_PARSER : public SCHEMATIC_LEXER
 public:
     SCH_IO_KICAD_SEXPR_PARSER( LINE_READER* aLineReader = nullptr,
                       PROGRESS_REPORTER* aProgressReporter = nullptr, unsigned aLineCount = 0,
-                      SCH_SHEET* aRootSheet = nullptr, bool aIsAppending = false );
+                      SCH_SHEET* aRootSheet = nullptr, bool aIsAppending = false,
+                      bool aIsSheetLoad = false );
 
     void ParseLib( LIB_SYMBOL_MAP& aSymbolLibMap );
 
@@ -163,6 +164,7 @@ private:
         LIB_ID            libId;
         std::vector<KIID> memberUuids;
         bool              locked = false;
+        std::map<wxString, wxString> customProperties;
     };
 
     void checkpoint();
@@ -209,6 +211,9 @@ private:
     }
 
     bool parseBool();
+
+    void parseCustomProperty( EDA_ITEM* aItem );
+    void parseCustomProperty( std::map<wxString, wxString>& aProps );
 
     /**
      * Parses a boolean flag inside a list that existed before boolean normalization.
@@ -328,6 +333,7 @@ private:
     int      m_bodyStyle;         ///< The current body style being parsed.
     wxString m_symbolName;        ///< The current symbol name.
     bool     m_appending;         ///< Appending load status.
+    bool     m_sheetLoad;         ///< Loading a sheet into an already open schematic.
 
     std::set<KIID>     m_uuids;
 

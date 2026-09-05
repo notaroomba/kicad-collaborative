@@ -366,6 +366,12 @@ public:
     PCB_VIA( const PCB_VIA& aOther );
     PCB_VIA& operator=( const PCB_VIA &aOther );
 
+    /**
+     * Runs of microvias that land on one another, each ordered from its outermost hop down.
+     * A run of one is left out, so an entry is a stack whether or not a generator built it.
+     */
+    static std::vector<std::vector<PCB_VIA*>> CollectMicroviaColumns( BOARD* aBoard );
+
     void CopyFrom( const BOARD_ITEM* aOther ) override;
 
     bool IsType( const std::vector<KICAD_T>& aScanTypes ) const override
@@ -819,6 +825,10 @@ public:
     bool GetIsFree() const              { return m_isFree; }
     void SetIsFree( bool aFree = true ) { m_isFree = aFree; }
 
+    // For property manager:
+    bool GetIsNotFree() const           { return !m_isFree; }
+    void SetIsNotFree( bool aNotFree )  { m_isFree = !aNotFree; }
+
     // @copydoc BOARD_ITEM::GetEffectiveShape
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
                                               FLASHING aFlash = FLASHING::DEFAULT,
@@ -847,6 +857,7 @@ private:
     // Silence GCC warning about hiding the PCB_TRACK base method
     bool operator==( const PCB_TRACK& aOther ) const override;
 
+private:
     VIATYPE      m_viaType;                  ///< through, blind/buried or micro
 
     PADSTACK     m_padStack;

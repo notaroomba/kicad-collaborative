@@ -68,10 +68,10 @@ void fontconfig::FONTCONFIG::SetReporter( REPORTER* aReporter )
 }
 
 
-REPORTER* fontconfig::FONTCONFIG::GetReporter()
+REPORTER& fontconfig::FONTCONFIG::GetReporter()
 {
     std::lock_guard lock( g_fontConfigMutex );
-    return s_reporter;
+    return s_reporter ? *s_reporter : NULL_REPORTER::GetInstance();
 }
 
 
@@ -240,10 +240,10 @@ FONTCONFIG::FF_RESULT FONTCONFIG::FindFont( const wxString& aFontName, wxString&
     FcPattern* pat = FcPatternCreate();
 
     if( aBold )
-        FcPatternAddString( pat, FC_STYLE, (const FcChar8*) "Bold" );
+        FcPatternAddInteger( pat, FC_WEIGHT, FC_WEIGHT_BOLD );
 
     if( aItalic )
-        FcPatternAddString( pat, FC_STYLE, (const FcChar8*) "Italic" );
+        FcPatternAddInteger( pat, FC_SLANT, FC_SLANT_ITALIC );
 
     FcPatternAddString( pat, FC_FAMILY, (FcChar8*) fcBuffer.data() );
 
@@ -499,4 +499,3 @@ void FONTCONFIG::ListFonts( std::vector<std::string>& aFonts, const std::string&
     for( const std::pair<const std::string, FONTINFO>& entry : m_fontInfoCache )
         aFonts.push_back( entry.second.Family() );
 }
-

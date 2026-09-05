@@ -130,6 +130,8 @@
 #include <tools/position_relative_tool.h>
 #include <tools/zone_filler_tool.h>
 #include <tools/multichannel_tool.h>
+#include <tools/match_properties_tool.h>
+#include <tools/graphic_edit_tool.h>
 #include "collab/pcb_collab_tool.h"
 #include <router/router_tool.h>
 #include <autorouter/autoplace_tool.h>
@@ -187,6 +189,7 @@ BEGIN_EVENT_TABLE( PCB_EDIT_FRAME, PCB_BASE_FRAME )
     // Horizontal toolbar
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_TRACK_WIDTH, PCB_EDIT_FRAME::Tracks_and_Vias_Size_Event )
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VIA_SIZE, PCB_EDIT_FRAME::Tracks_and_Vias_Size_Event )
+    EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VIA_STACK, PCB_EDIT_FRAME::SelectViaStack_Event )
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VARIANT_SELECT, PCB_EDIT_FRAME::onVariantSelected )
 
     // Tracks and vias sizes general options
@@ -225,6 +228,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_showBorderAndTitleBlock = true;   // true to display sheet references
     m_SelTrackWidthBox = nullptr;
     m_SelViaSizeBox = nullptr;
+    m_SelViaStackBox = nullptr;
     m_CurrentVariantCtrl = nullptr;
     m_ShowLayerManagerTools = true;
     m_supportsAutoSave = true;
@@ -894,6 +898,8 @@ void PCB_EDIT_FRAME::redrawNetnames()
     KIGFX::VIEW* view = GetCanvas()->GetView();
     BOX2D        viewport = view->GetViewport();
 
+    view->SyncLayerVisibilityCache();   // Required for ViewGetLOD() calls.
+
     // Inflate to catch most of the track width
     BOX2I_MINMAX clipbox( BOX2ISafe( viewport.Inflate( pcbIUScale.mmToIU( 2.0 ) ) ) );
 
@@ -1056,6 +1062,8 @@ void PCB_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new VIA_STITCH_TOOL );
     m_toolManager->RegisterTool( new PROPERTIES_TOOL );
     m_toolManager->RegisterTool( new MULTICHANNEL_TOOL );
+    m_toolManager->RegisterTool( new MATCH_PROPERTIES_TOOL );
+    m_toolManager->RegisterTool( new GRAPHIC_EDIT_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
     m_toolManager->RegisterTool( new DRC_RULE_EDITOR_TOOL );
     m_toolManager->RegisterTool( new DIFF_PHASE_SKEW_TOOL );
@@ -1474,6 +1482,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     CURRENT_EDIT_TOOL( PCB_ACTIONS::tuneSkew );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::showDiffPhaseSkew );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawVia );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::placeViaStack );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawZone );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawRuleArea );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawLine );

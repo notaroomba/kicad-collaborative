@@ -21,6 +21,9 @@
 #ifndef SCH_SHEEET_H
 #define SCH_SHEEET_H
 
+#include <map>
+#include <memory>
+
 #include <sch_field.h>
 
 class KIID_PATH;
@@ -31,6 +34,7 @@ class SCH_SHEET_PIN;
 class SCH_SHEET_PATH;
 class EDA_DRAW_FRAME;
 class SCH_NO_CONNECT;
+class SCH_SHEET_FIELD_PROPERTY;
 
 
 #define MIN_SHEET_WIDTH  500    // Units are mils.
@@ -103,6 +107,8 @@ public:
      */
     SCH_FIELD* GetField( const wxString& aFieldName );
     const SCH_FIELD* GetField( const wxString& aFieldName ) const;
+
+    std::vector<PROPERTY_BASE*> GetDynamicProperties() const override;
 
     /**
      * Return the next ordinal for a user field for this sheet
@@ -512,6 +518,12 @@ public:
      */
     const std::vector<SCH_SHEET_INSTANCE>& GetInstances() const { return m_instances; }
 
+    /// Return this sheet's placement record under @a aParentPath, or nullptr if it has none.
+    const SCH_SHEET_INSTANCE* GetInstance( const KIID_PATH& aParentPath ) const
+    {
+        return getInstance( aParentPath );
+    }
+
     /**
      * Check to see if this sheet has a root sheet instance.
      *
@@ -538,6 +550,10 @@ public:
     void AddInstance( const SCH_SHEET_INSTANCE& aInstance );
 
     void DeleteVariant( const KIID_PATH& aPath, const wxString& aVariantName );
+
+    // Remove a variant's override of one field
+    void ClearVariantField( const KIID_PATH& aPath, const wxString& aVariantName,
+                            const wxString& aFieldName );
 
     void RenameVariant( const KIID_PATH& aPath, const wxString& aOldName, const wxString& aNewName );
 
@@ -685,6 +701,8 @@ private:
     KIGFX::COLOR4D              m_backgroundColor;
 
     std::vector<SCH_SHEET_INSTANCE> m_instances;
+
+    mutable std::map<wxString, std::unique_ptr<SCH_SHEET_FIELD_PROPERTY>> m_dynamicPropertyCache;
 };
 
 

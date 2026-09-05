@@ -273,6 +273,8 @@ void REFERENCE_IMAGE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirecti
 
     m_pos = newPos;
     m_bitmapBase->Mirror( aFlipDirection );
+
+    MIRROR( m_transformOriginOffset, VECTOR2I( 0, 0 ), aFlipDirection );
 }
 
 
@@ -285,8 +287,16 @@ void REFERENCE_IMAGE::Rotate( const VECTOR2I& aCenter, const EDA_ANGLE& aAngle )
     norm.Normalize();
 
     // each call to m_bitmapBase->Rotate() rotates 90 degrees
+    int rotations = 0;
+
     for( double ang = 45.0; ang < norm.AsDegrees(); ang += 90.0 )
+    {
         m_bitmapBase->Rotate( true );
+        rotations++;
+    }
+
+    if( rotations > 0 )
+        RotatePoint( m_transformOriginOffset, EDA_ANGLE( rotations * 90.0, DEGREES_T ) );
 }
 
 

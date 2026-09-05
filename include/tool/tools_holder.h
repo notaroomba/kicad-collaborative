@@ -124,6 +124,11 @@ public:
 
     virtual void DisplayToolMsg( const wxString& msg ) {};
 
+    /**
+     * Select the given action in the toolbar group which contains it, if any.
+     */
+    virtual void SelectToolbarAction( const TOOL_ACTION& aAction ) {}
+
     virtual void ShowChangedLanguage();
 
     /**
@@ -189,7 +194,8 @@ protected:
 class SCOPED_TOOL_PUSHER
 {
 public:
-    SCOPED_TOOL_PUSHER( TOOLS_HOLDER* aHolder, const TOOL_EVENT& aEvent ) :
+    // nodiscard on the constructor makes an unnamed temporary (which pops immediately) a warning
+    [[nodiscard]] SCOPED_TOOL_PUSHER( TOOLS_HOLDER* aHolder, const TOOL_EVENT& aEvent ) :
             m_holder( aHolder ),
             m_event( aEvent )
     {

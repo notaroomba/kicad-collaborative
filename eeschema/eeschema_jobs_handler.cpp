@@ -197,6 +197,9 @@ EESCHEMA_JOBS_HANDLER::EESCHEMA_JOBS_HANDLER( KIWAY* aKiway ) :
 
 void EESCHEMA_JOBS_HANDLER::ClearCachedSchematic()
 {
+    if( m_cliSchematic )
+        m_cliSchematic->SetProject( nullptr );
+
     delete m_cliSchematic;
     m_cliSchematic = nullptr;
 }
@@ -255,6 +258,7 @@ void EESCHEMA_JOBS_HANDLER::InitRenderSettings( SCH_RENDER_SETTINGS* aRenderSett
     aRenderSettings->m_LabelSizeRatio = aSch->Settings().m_LabelSizeRatio;
     aRenderSettings->m_TextOffsetRatio = aSch->Settings().m_TextOffsetRatio;
     aRenderSettings->m_PinSymbolSize = aSch->Settings().m_PinSymbolSize;
+    aRenderSettings->m_ShowDNPMarkers = aSch->Settings().m_ShowDNPMarkers;
 
     aRenderSettings->SetDashLengthRatio( aSch->Settings().m_DashedLineDashRatio );
     aRenderSettings->SetGapLengthRatio( aSch->Settings().m_DashedLineGapRatio );
@@ -281,6 +285,12 @@ void EESCHEMA_JOBS_HANDLER::InitRenderSettings( SCH_RENDER_SETTINGS* aRenderSett
     // try to load the override first
     if( !aDrawingSheetOverride.IsEmpty() && loadSheet( aDrawingSheetOverride ) )
         return;
+
+    if( aSch->Settings().m_SchDrawingSheetFileName == wxS( "empty.kicad_wks" ) )
+    {
+        DS_DATA_MODEL::GetTheInstance().SetEmptyLayout();
+        return;
+    }
 
     // no override or failed override continues here
     loadSheet( aSch->Settings().m_SchDrawingSheetFileName );
@@ -1636,6 +1646,11 @@ int EESCHEMA_JOBS_HANDLER::JobImport( JOB* aJob )
         }
 
         schematic->SetSheetNumberAndCount();
+
+        // Imported schematics preserve their source page frame as schematic graphics.
+        // Match the editor import path and suppress KiCad's default frame/title block.
+        schematic->Settings().m_SchDrawingSheetFileName = wxS( "empty.kicad_wks" );
+        DS_DATA_MODEL::GetTheInstance().SetEmptyLayout();
 
         if( SCH_SHEET* topSheet = schematic->GetTopLevelSheet() )
             topSheet->SetFileName( outputFn.GetFullName() );

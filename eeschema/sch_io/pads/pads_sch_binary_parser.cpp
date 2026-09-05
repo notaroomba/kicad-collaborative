@@ -4391,21 +4391,30 @@ namespace
         }
 
         std::unordered_map<uint32_t, uint8_t> definitionColors;
-        std::function<void( uint32_t )>       visitDefinition = [&]( uint32_t aDefinition )
-        {
-            definitionColors[aDefinition] = 1;
+        std::function<void( uint32_t )>       visitDefinition =
+                [&]( uint32_t aDefinition )
+                {
+                    definitionColors[aDefinition] = 1;
 
-            for( const DEFINITION_EDGE& edge : definitionEdges[aDefinition] )
-            {
-                if( definitionColors[edge.target] == 1 )
-                    throwValidationError( edge.source, wxS( "cyclic symbol definition reference" ) );
+                    auto edges = definitionEdges.find( aDefinition );
 
-                if( definitionColors[edge.target] == 0 )
-                    visitDefinition( edge.target );
-            }
+                    if( edges == definitionEdges.end() )
+                    {
+                        definitionColors[aDefinition] = 2;
+                        return;
+                    }
 
-            definitionColors[aDefinition] = 2;
-        };
+                    for( const DEFINITION_EDGE& edge : edges->second )
+                    {
+                        if( definitionColors[edge.target] == 1 )
+                            throwValidationError( edge.source, wxS( "cyclic symbol definition reference" ) );
+
+                        if( definitionColors[edge.target] == 0 )
+                            visitDefinition( edge.target );
+                    }
+
+                    definitionColors[aDefinition] = 2;
+                };
 
         for( const auto& [definition, edges] : definitionEdges )
         {
@@ -4889,7 +4898,7 @@ namespace
             const uint8_t displayFlags = aCursor.U8At( recordOffset + 31 );
             text.presentation.visible = ( displayFlags & 1 ) == 0;
             text.presentation.horizontalJustification = freeTextHorizontalJustification( justification );
-            text.presentation.verticalJustification = MODEL_JUSTIFICATION::CENTER;
+            text.presentation.verticalJustification = verticalJustification( justification );
 
             SOURCE_PROVENANCE fontHandleSource = textSource;
             fontHandleSource.length = 2;

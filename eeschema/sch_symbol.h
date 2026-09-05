@@ -29,6 +29,7 @@
 #include <layer_ids.h>
 #include <lib_id.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -176,6 +177,8 @@ public:
 
     std::unique_ptr< LIB_SYMBOL >& GetLibSymbolRef() { return m_part; }
     const std::unique_ptr< LIB_SYMBOL >& GetLibSymbolRef() const { return m_part; }
+
+    bool HasEffectiveAssociatedFootprint() const;
 
     /**
      * Set this schematic symbol library symbol reference to \a aLibSymbol
@@ -453,6 +456,8 @@ public:
      */
     std::vector<SCH_FIELD>& GetFields() { return m_fields; }
     const std::vector<SCH_FIELD>& GetFields() const { return m_fields; }
+
+    std::vector<PROPERTY_BASE*> GetDynamicProperties() const override;
 
     /**
      * Add a field to the symbol.
@@ -1013,6 +1018,10 @@ public:
 
     void DeleteVariant( const KIID_PATH& aPath, const wxString& aVariantName );
 
+    // Remove a variant's override of one field
+    void ClearVariantField( const KIID_PATH& aPath, const wxString& aVariantName,
+                            const wxString& aFieldName );
+
     void RenameVariant( const KIID_PATH& aPath, const wxString& aOldName, const wxString& aNewName );
 
     void CopyVariant( const KIID_PATH& aPath, const wxString& aSourceVariant,
@@ -1132,6 +1141,11 @@ private:
     wxString                    m_schLibSymbolName;
 
     std::vector<SCH_FIELD>      m_fields;        ///< Variable length list of fields.
+
+    /// Per-object cache of dynamic property descriptors for custom fields and
+    /// effective pin-map entries, keyed by descriptor name and populated
+    /// lazily.
+    mutable std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_dynamicPropertyCache;
 
     std::unique_ptr<LIB_SYMBOL> m_part;          ///< A flattened copy of the #LIB_SYMBOL from the
                                                  ///< #PROJECT object's libraries.

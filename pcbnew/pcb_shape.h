@@ -60,7 +60,7 @@ public:
 
     bool IsConnected() const override;
 
-    wxString GetFriendlyName() const override { return getFriendlyName(); }
+    wxString GetFriendlyName() const override { return getFriendlyName( FRAME_PCB_EDITOR ); }
 
     bool IsType( const std::vector<KICAD_T>& aScanTypes ) const override;
 
@@ -107,6 +107,12 @@ public:
     void SetArcAngleAndEnd( const EDA_ANGLE& aAngle, bool aCheckNegativeAngle = false )
     {
         EDA_SHAPE::SetArcAngleAndEnd( aAngle, aCheckNegativeAngle );
+        syncLibCoords();
+    }
+
+    void SetArcAngle( const EDA_ANGLE& aAngle ) override
+    {
+        EDA_SHAPE::SetArcAngle( aAngle );
         syncLibCoords();
     }
 

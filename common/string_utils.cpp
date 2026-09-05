@@ -904,8 +904,7 @@ int StrNumCmp( const wxString& aString1, const wxString& aString2, bool aIgnoreC
 }
 
 
-bool WildCompareString( const wxString& pattern, const wxString& string_to_tst,
-                        bool case_sensitive )
+bool WildCompareString( const wxString& pattern, const wxString& string_to_tst, bool case_sensitive )
 {
     const wxChar* cp = nullptr;
     const wxChar* mp = nullptr;
@@ -1010,6 +1009,7 @@ bool ApplyModifier( double& value, const wxString& aString )
         value *= 1.0e-12;
     if( modifier == 'n' )
         value *= 1.0e-9;
+    /// Although the two 'μ's look the same, they are U+03BC and U+00B5
     else if( modifier == 'u' || modifier == wxS( "µ" )[0] || modifier == wxS( "μ" )[0] )
         value *= 1.0e-6;
     else if( modifier == 'm' || modifier == 'L' )

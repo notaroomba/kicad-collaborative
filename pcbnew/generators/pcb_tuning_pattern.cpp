@@ -1150,14 +1150,41 @@ bool PCB_TUNING_PATTERN::resetToBaseline( GENERATOR_TOOL* aTool, int aPNSLayer, 
         }
     }
 
-    PNS::LINE newLine( *pnsLine, newLineChain );
+    // Because PNS_LINE doesn't yet support multiple widths, we need to keep track
+    // of these separately for the scenario where someone drew a tuning pattern on a track
+    // and then changed the width of either the tuning pattern or the rest of the line so
+    // that they no longer match.
+    {
+        SHAPE_LINE_CHAIN pre, mid, post;
+        newLineChain.Split( m_origin, m_end, pre, mid, post );
 
-    branch->Add( newLine, false );
+        auto addPart = [&]( const SHAPE_LINE_CHAIN& part, int partWidth )
+        {
+            if( part.SegmentCount() == 0 )
+                return;
+
+            PNS::LINE line( *pnsLine, part );
+
+            if( partWidth > 0 )
+                line.SetWidth( partWidth );
+
+            branch->Add( line, false );
+        };
+
+        m_assembledLineWidth = pnsLine->Width();
+
+        addPart( pre, m_assembledLineWidth );
+        // m_trackWidth is the width of the generator itself, which starts out assuming the width
+        // of whatever line we're tuning, but after that may be independently changed
+        addPart( mid, m_trackWidth > 0 ? m_trackWidth : m_assembledLineWidth );
+        addPart( post, m_assembledLineWidth );
+    }
+
     router->CommitRouting( branch );
 
-    int clearance = router->GetRuleResolver()->Clearance( &newLine, nullptr );
+    int clearance = router->GetRuleResolver()->Clearance( &pnsLine.value(), nullptr );
 
-    iface->DisplayItem( &newLine, clearance, true, PNS_COLLISION );
+    iface->DisplayItem( &pnsLine.value(), clearance, true, PNS_COLLISION );
 
     return true;
 }
@@ -1174,6 +1201,21 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
     PNS::ROUTER*     router = aTool->Router();
     PNS_KICAD_IFACE* iface = aTool->GetInterface();
     PCB_LAYER_ID     pcblayer = GetLayer();
+    SHAPE_LINE_CHAIN bounds = getOutline();
+    int              epsilon = aBoard->GetDesignSettings().GetDRCEpsilon();
+
+    auto withinBounds = [bounds, epsilon]( BOARD_ITEM* aItem )
+    {
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( aItem ) )
+        {
+            if( bounds.PointInside( track->GetStart(), epsilon ) && bounds.PointInside( track->GetEnd(), epsilon ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
 
     auto hideRemovedItems = [&]( bool aHide )
     {
@@ -1183,7 +1225,7 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
             {
                 for( BOARD_ITEM* item : pnsCommit.removedItems )
                 {
-                    if( view )
+                    if( view && withinBounds( item ) )
                         view->Hide( item, aHide, aHide );
                 }
             }
@@ -1257,15 +1299,21 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
 
     router->Move( m_end, nullptr );
 
-    if( PNS::DP_MEANDER_PLACER* dpPlacer = dynamic_cast<PNS::DP_MEANDER_PLACER*>( placer ) )
+    // Only take the width from the PNS's assembled line if we don't already have an inherent
+    // width property set, otherwise width can get reset if the tuning pattern is on a line
+    // that has a different width
+    if( m_trackWidth == 0 )
     {
-        m_trackWidth = dpPlacer->GetOriginPair().Width();
-        m_diffPairGap = dpPlacer->GetOriginPair().Gap();
-    }
-    else
-    {
-        m_trackWidth = startItem->Width();
-        m_diffPairGap = router->Sizes().DiffPairGap();
+        if( PNS::DP_MEANDER_PLACER* dpPlacer = dynamic_cast<PNS::DP_MEANDER_PLACER*>( placer ) )
+        {
+            m_trackWidth = dpPlacer->GetOriginPair().Width();
+            m_diffPairGap = dpPlacer->GetOriginPair().Gap();
+        }
+        else
+        {
+            m_trackWidth = startItem->Width();
+            m_diffPairGap = router->Sizes().DiffPairGap();
+        }
     }
 
     m_settings = placer->MeanderSettings();
@@ -1310,7 +1358,6 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 {
     if( !( GetFlags() & IN_EDIT ) )
         return;
-
     ClearFlags( IN_EDIT ); // Clear the editing flag
 
     KIGFX::VIEW*      view = aTool->GetManager()->GetView();
@@ -1330,6 +1377,21 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
         router->StopRouting();
     }
 
+    PNS::NODE* world = router->GetWorld();
+
+    auto withinBounds = [bounds, epsilon]( BOARD_ITEM* aItem )
+    {
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( aItem ) )
+        {
+            if( bounds.PointInside( track->GetStart(), epsilon ) && bounds.PointInside( track->GetEnd(), epsilon ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
     const std::vector<GENERATOR_PNS_CHANGES>& pnsCommits = aTool->GetRouterChanges();
 
     for( const GENERATOR_PNS_CHANGES& pnsCommit : pnsCommits )
@@ -1343,6 +1405,10 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 
         for( BOARD_ITEM* item : routerRemovedItems )
         {
+            // Only remove items that were originally on the board before the generator ran
+            if( aTool->ItemCreatedBySession( item ) )
+                continue;
+
             if( view )
                 view->Hide( item, false );
 
@@ -1351,16 +1417,30 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 
         for( BOARD_ITEM* item : routerAddedItems )
         {
-            aCommit->Add( item );
+            // This avoids adding transient items such as the baseline
+            if( world->FindItemByParent( item ) == nullptr )
+                continue;
 
-            if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( item ) )
+            // The router added items will include a reconstruction of the original line
+            // without the tuning pattern.  Because we don't currently have the infrastructure
+            // to manage a PNS_LINE with different widths along the way, changing the width
+            // of an existing tuning pattern (e.g. with the properties panel) will reset the
+            // widths of the entire line, even when the segments outside the tuning pattern were
+            // not selected.  In order to prevent widths from changing outside the selection,
+            // we need to special-case this here and restore the original width.
+            if( !withinBounds( item ) )
             {
-                if( bounds.PointInside( track->GetStart(), epsilon )
-                    && bounds.PointInside( track->GetEnd(), epsilon ) )
+                if( PCB_TRACK* newTrack = dynamic_cast<PCB_TRACK*>( item ) )
                 {
-                    AddItem( item );
+                    if( m_assembledLineWidth != newTrack->GetWidth() )
+                        newTrack->SetWidth( m_assembledLineWidth );
                 }
             }
+
+            aCommit->Add( item );
+
+            if( withinBounds( item ) )
+                AddItem( item );
         }
     }
 }

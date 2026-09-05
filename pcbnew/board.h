@@ -57,6 +57,7 @@ class FOOTPRINT;
 class FOOTPRINT_COURTYARD_INDEX;
 class ZONE;
 class PCB_TRACK;
+class PCB_VIA;
 class PAD;
 class PCB_GROUP;
 class PCB_GENERATOR;
@@ -704,13 +705,17 @@ public:
      * Replace @a aExisting with @a aNew, preserving connectivity and metadata.
      */
     void ExchangeFootprint( FOOTPRINT* aExisting, FOOTPRINT* aNew, BOARD_COMMIT& aCommit,
-                            bool matchPadPositions,
-                            bool deleteExtraTexts = true, bool resetTextLayers = true,
-                            bool resetTextEffects = true, bool resetTextPositions = true,
-                            bool resetTextContent = true, bool resetFabricationAttrs = true,
-                            bool resetClearanceOverrides = true, bool reset3DModels = true,
-                            bool resetTransform = false,
-                            bool* aUpdated = nullptr );
+                            bool aMatchPadPositions,
+                            bool aDeleteExtraTexts = true,
+                            bool aResetTextLayers = true,
+                            bool aResetTextEffects = true,
+                            bool aResetTextPositions = true,
+                            bool aResetTextContent = true,
+                            bool aResetFabricationAttrs = true,
+                            bool aResetClearanceOverrides = true,
+                            bool aReset3DModels = true,
+                            bool aResetTransform = false,
+                            bool* aUpdated = nullptr, bool* aShifted = nullptr );
 
     /**
      * Reset all high light data to the init state
@@ -1719,6 +1724,10 @@ public:
     mutable std::optional<int>                            m_maxClearanceValue;
 
     mutable std::unordered_map<const BOARD_ITEM*, wxString> m_ItemNetclassCache;
+
+    // Microvias that land on another microvia, for isStackedVia(). Whole-board relation, so it
+    // is built in one pass rather than per via.
+    mutable std::optional<std::set<const PCB_VIA*>> m_StackedMicroviaCache;
 
     // Zone name lookup cache for DRC rule area functions like enclosedByArea/intersectsArea.
     // Maps zone names to vectors of matching zones to avoid O(n) zone iteration per lookup.

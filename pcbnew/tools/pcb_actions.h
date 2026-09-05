@@ -158,6 +158,10 @@ public:
     static TOOL_ACTION healShapes;
     /// Extend selected lines to meet at a point
     static TOOL_ACTION extendLines;
+    /// Extend one graphical line or arc to the nearest boundary
+    static TOOL_ACTION extendGraphic;
+    /// Trim a section from one graphical line or arc
+    static TOOL_ACTION trimGraphic;
     /// Simplify polygon outlines
     static TOOL_ACTION simplifyPolygons;
     /// Edit polygon vertices in a table
@@ -174,6 +178,8 @@ public:
 
     /// Activation of the edit tool
     static TOOL_ACTION properties;
+    static TOOL_ACTION matchProperties;
+    static TOOL_ACTION matchPropertiesSettings;
 
     /// Activation of the exact move tool
     static TOOL_ACTION moveExact;
@@ -221,6 +227,8 @@ public:
     static TOOL_ACTION drawZone;
     static TOOL_ACTION drawCopperThievingZone;
     static TOOL_ACTION drawVia;
+    static TOOL_ACTION placeViaStack;
+    static TOOL_ACTION makeViaStack;
     static TOOL_ACTION drawRuleArea;
     static TOOL_ACTION drawZoneCutout;
     static TOOL_ACTION drawSimilarZone;

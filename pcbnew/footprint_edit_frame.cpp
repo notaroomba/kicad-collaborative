@@ -31,6 +31,8 @@
 #include "tools/pcb_actions.h"
 #include "tools/pcb_control.h"
 #include "tools/pcb_picker_tool.h"
+#include "tools/match_properties_tool.h"
+#include "tools/graphic_edit_tool.h"
 #include <geometry/geometry_utils.h>
 #include "tools/align_distribute_tool.h"
 #include "tools/pcb_point_editor.h"
@@ -2152,6 +2154,8 @@ void FOOTPRINT_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new CONSTRAINT_EDIT_TOOL );
     m_toolManager->RegisterTool( new CONVERT_TOOL );
     m_toolManager->RegisterTool( new PROPERTIES_TOOL );
+    m_toolManager->RegisterTool( new MATCH_PROPERTIES_TOOL );
+    m_toolManager->RegisterTool( new GRAPHIC_EDIT_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
 
     for( TOOL_BASE* tool : m_toolManager->Tools() )

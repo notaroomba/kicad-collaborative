@@ -52,6 +52,84 @@
 #include <pgm_base.h>
 #include <wx/log.h>
 
+
+class SCH_SHEET_FIELD_PROPERTY : public PROPERTY_BASE
+{
+public:
+    SCH_SHEET_FIELD_PROPERTY( const wxString& aName ) :
+            PROPERTY_BASE( aName ),
+            m_name( aName )
+    {
+        SetGroup( _HKI( "Fields" ) );
+    }
+
+    size_t OwnerHash() const override { return TYPE_HASH( SCH_SHEET ); }
+    size_t BaseHash() const override { return TYPE_HASH( SCH_SHEET ); }
+    size_t TypeHash() const override { return TYPE_HASH( wxString ); }
+
+    void setter( void* obj, wxAny& v ) override
+    {
+        wxString value;
+
+        if( !v.GetAs( &value ) )
+            return;
+
+        SCH_SHEET* sheet = reinterpret_cast<SCH_SHEET*>( obj );
+        SCH_FIELD* field = sheet->GetField( m_name );
+
+        wxString              variantName;
+        const SCH_SHEET_PATH* sheetPath = nullptr;
+
+        if( sheet->Schematic() )
+        {
+            variantName = sheet->Schematic()->GetCurrentVariant();
+            sheetPath = &sheet->Schematic()->CurrentSheet();
+        }
+
+        if( !field )
+        {
+            SCH_FIELD newField( sheet, FIELD_T::USER, m_name );
+            newField.SetText( value, sheetPath, variantName );
+            sheet->AddField( newField );
+        }
+        else
+        {
+            field->SetText( value, sheetPath, variantName );
+        }
+    }
+
+    wxAny getter( const void* obj ) const override
+    {
+        const SCH_SHEET* sheet = reinterpret_cast<const SCH_SHEET*>( obj );
+        const SCH_FIELD* field = sheet->GetField( m_name );
+
+        if( !field )
+            return wxAny();
+
+        wxString              variantName;
+        const SCH_SHEET_PATH* sheetPath = nullptr;
+
+        if( sheet->Schematic() )
+        {
+            variantName = sheet->Schematic()->GetCurrentVariant();
+            sheetPath = &sheet->Schematic()->CurrentSheet();
+        }
+
+        wxString text;
+
+        if( !variantName.IsEmpty() && sheetPath )
+            text = field->GetText( sheetPath, variantName );
+        else
+            text = field->GetText();
+
+        return wxAny( text );
+    }
+
+private:
+    wxString m_name;
+};
+
+
 SCH_SHEET::SCH_SHEET( EDA_ITEM* aParent, const VECTOR2I& aPos, VECTOR2I aSize ) :
         SCH_ITEM( aParent, SCH_SHEET_T ),
         m_excludedFromSim( false ),
@@ -125,6 +203,7 @@ void SCH_SHEET::Serialize( google::protobuf::Any& aContainer ) const
     for( const SCH_SHEET_PIN* pin : GetPins() )
         pin->Serialize( *sheet.add_pins(), schIUScale );
 
+    kiapi::common::PackCustomProperties( sheet.mutable_custom_properties(), *this );
     aContainer.PackFrom( sheet );
 }
 
@@ -149,6 +228,7 @@ bool SCH_SHEET::Deserialize( const google::protobuf::Any& aContainer )
     SetExcludedFromBOM( sheet.exclude_from_bom() );
     SetExcludedFromBoard( sheet.exclude_from_board() );
     SetDNP( sheet.dnp() );
+    kiapi::common::UnpackCustomProperties( sheet.custom_properties(), *this );
 
     SetBorderWidth( UnpackDistance( sheet.border_stroke().width(), schIUScale ) );
     SetBorderColor( sheet.border_stroke().has_color() ? UnpackColor( sheet.border_stroke().color() )
@@ -245,6 +325,72 @@ SCH_SHEET::~SCH_SHEET()
     // We own our pins; delete them
     for( SCH_SHEET_PIN* pin : m_pins )
         delete pin;
+}
+
+
+std::vector<PROPERTY_BASE*> SCH_SHEET::GetDynamicProperties() const
+{
+    std::vector<PROPERTY_BASE*> props;
+
+    auto getOrCreate = [&]( const wxString& aName )
+    {
+        auto it = m_dynamicPropertyCache.find( aName );
+
+        if( it == m_dynamicPropertyCache.end() )
+        {
+            auto prop = std::make_unique<SCH_SHEET_FIELD_PROPERTY>( aName );
+            it = m_dynamicPropertyCache.emplace( aName, std::move( prop ) ).first;
+        }
+
+        return it->second.get();
+    };
+
+
+    for( const SCH_FIELD& field : GetFields() )
+    {
+        if( field.IsMandatory() )
+        {
+            if( field.IsPrivate() )
+                continue;
+
+            const wxString& name = field.GetUntranslatedName();
+
+            if( PROPERTY_MANAGER::Instance().GetProperty( TYPE_HASH( SCH_SHEET ), name ) )
+                continue;
+
+            props.push_back( getOrCreate( name ) );
+        }
+    }
+
+    std::vector<const SCH_FIELD*> userFields;
+
+    for( const SCH_FIELD& field : GetFields() )
+    {
+        if( field.IsMandatory() )
+            continue;
+
+        if( field.IsPrivate() )
+            continue;
+
+        userFields.push_back( &field );
+    }
+
+    std::ranges::sort( userFields,
+                       []( const SCH_FIELD* a, const SCH_FIELD* b )
+                       {
+                           return a->GetUntranslatedName().CmpNoCase( b->GetUntranslatedName() ) < 0;
+                       } );
+
+    for( const SCH_FIELD* field : userFields )
+    {
+        const wxString& name = field->GetUntranslatedName();
+        props.push_back( getOrCreate( name ) );
+    }
+
+    for( PROPERTY_BASE* prop : GetCustomPropertiesAsInspectables() )
+        props.push_back( prop );
+
+    return props;
 }
 
 
@@ -1587,7 +1733,7 @@ void SCH_SHEET::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     for( SCH_FIELD& field : m_fields )
         field.Plot( aPlotter, aBackground, aPlotOpts, aUnit, aBodyStyle, aOffset, aDimmed || dnp );
 
-    if( dnp )
+    if( dnp && renderSettings->m_ShowDNPMarkers )
     {
         BOX2I    bbox = GetBodyBoundingBox();
         BOX2I    pins = GetBoundingBox();
@@ -1990,6 +2136,18 @@ void SCH_SHEET::DeleteVariant( const KIID_PATH& aPath, const wxString& aVariantN
         return;
 
     instance->m_Variants.erase( aVariantName );
+}
+
+
+void SCH_SHEET::ClearVariantField( const KIID_PATH& aPath, const wxString& aVariantName,
+                                   const wxString& aFieldName )
+{
+    SCH_SHEET_INSTANCE* instance = getInstance( aPath );
+
+    if( !instance || !instance->m_Variants.contains( aVariantName ) )
+        return;
+
+    instance->m_Variants[aVariantName].m_Fields.erase( aFieldName );
 }
 
 

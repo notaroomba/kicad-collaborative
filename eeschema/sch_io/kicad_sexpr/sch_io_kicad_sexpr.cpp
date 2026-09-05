@@ -97,6 +97,7 @@ void SCH_IO_KICAD_SEXPR::init( SCHEMATIC* aSchematic,
 
     m_version   = 0;
     m_appending = false;
+    m_sheetLoad = aProperties && aProperties->count( "hierarchical_sheet_load" );
     m_rootSheet = nullptr;
     m_schematic = aSchematic;
     m_cache     = nullptr;
@@ -336,7 +337,7 @@ void SCH_IO_KICAD_SEXPR::loadFile( const wxString& aFileName, SCH_SHEET* aSheet 
     }
 
     SCH_IO_KICAD_SEXPR_PARSER parser( &reader, m_progressReporter, lineCount, m_rootSheet,
-                                      m_appending );
+                                      m_appending, m_sheetLoad );
 
     parser.ParseSchematic( aSheet );
 
@@ -1130,6 +1131,7 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
         m_out->Print( ")" );  // Closes `instances`.
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aSymbol );
     m_out->Print( ")" );  // Closes `symbol`.
 }
 
@@ -1167,6 +1169,7 @@ void SCH_IO_KICAD_SEXPR::saveField( SCH_FIELD* aField )
         aField->Format( m_out, 0 );
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aField );
     m_out->Print( ")" );            // Closes `property` token
 }
 
@@ -1208,6 +1211,7 @@ void SCH_IO_KICAD_SEXPR::saveBitmap( const SCH_BITMAP& aBitmap )
 
     KICAD_FORMAT::FormatStreamData( *m_out, *stream.GetOutputStreamBuffer() );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, aBitmap );
     m_out->Print( ")" );        // Closes image token.
 }
 
@@ -1377,6 +1381,7 @@ void SCH_IO_KICAD_SEXPR::saveSheet( SCH_SHEET* aSheet, const SCH_SHEET_LIST& aSh
         m_out->Print( ")" );          // Closes `instances` token.
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aSheet );
     m_out->Print( ")" );              // Closes sheet token.
 }
 
@@ -1402,6 +1407,7 @@ void SCH_IO_KICAD_SEXPR::saveJunction( SCH_JUNCTION* aJunction )
     if( aJunction->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aJunction );
     m_out->Print( ")" );
 }
 
@@ -1421,6 +1427,7 @@ void SCH_IO_KICAD_SEXPR::saveNoConnect( SCH_NO_CONNECT* aNoConnect )
     if( aNoConnect->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aNoConnect );
     m_out->Print( ")" );
 }
 
@@ -1455,6 +1462,7 @@ void SCH_IO_KICAD_SEXPR::saveBusEntry( SCH_BUS_ENTRY_BASE* aBusEntry )
     if( aBusEntry->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aBusEntry );
     m_out->Print( ")" );
 }
 
@@ -1526,6 +1534,7 @@ void SCH_IO_KICAD_SEXPR::saveRuleArea( SCH_RULE_AREA* aRuleArea )
 
     saveShape( aRuleArea );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aRuleArea );
     m_out->Print( ")" );
 }
 
@@ -1571,6 +1580,7 @@ void SCH_IO_KICAD_SEXPR::saveLine( SCH_LINE* aLine )
     if( aLine->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aLine );
     m_out->Print( ")" );
 }
 
@@ -1648,6 +1658,7 @@ void SCH_IO_KICAD_SEXPR::saveText( SCH_TEXT* aText )
             saveField( &field );
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aText );
     m_out->Print( ")" );   // Closes text token.
 }
 
@@ -1689,6 +1700,7 @@ void SCH_IO_KICAD_SEXPR::saveTextBox( SCH_TEXTBOX* aTextBox )
     if( aTextBox->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTextBox );
     m_out->Print( ")" );
 }
 
@@ -1793,6 +1805,8 @@ void SCH_IO_KICAD_SEXPR::saveTable( SCH_TABLE* aTable )
         saveTextBox( cell );
 
     m_out->Print( ")" );        // Close `cells` token.
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTable );
     m_out->Print( ")" );        // Close `table` token.
 
     if( aTable->GetFlags() & SKIP_STRUCT )
@@ -1829,6 +1843,8 @@ void SCH_IO_KICAD_SEXPR::saveGroup( SCH_GROUP* aGroup )
         m_out->Print( " %s", m_out->Quotew( memberId ).c_str() );
 
     m_out->Print( ")" ); // Close `members` token.
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aGroup );
     m_out->Print( ")" ); // Close `group` token.
 }
 

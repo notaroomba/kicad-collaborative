@@ -38,6 +38,8 @@
 #include <wx/settings.h>
 #include <wx/stattext.h>
 #include <wx/propgrid/advprops.h>
+#include <wx/menu.h>
+#include <wx/utils.h>
 
 
 // This is provided by wx >3.3.0
@@ -141,6 +143,14 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
     Layout();
 
     m_grid->CenterSplitter();
+
+    // Actual edits are allowed or vetoed per-property based on whether or not it's
+    // something where the label/key should be editable (user fields, custom properties, ...)
+    m_grid->MakeColumnEditable( 0 );
+
+    Bind( wxEVT_PG_LABEL_EDIT_BEGIN, &PROPERTIES_PANEL::onLabelEditBegin, this );
+    Bind( wxEVT_PG_LABEL_EDIT_ENDING, &PROPERTIES_PANEL::onLabelEditEnding, this );
+    Bind( wxEVT_PG_RIGHT_CLICK, &PROPERTIES_PANEL::onRightClick, this );
 
     Connect( wxEVT_CHAR_HOOK, wxKeyEventHandler( PROPERTIES_PANEL::onCharHook ), nullptr, this );
     Connect( wxEVT_PG_CHANGED, wxPropertyGridEventHandler( PROPERTIES_PANEL::valueChanged ), nullptr, this );
@@ -278,6 +288,48 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
             else
             {
                 it = commonProps.erase( it );
+            }
+        }
+    }
+
+    for( const EDA_ITEM* item : aSelection )
+    {
+        for( PROPERTY_BASE* prop : item->GetDynamicProperties() )
+        {
+            bool commonToAll = true;
+
+            for( const EDA_ITEM* other : aSelection )
+            {
+                std::vector<PROPERTY_BASE*> otherProps = other->GetDynamicProperties();
+
+                if( std::ranges::none_of( otherProps,
+                                          [&]( PROPERTY_BASE* p )
+                                          {
+                                              return p->Name() == prop->Name();
+                                          } ) )
+                {
+                    commonToAll = false;
+                    break;
+                }
+            }
+
+            if( !commonToAll || commonProps.contains( prop->Name() ) )
+                continue;
+
+            commonProps.emplace( prop->Name(), prop );
+
+            auto maxOrderIt = std::ranges::max_element( displayOrder,
+                                                        []( const auto& aL, const auto& aR )
+                                                        {
+                                                            return aL.second < aR.second;
+                                                        } );
+            int  nextOrder = maxOrderIt == displayOrder.end() ? 0 : maxOrderIt->second + 1;
+            displayOrder.emplace( prop->Name(), nextOrder );
+
+            if( const wxString& dynGroup = prop->Group(); !dynGroup.IsEmpty() && !groups.contains( dynGroup ) )
+            {
+                groupDisplayOrder.emplace_back( dynGroup );
+                groups.insert( dynGroup );
             }
         }
     }
@@ -442,7 +494,7 @@ bool PROPERTIES_PANEL::extractValueAndWritability( const SELECTION& aSelection, 
 
     for( EDA_ITEM* item : aSelection )
     {
-        PROPERTY_BASE* property = propMgr.GetProperty( TYPE_HASH( *item ), aPropName );
+        PROPERTY_BASE* property = propMgr.GetProperty( item, aPropName );
 
         if( !property )
             return false;
@@ -509,6 +561,136 @@ void PROPERTIES_PANEL::onShow( wxShowEvent& aEvent )
 
     aEvent.Skip();
 }
+
+
+void PROPERTIES_PANEL::onLabelEditBegin( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp || !isKeyEditable( pgProp ) )
+    {
+        aEvent.Veto();
+        return;
+    }
+
+    // Remember the original label so an invalid rename can be undone.
+    m_editingOriginalLabel = pgProp->GetLabel();
+}
+
+
+void PROPERTIES_PANEL::onLabelEditEnding( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp || !isKeyEditable( pgProp ) )
+        return;
+
+    const wxString oldName = pgProp->GetBaseName();
+
+    wxTextCtrl* labelEditor = m_grid->GetLabelEditor();
+    wxString    newName;
+
+    if( labelEditor )
+        newName = labelEditor->GetValue();
+
+    if( !m_pendingNewKey.IsEmpty() && oldName == m_pendingNewKey )
+    {
+        const wxString pendingKey = m_pendingNewKey;
+
+        m_pendingNewKey.Clear();
+
+        if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+        {
+            CallAfter(
+                    [this, pendingKey]()
+                    {
+                        onNewItemLeftBlank( pendingKey );
+                    } );
+        }
+        else
+        {
+            CallAfter(
+                    [this, oldName, newName]()
+                    {
+                        onKeyRenamed( oldName, newName );
+                    } );
+        }
+
+        return;
+    }
+
+    if( newName == oldName )
+        return;
+
+    if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+    {
+        const wxString originalLabel = m_editingOriginalLabel;
+
+        CallAfter(
+                [this, oldName, originalLabel, newName]()
+                {
+                    for( wxPropertyGridIterator it = m_grid->GetIterator(); !it.AtEnd(); it.Next() )
+                    {
+                        wxPGProperty* p = it.GetProperty();
+
+                        if( p->GetBaseName() == oldName && p->GetLabel() == newName )
+                        {
+                            p->SetLabel( originalLabel );
+                            m_grid->Refresh();
+                            break;
+                        }
+                    }
+                } );
+
+        return;
+    }
+
+    CallAfter(
+            [this, oldName, newName]()
+            {
+                onKeyRenamed( oldName, newName );
+            } );
+}
+
+
+void PROPERTIES_PANEL::onRightClick( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp )
+        return;
+
+    m_contextMenuPropertyName = pgProp->GetBaseName();
+
+    wxMenu menu;
+
+    if( !buildContextMenu( menu, pgProp ) )
+        return;
+
+    PopupMenu( &menu, ScreenToClient( wxGetMousePosition() ) );
+}
+
+
+void PROPERTIES_PANEL::beginLabelEdit( const wxString& aKey, bool aStartBlank )
+{
+    for( wxPropertyGridIterator it = m_grid->GetIterator(); !it.AtEnd(); it.Next() )
+    {
+        wxPGProperty* p = it.GetProperty();
+
+        if( !p->IsCategory() && p->GetBaseName() == aKey )
+        {
+            m_grid->SelectProperty( p );
+            m_grid->BeginLabelEdit( 0 );
+
+            if( aStartBlank && m_grid->GetLabelEditor() )
+                m_grid->GetLabelEditor()->SetValue( wxEmptyString );
+
+            break;
+        }
+    }
+}
+
+
 
 
 void PROPERTIES_PANEL::onCharHook( wxKeyEvent& aEvent )

@@ -27,6 +27,7 @@
 // Code under test
 #include <bitmap_base.h>
 
+#include "gal/color4d.h"
 #include "wximage_test_utils.h"
 
 #include <wx/mstream.h>
@@ -60,6 +61,10 @@ static const KIGFX::COLOR4D col_red{ 1.0, 0.0, 0.0, 1.0 };
 static const KIGFX::COLOR4D col_green{ 0.0, 1.0, 0.0, 1.0 };
 static const KIGFX::COLOR4D col_blue{ 0.0, 0.0, 1.0, 1.0 };
 static const KIGFX::COLOR4D col_black{ 0.0, 0.0, 0.0, 1.0 };
+static const KIGFX::COLOR4D col_white{ 1.0, 1.0, 1.0, 1.0 };
+static const KIGFX::COLOR4D col_magenta{ 1.0, 0.0, 1.0, 1.0 };
+static const KIGFX::COLOR4D col_cyan{ 0.0, 1.0, 1.0, 1.0 };
+static const KIGFX::COLOR4D col_yellow{ 1.0, 1.0, 0.0, 1.0 };
 
 
 class TEST_BITMAP_BASE_FIXTURE
@@ -303,6 +308,65 @@ BOOST_AUTO_TEST_CASE( MirrorImage )
                 KI_TEST::IsImagePixelOfColor, ( *img_data )( c.m_x )( c.m_y )( c.m_color ) );
     }
 }
+
+/**
+ * Check the image is right after inverting the colours
+ */
+BOOST_AUTO_TEST_CASE( InvertImage )
+{
+    // Set one of the pixels to non-opaque to make sure the alpha channel is not modified
+    wxImage* img_data = m_4tile.GetImageData();
+    BOOST_REQUIRE_NE( img_data, nullptr );
+    img_data->SetAlpha( 1, 1, 42 );
+
+    m_4tile.InvertColors();
+
+    KIGFX::COLOR4D col_1_1 = col_magenta;
+    col_1_1.a = 42.0 / 255.0; // alpha channel should not be modified
+
+    // Original:        After inverting:
+    //   green, black,     magenta, white,
+    //   red,   blue       cyan,    yellow
+    const std::vector<TEST_PIXEL_CASE> exp_pixels = {
+        { 1, 1, col_1_1 },
+        { 6, 1, col_white },
+        { 1, 6, col_cyan },
+        { 6, 6, col_yellow },
+    };
+
+    for( const auto& c : exp_pixels )
+    {
+        BOOST_CHECK_PREDICATE( KI_TEST::IsImagePixelOfColor, ( *img_data )( c.m_x )( c.m_y )( c.m_color ) );
+    }
+}
+
+
+/**
+ * Basic test of ConvertColourToAlpha()
+ */
+BOOST_AUTO_TEST_CASE( ConvertColourToAlpha )
+{
+    BITMAP_BASE bitmap;
+    wxImage     img( 3, 1 );
+    img.SetRGB( 0, 0, 255, 255, 255 ); // closest to the background -> transparent
+    img.SetRGB( 1, 0, 42, 42, 42 );    // in between -> semi-transparent
+    img.SetRGB( 2, 0, 0, 0, 0 );       // farthest from the background
+
+    const wxColour bgColour( 255, 255, 255 );
+
+    bitmap.SetImage( img );
+    bitmap.ConvertColourToAlpha( bgColour );
+
+    const wxImage* result = bitmap.GetImageData();
+    BOOST_REQUIRE_NE( result, nullptr );
+    BOOST_CHECK( result->HasAlpha() );
+
+    // white is now fully transparent, black stays fully opaque
+    BOOST_CHECK_EQUAL( result->GetAlpha( 0, 0 ), 0 );
+    BOOST_CHECK_EQUAL( result->GetAlpha( 1, 0 ), 255 - 42 );
+    BOOST_CHECK_EQUAL( result->GetAlpha( 2, 0 ), 255 );
+}
+
 
 /**
  * Check setting image data by SetImage produces saveable data

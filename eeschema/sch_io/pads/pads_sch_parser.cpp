@@ -413,6 +413,31 @@ size_t PADS_SCH_PARSER::parseSectionSCH( const std::vector<std::string>& aLines,
                     m_parameters.sheet_size.width = 44000.0;
                     m_parameters.sheet_size.height = 34000.0;
                 }
+                else if( sizeCode == "A0" )
+                {
+                    m_parameters.sheet_size.width = 46811.0;
+                    m_parameters.sheet_size.height = 33110.0;
+                }
+                else if( sizeCode == "A1" )
+                {
+                    m_parameters.sheet_size.width = 33110.0;
+                    m_parameters.sheet_size.height = 23386.0;
+                }
+                else if( sizeCode == "A2" )
+                {
+                    m_parameters.sheet_size.width = 23386.0;
+                    m_parameters.sheet_size.height = 16535.0;
+                }
+                else if( sizeCode == "A3" )
+                {
+                    m_parameters.sheet_size.width = 16535.0;
+                    m_parameters.sheet_size.height = 11693.0;
+                }
+                else if( sizeCode == "A4" )
+                {
+                    m_parameters.sheet_size.width = 11693.0;
+                    m_parameters.sheet_size.height = 8268.0;
+                }
             }
         }
         else if( keyword == "USERGRID" )
@@ -1837,11 +1862,11 @@ size_t PADS_SCH_PARSER::parsePartPlacement( const std::vector<std::string>& aLin
         if( aPart.gate_index >= 0 && static_cast<size_t>( aPart.gate_index ) < definition.gates.size()
             && !definition.gates[aPart.gate_index].decal_names.empty() )
         {
-            aPart.symbol_name = definition.gates[aPart.gate_index].decal_names.front();
+            aPart.decal_name = definition.gates[aPart.gate_index].decal_names.front();
         }
         else if( definition.is_connector && !definition.special_variants.empty() )
         {
-            aPart.symbol_name = definition.special_variants.front().decal_name;
+            aPart.decal_name = definition.special_variants.front().decal_name;
         }
     }
 

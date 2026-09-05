@@ -1481,7 +1481,7 @@ void EDA_SHAPE::SetArcAngleAndEnd( const EDA_ANGLE& aAngle, bool aCheckNegativeA
 }
 
 
-wxString EDA_SHAPE::getFriendlyName() const
+wxString EDA_SHAPE::getFriendlyName( FRAME_T aFrameType ) const
 {
     if( IsProxyItem() )
     {
@@ -1492,19 +1492,23 @@ wxString EDA_SHAPE::getFriendlyName() const
         default:                 return _( "Unrecognized" );
         }
     }
+    else if( aFrameType == FRAME_SCH_SYMBOL_EDITOR && m_shape == SHAPE_T::POLY )
+    {
+        return _( "Connected Lines" );
+    }
     else
     {
         switch( m_shape )
         {
-        case SHAPE_T::CIRCLE: return _( "Circle" );
-        case SHAPE_T::ARC: return _( "Arc" );
-        case SHAPE_T::BEZIER: return _( "Curve" );
-        case SHAPE_T::POLY: return _( "Polygon" );
-        case SHAPE_T::RECTANGLE: return _( "Rectangle" );
-        case SHAPE_T::SEGMENT: return _( "Segment" );
-        case SHAPE_T::ELLIPSE: return _( "Ellipse" );
+        case SHAPE_T::CIRCLE:      return _( "Circle" );
+        case SHAPE_T::ARC:         return _( "Arc" );
+        case SHAPE_T::BEZIER:      return _( "Curve" );
+        case SHAPE_T::POLY:        return _( "Polygon" );
+        case SHAPE_T::RECTANGLE:   return _( "Rectangle" );
+        case SHAPE_T::SEGMENT:     return _( "Segment" );
+        case SHAPE_T::ELLIPSE:     return _( "Ellipse" );
         case SHAPE_T::ELLIPSE_ARC: return _( "Elliptical Arc" );
-        default: return _( "Unrecognized" );
+        default:                   return _( "Unrecognized" );
         }
     }
 }
@@ -1515,7 +1519,7 @@ void EDA_SHAPE::ShapeGetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PA
     wxString msg;
 
     wxString shape = _( "Shape" );
-    aList.emplace_back( shape, getFriendlyName() );
+    aList.emplace_back( shape, getFriendlyName( aFrame->GetFrameType() ) );
 
     switch( m_shape )
     {
@@ -1555,6 +1559,7 @@ void EDA_SHAPE::ShapeGetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PA
     case SHAPE_T::POLY:
     {
         int pointCount = 0;
+
         if( GetPolyShape().OutlineCount() > 0 )
             pointCount = GetPolyShape().Outline( 0 ).PointCount();
 
@@ -4695,27 +4700,41 @@ static struct EDA_SHAPE_DESC
 
         propMgr.AddProperty( new PROPERTY<EDA_SHAPE, int>( _HKI( "Line Width" ),
                     &EDA_SHAPE::SetWidth, &EDA_SHAPE::GetWidth, PROPERTY_DISPLAY::PT_SIZE ),
-                    shapeProps );
+                    shapeProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<EDA_SHAPE, LINE_STYLE>( _HKI( "Line Style" ),
                     &EDA_SHAPE::SetLineStyle, &EDA_SHAPE::GetLineStyle ),
-                    shapeProps );
+                    shapeProps ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_SHAPE, COLOR4D>( _HKI( "Line Color" ),
                     &EDA_SHAPE::SetLineColor, &EDA_SHAPE::GetLineColor ),
                     shapeProps )
                 .SetIsHiddenFromRulesEditor();
 
-        propMgr.AddProperty( new PROPERTY<EDA_SHAPE, EDA_ANGLE>( _HKI( "Angle" ),
-                    NO_SETTER( EDA_SHAPE, EDA_ANGLE ), &EDA_SHAPE::GetArcAngle, PROPERTY_DISPLAY::PT_DECIDEGREE ),
-                    shapeProps )
-                .SetAvailableFunc( [=]( INSPECTABLE* aItem ) -> bool
-                                   {
-                                       if( EDA_SHAPE* curr_shape = dynamic_cast<EDA_SHAPE*>( aItem ) )
-                                           return curr_shape->GetShape() == SHAPE_T::ARC;
+        propMgr.AddProperty( new PROPERTY<EDA_SHAPE, EDA_ANGLE>( _HKI( "Angle" ), &EDA_SHAPE::SetArcAngle,
+                                                                 &EDA_SHAPE::GetArcAngle,
+                                                                 PROPERTY_DISPLAY::PT_DECIDEGREE ),
+                             shapeProps )
+                .SetAvailableFunc(
+                        [=]( INSPECTABLE* aItem ) -> bool
+                        {
+                            if( EDA_SHAPE* curr_shape = dynamic_cast<EDA_SHAPE*>( aItem ) )
+                                return curr_shape->GetShape() == SHAPE_T::ARC;
 
-                                       return false;
-                                   } );
+                            return false;
+                        } )
+                .SetValidator(
+                        []( const wxAny&& aValue, EDA_ITEM* aItem ) -> VALIDATOR_RESULT
+                        {
+                            double degrees = 0.0;
+
+                            if( aValue.GetAs( &degrees ) && degrees == 0.0 )
+                            {
+                                return std::make_unique<VALIDATION_ERROR_MSG>( _( "Arc angle must not be zero." ) );
+                            }
+
+                            return std::nullopt;
+                        } );
 
         auto fillAvailable =
                 [=]( INSPECTABLE* aItem ) -> bool
@@ -4749,7 +4768,7 @@ static struct EDA_SHAPE_DESC
         propMgr.AddProperty( new PROPERTY_ENUM<EDA_SHAPE, UI_FILL_MODE>( _HKI( "Fill" ),
                     &EDA_SHAPE::SetFillModeProp, &EDA_SHAPE::GetFillModeProp ),
                     shapeProps )
-                .SetAvailableFunc( fillAvailable );
+                .SetAvailableFunc( fillAvailable ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY<EDA_SHAPE, COLOR4D>( _HKI( "Fill Color" ),
                     &EDA_SHAPE::SetFillColor, &EDA_SHAPE::GetFillColor ),
