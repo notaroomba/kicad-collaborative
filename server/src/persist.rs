@@ -884,3 +884,15 @@ pub async fn prune(pool: &PgPool) -> DbResult<()> {
     .await?;
     Ok(())
 }
+
+
+/// Doc ids (among `doc_ids`) that have at least one rendered preview.
+pub async fn docs_with_previews(pool: &PgPool, doc_ids: &[Uuid]) -> DbResult<Vec<Uuid>> {
+    let rows: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT doc_id FROM doc_previews WHERE doc_id = ANY($1)",
+    )
+    .bind(doc_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}

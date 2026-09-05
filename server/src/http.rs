@@ -381,10 +381,15 @@ pub async fn project_info(
         return Err(AppError::NotFound);
     }
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
-    let docs: Vec<_> = persist::project_documents(&state.pool, id)
-        .await?
+    let all_docs = persist::project_documents(&state.pool, id).await?;
+    let ids: Vec<Uuid> = all_docs.iter().map(|d| d.id).collect();
+    let rendered: std::collections::HashSet<Uuid> =
+        persist::docs_with_previews(&state.pool, &ids).await?.into_iter().collect();
+    let docs: Vec<_> = all_docs
+        
         .iter()
-        .map(|d| json!({ "docId": d.id, "path": d.path, "docType": d.doc_type }))
+        .map(|d| json!({ "docId": d.id, "path": d.path, "docType": d.doc_type,
+                         "hasPreview": rendered.contains(&d.id) }))
         .collect();
     Ok(Json(json!({
         "projectId": project.id, "name": project.name, "description": project.description,
