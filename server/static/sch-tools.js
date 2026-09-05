@@ -1,9 +1,11 @@
 // sch-tools.js — schematic editing tools for the web editor: wires and buses with
 // KiCad's 90° routing and automatic junctions, bus entries, no-connects, labels,
 // text, symbol and power-symbol placement, directive labels, graphic shapes
-// (rectangle, circle, arc, lines, text box), rotate / mirror / duplicate,
-// wire-segment drag, KiCad's interactive delete tool and delete of the
-// non-symbol items app.js does not select itself.
+// (rectangle, circle, arc, lines, polygon, bezier, text box, table, rule area,
+// image), hierarchical sheets (their file is created on the server first) and
+// sheet pins, net highlighting, rotate / mirror / duplicate, the connected drag
+// of one item or a multi-selection, KiCad's interactive delete tool and delete
+// of the non-symbol items app.js does not select itself.
 //
 // Registers on window.CollabTools.sch; app.js drives the hooks documented at its
 // "editing tools" seam.  Edits are whole-item changes built from a *cloned* node,
@@ -20,7 +22,9 @@ const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
 const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
 const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
 const SHAPE_KINDS = new Set(["rectangle", "circle", "arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
-const DRAW_TOOLS = new Set(["rect", "circle", "arc", "lines", "textbox"]);
+const DRAW_TOOLS = new Set(["rect", "circle", "arc", "lines", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
+// Kinds the canvas has no SCH_TYPE_NAMES entry for: the desktop's GetClass() names.
+const TYPE_NAMES = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };
 // KiCad's delete cursor: a small bin with a crosshair hotspot
 const DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
 const TOOLS = [
@@ -42,13 +46,23 @@ const TOOLS = [
   { id: "arc", label: "Arc", key: "", cursor: "crosshair", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
   { id: "textbox", label: "Text box", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M8 9h8M12 9v7"/>' },
   { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
+  // KiCad's drawSheet hotkey (S) is app.js's select key, so the sheet tool has none here
+  { id: "sheet", label: "Hierarchical sheet", key: "", cursor: "crosshair", icon: '<rect x="4" y="6" width="16" height="13"/><path d="M4 6V3h6M4 9h3M17 15h3"/>' },
+  { id: "sheetpin", label: "Sheet pin", key: "", cursor: "crosshair", icon: '<rect x="8" y="4" width="12" height="16"/><path d="M2 12h6M6 10l2 2-2 2"/>' },
+  { id: "table", label: "Table", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M3 10h18M3 14h18M9 5v14M15 5v14"/>' },
+  { id: "bezier", label: "Bezier curve", key: "", cursor: "crosshair", icon: '<path d="M3 19C3 8 21 16 21 5"/><path d="M3 19l4-8M21 5l-4 8" stroke-dasharray="1.5 1.5"/>' },
+  { id: "polygon", label: "Polygon", key: "", cursor: "crosshair", icon: '<path d="M4 9l8-5 8 5-3 10H7z"/>' },
+  { id: "rulearea", label: "Rule area", key: "", cursor: "crosshair", icon: '<path d="M4 5h16v14H4z" stroke-dasharray="2 2"/><path d="M8 9l8 6M16 9l-8 6"/>' },
+  { id: "image", label: "Image", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M3 16l5-5 4 4 3-3 6 5"/><circle cx="16" cy="9" r="1.5"/>' },
+  // ` is KiCad's net-highlight hotkey (highlightNetTool itself has no default)
+  { id: "highlight", label: "Highlight net", key: "`", cursor: "crosshair", icon: '<path d="M3 12h6l3-6 3 12 3-6h3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 2"/>' },
 ];
 const toolOf = (id) => TOOLS.find((t) => t.id === id) || null;
 
 // Module state: one in-progress operation at a time, plus a selection of our own
 // for the items app.js's select tool ignores (everything but symbols).
 const S = { ctx: null, tool: "select", wire: null, carry: null, drag: null, pending: null, sel: null, hover: null,
-  cursor: null, cursorClient: null, prompt: null, picker: null, dom: false, draw: null };
+  cursor: null, cursorClient: null, prompt: null, picker: null, dom: false, draw: null, highlight: null, sheetJob: null, imageWait: false };
 
 // ---------------------------------------------------------------- small helpers
 const deep = (n) => JSON.parse(JSON.stringify(n));
@@ -65,10 +79,33 @@ function segs(item) { const p = ptsOf(item.node), out = []; for (let i = 1; i < 
 function replaceKid(node, child) { const i = node.findIndex((c) => Array.isArray(c) && c[0] === child[0]); if (i >= 0) node[i] = child; else node.push(child); }
 function dropKid(node, key) { const i = node.findIndex((c) => Array.isArray(c) && c[0] === key); if (i >= 0) node.splice(i, 1); }
 
+// The desktop class name for a change (the canvas knows only the KiCad 9 kinds).
+function typeNameFor(item) { return TYPE_NAMES[item.kind] || K.typeNameOf(item); }
+// A rule area's uuid sits inside its polyline (formatPoly writes it there); the canvas keys the item by
+// that uuid and pushes a direct (uuid) child the desktop parser would reject, so strip it before sending.
+function ruleAreaId(node) { const pl = kid(node, "polyline"); return pl ? uuidOf(pl) : ""; }
+function itemSexpr(doc, kind, node) {
+  if (kind === "rule_area" && kid(node, "uuid")) { node = deep(node); dropKid(node, "uuid"); }
+  let s = K.serializeItem(doc, { kind, node });
+  // a sheet's page number is a string to KiCad (its parser wants a symbol): keep the quotes the canvas drops
+  if (kind === "sheet") s = s.replace(/\(page (\d+)\)/g, '(page "$1")');
+  return s;
+}
 // MODIFIED change from a cloned node: the doc item stays untouched until commit applies it,
 // which is what lets app.js record the pre-edit item as the undo step.
-function modChange(doc, item, node) { return { id: item.id, kind: "MODIFIED", typeName: K.typeNameOf(item), sexpr: K.serializeItem(doc, { kind: item.kind, node }) }; }
-function addNode(doc, node) { const item = K.createItem(doc, node); return { item, change: K.addChange(doc, item) }; }
+function modChange(doc, item, node) { return { id: item.id, kind: "MODIFIED", typeName: typeNameFor(item), sexpr: itemSexpr(doc, item.kind, node) }; }
+function removeChange(item) { return { id: item.id, kind: "REMOVED", typeName: typeNameFor(item), properties: [] }; }
+function addNode(doc, node) {
+  if (node[0] === "rule_area") {
+    let pl = kid(node, "polyline"); if (!pl) { pl = ["polyline", ["pts"]]; node.splice(1, 0, pl); }
+    if (!uuidOf(pl)) pl.push(["uuid", K.newUuid()]);
+    const item = K.addItem(doc, node), id = ruleAreaId(node);
+    doc.items.delete(item.id); item.id = id; doc.items.set(id, item);
+    return { item, change: { id, kind: "ADDED", typeName: typeNameFor(item), sexpr: itemSexpr(doc, item.kind, node) } };
+  }
+  const item = K.createItem(doc, node);
+  return { item, change: { id: item.id, kind: "ADDED", typeName: typeNameFor(item), sexpr: itemSexpr(doc, item.kind, item.node) } };
+}
 // Geometry for a node that is not (yet) part of the document: borrow the canvas builder.
 function ghost(doc, node) { if (!uuidOf(node)) node.push(["uuid", K.newUuid()]); const it = K.addItem(doc, node); if (it) doc.items.delete(it.id); return it; }
 
@@ -109,6 +146,80 @@ function textBoxNode(text, a, b) {
   const [x0, y0, x1, y1] = corners(a, b);
   return ["text_box", text, ["exclude_from_sim", "no"], ["at", x0, y0, 0], ["size", r4(x1 - x0), r4(y1 - y0)], ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN],
     stroke0(), fillNone(), ["effects", fontNode(1.27), ["justify", "left", "top"]]];
+}
+// Hierarchical sheet (sch_io_kicad_sexpr.cpp saveSheet): flags, 6 mil solid border, transparent fill, uuid,
+// then the Sheetname / Sheetfile fields where SCH_SHEET::AutoplaceFields puts them for a horizontal sheet:
+// margin = round(border/2) + 4 IU + text size × 0.5 (name, above) or × 0.4 (file, below).
+const SHEET_BORDER = 0.1524, SHEET_NAME_OFF = r4(SHEET_BORDER / 2 + 0.000004 + 1.27 * 0.5), SHEET_FILE_OFF = r4(SHEET_BORDER / 2 + 0.000004 + 1.27 * 0.4);
+function sheetNode(a, b, name, file) {
+  const [x0, y0, x1, y1] = corners(a, b);
+  return ["sheet", ["at", x0, y0], ["size", r4(x1 - x0), r4(y1 - y0)], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["fields_autoplaced", "yes"],
+    ["stroke", ["width", SHEET_BORDER], ["type", "solid"]], ["fill", ["color", 0, 0, 0, 0]], ["uuid", K.newUuid()],
+    ["property", "Sheetname", name, ["at", x0, r4(y0 - SHEET_NAME_OFF), 0], ["effects", fontNode(1.27), ["justify", "left", "bottom"]]],
+    ["property", "Sheetfile", file, ["at", x0, r4(y1 + SHEET_FILE_OFF), 0], ["effects", fontNode(1.27), ["justify", "left", "top"]]]];
+}
+// Sheet pin on one side of the sheet: SCH_SHEET_PIN::SetSide picks the spin style (left edge reads
+// rightwards = justify left, right edge leftwards = justify right, top like right, bottom like left)
+// and getSheetPinAngle the stored angle (right 0, top 90, left 180, bottom 270).
+const PIN_SIDE = { right: [0, "right"], top: [90, "right"], left: [180, "left"], bottom: [270, "left"] };
+function sheetPinNode(name, p, side) {
+  const [rot, just] = PIN_SIDE[side] || PIN_SIDE.left;
+  return ["pin", name, "input", ["at", r4(p[0]), r4(p[1]), rot], ["uuid", K.newUuid()], ["effects", fontNode(1.27), ["justify", just]]];
+}
+// Table (saveTable): border and separator strokes, column widths, row heights, uuid, then the cells as
+// SCH_TABLECELLs (saveTextBox without a stroke).  Cells are the corner box split evenly, rounded to the
+// grid with KiCad's 5 × 2 grid-step minimum (SCH_DRAWING_TOOLS::DrawTable).
+function tableNode(a, b, rows, cols, grid) {
+  const [x0, y0, x1, y1] = corners(a, b); grid = grid > 0 ? grid : 1.27; rows = Math.max(1, rows | 0); cols = Math.max(1, cols | 0);
+  const cw = r4(Math.max(5 * grid, Math.round((x1 - x0) / cols / grid) * grid)), ch = r4(Math.max(2 * grid, Math.round((y1 - y0) / rows / grid) * grid));
+  const cells = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push(["table_cell", "", ["exclude_from_sim", "no"], ["at", r4(x0 + c * cw), r4(y0 + r * ch), 0], ["size", cw, ch],
+    ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN], ["span", 1, 1], fillNone(), ["effects", fontNode(1.27), ["justify", "left", "top"]], ["uuid", K.newUuid()]]);
+  return ["table", ["column_count", cols], ["border", ["external", "yes"], ["header", "yes"], stroke0()], ["separators", ["rows", "yes"], ["cols", "yes"], stroke0()],
+    ["column_widths", ...Array(cols).fill(cw)], ["row_heights", ...Array(rows).fill(ch)], ["uuid", K.newUuid()], ["cells", ...cells]];
+}
+// formatBezier: start, control 1, control 2, end.
+function bezierNode(p0, c1, c2, p1) { return ["bezier", ["pts", xy(p0), xy(c1), xy(c2), xy(p1)], stroke0(), fillNone()]; }
+// A polygon is an open SCH_SHAPE polyline closed by hand: the drawing tool ends on the first point,
+// so the file repeats it (SCH_SHAPE::EndEdit keeps the outline open).
+function polygonNode(pts) { return ["polyline", ["pts", ...pts.map(xy), xy(pts[0])], stroke0(), fillNone()]; }
+// saveRuleArea: the exclude flags, then the closed polyline (dashed, no repeat) carrying the uuid.
+function ruleAreaNode(pts) {
+  return ["rule_area", ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"],
+    ["polyline", ["pts", ...pts.map(xy)], ["stroke", ["width", 0], ["type", "dash"]], fillNone(), ["uuid", K.newUuid()]]];
+}
+// saveBitmap: (at) is the image centre; (scale) is only written when it is not 1; the PNG/JPEG bytes
+// follow base64-encoded in 76-character lines (KICAD_FORMAT::FormatStreamData).
+const IMAGE_LINE = 76, IMAGE_PPI = 300;                     // BITMAP_BASE's default resolution
+function imageNode(p, base64) {
+  const chunks = []; for (let i = 0; i < base64.length; i += IMAGE_LINE) chunks.push(base64.slice(i, i + IMAGE_LINE));
+  return ["image", ["at", r4(p[0]), r4(p[1])], ["uuid", K.newUuid()], ["data", ...chunks]];
+}
+function imageData(node) { const d = kid(node, "data"); return d ? d.slice(1).map(str).join("") : ""; }
+// Pixel size from a PNG IHDR or the first JPEG SOF marker; null for anything else.
+function imageSize(b) {
+  if (!b || b.length < 4) return null;
+  const u32 = (i) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47 && b.length >= 24) return [u32(16), u32(20)];
+  if (b[0] === 0xFF && b[1] === 0xD8) {
+    for (let i = 2; i + 9 < b.length;) {
+      if (b[i] !== 0xFF) { i++; continue; }
+      const m = b[i + 1]; if (m === 0xFF) { i++; continue; }
+      if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return [(b[i + 7] << 8) | b[i + 8], (b[i + 5] << 8) | b[i + 6]];
+      i += 2 + ((b[i + 2] << 8) | b[i + 3]);
+    }
+  }
+  return null;
+}
+function bytesToBase64(bytes) {
+  if (typeof Buffer !== "undefined") return Buffer.from(bytes).toString("base64");
+  let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function base64ToBytes(b64) {
+  try { if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(b64, "base64")); const s = atob(b64), out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
+  catch (e) { return null; }
 }
 // Directive label (netclass flag) with its Netclass field where SCH_DIRECTIVE_LABEL::AutoplaceFields puts it
 // for the spin style of the angle: symbol size 20 mil + text offset (0.15 × size) beside the pin-length flag.
@@ -196,23 +307,30 @@ function mirrorNode(kind, node, axis) {
 }
 const SHAPE_POINTS = { rectangle: ["start", "end"], circle: ["center"], arc: ["start", "mid", "end"] };
 function anchorOf(kind, node) {
-  if (LINE_KINDS.has(kind)) { const p = ptsOf(node); return p[0] || [0, 0]; }
+  if (LINE_KINDS.has(kind) || kind === "bezier") { const p = ptsOf(node); return p[0] || [0, 0]; }
   if (SHAPE_KINDS.has(kind)) { const k = kid(node, SHAPE_POINTS[kind][0]); return k ? [num(k[1]), num(k[2])] : [0, 0]; }
+  if (kind === "rule_area") { const pl = kid(node, "polyline"); const p = pl ? ptsOf(pl) : []; return p[0] || [0, 0]; }
+  if (kind === "table") { const cells = kid(node, "cells"); const c = cells && kid(cells, "table_cell"); if (c) { const [x, y] = atOf(c); return [x, y]; } return [0, 0]; }
   const [x, y] = atOf(node); return [x, y];
 }
+function shiftAt(n, dx, dy) { const a = kid(n, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
 function shiftNode(kind, node, dx, dy) {
   if (!dx && !dy) return;
-  if (LINE_KINDS.has(kind)) { setPts(node, ptsOf(node).map(([x, y]) => [x + dx, y + dy])); return; }
+  if (LINE_KINDS.has(kind) || kind === "bezier") { setPts(node, ptsOf(node).map(([x, y]) => [x + dx, y + dy])); return; }
   if (SHAPE_KINDS.has(kind)) { for (const key of SHAPE_POINTS[kind]) { const k = kid(node, key); if (k) { k[1] = r4(num(k[1]) + dx); k[2] = r4(num(k[2]) + dy); } } return; }
+  if (kind === "rule_area") { for (const pl of kids(node, "polyline")) setPts(pl, ptsOf(pl).map(([x, y]) => [x + dx, y + dy])); return; }
+  if (kind === "table") { const cells = kid(node, "cells"); if (cells) for (const c of kids(cells, "table_cell")) shiftAt(c, dx, dy); return; }
   const [x, y] = atOf(node); setAt(node, r4(x + dx), r4(y + dy));
-  for (const pr of kids(node, "property")) { const a = kid(pr, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
-  if (kind === "sheet") for (const pin of kids(node, "pin")) { const a = kid(pin, "at"); if (a) { a[1] = r4(num(a[1]) + dx); a[2] = r4(num(a[2]) + dy); } }
+  for (const pr of kids(node, "property")) shiftAt(pr, dx, dy);
+  if (kind === "sheet") for (const pin of kids(node, "pin")) shiftAt(pin, dx, dy);
 }
 // A copy with a fresh identity; the desktop re-annotates and rebuilds instance data.
 function cloneNode(item) {
   const node = deep(item.node);
+  if (item.kind === "rule_area") { dropKid(node, "uuid"); for (const pl of kids(node, "polyline")) replaceKid(pl, ["uuid", K.newUuid()]); return node; }
   replaceKid(node, ["uuid", K.newUuid()]);
   for (const pin of kids(node, "pin")) replaceKid(pin, ["uuid", K.newUuid()]);
+  const cells = item.kind === "table" ? kid(node, "cells") : null; if (cells) for (const c of kids(cells, "table_cell")) replaceKid(c, ["uuid", K.newUuid()]);
   dropKid(node, "instances");
   return node;
 }
@@ -252,6 +370,83 @@ function junctionChanges(doc, pts, kind) {
   const out = [];
   for (const p of pts) if (!junctionAt(doc, p[0], p[1]) && needsJunction(doc, p[0], p[1], kind)) out.push(addNode(doc, junctionNode(p)).change);
   return out;
+}
+
+// ---------------------------------------------------------------- net highlighting (connectivity on this sheet)
+// Terminals of an item: { p, net: "wire" | "bus" | "any", key }.  Terminals join where they share a
+// point (a wire never joins a bus directly, everything else is agnostic) or sit on the middle of a
+// net line; `key` names a net that spans the sheet — net labels by text, global labels and power
+// symbols by name, hierarchical labels by text.  Net lines, junctions and bus entries conduct
+// between all their terminals; a symbol's or sheet's pins are separate nets.
+const NET_PICK = new Set(["wire", "bus", "junction", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
+function terminalsOf(doc, it) {
+  const k = it.kind, n = it.node, at = () => atOf(n).slice(0, 2).map(r4);
+  if (isNetLine(k)) return ptsOf(n).map((p) => ({ p: p.map(r4), net: k }));
+  if (k === "junction" || k === "netclass_flag" || k === "directive_label") return [{ p: at(), net: "any" }];
+  if (k === "bus_entry") return connPoints(doc, it).map((p) => ({ p, net: "any" }));
+  if (k === "label") return [{ p: at(), net: "any", key: "local:" + str(n[1]) }];
+  if (k === "global_label") return [{ p: at(), net: "any", key: "global:" + str(n[1]) }];
+  if (k === "hierarchical_label") return [{ p: at(), net: "any", key: "hier:" + str(n[1]) }];
+  if (k === "symbol") {
+    const libId = str((kid(n, "lib_id") || [])[1]), value = kids(n, "property").find((p) => str(p[1]) === "Value");
+    const key = isPowerSymbol(doc, libId) && value ? "global:" + str(value[2]) : undefined;
+    return K.pinPoints(doc, it).map((q) => ({ p: [r4(q.x), r4(q.y)], net: "wire", key }));
+  }
+  if (k === "sheet") return kids(n, "pin").map((pin) => ({ p: atOf(pin).slice(0, 2).map(r4), net: "any" }));
+  return [];
+}
+const conducts = (it) => isNetLine(it.kind) || it.kind === "junction" || it.kind === "bus_entry";
+const joins = (a, b) => a.net === "any" || b.net === "any" || a.net === b.net;
+/** Ids of everything on the net of `item` on this sheet; `near` picks the pin of a symbol or sheet. */
+function netItems(doc, item, near) {
+  const terms = new Map();
+  for (const it of doc.items.values()) { const t = terminalsOf(doc, it); if (t.length) terms.set(it, t); }
+  const mine = terms.get(item), set = new Set([item.id]); if (!mine) return set;
+  const done = new Set(), keys = new Set(), keysDone = new Set(), work = [];
+  const reach = (it, t) => {
+    set.add(it.id);
+    for (const u of conducts(it) ? terms.get(it) : [t]) { if (done.has(u)) continue; done.add(u); work.push(u); if (u.key) keys.add(u.key); }
+    if (isNetLine(it.kind)) {                                 // things sitting on the middle of a reached line
+      const sg = segs(it), lineT = { net: it.kind };
+      for (const [o, ts] of terms) { if (o === it) continue; for (const u of ts) if (!done.has(u) && joins(lineT, u) && sg.some(([a, b]) => onSegMid(u.p, a, b))) reach(o, u); }
+    }
+  };
+  if (item.kind === "symbol" || item.kind === "sheet") {
+    let best = mine[0], bd = Infinity;
+    if (near) for (const t of mine) { const dd = Math.hypot(t.p[0] - near[0], t.p[1] - near[1]); if (dd < bd) { bd = dd; best = t; } }
+    reach(item, best);
+  } else for (const t of mine) reach(item, t);
+  for (;;) {
+    while (work.length) {
+      const t = work.pop();
+      for (const [it, ts] of terms) {
+        for (const u of ts) if (!done.has(u) && joins(t, u) && same(u.p, t.p)) reach(it, u);
+        if (isNetLine(it.kind) && !set.has(it.id) && joins(t, { net: it.kind }) && segs(it).some(([a, b]) => onSegMid(t.p, a, b))) reach(it, ts[0]);
+      }
+    }
+    const fresh = Array.from(keys).filter((k) => !keysDone.has(k)); if (!fresh.length) break;
+    for (const key of fresh) { keysDone.add(key); for (const [o, ts] of terms) for (const u of ts) if (u.key === key && !done.has(u)) reach(o, u); }
+  }
+  return set;
+}
+// What the highlight tool picks under the cursor: a net item, a symbol pin, or a sheet pin.
+function pickNet(ctx, mm) {
+  const doc = ctx.doc, tol = Math.max(0.3, 5 * mmPerPx(ctx)), pinTol = Math.max(tol, 0.6);
+  const hit = hitNonSymbol(doc, mm[0], mm[1], tol);
+  if (hit && NET_PICK.has(hit.kind)) return { item: hit, at: mm };
+  const pins = pinsAt(doc, mm[0], mm[1], pinTol); if (pins.length) return { item: pins[0].item, at: [pins[0].x, pins[0].y] };
+  for (const it of doc.items.values()) if (it.kind === "sheet") for (const pin of kids(it.node, "pin")) { const [x, y] = atOf(pin); if (Math.hypot(x - mm[0], y - mm[1]) <= pinTol) return { item: it, at: [x, y] }; }
+  return null;
+}
+function setHighlight(ctx, ids) {
+  S.highlight = ids && ids.size ? ids : null;
+  if (typeof ctx.setHighlight === "function") ctx.setHighlight(S.highlight);
+  ctx.requestRender();
+}
+function highlightClick(ctx, mm) {
+  const pick = pickNet(ctx, mm);
+  if (!pick) { setHighlight(ctx, null); return null; }
+  const ids = netItems(ctx.doc, pick.item, pick.at); setHighlight(ctx, ids); return ids;
 }
 
 // ---------------------------------------------------------------- cursor snapping
@@ -326,7 +521,8 @@ function startCarry(ctx, kind, node, mm) {
 }
 function placeCarry(ctx, mm) {
   const c = S.carry; if (!c) return;
-  const gridOnly = c.kind === "symbol" || TEXT_KINDS.has(c.kind) || SHAPE_KINDS.has(c.kind) || c.kind === "text_box" || c.kind === "netclass_flag";
+  const gridOnly = c.kind === "symbol" || TEXT_KINDS.has(c.kind) || SHAPE_KINDS.has(c.kind) || c.kind === "text_box" || c.kind === "netclass_flag"
+    || c.kind === "image" || c.kind === "table" || c.kind === "bezier" || c.kind === "rule_area" || c.kind === "sheet";
   const p = gridOnly ? ctx.snap([mm[0], mm[1]]).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire");
   if (c.pos && same(c.pos, p)) return;
   const a = anchorOf(c.kind, c.node); shiftNode(c.kind, c.node, r4(p[0] - a[0]), r4(p[1] - a[1]));
@@ -342,7 +538,7 @@ function dropCarry(ctx) {
   if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
   else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
   ctx.commit(changes, c.kind === "symbol" ? "place " + (item.ref || "symbol") : c.kind.replace("_", " "));
-  if (c.kind === "symbol") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
+  if (c.kind === "symbol" || c.kind === "sheet") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
   ctx.requestRender();
   return item;
 }
@@ -384,8 +580,8 @@ function hitNonSymbol(doc, x, y, tol) {
   for (const it of doc.items.values()) {
     let d;
     if (LINE_KINDS.has(it.kind)) { d = Infinity; for (const [a, b] of segs(it)) d = Math.min(d, segDist([x, y], a, b)); d += 0.01; }   // small things on a line win ties
-    else if (SHAPE_KINDS.has(it.kind)) { d = Infinity; for (const g of it.geom) if (!g.noStroke) d = Math.min(d, geomDist(g, x, y)); d += 0.01; }
-    else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label") d = boxDist(it.bbox, x, y);
+    else if (SHAPE_KINDS.has(it.kind) || it.kind === "bezier" || it.kind === "rule_area") { d = Infinity; for (const g of it.geom) if (!g.noStroke) d = Math.min(d, geomDist(g, x, y)); d += 0.01; }
+    else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label" || it.kind === "table" || it.kind === "image") d = boxDist(it.bbox, x, y);
     else if (it.kind === "bus_entry") { const [ax, ay] = atOf(it.node), s = kid(it.node, "size"); d = segDist([x, y], [ax, ay], [ax + (s ? num(s[1]) : 2.54), ay + (s ? num(s[2]) : 2.54)]); }
     else if (it.kind === "junction" || it.kind === "no_connect") { const [ax, ay] = atOf(it.node); d = Math.max(0, Math.hypot(ax - x, ay - y) - 0.6); }
     else if (TEXT_KINDS.has(it.kind)) { const b = textRect(it); d = Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0); }
@@ -423,7 +619,8 @@ const LINE_MODES = ["90", "45", "free"];
 const LINE_MODE_LABEL = { "90": "90°", "45": "45°", free: "free" };
 const LABEL_KINDS = new Set(["label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
 const RIDER_KINDS = new Set(["junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
-const DRAG_KINDS = new Set(["symbol", "sheet", "wire", "bus", "polyline", "junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "text"]);
+const DRAG_KINDS = new Set(["symbol", "sheet", "wire", "bus", "polyline", "junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "text",
+  "text_box", "rectangle", "circle", "arc", "bezier", "rule_area", "table", "image"]);
 const isNetLine = (k) => k === "wire" || k === "bus";
 
 function modeText() { return `${S.dragMode === "drag" ? "drag keeps connections (G)" : "move leaves connections (M)"} · wires ${LINE_MODE_LABEL[S.lineMode]} (Shift+Space)`; }
@@ -536,28 +733,47 @@ function lineCovers(doc, kind, a, b) {                   // an existing collinea
   return false;
 }
 
-function beginDrag(ctx, item, mm, byPointer) {
-  const doc = ctx.doc; if (!item || !DRAG_KINDS.has(item.kind)) return null;
+// One item or a list of them (a multi-selection): every connection point of every moved item is an
+// anchor, riders of every moved net line come along, and a line whose ends all sit on moved items
+// (a wire between two dragged symbols) is promoted into the moved set so it just moves.
+function beginDrag(ctx, items, mm, byPointer) {
+  const doc = ctx.doc, seen = new Set(), list = [];
+  for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) { seen.add(it.id); list.push(it); }
+  if (!list.length) return null;
   if (S.drag) endDrag(ctx, false);
-  const anchor0 = anchorOf(item.kind, item.node);
-  const d = { item, kind: item.kind, orig: deep(item.node), anchor0, grab: [mm[0] - anchor0[0], mm[1] - anchor0[1]], last: [0, 0], applied: [0, 0],
-    moved: false, byPointer: !!byPointer, riders: ridersOf(doc, item), anchors: [], preview: [] };
-  const moving = new Set([item.id, ...d.riders.map((r) => r.item.id)]);
-  for (const p of connPoints(doc, item)) d.anchors.push(makeAnchor(doc, item, p, moving));
-  for (const r of d.riders) {
-    if (r.item.kind === "junction") d.anchors.push(makeAnchor(doc, r.item, r.orig, moving));
-    else if (r.item.kind === "bus_entry") for (const p of connPoints(doc, r.item)) d.anchors.push(makeAnchor(doc, r.item, p, moving));
+  const item = list[0], anchor0 = anchorOf(item.kind, item.node);
+  const d = { items: list.map((it) => ({ item: it, kind: it.kind, orig: deep(it.node) })), item, kind: item.kind, orig: null, anchor0, grab: [mm[0] - anchor0[0], mm[1] - anchor0[1]],
+    last: [0, 0], applied: [0, 0], moved: false, byPointer: !!byPointer, riders: [], anchors: [], preview: [] };
+  d.orig = d.items[0].orig;
+  for (let pass = 0; pass < 8; pass++) {                   // re-resolve after each promotion, the moved set grew
+    const moving = new Set(d.items.map((e) => e.item.id));
+    d.riders = [];
+    for (const e of d.items) for (const r of ridersOf(doc, e.item)) if (!moving.has(r.item.id)) { moving.add(r.item.id); d.riders.push(r); }
+    d.anchors = [];
+    for (const e of d.items) for (const p of connPoints(doc, e.item)) d.anchors.push(makeAnchor(doc, e.item, p, moving));
+    for (const r of d.riders) {
+      if (r.item.kind === "junction") d.anchors.push(makeAnchor(doc, r.item, r.orig, moving));
+      else if (r.item.kind === "bus_entry") for (const p of connPoints(doc, r.item)) d.anchors.push(makeAnchor(doc, r.item, p, moving));
+    }
+    const seenEnd = new Set();                              // a line end belongs to one anchor only
+    for (const a of d.anchors) a.ends = a.ends.filter((e) => { const k = e.item.id + ":" + e.index; if (seenEnd.has(k)) return false; seenEnd.add(k); return true; });
+    const spanned = [], idx = new Map();
+    for (const a of d.anchors) for (const e of a.ends) { if (!idx.has(e.item.id)) idx.set(e.item.id, new Set()); idx.get(e.item.id).add(e.index); }
+    for (const [id, ends] of idx) { const it = doc.items.get(id); const n = it ? ptsOf(it.node).length : 0; if (it && n > 1 && ends.has(0) && ends.has(n - 1)) spanned.push(it); }
+    if (!spanned.length) { for (const a of d.anchors) for (const f of a.followers) moving.add(f.item.id); break; }
+    for (const it of spanned) d.items.push({ item: it, kind: it.kind, orig: deep(it.node) });
   }
-  const seenEnd = new Set();                                // a line end belongs to one anchor only
-  for (const a of d.anchors) { a.ends = a.ends.filter((e) => { const k = e.item.id + ":" + e.index; if (seenEnd.has(k)) return false; seenEnd.add(k); return true; }); for (const f of a.followers) moving.add(f.item.id); }
   S.drag = d; announceModes(ctx); return d;
 }
 // Live preview: the moved items and stretched ends are edited in place (restored by endDrag),
 // stub wires are drawn from d.preview by the overlay.
 function applyDrag(doc, d, dx, dy) {
-  if (!dx && !dy) { restoreNode(d.item.node, d.orig); }
-  else shiftNode(d.kind, d.item.node, r4(dx - d.applied[0]), r4(dy - d.applied[1]));
-  d.applied = [dx, dy]; K.replaceChange(doc, d.item);
+  for (const e of d.items) {
+    if (!dx && !dy) restoreNode(e.item.node, e.orig);
+    else shiftNode(e.kind, e.item.node, r4(dx - d.applied[0]), r4(dy - d.applied[1]));
+    K.replaceChange(doc, e.item);
+  }
+  d.applied = [dx, dy];
   for (const r of d.riders) { const [cx, cy] = atOf(r.item.node); shiftNode(r.item.kind, r.item.node, r4(r.orig[0] + dx - cx), r4(r.orig[1] + dy - cy)); K.replaceChange(doc, r.item); }
   d.preview = [];
   const connected = S.dragMode === "drag";
@@ -601,9 +817,9 @@ function dragChanges(ctx, d, dx, dy) {
     out.set(c.id, c);
   };
   const touched = [];
-  { const n = deep(d.item.node); shiftNode(d.kind, n, dx, dy); put(modChange(doc, d.item, n)); }
+  for (const e of d.items) { const n = deep(e.item.node); shiftNode(e.kind, n, dx, dy); put(modChange(doc, e.item, n)); }
   for (const r of d.riders) { const n = deep(r.item.node); shiftNode(r.item.kind, n, dx, dy); put(modChange(doc, r.item, n)); }
-  for (const p of connPoints(doc, d.item)) touched.push(p, [r4(p[0] + dx), r4(p[1] + dy)]);
+  for (const e of d.items) for (const p of connPoints(doc, e.item)) touched.push(p, [r4(p[0] + dx), r4(p[1] + dy)]);
   if (connected) for (const a of d.anchors) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
     for (const e of a.ends) {
@@ -622,7 +838,7 @@ function dragChanges(ctx, d, dx, dy) {
       if (!lineCovers(doc, a.stub.kind, a.p, Pn)) put(addNode(doc, lineNode(a.stub.kind, a.p, Pn)).change);
     }
   }
-  const keep = new Set([d.item.id, ...d.riders.map((r) => r.item.id)]);
+  const keep = new Set([...d.items.map((e) => e.item.id), ...d.riders.map((r) => r.item.id)]);
   for (const c of cleanupAt(doc, Array.from(out.values()), touched, keep, ctx.IU || 1e4)) put(c);
   for (const c of out.values()) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
   return Array.from(out.values());
@@ -673,20 +889,24 @@ function orientSelected(ctx, op) {
   ctx.commit([modChange(ctx.doc, it, node)], op === "x" || op === "y" ? "mirror" : "rotate");
   return true;
 }
-// Removal of one item plus the junctions that only existed for it: a line's own points, or the
-// connection points (pins, ends, anchors) of anything else — SCH_EDIT_TOOL::DoDelete's junction pass.
-function deleteChanges(doc, it) {
-  const changes = [K.removeChange(it)];
-  const line = LINE_KINDS.has(it.kind), pts = line ? ptsOf(it.node) : connPoints(doc, it);
+// Removal of one item (or a list — a multi-selection) plus the junctions that only existed for them:
+// a line's own points, or the connection points (pins, ends, anchors) of anything else —
+// SCH_EDIT_TOOL::DoDelete's junction pass, evaluated with every listed item out of the document.
+function deleteChanges(doc, items) {
+  const list = [], ids = new Set();
+  for (const it of Array.isArray(items) ? items : [items]) if (it && !ids.has(it.id)) { ids.add(it.id); list.push(it); }
+  const changes = list.map(removeChange), pts = [];
+  for (const it of list) { const line = LINE_KINDS.has(it.kind); for (const p of line ? ptsOf(it.node) : connPoints(doc, it)) pts.push({ p, kind: line ? it.kind : null }); }
   if (!pts.length) return changes;
-  doc.items.delete(it.id);
+  const saved = list.map((it) => [it.id, doc.items.get(it.id)]);
+  for (const it of list) doc.items.delete(it.id);
   try {
-    for (const p of pts) {
-      const j = junctionAt(doc, p[0], p[1]); if (!j || changes.some((c) => c.id === j.id)) continue;
-      const needed = line ? needsJunction(doc, p[0], p[1], it.kind) : needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus");
-      if (!needed) changes.push(K.removeChange(j));
+    for (const { p, kind } of pts) {
+      const j = junctionAt(doc, p[0], p[1]); if (!j || ids.has(j.id) || changes.some((c) => c.id === j.id)) continue;
+      const needed = kind ? needsJunction(doc, p[0], p[1], kind) : needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus");
+      if (!needed) changes.push(removeChange(j));
     }
-  } finally { doc.items.set(it.id, it); }
+  } finally { for (const [id, obj] of saved) if (obj) doc.items.set(id, obj); }
   return changes;
 }
 function deleteSelected(ctx) {
@@ -840,7 +1060,7 @@ function onKeyCapture(ev) {
   if (ev.key === "Escape") {
     let took = true;
     if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) finishWire(ctx); else if (S.draw) cancelDraw(ctx);
-    else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else took = false;
+    else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) setHighlight(ctx, null); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
@@ -865,6 +1085,152 @@ function placeClassLabel(ctx, name, p, rot) {
   return item;
 }
 
+// ---------------------------------------------------------------- hierarchical sheets (the sheet file lives on the server first)
+const SHEET_EXT = ".kicad_sch";
+const baseName = (p) => str(p).split("/").pop();
+const dirName = (p) => { const s = str(p).split("/"); s.pop(); return s.join("/"); };
+const joinPath = (dir, file) => dir ? dir + "/" + file : file;
+// Relative path from directory `dir` to `path` (both project-relative, "/" separated) — what Sheetfile holds.
+function relPath(dir, path) {
+  const a = dir ? dir.split("/") : [], b = path.split("/"); let i = 0;
+  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
+  return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
+}
+function schDocs(ctx) { return (ctx.docs || []).filter((d) => d && d.docType === "kicad_sch"); }
+// The schematic doc being edited: ctx.docId when the app says, else the project's root sheet.
+function currentDoc(ctx) {
+  const docs = schDocs(ctx);
+  if (ctx.docId) { const d = docs.find((x) => x.docId === ctx.docId); if (d) return d; }
+  if (ctx.docPath) return { path: ctx.docPath };
+  const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro"), stem = pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : null;
+  return (stem && docs.find((d) => baseName(d.path) === stem + SHEET_EXT)) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
+}
+function normSheetFile(file) { file = str(file).trim().replace(/\\/g, "/").replace(/^\/+/, ""); if (!file) return ""; if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT; return file; }
+function sheetFileFor(name) { return normSheetFile(str(name).trim().replace(/[\\/:*?"<>|]+/g, "_")); }
+function emptySheetDoc() { return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))\n`; }
+// Reference the project doc for a sheet file, creating it (POST …/docs, then snapshot 0) when there is none.
+async function ensureSheetDoc(ctx, file) {
+  file = normSheetFile(file); if (!file) throw new Error("no sheet file name");
+  const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
+  const found = schDocs(ctx).find((d) => d.path === target || d.path === file) || schDocs(ctx).find((d) => baseName(d.path) === baseName(file));
+  if (found) return { file: relPath(dir, found.path), docId: found.docId, created: false };
+  if (typeof ctx.api !== "function" || !ctx.project || !ctx.project.projectId) throw new Error("this session cannot create sheet files");
+  const res = await ctx.api(`/api/projects/${ctx.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target, docType: "kicad_sch" }) });
+  if (!res || !res.docId) throw new Error("no document id returned");
+  if (!res.existing) await ctx.api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: emptySheetDoc() });
+  const entry = { docId: res.docId, path: res.path || target, docType: "kicad_sch" };
+  if (Array.isArray(ctx.docs) && !ctx.docs.some((d) => d && d.docId === entry.docId)) ctx.docs.push(entry);
+  return { file, docId: entry.docId, created: !res.existing };
+}
+// The sheet path and project name this screen's symbols and sheets record in their instance data:
+// a sheet's instance path is the path of the sheet *containing* it, the same path its symbols use.
+function sheetPathHere(doc) {
+  const paths = new Map(), names = new Map(), vote = (m, k) => { if (k) m.set(k, (m.get(k) || 0) + 1); };
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" && it.kind !== "sheet") continue;
+    for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) { vote(names, str(pr[1])); for (const pa of kids(pr, "path")) vote(paths, str(pa[1])); }
+  }
+  const top = (m) => { let best = null, bn = 0; for (const [k, n] of m) if (n > bn) { bn = n; best = k; } return best; };
+  return { path: top(paths), project: top(names) };
+}
+// Next free page: the project's sheet count (root is page 1), bumped past the pages used on this screen.
+function nextPage(ctx, doc) {
+  const used = new Set(["1"]);
+  for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) for (const pa of kids(pr, "path")) { const pg = kid(pa, "page"); if (pg) used.add(str(pg[1])); }
+  let n = Math.max(2, schDocs(ctx).length);
+  while (used.has(String(n))) n++;
+  return n;
+}
+function sheetInstance(ctx, doc, page) {
+  const { path, project } = sheetPathHere(doc);
+  const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro");
+  const name = project || (pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : "") || (ctx.project && ctx.project.name) || "";
+  if (!path || !name) return null;
+  return ["instances", ["project", name, ["path", path, ["page", String(page)]]]];
+}
+// Place a sheet: make sure its file is a project doc, then commit the sheet node.  One at a time;
+// clicks are ignored while the request is out, and a document switch drops the result.
+function placeSheet(ctx, a, b, name, file) {
+  if (S.sheetJob) { ctx.toast("Still creating the previous sheet…"); return S.sheetJob.promise; }
+  const doc = ctx.doc, job = { doc, promise: null }; S.sheetJob = job;
+  job.promise = (async () => {
+    try {
+      const ref = await ensureSheetDoc(ctx, normSheetFile(file));
+      if (S.sheetJob !== job || ctx.doc !== doc) return null;
+      const node = sheetNode(a, b, name, ref.file);
+      const inst = sheetInstance(ctx, doc, nextPage(ctx, doc)); if (inst) node.push(inst);
+      const { item, change } = addNode(doc, node);
+      ctx.commit([change], "sheet");
+      ctx.setSelected({ id: item.id });
+      return item;
+    } catch (e) { ctx.toast("Could not create the sheet: " + ((e && e.message) || e), 4000); return null; }
+    finally { if (S.sheetJob === job) S.sheetJob = null; ctx.requestRender(); }
+  })();
+  return job.promise;
+}
+// The sheet border within tol of p and its nearest side (SCH_SHEET_PIN::ConstrainOnEdge's NearestSegment).
+function sheetEdgeAt(doc, p, tol) {
+  let best = null;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "sheet") continue;
+    const [x, y] = atOf(it.node), s = kid(it.node, "size"), w = num(s && s[1], 0), h = num(s && s[2], 0);
+    const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
+    for (const side of ["top", "right", "bottom", "left"]) { const d = segDist(p, edges[side][0], edges[side][1]); if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h }; }
+  }
+  return best;
+}
+// The pin sits on the edge, its free coordinate grid-snapped and clamped to the edge (ConstrainOnEdge).
+function sheetPinPoint(ctx, edge, p) {
+  const g = ctx.snap([p[0], p[1]]), clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  if (edge.side === "left") return [r4(edge.x), r4(clamp(g[1], edge.y, edge.y + edge.h))];
+  if (edge.side === "right") return [r4(edge.x + edge.w), r4(clamp(g[1], edge.y, edge.y + edge.h))];
+  if (edge.side === "top") return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y)];
+  return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y + edge.h)];
+}
+function sheetPinClick(ctx, mm) {
+  const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
+  if (!edge) { ctx.toast("Click on the border of a sheet"); return null; }
+  const p = sheetPinPoint(ctx, edge, mm);
+  promptImpl("Sheet pin", "", S.cursorClient, (name) => { if (name) placeSheetPin(ctx, edge.item, name, p, edge.side); });
+  return edge;
+}
+// The pin goes into a clone of the sheet node after the fields (before instance data), committed as a whole-item change.
+function placeSheetPin(ctx, sheet, name, p, side) {
+  const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
+  const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+  if (at >= 0) node.splice(at, 0, pin); else node.push(pin);
+  ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
+  ctx.requestRender();
+  return pin;
+}
+
+// ---------------------------------------------------------------- images (a file picker, then the bitmap rides on the cursor)
+// done({ name, bytes }) or done({ base64 }) — or done(null).  Swappable for tests, like the prompt.
+let imagePickerImpl = function (ctx, done) {
+  if (!hasDom()) { done(null); return; }
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/png,image/jpeg"; inp.style.display = "none"; inp.dataset.schtools = "1";
+  document.body.appendChild(inp);
+  let sent = false; const finish = (v) => { if (sent) return; sent = true; inp.remove(); done(v); };
+  inp.addEventListener("change", () => { const f = inp.files && inp.files[0]; if (!f) { finish(null); return; } f.arrayBuffer().then((buf) => finish({ name: f.name, bytes: new Uint8Array(buf) })).catch(() => finish(null)); });
+  inp.addEventListener("cancel", () => finish(null));
+  // a dismissed dialog fires no change in older browsers: once focus is back and nothing was chosen, give up
+  window.addEventListener("focus", () => setTimeout(() => { if (!inp.files || !inp.files.length) finish(null); }, 800), { once: true });
+  inp.click();
+};
+function openImagePicker(ctx) {
+  if (S.imageWait) return; S.imageWait = true;
+  imagePickerImpl(ctx, (file) => {
+    S.imageWait = false;
+    if (!file || S.tool !== "image") return;
+    const bytes = file.bytes || (file.base64 ? base64ToBytes(file.base64) : null);
+    const base64 = file.base64 || (bytes ? bytesToBase64(bytes) : "");
+    if (!base64) { ctx.toast("Could not read the image"); return; }
+    const px = bytes ? imageSize(bytes) : null;               // drawn at BITMAP_BASE's 300 PPI
+    startCarry(ctx, "image", imageNode(S.cursor || [0, 0], base64), S.cursor);
+    if (S.carry) S.carry.size = px ? [px[0] * 25.4 / IMAGE_PPI, px[1] * 25.4 / IMAGE_PPI] : [20, 20];
+  });
+}
+
 // ---------------------------------------------------------------- graphic shapes (KiCad's two/three-click drawing)
 // S.draw = { shape, pts (fixed clicks), cur (cursor) }: rect and textbox take two corners, circle its
 // centre then a radius point, arc its start, end and then a point on the arc, lines any number of
@@ -878,7 +1244,15 @@ function drawClick(ctx, shape, p) {
   if (!d || d.shape !== shape) { startDraw(ctx, shape, p); return; }
   d.cur = p.slice();
   const last = d.pts[d.pts.length - 1];
-  if (shape === "lines") { if (same(p, last)) finishDraw(ctx); else { d.pts.push(p); ctx.requestRender(); } return; }
+  if (shape === "lines" || shape === "polygon" || shape === "rulearea") {
+    if (same(p, last)) { finishDraw(ctx); return; }
+    if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) { finishDraw(ctx); return; }   // back on the first point closes it
+    d.pts.push(p); ctx.requestRender(); return;
+  }
+  if (shape === "bezier") {                        // start, control 1, end, then the far handle (BEZIER_GEOM_MANAGER)
+    if (d.pts.length === 2 && same(p, d.pts[0])) { ctx.toast("The curve's end must differ from its start"); return; }
+    d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
+  }
   if (shape === "arc") {
     if (d.pts.length === 1) { if (!same(p, last)) d.pts.push(p); ctx.requestRender(); return; }
     if (!K.arcFrom3(d.pts[0], p, d.pts[1]) || same(p, d.pts[0]) || same(p, d.pts[1])) { ctx.toast("Click a point on the arc, off the line between its ends"); return; }
@@ -894,6 +1268,36 @@ function finishDraw(ctx) {
   else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
   else if (d.shape === "arc") node = arcNode(pts[0], pts[2], pts[1]);
   else if (d.shape === "lines") { const p = simplify(pts); if (p.length >= 2) node = polylineNode(p); label = "lines"; }
+  else if (d.shape === "polygon") { const p = simplify(pts); if (p.length >= 3) node = polygonNode(p); }
+  else if (d.shape === "rulearea") { const p = simplify(pts); if (p.length >= 3) node = ruleAreaNode(p); label = "rule area"; }
+  else if (d.shape === "bezier") {
+    // KiCad's fourth click is the handle beyond the end: control 2 is its reflection over the end point
+    if (pts.length === 4) { const e = pts[2], c2 = [r4(2 * e[0] - pts[3][0]), r4(2 * e[1] - pts[3][1])]; node = bezierNode(pts[0], pts[1], c2, e); }
+  }
+  else if (d.shape === "table") {
+    d.await = true; ctx.requestRender();
+    promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
+      if (S.draw !== d) return; S.draw = null;
+      const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
+      if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
+      else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
+      ctx.requestRender();
+    });
+    return;
+  }
+  else if (d.shape === "sheet") {
+    // the rectangle is fixed; the name and file name come from two prompts, then the file is created
+    d.await = true; ctx.requestRender();
+    promptImpl("Sheet name", "", S.cursorClient, (name) => {
+      if (S.draw !== d) return;
+      if (!name) { S.draw = null; ctx.requestRender(); return; }
+      promptImpl("Sheet file", sheetFileFor(name), S.cursorClient, (file) => {
+        if (S.draw !== d) return; S.draw = null;
+        if (file) placeSheet(ctx, pts[0], pts[1], name, file); else ctx.requestRender();
+      });
+    });
+    return;
+  }
   else if (d.shape === "textbox") {
     // the box is fixed, the text comes from the inline prompt; Escape there drops the box
     d.await = true; ctx.requestRender();
@@ -940,8 +1344,11 @@ function drawOverlay(c, view, ctx) {
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
   if (S.hover && S.hover !== S.sel && !S.drag) { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
   if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
+  if (S.highlight && typeof ctx.setHighlight !== "function") {   // app.js paints the highlight when it can; else a plain outline
+    for (const id of S.highlight) { const it = doc.items.get(id); if (it) outline(c, it, "#FF40FF", px, 2); }
+  }
   if (S.drag) {
-    const it = S.drag.item; if (it) outline(c, it, CLR.sel, px, 2);
+    for (const e of S.drag.items) outline(c, e.item, CLR.sel, px, 2);
     for (const s of S.drag.preview || []) {                 // new wires the drop will create
       c.save(); c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(s.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.globalAlpha = 0.85;
       c.beginPath(); c.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) c.lineTo(s.pts[i][0], s.pts[i][1]); c.stroke(); c.restore();
@@ -959,20 +1366,37 @@ function drawOverlay(c, view, ctx) {
   if (d) {
     c.save(); c.strokeStyle = K.SCH.notes; c.lineWidth = Math.max(0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round"; c.globalAlpha = 0.85;
     const cur = d.await ? d.pts[1] : d.cur, p0 = d.pts[0];
-    if (d.shape === "rect" || d.shape === "textbox") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
+    if (d.shape === "sheet") c.strokeStyle = K.SCH.sheet; else if (d.shape === "rulearea") { c.strokeStyle = K.SCH.ruleArea; c.setLineDash([4 * px, 3 * px]); }
+    if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet" || d.shape === "table") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
     else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
     else if (d.shape === "arc") {
       const a = d.pts.length > 1 ? K.arcFrom3(p0, cur, d.pts[1]) : null;
       c.beginPath();
       if (a) c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise); else { c.moveTo(p0[0], p0[1]); c.lineTo(cur[0], cur[1]); }
       c.stroke();
-    } else { c.beginPath(); c.moveTo(p0[0], p0[1]); for (let i = 1; i < d.pts.length; i++) c.lineTo(d.pts[i][0], d.pts[i][1]); c.lineTo(cur[0], cur[1]); c.stroke(); }
+    } else if (d.shape === "bezier") {
+      // the manager's preview: end and control 2 trail the cursor until they are fixed
+      const n = d.pts.length, e = n > 2 ? d.pts[2] : cur;
+      const ctrl = n === 1 ? [p0, cur, cur, cur] : n === 2 ? [p0, d.pts[1], cur, cur] : [p0, d.pts[1], [2 * e[0] - cur[0], 2 * e[1] - cur[1]], e];
+      const bp = K.bezierPts(ctrl, 24); c.beginPath(); c.moveTo(bp[0][0], bp[0][1]); for (let i = 1; i < bp.length; i++) c.lineTo(bp[i][0], bp[i][1]); c.stroke();
+      c.save(); c.setLineDash([2 * px, 2 * px]); c.globalAlpha = 0.5; c.beginPath(); c.moveTo(ctrl[0][0], ctrl[0][1]); c.lineTo(ctrl[1][0], ctrl[1][1]); c.moveTo(ctrl[3][0], ctrl[3][1]); c.lineTo(ctrl[2][0], ctrl[2][1]); c.stroke(); c.restore();
+    } else {
+      c.beginPath(); c.moveTo(p0[0], p0[1]); for (let i = 1; i < d.pts.length; i++) c.lineTo(d.pts[i][0], d.pts[i][1]); c.lineTo(cur[0], cur[1]);
+      if (d.shape !== "lines" && d.pts.length >= 2) c.closePath();   // polygons and rule areas close back to the first point
+      c.stroke();
+    }
     c.fillStyle = CLR.sel; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
     c.restore();
   }
   if (S.carry && S.carry.item) {
     paint(c, S.carry.item, 0.65, px);
-    const b = S.carry.item.bbox; if (b) { c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.strokeRect(b[0] - 0.3, b[1] - 0.3, b[2] - b[0] + 0.6, b[3] - b[1] + 0.6); c.restore(); }
+    const b = S.carry.item.bbox;
+    if (b) { c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.strokeRect(b[0] - 0.3, b[1] - 0.3, b[2] - b[0] + 0.6, b[3] - b[1] + 0.6); c.restore(); }
+    else if (S.carry.kind === "image" && S.carry.size) {   // the canvas draws no bitmap: a crossed box of the image's size, centred on the anchor
+      const [w, h] = S.carry.size, [x, y] = anchorOf("image", S.carry.node);
+      c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]);
+      c.strokeRect(x - w / 2, y - h / 2, w, h); c.beginPath(); c.moveTo(x - w / 2, y - h / 2); c.lineTo(x + w / 2, y + h / 2); c.moveTo(x + w / 2, y - h / 2); c.lineTo(x - w / 2, y + h / 2); c.stroke(); c.restore();
+    }
   }
   const t = toolOf(S.tool);
   if (t && S.cursor && !S.carry && t.id !== "delete") {   // where the next click lands
@@ -990,12 +1414,14 @@ function onActivate(toolId, ctx) {
   if (S.draw) S.draw = null;                      // an unfinished shape is dropped with its tool
   if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
   S.sel = null; S.hover = null;
-  if (toolId !== "place" && toolId !== "power") S.carry = null;   // a carried duplicate rides into the place tool
+  if (toolId !== "place" && toolId !== "power" && toolId !== "image") S.carry = null;   // a carried duplicate rides into the place tool
+  if (toolId !== "image") S.imageWait = false;    // a file chosen after leaving the tool is ignored anyway
   if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "noconnect") startCarry(ctx, "no_connect", noConnectNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "busentry") startCarry(ctx, "bus_entry", busEntryNode(S.cursor || [0, 0], 2.54, 2.54), S.cursor);
   else if (toolId === "place" && !S.carry) openPicker(ctx, S.cursorClient);
   else if (toolId === "power" && !S.carry) openPowerPicker(ctx, S.cursorClient);
+  else if (toolId === "image" && !S.carry) openImagePicker(ctx);
   ctx.requestRender();
 }
 function onPointerDown(ev, mm, ctx) {
@@ -1025,6 +1451,10 @@ function onPointerDown(ev, mm, ctx) {
     return true;
   }
   if (t.id === "classlabel") { promptClassLabel(ctx, mm, S.cursorClient); return true; }
+  if (t.id === "image") { if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); } else openImagePicker(ctx); return true; }
+  if (t.id === "sheetpin") { sheetPinClick(ctx, mm); return true; }
+  if (t.id === "highlight") { highlightClick(ctx, mm); return true; }   // empty space clears it
+  if (t.id === "sheet" && S.sheetJob) { ctx.toast("Still creating the previous sheet…"); return true; }
   if (DRAW_TOOLS.has(t.id)) { if (S.draw && S.draw.await) return true; drawClick(ctx, t.id, drawPoint(ctx, mm)); return true; }
   if (t.id === "delete") { deleteAt(ctx, mm); return true; }   // an empty click is ours too: the tool stays armed
   return false;
@@ -1034,6 +1464,13 @@ function onPointerMove(ev, mm, ctx) {
   if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind); if (!same(S.wire.cur, p)) { S.wire.cur = p; ctx.requestRender(); } return; }
   if (S.carry) { placeCarry(ctx, mm); return; }
   if (S.draw && !S.draw.await) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { S.draw.cur = p; ctx.requestRender(); } return; }
+  if (S.tool === "highlight" || S.tool === "sheetpin") {   // what the click would pick: a net item / pin, or the sheet whose border is near
+    let id = null;
+    if (S.tool === "highlight") { const p = pickNet(ctx, mm); id = p ? p.item.id : null; }
+    else if (!ctx.viewOnly) { const e = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx))); id = e ? e.item.id : null; }
+    if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
+    return;
+  }
   if (S.tool === "delete") {                      // what the click would remove
     const hit = ctx.viewOnly ? null : pickAny(ctx, mm), id = hit ? hit.id : null;
     if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
@@ -1058,11 +1495,16 @@ function onKey(key, ev, ctx) {
     if (key === "Backspace") { undoLeg(ctx); return true; }
   }
   if (S.draw && !S.draw.await) {
-    if (key === "Enter") { if (S.draw.shape === "lines" && S.draw.pts.length >= 2) finishDraw(ctx); else cancelDraw(ctx); return true; }
+    if (key === "Enter") {
+      const sh = S.draw.shape, n = S.draw.pts.length;
+      if ((sh === "lines" && n >= 2) || ((sh === "polygon" || sh === "rulearea") && n >= 3)) finishDraw(ctx); else cancelDraw(ctx);
+      return true;
+    }
     if (key === "Backspace") { undoDrawPoint(ctx); return true; }
     if (key === "Escape") { cancelDraw(ctx); return true; }
   }
   switch (key) {
+  case "`": return armTool("highlight");
   case "w": case "W": return armTool("wire", "wire");
   case "b": case "B": return armTool("bus", "bus");
   case "z": case "Z": return armTool("busentry");
@@ -1092,7 +1534,8 @@ function onKey(key, ev, ctx) {
 }
 function onDocChanged(ctx) {
   S.ctx = ctx; installDom(ctx);
-  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null; S.draw = null;
+  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null; S.draw = null; S.sheetJob = null; S.imageWait = false;
+  if (S.highlight) setHighlight(ctx, null);
   closePrompt(); closePicker(); announceModes(ctx);
   S.tool = curTool();
 }
@@ -1102,14 +1545,20 @@ root.CollabTools.sch = {
   id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
   onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged,
   // for tests and the props panel
-  state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; },
-  // connected drag engine, shared with app.js's select tool (symbols and sheets)
+  state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; }, setImagePicker(fn) { imagePickerImpl = fn; },
+  // connected drag engine, shared with app.js's select tool (symbols and sheets; an array drags a multi-selection)
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
+  // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet
+  deleteChanges, netItems,
   _: { lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
     tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool
     rectangleNode, circleNode, arcNode, polylineNode, textBoxNode, classLabelNode, placeClassLabel, isPowerSymbol, powerSymbols, pickSymbol,
-    drawClick, finishDraw, cancelDraw, deleteChanges, deleteAt, pickAny, geomDist, anchorOf, DELETE_CURSOR },
+    drawClick, finishDraw, cancelDraw, deleteChanges, deleteAt, pickAny, geomDist, anchorOf, DELETE_CURSOR,
+    // sheets, sheet pins, tables, curves, polygons, rule areas, images and net highlighting
+    sheetNode, sheetPinNode, tableNode, bezierNode, polygonNode, ruleAreaNode, imageNode, imageData, imageSize, bytesToBase64, base64ToBytes,
+    placeSheet, ensureSheetDoc, sheetInstance, sheetPathHere, nextPage, emptySheetDoc, relPath, currentDoc, sheetEdgeAt, sheetPinPoint, sheetPinClick, placeSheetPin,
+    openImagePicker, netItems, terminalsOf, pickNet, highlightClick, setHighlight, typeNameFor, ruleAreaId, itemSexpr, SHEET_NAME_OFF, SHEET_FILE_OFF },
 };
 })(typeof window !== "undefined" ? window : globalThis);
