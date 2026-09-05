@@ -1770,10 +1770,11 @@ void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
         me = COLLAB_REST::Me( server, token );
     }
 
+    bool     signedIn = !token.IsEmpty();
     wxString onlineName = project ? wxString::FromUTF8( project->value( "name", "" ) )
-                                  : wxString( _( "(unavailable)" ) );
+                                  : wxString( signedIn ? _( "(unavailable)" ) : _( "(unknown)" ) );
     wxString role = project ? wxString::FromUTF8( project->value( "role", "" ) )
-                            : wxString( _( "offline" ) );
+                            : wxString( signedIn ? _( "offline" ) : _( "not signed in" ) );
     bool     owner = project && me
                      && project->value( "ownerId", -1LL ) == me->value( "id", -2LL );
 
@@ -1781,7 +1782,7 @@ void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
         role = _( "the owner" );
 
     DIALOG_COLLAB_SYNC dlg( this, projectName, onlineName, server, role, owner,
-                            project.has_value(), projectPath );
+                            project.has_value(), signedIn, projectPath );
 
     if( dlg.ShowModal() != wxID_OK )
         return;
