@@ -302,7 +302,7 @@ function addItem(doc, node) {
   if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
   let id = uuidOf(node);
   if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
-  const item = { id, kind: k, node, geom: [], bbox: null, movable: false };
+  const item = { id, kind: k, node, geom: [], bbox: null, movable: false, hiddenGeom: null };
   buildGeom(doc, item);
   doc.items.set(id, item);
   return item;
@@ -346,7 +346,7 @@ function G(item, g) {
 }
 
 function buildGeom(doc, item) {
-  item.geom = []; item.bbox = null;
+  item.geom = []; item.bbox = null; item.hiddenGeom = null;
   if (doc.type === "sch") buildSchGeom(doc, item); else buildPcbGeom(doc, item);
 }
 
@@ -605,6 +605,7 @@ function buildSheetGeom(item, n) {
   }
 }
 const PIN_TEXT_OFFSET = Math.round(24 * 0.15) * MIL, PIN_TEXT_MARGIN = 4 * MIL, TARGET_PIN_RADIUS = 15 * MIL;
+const pinHidden = (g) => has(g, "hide") || !!(kid(g, "hide") && str(kid(g, "hide")[1]) === "yes");
 function buildSymbolGeom(doc, item) {
   const n = item.node;
   const libId = str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1]);
@@ -650,12 +651,18 @@ function buildSymbolGeom(doc, item) {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g); const sz = kid(g, "size"); const [px, py] = tf(tx, ty);
           if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), alpha, defH: "left", defV: "top" }); take("body"); }
         } else if (gk === "pin") {
-          buildPinGeom(item, g, tf, sym); take("pin");
+          if (pinHidden(g)) {
+            // kept aside, untouched bbox: drawn only under the showHiddenPins render option, in KiCad's hidden-item colour
+            const shadow = { geom: [], bbox: null };
+            buildPinGeom(shadow, g, tf, Object.assign({}, sym, { col: () => SCH.hidden, showHidden: true }));
+            if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
+          } else { buildPinGeom(item, g, tf, sym); take("pin"); }
         }
         if (before) item.bbox = item.bbox ? boxUnion(item.bbox, before[0], before[1], before[2], before[3]) : before;
       }
     }
     if (alpha !== undefined) for (let i = geomStart; i < item.geom.length; i++) if (item.geom[i].alpha === undefined) item.geom[i].alpha = alpha;
+    if (alpha !== undefined && item.hiddenGeom) for (const hg of item.hiddenGeom) if (hg.alpha === undefined) hg.alpha = alpha;
   } else {
     G(item, { t: "rect", x: ax - 2.54, y: ay - 2.54, w: 5.08, h: 5.08, wd: SCH_PEN, color: SCH.outline, fill: null, layer: bodyLayer, z: SCH_Z.device });
     bodyBox = item.bbox.slice();
@@ -693,7 +700,7 @@ function buildSymbolGeom(doc, item) {
 function buildPinGeom(item, g, tf, sym) {
   const type = str(g[1]), shape = str(g[2]);
   const [px, py, pr] = atOf(g); const lenN = kid(g, "length"); const len = lenN ? num(lenN[1]) : 2.54;
-  if (has(g, "hide") || (kid(g, "hide") && str(kid(g, "hide")[1]) === "yes")) return;   // hidden (e.g. power) pins draw nothing
+  if (pinHidden(g) && !sym.showHidden) return;   // hidden (e.g. power) pins draw nothing unless asked for
   const dir = ((Math.round(pr) % 360) + 360) % 360;
   const d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];   // file angle points into the body
   const pos = tf(px, py), rootPt = tf(px + d[0] * len, py + d[1] * len);
@@ -785,12 +792,12 @@ function buildPcbGeom(doc, item) {
   const n = item.node, k = item.kind;
   if (k === "segment") {
     const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu");
-    G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round" });
+    G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true });
   } else if (k === "arc") {
     const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu");
     const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
-    if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round" }, a));
-    else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round" });
+    if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true }, a));
+    else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true });
   } else if (k === "via") {
     buildViaGeom(doc, item, n);
   } else if (k === "zone") {
@@ -822,13 +829,13 @@ function buildViaGeom(doc, item, n) {
   const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   let layers = copper;
   if (vtype !== "through") { const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]); if (i0 >= 0 && i1 >= 0) layers = copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1); else layers = pair; }
-  for (const layer of layers) G(item, { t: "circle", x, y, r: size / 2, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_VIA });
+  for (const layer of layers) G(item, { t: "circle", x, y, r: size / 2, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_VIA, via: true });
   const zh = pcbZ("holes");
-  if (vtype === "through") G(item, { t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh });
+  if (vtype === "through") G(item, { t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true });
   else {
     // blind/buried and micro vias show their layer pair in the hole: top-colour upper half, bottom-colour lower half
-    G(item, { t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true });
-    G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true });
+    G(item, { t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true });
+    G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true, via: true });
   }
   item.viaType = vtype;
 }
@@ -854,7 +861,7 @@ function buildZoneGeom(doc, item, n) {
   if (keepout) return;   // rule areas have no fill
   for (const fp of kids(n, "filled_polygon")) {
     const layer = layerOf(fp, layersZ[0]); const p = ptsOf(fp); if (p.length < 3) continue;
-    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true });
+    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true });
   }
 }
 /** SHAPE_POLY_SET::GenerateHatchLines for one outline: lines y = slope·x + a every `spacing`, clipped to the polygon. */
@@ -1060,6 +1067,11 @@ function buildPadGeom(item, pad, tf, side, doc) {
   // one geometry per layer the pad is on (copper, mask, paste): whichever is drawn last wins, like KiCad
   const shapes = [];
   const pushShape = (layer, z, color, fill) => {
+    const from = item.geom.length;
+    pushPadShape(layer, z, color, fill);
+    for (let i = from; i < item.geom.length; i++) item.geom[i].pad = true;   // tagged for the outlinePads render option
+  };
+  const pushPadShape = (layer, z, color, fill) => {
     if (shape === "custom") {
       const prims = kid(pad, "primitives"); const anchor = str((kid(pad, "options") && kid(kid(pad, "options"), "anchor") || [])[1]);
       if (prims) { const Rp = rotator(prot); const ptf = (lx, ly) => { const [x, y] = Rp(lx, ly); return [cx + x, cy + y]; }; for (const pr of prims.slice(1)) if (isList(pr)) { const before = item.geom.length; graphicGeom(item, pr, pr[0].replace("gr_", ""), ptf, layer, z); for (let i = before; i < item.geom.length; i++) { const gg = item.geom[i]; gg.color = color; if (gg.fill) gg.fill = fill; if (!gg.fill && gg.w <= 0) { gg.fill = fill; gg.noStroke = true; } } } }
@@ -1203,7 +1215,7 @@ function moveItem(doc, item, x, y, IU) {
 function replaceChange(doc, item) { buildGeom(doc, item); return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
 function addChange(doc, item) { return { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
 function removeChange(item) { return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] }; }
-const SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE" };
+const SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE", netclass_flag: "SCH_DIRECTIVE_LABEL", directive_label: "SCH_DIRECTIVE_LABEL" };
 const PCB_TYPE_NAMES = { footprint: "FOOTPRINT", segment: "PCB_TRACK", arc: "PCB_ARC", via: "PCB_VIA", zone: "ZONE", gr_line: "PCB_SHAPE", gr_rect: "PCB_SHAPE", gr_circle: "PCB_SHAPE", gr_arc: "PCB_SHAPE", gr_poly: "PCB_SHAPE", gr_text: "PCB_TEXT", gr_text_box: "PCB_TEXTBOX" };
 function typeNameOf(item) { return (SCH_TYPE_NAMES[item.kind] || PCB_TYPE_NAMES[item.kind] || item.kind.toUpperCase()); }
 /** Screen-space connection points of a symbol's pins (mm). */
@@ -1304,9 +1316,25 @@ function tracePad(ctx, g) {
 /**
  * view: { ppm (css px per mm at zoom 1), zoom, panX, panY (css px), x0, y0 (mm origin), dpr }
  * opts: { hidden: Set(layer keys), grid: pitch mm (0 = off), selected: Set(item ids) }
+ *   plus KiCad's display options (all optional, default off):
+ *   showHiddenPins (schematic) — draw the pins a library symbol marks hidden, with their names and
+ *                                numbers, in the hidden-item grey (they are kept in item.hiddenGeom
+ *                                so hit boxes stay as they were);
+ *   zoneOutline    (board)     — zones as outlines with their hatch only, no copper fill;
+ *   outlinePads, outlineTracks, outlineVias (board) — KiCad's sketch display modes: the pad shapes,
+ *                                the track/arc stadium outlines and the via rings are stroked with a
+ *                                hairline instead of filled;
+ *   highContrast + activeLayer (board) — high-contrast mode: everything not on `activeLayer` is
+ *                                dimmed to HC_DIM alpha (holes stay visible), the active layer is
+ *                                drawn at full colour.
  */
+const HC_DIM = 0.2;
 function render(doc, ctx, view, opts) {
   opts = opts || {}; const hidden = opts.hidden || new Set();
+  const isPcb = doc.type === "pcb";
+  const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;
+  const sketchPads = isPcb && !!opts.outlinePads, sketchTracks = isPcb && !!opts.outlineTracks, sketchVias = isPcb && !!opts.outlineVias;
+  const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1333,6 +1361,11 @@ function render(doc, ctx, view, opts) {
   for (const it of doc.items.values()) {
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     for (const g of it.geom) {
+      if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
+      const z = g.z === undefined ? 0 : g.z;
+      let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
+    }
+    if (showHiddenPins && it.hiddenGeom) for (const g of it.hiddenGeom) {
       if (hidden.has(g.layer)) continue;
       const z = g.z === undefined ? 0 : g.z;
       let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
@@ -1351,9 +1384,16 @@ function render(doc, ctx, view, opts) {
   const fillG = (g) => { const p = pathOf(g); if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } };
   for (const z of zs) {
     for (const g of buckets.get(z)) {
-      setAlpha(g.alpha === undefined ? 1 : g.alpha);
+      let alpha = g.alpha === undefined ? 1 : g.alpha;
+      if (hcLayer && g.layer !== hcLayer && g.layer !== "holes") alpha *= HC_DIM;
+      setAlpha(alpha);
       const t = g.t;
       if (t === "text") { drawText(ctx, g, s, doc.type, minW); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
+      if ((sketchPads && g.pad) || (sketchVias && g.via)) {   // sketch mode: the shape's outline in a hairline, nothing filled
+        if (t === "poly" && g.pts.length < 2) continue;
+        setStroke(g.color); setWidth(minW); setCap("butt"); strokeG(g); continue;
+      }
+      if (sketchTracks && g.track) { setStroke(g.color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); continue; }
       if (t === "rect") {
         if (g.fill) { setFill(g.fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
         if (!g.noStroke) { setStroke(g.color); setWidth(Math.max(g.wd || 0, minW)); ctx.strokeRect(g.x, g.y, g.w, g.h); }
@@ -1374,6 +1414,28 @@ function render(doc, ctx, view, opts) {
   // selection: KiCad's selection shadow — a translucent halo around the item's own geometry
   if (opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+/** Outline of a track segment (stadium) or track arc (band with round caps) for the sketch display mode. */
+function traceTrackOutline(ctx, g) {
+  const hw = (g.w || 0) / 2;
+  if (g.t === "line") {
+    const dx = g.x2 - g.x1, dy = g.y2 - g.y1, L = Math.hypot(dx, dy);
+    if (L < 1e-9 || hw <= 0) { ctx.moveTo(g.x1 + hw, g.y1); ctx.arc(g.x1, g.y1, Math.max(hw, 1e-6), 0, Math.PI * 2); return; }
+    const ang = Math.atan2(dy, dx), nx = -dy / L * hw, ny = dx / L * hw;
+    ctx.moveTo(g.x1 + nx, g.y1 + ny); ctx.lineTo(g.x2 + nx, g.y2 + ny);
+    ctx.arc(g.x2, g.y2, hw, ang + Math.PI / 2, ang - Math.PI / 2, true);
+    ctx.lineTo(g.x1 - nx, g.y1 - ny);
+    ctx.arc(g.x1, g.y1, hw, ang - Math.PI / 2, ang + Math.PI / 2, true);
+    ctx.closePath();
+  } else if (g.t === "arc") {
+    const acw = !!g.anticlockwise, p0 = [g.x + g.r * Math.cos(g.a0), g.y + g.r * Math.sin(g.a0)], p1 = [g.x + g.r * Math.cos(g.a1), g.y + g.r * Math.sin(g.a1)];
+    ctx.moveTo(g.x + (g.r + hw) * Math.cos(g.a0), g.y + (g.r + hw) * Math.sin(g.a0));
+    ctx.arc(g.x, g.y, g.r + hw, g.a0, g.a1, acw);
+    ctx.arc(p1[0], p1[1], hw, g.a1, g.a1 + Math.PI, acw);
+    if (g.r - hw > 1e-9) ctx.arc(g.x, g.y, g.r - hw, g.a1, g.a0, !acw); else ctx.lineTo(g.x, g.y);
+    ctx.arc(p0[0], p0[1], hw, g.a0 + Math.PI, g.a0, acw);
+    ctx.closePath();
+  } else tracePath(ctx, g);
 }
 /** Draw KiCad's selection shadow around every geom of the given item ids (canvas must be in document space). */
 function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) {

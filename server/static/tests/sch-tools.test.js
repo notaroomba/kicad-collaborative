@@ -75,8 +75,10 @@ sch.onDocChanged(ctx);
 
 test("module registers tools with KiCad-style hotkeys", () => {
   assert.strictEqual(sch.id, "sch");
-  assert.deepStrictEqual(sch.tools.map((t) => t.key), ["W", "B", "Z", "J", "Q", "L", "Shift+L", "Shift+H", "T", "A"]);
-  for (const t of sch.tools) assert.ok(t.icon.includes("<") && t.label && t.id);
+  assert.deepStrictEqual(Object.fromEntries(sch.tools.map((t) => [t.id, t.key])), { wire: "W", bus: "B", busentry: "Z", junction: "J", noconnect: "Q", label: "L", glabel: "Shift+L", hlabel: "Shift+H", text: "T", place: "A",
+    power: "P", classlabel: "", lines: "I", rect: "", circle: "", arc: "", textbox: "", delete: "" });
+  for (const t of sch.tools) assert.ok(t.icon.includes("<") && t.label && t.id && t.cursor);
+  assert.ok(sch.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "the delete tool carries KiCad's delete cursor");
 });
 
 test("wire ending on the middle of another wire gets a junction (T)", () => {
@@ -289,6 +291,172 @@ test("delete removes the selected wire and the junction it alone justified", () 
   assert.ok(!doc.items.has(ctx.tWire) && !doc.items.has(ctx.tJunction));
   assert.strictEqual(sch.state.sel, null);
   assert.strictEqual(sch.onKey("Delete", {}, ctx), false, "nothing selected -> app.js keeps the key");
+});
+
+// ---- graphic shapes, power symbols, directive labels, the delete tool, render options ----
+const STROKE0 = ["stroke", ["width", 0], ["type", "default"]], FILL_NONE = ["fill", ["type", "none"]];
+/** Recording 2D-context stub, as in render.test.js. */
+function stubCtx(w, h) {
+  const calls = {}; const rec = (n) => { calls[n] = (calls[n] || 0) + 1; };
+  const c = { canvas: { width: w, height: h }, calls, font: "", textAlign: "", textBaseline: "", fillStyle: "", strokeStyle: "", lineWidth: 1, lineCap: "", lineJoin: "", globalAlpha: 1 };
+  for (const n of ["setTransform", "fillRect", "strokeRect", "beginPath", "moveTo", "lineTo", "closePath", "arc", "rect", "fill", "stroke", "save", "restore", "translate", "rotate", "scale", "fillText", "strokeText", "setLineDash"]) c[n] = () => rec(n);
+  c.measureText = (t) => ({ width: t.length * 0.7 });
+  return c;
+}
+const LIB_SYM = (name, ref, extra) => `(symbol "${name}" ${extra || ""} (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+  (property "Reference" "${ref}" (at 0 -6.35 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "${name.split(":")[1]}" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+  (symbol "${name.split(":")[1]}_0_1" (polyline (pts (xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)) (stroke (width 0) (type default)) (fill (type none))))
+  (symbol "${name.split(":")[1]}_1_1" (pin power_in line (at 0 0 270) (length 0) (hide yes) (name "${name.split(":")[1]}" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))`;
+
+test("power (P): the picker offers power symbols only; with none in the sheet the tool stays armed with a hint", () => {
+  assert.deepStrictEqual(_.powerSymbols(doc), []);
+  ctx.toasts.length = 0;
+  assert.ok(sch.onKey("p", {}, ctx)); assert.strictEqual(sch.state.tool, "power");
+  assert.ok(ctx.toasts.some((m) => /power symbols/.test(m)), "told there is nothing to place");
+  const n0 = ctx.log.length; assert.ok(sch.onPointerDown(ev(), [10, 10], ctx)); assert.strictEqual(ctx.log.length, n0, "a click without a carry places nothing");
+  doc.lib.set("power:GND", K.parse(LIB_SYM("power:GND", "#PWR", "(power)")));       // the (power) flag
+  doc.lib.set("Mine:VCC", K.parse(LIB_SYM("Mine:VCC", "#PWR")));                    // a #PWR reference
+  doc.lib.set("Mine:PWR_FLAG", K.parse(LIB_SYM("Mine:PWR_FLAG", "#FLG")));          // a #FLG reference
+  doc.lib.set("Mine:Thing", K.parse(LIB_SYM("Mine:Thing", "U")));                   // an ordinary part
+  doc.lib.set("power:+5V", K.parse('(symbol "power:+5V" (extends "GND") (property "Value" "+5V" (at 0 0 0) (effects (font (size 1.27 1.27)))))'));   // inherits (power)
+  assert.deepStrictEqual(_.powerSymbols(doc), ["Mine:PWR_FLAG", "Mine:VCC", "power:+5V", "power:GND"]);
+  assert.strictEqual(_.isPowerSymbol(doc, "Device:R"), false);
+  _.pickSymbol(ctx, "power:GND");
+  assert.ok(sch.state.carry && sch.state.carry.kind === "symbol", "picked symbol rides on the cursor");
+  sch.onPointerMove(ev(), [88.95, 114.25], ctx); sch.onPointerDown(ev(), [88.95, 114.25], ctx);
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "place #PWR?"); assert.strictEqual(c.changes[0].typeName, "SCH_SYMBOL");
+  const n = fragItem(c.changes[0]); assert.deepStrictEqual(atOf(n), [88.9, 114.3, 0]);
+  assert.deepStrictEqual(kids(n, "property").slice(0, 2).map((p) => [p[1], p[2]]), [["Reference", "#PWR?"], ["Value", "GND"]]);
+  assert.ok(c.changes[0].sexpr.includes("(lib_symbols (symbol power:GND"), "fragment embeds the power symbol");
+  assert.strictEqual(sch.state.carry, null); assert.strictEqual(sch.state.tool, "power", "ready for the next one");
+  ctx.tPower = c.changes[0].id;
+});
+
+test("render option showHiddenPins: hidden pins are kept beside the geometry and drawn only on request", () => {
+  const it = doc.items.get(ctx.tPower);
+  assert.ok(it.hiddenGeom && it.hiddenGeom.length >= 2, "hidden pin name and number kept aside");
+  assert.ok(!it.geom.some((g) => g.layer === "Pin names" || g.layer === "Pin numbers"), "…and not in the item's own geometry");
+  assert.ok(it.hiddenGeom.some((g) => g.t === "text" && g.text === "GND" && g.color === K.SCH.hidden), "drawn in the hidden-item grey");
+  const view = { ppm: 1600 / doc.page[0], zoom: 1, panX: 0, panY: 0, x0: 0, y0: 0, dpr: 1 };
+  const plain = stubCtx(1600, 1200); K.render(doc, plain, view, {});
+  const shown = stubCtx(1600, 1200); K.render(doc, shown, view, { showHiddenPins: true });
+  assert.strictEqual((shown.calls.fillText || 0) - (plain.calls.fillText || 0), 2, "the hidden pin's name and number are drawn");
+  const none = stubCtx(1600, 1200); K.render(doc, none, view, { showHiddenPins: true, hidden: new Set(["Pin names", "Pin numbers"]) });
+  assert.strictEqual(none.calls.fillText, plain.calls.fillText, "hidden layers still apply");
+});
+
+test("rectangle: two corners give KiCad's (rectangle (start) (end) (stroke) (fill) (uuid)), corners normalised", () => {
+  sch.onActivate("rect", ctx);
+  assert.ok(sch.onPointerDown(ev(), [30.5, 30.4], ctx)); assert.deepStrictEqual(sch.state.draw.pts, [[30.48, 30.48]]);
+  sch.onPointerMove(ev(), [20.3, 40.7], ctx); assert.deepStrictEqual(sch.state.draw.cur, [20.32, 40.64], "preview corner follows the snapped cursor");
+  sch.onPointerDown(ev(), [20.3, 40.7], ctx);
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "rectangle"); assert.strictEqual(c.changes[0].kind, "ADDED"); assert.strictEqual(c.changes[0].typeName, "SCH_SHAPE");
+  const n = fragItem(c.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 5), ["rectangle", ["start", 20.32, 30.48], ["end", 30.48, 40.64], STROKE0, FILL_NONE]);
+  assert.strictEqual(n[5][0], "uuid"); assert.strictEqual(n.length, 6);
+  const it = doc.items.get(c.changes[0].id); assert.strictEqual(it.kind, "rectangle"); assert.ok(it.geom.some((g) => g.t === "poly" && g.close && g.pts.length === 4));
+  assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "rect", "tool stays armed"); assert.strictEqual(sch.state.sel, it.id);
+  assert.deepStrictEqual(_.anchorOf("rectangle", it.node), [20.32, 30.48]);
+  ctx.tRect = it.id;
+});
+
+test("circle: centre then a radius point; a zero radius is not a circle", () => {
+  sch.onActivate("circle", ctx);
+  sch.onPointerDown(ev(), [50.8, 50.8], ctx); sch.onPointerDown(ev(), [50.8, 50.8], ctx);
+  assert.ok(sch.state.draw && sch.state.draw.pts.length === 1); assert.strictEqual(lastCommit(ctx).label, "rectangle");
+  sch.onPointerDown(ev(), [55.88, 50.8], ctx);
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "circle");
+  const n = fragItem(c.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 5), ["circle", ["center", 50.8, 50.8], ["radius", 5.08], STROKE0, FILL_NONE]); assert.strictEqual(n[5][0], "uuid");
+  assert.strictEqual(doc.items.get(c.changes[0].id).geom.find((g) => g.t === "circle").r, 5.08);
+  assert.strictEqual(sch.state.draw, null);
+});
+
+test("arc: start, end, then a point on the arc; a point on the chord is refused", () => {
+  sch.onActivate("arc", ctx);
+  sch.onPointerDown(ev(), [76.2, 101.6], ctx); sch.onPointerDown(ev(), [86.36, 101.6], ctx);
+  assert.deepStrictEqual(sch.state.draw.pts, [[76.2, 101.6], [86.36, 101.6]]);
+  ctx.toasts.length = 0; sch.onPointerDown(ev(), [81.28, 101.6], ctx);
+  assert.ok(sch.state.draw && sch.state.draw.pts.length === 2 && ctx.toasts.length, "collinear point refused");
+  sch.onPointerDown(ev(), [81.28, 96.52], ctx);
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "arc"); assert.strictEqual(c.changes[0].typeName, "SCH_SHAPE");
+  const n = fragItem(c.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 6), ["arc", ["start", 76.2, 101.6], ["mid", 81.28, 96.52], ["end", 86.36, 101.6], STROKE0, FILL_NONE]); assert.strictEqual(n[6][0], "uuid");
+  const g = doc.items.get(c.changes[0].id).geom.find((x) => x.t === "arc"); assert.ok(g); assert.ok(near(g.r, 5.08) && near(g.x, 81.28) && near(g.y, 101.6));
+  assert.strictEqual(sch.state.draw, null);
+});
+
+test("lines (I): points until a click on the last one; Backspace drops a point, Enter finishes, a lone point is dropped", () => {
+  assert.ok(sch.onKey("i", {}, ctx)); assert.strictEqual(sch.state.tool, "lines");
+  for (const p of [[25.4, 25.4], [38.1, 25.4], [38.1, 38.1], [50.8, 38.1]]) sch.onPointerDown(ev(), p, ctx);
+  assert.ok(sch.onKey("Backspace", {}, ctx)); assert.strictEqual(sch.state.draw.pts.length, 3);
+  sch.onPointerDown(ev(), [38.1, 38.1], ctx);                      // click on the last point ends it
+  let c = lastCommit(ctx); assert.strictEqual(c.label, "lines"); assert.strictEqual(c.changes[0].typeName, "SCH_LINE");
+  let n = fragItem(c.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 4), ["polyline", ["pts", ["xy", 25.4, 25.4], ["xy", 38.1, 25.4], ["xy", 38.1, 38.1]], STROKE0, FILL_NONE]); assert.strictEqual(n[4][0], "uuid");
+  const it = doc.items.get(c.changes[0].id); assert.strictEqual(it.kind, "polyline"); assert.strictEqual(it.geom[0].t, "poly"); assert.strictEqual(it.geom[0].pts.length, 3);
+  assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "lines");
+  sch.onPointerDown(ev(), [63.5, 25.4], ctx); sch.onPointerDown(ev(), [76.2, 25.4], ctx); assert.ok(sch.onKey("Enter", {}, ctx));
+  c = lastCommit(ctx); n = fragItem(c.changes[0]); assert.deepStrictEqual(ptsOf(n), [[63.5, 25.4], [76.2, 25.4]], "Enter finishes a two-point line");
+  const before = ctx.log.length; sch.onPointerDown(ev(), [88.9, 25.4], ctx); assert.ok(sch.onKey("Enter", {}, ctx));
+  assert.strictEqual(ctx.log.length, before); assert.strictEqual(sch.state.draw, null);
+});
+
+test("text box: two corners then the inline prompt; KiCad's (text_box …) with margins and left/top justify", () => {
+  let title = null; sch.setPrompt((t, initial, client, done) => { title = t; done("Note\nline 2"); });
+  sch.onActivate("textbox", ctx);
+  sch.onPointerDown(ev(), [101.6, 114.3], ctx); sch.onPointerDown(ev(), [127, 127], ctx);
+  assert.strictEqual(title, "Text box");
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "text box"); assert.strictEqual(c.changes[0].typeName, "SCH_TEXTBOX");
+  const n = fragItem(c.changes[0]); assert.strictEqual(n[1], "Note\nline 2");
+  assert.deepStrictEqual(n.slice(2, 9), [["exclude_from_sim", "no"], ["at", 101.6, 114.3, 0], ["size", 25.4, 12.7], ["margins", 0.9525, 0.9525, 0.9525, 0.9525], STROKE0, FILL_NONE, ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]]]);
+  assert.strictEqual(n[9][0], "uuid"); assert.strictEqual(n.length, 10);
+  const it = doc.items.get(c.changes[0].id); assert.strictEqual(it.kind, "text_box"); assert.strictEqual(it.geom.filter((g) => g.t === "text").length, 2);
+  assert.strictEqual(sch.state.draw, null);
+  sch.setPrompt((t, i, cl, done) => done(null));                    // Escape in the prompt drops the box
+  const before = ctx.log.length; sch.onPointerDown(ev(), [10.16, 10.16], ctx); sch.onPointerDown(ev(), [20.32, 20.32], ctx);
+  assert.strictEqual(ctx.log.length, before); assert.strictEqual(sch.state.draw, null);
+});
+
+test("directive label: the netclass name from the prompt lands as (netclass_flag …) with its autoplaced Netclass field", () => {
+  sch.setPrompt((t, initial, client, done) => { assert.strictEqual(t, "Netclass"); done("Power"); });
+  sch.onActivate("classlabel", ctx);
+  assert.ok(sch.onPointerDown(ev(), [152.4, 139.7], ctx));
+  const c = lastCommit(ctx); assert.strictEqual(c.label, "directive label"); assert.strictEqual(c.changes[0].typeName, "SCH_DIRECTIVE_LABEL");
+  const n = fragItem(c.changes[0]);
+  assert.deepStrictEqual(n.slice(0, 7), ["netclass_flag", "", ["length", 2.54], ["shape", "round"], ["at", 152.4, 139.7, 0], ["fields_autoplaced", "yes"], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]]]);
+  assert.strictEqual(n[7][0], "uuid");
+  assert.deepStrictEqual(n[8], ["property", "Netclass", "Power", ["at", 153.0985, 137.16, 0], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]]]);
+  assert.strictEqual(n.length, 9);
+  const it = doc.items.get(c.changes[0].id); assert.ok(it.geom.some((g) => g.t === "text" && g.text === "Power")); assert.ok(it.geom.some((g) => g.t === "circle"));
+  assert.strictEqual(sch.state.sel, it.id);
+  // the field follows SCH_DIRECTIVE_LABEL::AutoplaceFields for every spin style
+  assert.deepStrictEqual(atOf(kids(_.classLabelNode("X", [0, 0], 90), "property")[0]), [-2.54, -0.6985, 90]);
+  assert.deepStrictEqual(atOf(kids(_.classLabelNode("X", [0, 0], 180), "property")[0]), [0.6985, 2.54, 0]);
+  assert.deepStrictEqual(atOf(kids(_.classLabelNode("X", [0, 0], 270), "property")[0]), [2.54, -0.6985, 90]);
+  ctx.tFlag = it.id;
+});
+
+test("delete tool: clicks remove wires (with the junction they alone justified), shapes, flags and symbols; the tool stays armed", () => {
+  sch.onActivate("delete", ctx); assert.strictEqual(sch.state.tool, "delete");
+  sch.onPointerMove(ev(), [70, 63.55], ctx); assert.strictEqual(sch.state.hover, "w2", "hover shows what the click removes");
+  assert.ok(sch.onPointerDown(ev(), [70, 63.55], ctx));
+  let c = lastCommit(ctx); assert.strictEqual(c.label, "delete");
+  assert.deepStrictEqual(c.changes.map((x) => [x.kind, x.id]).sort(), [["REMOVED", "j1"], ["REMOVED", "w2"]], "j1 only joined w1/w2/w3 at a T");
+  assert.ok(/\(wire \(pts \(xy 63\.5 63\.5\) \(xy 76\.2 63\.5\)\)/.test(c.before[c.changes.findIndex((x) => x.id === "w2")]), "commit saw the untouched original for its undo record");
+  assert.ok(!doc.items.has("w2") && !doc.items.has("j1"));
+  assert.ok(sch.onPointerDown(ev(), [20.32, 35], ctx));            // the rectangle, by its left edge
+  c = lastCommit(ctx); assert.deepStrictEqual(c.changes.map((x) => [x.kind, x.id, x.typeName]), [["REMOVED", ctx.tRect, "SCH_SHAPE"]]);
+  assert.ok(sch.onPointerDown(ev(), [152.4, 138.5], ctx));         // the directive label, by its box
+  c = lastCommit(ctx); assert.strictEqual(c.changes[0].id, ctx.tFlag);
+  ctx.selected = { id: "s1" };
+  assert.ok(sch.onPointerDown(ev(), [25.4, 100.33], ctx));         // R1's body: a symbol through K.hitTest
+  c = lastCommit(ctx); assert.strictEqual(c.changes[0].typeName, "SCH_SYMBOL"); assert.strictEqual(c.changes[0].id, "s1");
+  assert.ok(c.changes.some((x) => x.typeName === "SCH_JUNCTION"), "the junction that only marked the wire corner on its pin goes too");
+  assert.strictEqual(ctx.selected, null, "app.js's selection is dropped with the item"); assert.ok(!doc.items.has("s1"));
+  const before = ctx.log.length; assert.ok(sch.onPointerDown(ev(), [200, 200], ctx), "an empty click is still the tool's"); assert.strictEqual(ctx.log.length, before);
+  assert.strictEqual(sch.state.tool, "delete");
+  sch.onActivate("select", ctx);
 });
 
 // ---- connected drag (KiCad's sch_move_tool DRAG semantics) ----

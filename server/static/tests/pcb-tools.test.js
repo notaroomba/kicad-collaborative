@@ -254,6 +254,129 @@ test("module: D drags the selected segment, click commits the moved run", () => 
   assert.deepEqual(K.kid(doc.items.get("s-2").node, "start").slice(1), [115, 52]);
 });
 
+test("module: graphic arc (Ctrl+Shift+A) takes the start, the end, then a point on the arc", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.ok(pcb.tools.some((t) => t.id === "garc" && t.key === "Ctrl+Shift+A"));
+  assert.equal(pcb.onKey("Arc", ev(), ctx), true); assert.equal(log.tool, "garc");
+  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 10], ctx);
+  assert.deepEqual(P.state.draw.pts, [[10, 10], [20, 10]]);
+  pcb.onPointerDown(ev(), [15, 10], ctx);                                  // on the chord: refused
+  assert.ok(P.state.draw && P.state.draw.pts.length === 2); assert.ok(log.toasts.at(-1).includes("off the line"));
+  pcb.onPointerMove(ev(), [15, 15], ctx); assert.deepEqual(P.state.draw.cur, [15, 15]);
+  pcb.onPointerDown(ev(), [15, 15], ctx);
+  const c = log.commits.at(-1); assert.equal(c.label, "arc"); assert.equal(c.changes[0].kind, "ADDED"); assert.equal(c.changes[0].typeName, "PCB_SHAPE");
+  const node = K.kid(K.parse(c.changes[0].sexpr), "gr_arc");
+  assert.deepEqual(node.slice(0, 6), ["gr_arc", ["start", 10, 10], ["mid", 15, 15], ["end", 20, 10], ["stroke", ["width", 0.1], ["type", "default"]], ["layer", "F.SilkS"]]);
+  assert.equal(node[6][0], "uuid"); assert.equal(node.length, 7);
+  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "gr_arc"); assert.equal(it.geom[0].t, "arc"); assert.ok(near(it.geom[0].r, 5) && near(it.geom[0].x, 15) && near(it.geom[0].y, 10));
+  assert.equal(P.state.draw, null); assert.equal(log.tool, "garc");
+  assert.deepEqual(K.kid(P.arcNode([0, 0], [1, 1], [2, 0], "Edge.Cuts"), "stroke"), ["stroke", ["width", 0.05], ["type", "default"]], "outline layer takes the edge width");
+});
+
+test("module: graphic polygon (Ctrl+Shift+P) closes on the first corner or Enter; fewer than three corners is refused", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.equal(pcb.onKey("Polygon", ev(), ctx), true); assert.equal(log.tool, "gpoly");
+  for (const p of [[10, 10], [20, 10], [20, 20], [10, 20]]) pcb.onPointerDown(ev(), p, ctx);
+  assert.equal(pcb.onKey("Backspace", ev(), ctx), true); assert.equal(P.state.draw.pts.length, 3, "Backspace drops the last corner");
+  pcb.onPointerDown(ev(), [10, 20], ctx);
+  pcb.onPointerDown(ev(), [10, 10], ctx);                                   // back on the first corner: closed
+  let c = log.commits.at(-1); assert.equal(c.label, "polygon"); assert.equal(c.changes[0].typeName, "PCB_SHAPE");
+  const node = K.kid(K.parse(c.changes[0].sexpr), "gr_poly");
+  assert.deepEqual(node.slice(0, 5), ["gr_poly", ["pts", ["xy", 10, 10], ["xy", 20, 10], ["xy", 20, 20], ["xy", 10, 20]], ["stroke", ["width", 0.1], ["type", "default"]], ["fill", "no"], ["layer", "F.SilkS"]]);
+  assert.equal(node[5][0], "uuid"); assert.equal(node.length, 6);
+  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "gr_poly"); assert.equal(it.geom[0].t, "poly"); assert.equal(it.geom[0].close, true); assert.equal(it.geom[0].fill, null);
+  assert.equal(P.state.draw, null);
+  pcb.onPointerDown(ev(), [30, 30], ctx); pcb.onPointerDown(ev(), [40, 30], ctx); pcb.onPointerDown(ev(), [40, 40], ctx);
+  assert.equal(pcb.onKey("Enter", ev(), ctx), true);
+  c = log.commits.at(-1); assert.equal(K.ptsOf(K.kid(K.parse(c.changes[0].sexpr), "gr_poly")).length, 3, "Enter closes too");
+  const n = log.commits.length;
+  pcb.onPointerDown(ev(), [50, 50], ctx); pcb.onPointerDown(ev(), [60, 50], ctx); assert.equal(pcb.onKey("Enter", ev(), ctx), true);
+  assert.equal(log.commits.length, n); assert.ok(log.toasts.at(-1).includes("three corners")); assert.equal(P.state.draw, null);
+});
+
+test("module: the delete tool removes tracks, graphics and footprints under the click and stays armed", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  assert.ok(pcb.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "KiCad's delete cursor");
+  ctx.setTool("delete"); assert.equal(P.state.modTool, "delete");
+  pcb.onPointerMove(ev(), [112, 50.05], ctx); assert.equal(P.state.hover.del.id, "s-1", "hover shows what the click removes");
+  assert.equal(pcb.onPointerDown(ev(), [112, 50.05], ctx), true);
+  let c = log.commits.at(-1); assert.equal(c.label, "delete"); assert.deepEqual(c.changes.map((x) => [x.kind, x.id, x.typeName]), [["REMOVED", "s-1", "PCB_TRACK"]]);
+  assert.equal(doc.items.has("s-1"), false);
+  pcb.onPointerDown(ev(), [120, 40.02], ctx); assert.equal(log.commits.at(-1).changes[0].id, "g-1");
+  ctx.selected = { id: "fp-1" }; let cleared = false; ctx.setSelected = (sel) => { cleared = sel === null; };
+  pcb.onPointerDown(ev(), [100, 50], ctx);                                   // the footprint body, through K.hitTest
+  c = log.commits.at(-1); assert.deepEqual(c.changes.map((x) => [x.kind, x.id, x.typeName]), [["REMOVED", "fp-1", "FOOTPRINT"]]); assert.ok(cleared, "app.js's selection is dropped with the item");
+  assert.equal(doc.items.has("fp-1"), false);
+  const n = log.commits.length; assert.equal(pcb.onPointerDown(ev(), [200, 200], ctx), true, "an empty click is still the tool's"); assert.equal(log.commits.length, n);
+  assert.equal(log.tool, "delete");
+});
+
+// ---- render options (kicad-canvas.js), driven with a recording 2D-context stub like render.test.js
+function stubCtx(w, h) {
+  const calls = {}, alphas = new Set(); const rec = (n) => { calls[n] = (calls[n] || 0) + 1; };
+  const c = { canvas: { width: w, height: h }, calls, alphas, font: "", textAlign: "", textBaseline: "", fillStyle: "", strokeStyle: "", lineWidth: 1, lineCap: "", lineJoin: "" };
+  let alpha = 1; Object.defineProperty(c, "globalAlpha", { configurable: true, get: () => alpha, set: (v) => { alpha = v; alphas.add(+v.toFixed(3)); } });
+  for (const n of ["setTransform", "fillRect", "strokeRect", "beginPath", "moveTo", "lineTo", "closePath", "arc", "rect", "fill", "stroke", "save", "restore", "translate", "rotate", "scale", "fillText", "strokeText", "setLineDash"]) c[n] = () => rec(n);
+  c.measureText = (t) => ({ width: t.length * 0.7 });
+  return c;
+}
+const ZONED = FIXTURE.replace(/\)\s*$/, "") + ' (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z-1") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))'
+  + ' (polygon (pts (xy 90 60) (xy 120 60) (xy 120 80) (xy 90 80))) (filled_polygon (layer "F.Cu") (pts (xy 91 61) (xy 119 61) (xy 119 79) (xy 91 79)))))';
+const VIEW = { ppm: 8, zoom: 1, panX: 0, panY: 0, x0: 85, y0: 35, dpr: 1 };
+const renderWith = (doc, opts) => { const c = stubCtx(800, 600); K.render(doc, c, VIEW, opts); return c; };
+
+test("render options: geometry carries the tags the sketch modes need", () => {
+  const doc = K.parseDoc(ZONED, "kicad_pcb");
+  assert.ok(doc.items.get("z-1").geom.some((g) => g.zoneFill && g.fill), "zone fill tagged");
+  assert.ok(doc.items.get("z-1").geom.some((g) => !g.zoneFill && g.t === "poly" && !g.fill), "…its outline is not");
+  assert.ok(doc.items.get("v-1").geom.every((g) => g.via) && doc.items.get("v-1").geom.length === 3);
+  assert.ok(doc.items.get("s-1").geom[0].track && doc.items.get("a-1").geom[0].track && doc.items.get("a-1").geom[0].t === "arc");
+  const pads = doc.items.get("fp-1").geom.filter((g) => g.pad); assert.equal(pads.length, 6, "two pads on F.Cu/F.Mask/F.Paste");
+  assert.ok(!doc.items.get("fp-1").geom.some((g) => g.t === "line" && g.pad), "footprint drawings are not pads");
+  assert.ok(!doc.items.get("g-1").geom[0].track && !doc.items.get("g-1").geom[0].pad);
+});
+
+test("render options: zoneOutline drops the copper fill, the outline hatch stays", () => {
+  const doc = K.parseDoc(ZONED, "kicad_pcb");
+  const plain = renderWith(doc, {}), outline = renderWith(doc, { zoneOutline: true });
+  assert.equal(plain.calls.fill - outline.calls.fill, 1, "exactly the filled polygon is skipped");
+  assert.equal(plain.calls.stroke, outline.calls.stroke, "outline and hatch ticks still stroked");
+});
+
+test("render options: outlinePads / outlineTracks / outlineVias stroke instead of fill", () => {
+  const doc = K.parseDoc(ZONED, "kicad_pcb");
+  const plain = renderWith(doc, {});
+  const pads = renderWith(doc, { outlinePads: true });
+  assert.equal(plain.calls.fill - pads.calls.fill, 6, "six pad shapes no longer filled"); assert.equal(pads.calls.stroke - plain.calls.stroke, 6, "…but stroked");
+  const vias = renderWith(doc, { outlineVias: true });
+  assert.equal(plain.calls.fill - vias.calls.fill, 3, "two copper rings and the hole become outlines"); assert.equal(vias.calls.stroke - plain.calls.stroke, 3);
+  const tracks = renderWith(doc, { outlineTracks: true });
+  assert.equal(tracks.calls.stroke, plain.calls.stroke, "every track still one stroke");
+  assert.ok(tracks.calls.arc - plain.calls.arc >= 2 * 4 + 3, "stadium end caps and arc band caps are traced");
+  assert.equal(tracks.calls.fill, plain.calls.fill, "tracks were never filled");
+  const all = renderWith(doc, { outlinePads: true, outlineTracks: true, outlineVias: true });
+  assert.equal(plain.calls.fill - all.calls.fill, 9);
+  const sch = K.parseDoc('(kicad_sch (version 20250114) (generator "t") (paper "A4") (junction (at 2 2) (diameter 0) (color 0 0 0 0) (uuid "j")))');
+  const sview = { ppm: 2, zoom: 1, panX: 0, panY: 0, x0: 0, y0: 0, dpr: 1 };
+  const a = stubCtx(600, 400); K.render(sch, a, sview, {}); const b = stubCtx(600, 400); K.render(sch, b, sview, { outlinePads: true, outlineVias: true, outlineTracks: true, zoneOutline: true, highContrast: true, activeLayer: "F.Cu" });
+  assert.deepEqual(b.calls, a.calls, "board options are ignored on a schematic");
+});
+
+test("render options: highContrast dims everything off the active layer, holes stay", () => {
+  const doc = K.parseDoc(ZONED, "kicad_pcb");
+  const plain = renderWith(doc, {});
+  assert.ok(!plain.alphas.has(0.2), "nothing dimmed by default");
+  const hc = renderWith(doc, { highContrast: true, activeLayer: "B.Cu" });
+  assert.ok(hc.alphas.has(0.2) && hc.alphas.has(1), "inactive layers at 0.2 alpha, B.Cu at full");
+  assert.equal(hc.calls.fill, plain.calls.fill, "dimming does not drop anything");
+  const only = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) (via (at 100 50) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 0) (uuid "v")))', "kicad_pcb");
+  const alphas = []; const c = stubCtx(800, 600); Object.defineProperty(c, "globalAlpha", { set: (v) => alphas.push(+v.toFixed(3)), get: () => 1 });
+  K.render(only, c, VIEW, { highContrast: true, activeLayer: "F.Cu" });
+  assert.deepEqual(alphas.filter((v) => v !== 1).length, 1, "only the B.Cu ring is dimmed: the F.Cu ring and the hole are drawn at full alpha");
+  const off = renderWith(doc, { highContrast: true });
+  assert.ok(!off.alphas.has(0.2), "no active layer: nothing to contrast against");
+});
+
 test("sample board: rotate/flip invariants hold for every footprint, tracks snap and chain", { skip: !fs.existsSync(SAMPLE) && "sample board not present" }, () => {
   const doc = K.parseDoc(fs.readFileSync(SAMPLE, "utf8"), "kicad_pcb");
   assert.equal(P.netStyle(doc), "name");
