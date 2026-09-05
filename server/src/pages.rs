@@ -117,7 +117,8 @@ fn asset_version() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
-        let all = [include_str!("../static/app.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js")];
+        let all = [include_str!("../static/app.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
+                   include_str!("../static/kicad-ui.js"), include_str!("../static/kicad-ui-spec.js"), include_str!("../static/app.html")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
@@ -134,7 +135,9 @@ pub async fn app_page() -> Html<String> {
             .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\""))
             .replace("/static/sch-tools.js\"", &format!("/static/sch-tools.js?v={v}\""))
             .replace("/static/pcb-tools.js\"", &format!("/static/pcb-tools.js?v={v}\""))
-            .replace("/static/props.js\"", &format!("/static/props.js?v={v}\"")),
+            .replace("/static/props.js\"", &format!("/static/props.js?v={v}\""))
+            .replace("/static/kicad-ui.js\"", &format!("/static/kicad-ui.js?v={v}\""))
+            .replace("/static/kicad-ui-spec.js\"", &format!("/static/kicad-ui-spec.js?v={v}\"")),
     )
 }
 
@@ -153,6 +156,8 @@ fn js_response(body: &'static str) -> Response {
 pub async fn sch_tools_js() -> Response { js_response(include_str!("../static/sch-tools.js")) }
 pub async fn pcb_tools_js() -> Response { js_response(include_str!("../static/pcb-tools.js")) }
 pub async fn props_js() -> Response { js_response(include_str!("../static/props.js")) }
+pub async fn kicad_ui_js() -> Response { js_response(include_str!("../static/kicad-ui.js")) }
+pub async fn kicad_ui_spec_js() -> Response { js_response(include_str!("../static/kicad-ui-spec.js")) }
 
 pub async fn app_js() -> Response {
     (

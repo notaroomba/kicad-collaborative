@@ -64,7 +64,7 @@
   svg.glyph { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7;
               stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
-  #app { display: grid; grid-template-rows: 32px 1fr 24px; height: 100%; }
+  #app { display: grid; grid-template-rows: 32px 1fr 24px; grid-template-columns: minmax(0, 1fr); height: 100%; }
 
   /* ---- menubar (the project manager's bar) ---- */
   #menubar { display: flex; align-items: center; gap: 2px; padding: 0 8px; background: var(--bench);
@@ -150,119 +150,150 @@
   .row input { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
                padding: 7px 10px; color: var(--ink); font: 12.5px var(--mono); }
 
-  /* ---- editor ---- */
-  #editor { grid-template-columns: 40px 1fr 300px; grid-template-rows: 34px 1fr; }
-  #toolbar { grid-column: 1 / 4; display: flex; align-items: center; gap: 4px; padding: 0 8px;
-             background: var(--bench); border-bottom: 1px solid var(--line); }
-  #toolbar .name { font-weight: 600; margin-right: 8px; }
-  #toolbar .tsep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
-  #hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 11px var(--mono); color: var(--ink-3); }
-  @media (max-width: 1250px) { #hint { display: none; } }
-  .tb { background: none; border: 1px solid transparent; border-radius: 3px; padding: 3px 6px; color: var(--ink);
-        display: inline-flex; align-items: center; gap: 6px; height: 26px; }
-  .tb:hover { background: var(--paper); border-color: var(--line); }
-  .tb.on { background: var(--paper); border-color: var(--blue); color: var(--blue); }
-  .tb svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
-            stroke-linecap: round; stroke-linejoin: round; }
-  #ltools { background: var(--bench); border-right: 1px solid var(--line); display: flex;
-            flex-direction: column; align-items: center; padding-top: 6px; gap: 4px; }
-  #ltools .tb { width: 30px; height: 30px; padding: 0; justify-content: center; }
-  #stage { position: relative; background: var(--canvas); overflow: hidden; touch-action: none;
-           cursor: crosshair; }
+
+  /* ---- editor: the desktop's frame (toolbars from kicad-ui-spec.js, docked panes, status bar) ---- */
+  #editor { grid-template-rows: auto auto 1fr; grid-template-columns: 1fr; }
+  .ktb { display: flex; align-items: center; gap: 1px; padding: 2px 4px; background: var(--bench); border-bottom: 1px solid var(--line); min-height: 34px; flex-wrap: wrap; }
+  .ktb.ktb-v { flex-direction: column; border-bottom: 0; padding: 4px 2px; min-height: 0; width: 34px; overflow: visible; }
+  #tbLeft { border-right: 1px solid var(--line); }
+  #tbRight { border-left: 1px solid var(--line); }
+  #tbAux { min-height: 30px; }
+  #tbAux[hidden] { display: none; }
+  .kb { position: relative; width: 30px; height: 30px; padding: 2px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--ink);
+        display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .kb:hover { background: var(--paper); border-color: var(--line); }
+  .kb.on { background: color-mix(in srgb, var(--blue) 22%, var(--paper)); border-color: color-mix(in srgb, var(--blue) 60%, var(--line)); box-shadow: inset 0 1px 2px #0002; }
+  .kb.desk { opacity: .38; }
+  .kb.desk:hover { opacity: .7; }
+  .kb:active { transform: translateY(1px); }
+  .kicon { width: 24px; height: 24px; display: block; }
+  .kicon.stroke { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .kicon .dk { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kicon .lt { display: none; } :root:not([data-theme="light"]) .kicon .dk { display: inline; } }
+  :root[data-theme="dark"] .kicon .lt { display: none; } :root[data-theme="dark"] .kicon .dk { display: inline; }
+  .ksep { flex: none; width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
+  .ktb-v .ksep { width: 22px; height: 1px; margin: 3px 0; }
+  .kgroup { position: relative; flex: none; }
+  .karrow { position: absolute; right: 0; bottom: 0; width: 10px; height: 10px; padding: 0; border: 0; background: none; color: var(--ink-2); display: grid; place-items: center; }
+  .karrow svg { width: 7px; height: 7px; }
+  .kpalette { position: fixed; z-index: 70; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: var(--shadow); padding: 4px; min-width: 200px; }
+  .krow { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; border-radius: 2px; padding: 4px 8px; color: var(--ink); text-align: left; }
+  .krow:hover { background: var(--blue); color: #fff; }
+  .krow.cur { box-shadow: inset 2px 0 0 var(--copper); }
+  .krow.desk { opacity: .45; }
+  .krow span { flex: 1; }
+  .krow kbd { font: 11px var(--mono); color: var(--ink-3); } .krow:hover kbd { color: #fff; }
+  .kctl { display: inline-flex; align-items: center; gap: 4px; margin: 0 3px; flex: none; }
+  .ksel { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; height: 24px; font-size: 12px; color: var(--ink); max-width: 170px; }
+  .kcheck { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+  #editorBody { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; min-height: 0; min-width: 0; }
+  #dockL { grid-column: 1; } #tbLeft { grid-column: 2; } #stage { grid-column: 3; } #tbRight { grid-column: 4; } #dockR { grid-column: 5; }
+  #editor, #tbTop, #tbAux { min-width: 0; }
+  .kdock { width: 300px; background: var(--bench); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .kdock[hidden] { display: none; }
+  #dockL { border-right: 1px solid var(--line); }
+  #dockR { border-left: 1px solid var(--line); }
+  .kpane { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--line); flex: 1 1 0; }
+  .kpane[hidden] { display: none; }
+  .kpane[data-pane="props"] { flex: 2 1 0; } .kpane[data-pane="filter"] { flex: 0 0 auto; } .kpane[data-pane="history"] { flex: 1.4 1 0; }
+  .kpane > header { display: flex; align-items: center; height: 22px; padding: 0 6px; font-size: 12px; font-weight: 600; color: var(--ink);
+                    background: linear-gradient(var(--paper), var(--bench)); border-bottom: 1px solid var(--line); user-select: none; flex: none; }
+  .kpane > header .kx { margin-left: auto; width: 16px; height: 16px; border: 0; background: none; color: var(--ink-2); font: 14px/1 var(--font); padding: 0; border-radius: 2px; }
+  .kpane > header .kx:hover { background: var(--copper); color: #fff; }
+  .kbody { overflow: auto; padding: 6px 8px; min-height: 0; flex: 1 1 auto; background: var(--paper); font-size: 12px; }
+  .kbody h3 { font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-3); margin: 8px 0 6px; }
+  .kbtns { display: flex; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--bench); flex: none; }
+  .kbtn { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 3px 10px; color: var(--ink); font-size: 12px; }
+  .kbtn:hover { border-color: var(--ink-3); } .kbtn:disabled { opacity: .45; }
+  .kbtn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
+  .ktable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .ktable th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 3px 6px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; }
+  .ktable td { padding: 3px 6px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+  .ktable tr.sel td { background: color-mix(in srgb, var(--blue) 25%, var(--paper)); }
+  .ktable tr:hover td { background: color-mix(in srgb, var(--blue) 12%, var(--paper)); cursor: default; }
+  .ktree .node { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 2px; cursor: pointer; white-space: nowrap; }
+  .ktree .node:hover { background: var(--panel); }
+  .ktree .node.cur { background: color-mix(in srgb, var(--blue) 25%, var(--paper)); }
+  .ktree .node .kicon { width: 16px; height: 16px; }
+  .kfilter .kcb { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .kfilter .kcb input { margin: 0; accent-color: var(--blue); }
+  .kfilter .kfgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; margin: 2px 0 4px 14px; }
+  .kfilter .locked { color: var(--ink-3); }
+  .ktabs { display: flex; border-bottom: 1px solid var(--line); margin: -6px -8px 6px; background: var(--bench); }
+  .ktabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; padding: 4px 0; font-size: 12px; color: var(--ink-2); }
+  .ktabs button.on { color: var(--ink); border-bottom-color: var(--copper); background: var(--paper); }
+  #stage { position: relative; background: var(--canvas); overflow: hidden; touch-action: none; cursor: crosshair; min-width: 0; }
+  #stage.pan { cursor: grab; } #stage.comment { cursor: cell; } #stage.zoomtool { cursor: zoom-in; } #stage.measure { cursor: crosshair; }
   #canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
-  #world { pointer-events: none; }
-  #gridSel { max-width: 92px; }
-  #stage.pan { cursor: grab; }
-  #stage.comment { cursor: cell; }
-  #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; }
+  #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; pointer-events: none; }
   #world svg#base { display: block; width: 100%; height: auto; }
   #overlay { position: absolute; inset: 0; pointer-events: none; }
-  #cmtPanel { position: absolute; display: none; background: var(--panel); border: 1px solid var(--line);
-              border-radius: 4px; padding: 10px 12px; min-width: 260px; max-width: 340px;
+  #crosshair { position: absolute; inset: 0; pointer-events: none; display: none; }
+  #crosshair.on { display: block; }
+  #cmtPanel { position: absolute; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 260px; max-width: 340px;
               box-shadow: var(--shadow); font-size: 12px; z-index: 5; }
   #cmtPanel .meta { color: var(--ink-3); font: 11px var(--mono); }
   #cmtPanel .cbody { margin: 2px 0 8px; white-space: pre-wrap; }
-  #cmtPanel textarea { width: 100%; background: var(--paper); border: 1px solid var(--line);
-                       border-radius: 3px; color: var(--ink); padding: 6px; }
+  #cmtPanel textarea { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px; }
   #cmtPanel p { margin: 8px 0 0; display: flex; gap: 6px; }
-  #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel);
-                   border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; display: none;
-                   box-shadow: var(--shadow); }
-  #dock { background: var(--bench); border-left: 1px solid var(--line); display: grid;
-          grid-template-rows: 30px 1fr; min-height: 0; }
-  #dockTabs { display: flex; border-bottom: 1px solid var(--line); }
-  #dockTabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
-                     color: var(--ink-2); padding: 0; font-size: 11px; white-space: nowrap; overflow: hidden; }
-  #dockTabs button.active { color: var(--ink); border-bottom-color: var(--copper); }
-  #dockTabs button .n { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 4px;
-                        border-radius: 2px; background: var(--paper); border: 1px solid var(--line);
-                        font: 10px var(--mono); }
-  .pane { display: none; overflow: auto; padding: 10px; min-height: 0; background: var(--paper); }
-  .pane.active { display: block; }
-  .pane h3 { font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--ink-3);
-             margin: 8px 0 8px; }
-  .layer { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 2px; }
+  #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; display: none; box-shadow: var(--shadow); }
+  #docSel { display: none !important; }
+  .layer { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 2px; }
   .layer:hover { background: var(--panel); }
-  .layer .sw { width: 14px; height: 14px; border-radius: 2px; border: 1px solid #0006; }
+  .layer .sw { width: 14px; height: 14px; border-radius: 2px; border: 1px solid #0006; flex: none; }
   .layer input { margin: 0; accent-color: var(--blue); }
   .layer .cnt { margin-left: auto; color: var(--ink-3); font: 11px var(--mono); }
   .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; }
   .kv label { color: var(--ink-2); }
-  .kv input { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px;
-              color: var(--ink); font-family: var(--mono); width: 100%; }
+  .kv input { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; color: var(--ink); font-family: var(--mono); width: 100%; }
   .kv .ro { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .peer { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 2px; }
+  .peer { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 2px; }
   .peer:hover { background: var(--panel); }
   .peer .dot { width: 10px; height: 10px; border-radius: 50%; }
   .peer .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .peer .me { color: var(--ink-3); font: 11px var(--mono); }
-  .thread { padding: 8px; border-radius: 3px; border: 1px solid var(--line); margin-bottom: 8px; cursor: pointer;
-            background: var(--panel); }
+  .thread { padding: 8px; border-radius: 3px; border: 1px solid var(--line); margin-bottom: 8px; cursor: pointer; background: var(--panel); }
   .thread:hover { border-color: var(--blue); }
   .thread.resolved { opacity: .55; }
   .thread .meta { color: var(--ink-3); font: 11px var(--mono); display: flex; justify-content: space-between; }
   .thread .body { margin-top: 3px; white-space: pre-wrap; }
-  .ckpt { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 2px; }
-  .ckpt:hover { background: var(--panel); }
-  .ckpt .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ckpt .when { color: var(--ink-3); font: 11px var(--mono); }
   .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
   .muted { color: var(--ink-2); }
   .note { color: var(--ink-2); font-size: 12px; margin: 6px 0; }
+  #homeMenus, #kmenus { display: flex; gap: 2px; }
+  body[data-editor] #homeMenus { display: none !important; }
+  body:not([data-editor]) #kmenus { display: none !important; }
+  .menu .sub { position: relative; }
+  .menu .sub > .dd { display: none; left: 100%; top: -4px; }
+  .menu .sub:hover > .dd { display: block; }
+  .dd button.desk { opacity: .5; }
 
-  /* ---- status bar (X/Y readouts like the editors) ---- */
-  #statusbar { display: flex; align-items: center; gap: 16px; padding: 0 10px; background: var(--bench);
-               border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--ink-2);
+  /* ---- status bar: the editors' fields (Z, X/Y, dx/dy, grid, units) ---- */
+  #statusbar { display: flex; align-items: stretch; gap: 0; padding: 0; background: var(--bench); border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--ink-2);
                font-variant-numeric: tabular-nums; }
-  #statusbar .conn::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-                             background: var(--ink-3); margin-right: 6px; }
+  #statusbar .sbcell { display: flex; align-items: center; padding: 0 10px; border-left: 1px solid var(--line); white-space: nowrap; }
+  #statusbar .sbmsg { flex: 1; display: flex; align-items: center; padding: 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font); }
+  #statusbar .conn::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); margin-right: 6px; }
   #statusbar .conn.live::before { background: var(--wire); }
   #statusbar .conn.err::before { background: var(--err); }
   #statusbar .spacer { flex: 1; }
 
   /* ---- toast & popover ---- */
-  #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: var(--ink);
-           color: var(--paper); border-radius: 3px; padding: 8px 14px; opacity: 0;
+  #toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: var(--ink); color: var(--paper); border-radius: 3px; padding: 8px 14px; opacity: 0;
            transition: opacity .2s; pointer-events: none; z-index: 100; }
   #toast.show { opacity: 1; }
-  #popover { position: fixed; display: none; background: var(--panel); border: 1px solid var(--line);
-             border-radius: 4px; padding: 12px 14px; min-width: 320px; box-shadow: var(--shadow);
-             z-index: 60; }
+  #popover { position: fixed; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px 14px; min-width: 320px; box-shadow: var(--shadow); z-index: 60; }
   #popover h4 { margin: 0 0 8px; font-size: 13px; }
-  #popover input { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: 3px;
-                   padding: 6px 8px; color: var(--ink); font-family: var(--mono); font-size: 12px; }
-  @media (max-width: 900px) {
-    #editor { grid-template-columns: 40px 1fr; }
-    #dock { display: none; }
-    #home { grid-template-columns: 1fr; }
-    #home nav { display: none; }
-  }
+  #popover input { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; color: var(--ink); font-family: var(--mono); font-size: 12px; }
+  @media (max-width: 1100px) { .kdock { width: 240px; } }
+  @media (max-width: 900px) { #dockL, #dockR { display: none !important; } #home { grid-template-columns: 1fr; } #home nav { display: none; } }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="menubar">
     <div class="brand"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>KiCad Collaborative <span class="ver">1.0.3</span></div>
+    <div id="homeMenus">
     <div class="menu" data-menu="file"><button>File</button>
       <div class="dd">
         <button data-act="home">Home</button>
@@ -296,6 +327,11 @@
         <button data-act="about">About</button>
       </div>
     </div>
+    </div>
+    <div id="kmenus"></div>
+    <span class="name" id="projName" style="margin-left:14px;font-weight:600"></span>
+    <span class="pill" id="roleChip" style="margin-left:6px"></span>
+    <select id="docSel"></select>
     <div class="spacer"></div>
     <div class="user" id="userBox"><a class="btn sm" id="signinBtn" href="/auth/github/login">Sign in with GitHub</a></div>
   </div>
@@ -312,68 +348,61 @@
     <main id="homeMain"></main>
   </section>
 
-  <!-- ===== Editor ===== -->
+  <!-- ===== Editor: KiCad's frame ===== -->
   <section id="editor" class="view">
-    <div id="toolbar">
-      <button class="tb" data-act="home" title="Back to projects"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
-      <span class="name" id="projName">Project</span>
-      <span class="pill" id="roleChip">viewer</span>
-      <select id="docSel" class="tb" style="display:none;background:var(--panel-2);border-color:var(--line);max-width:260px" title="Board or schematic sheet"></select>
-      <span class="tsep"></span>
-      <button class="tb" data-act="zoomin" title="Zoom in (+)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5M8 11h6M11 8v6"/></svg></button>
-      <button class="tb" data-act="zoomout" title="Zoom out (−)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5M8 11h6"/></svg></button>
-      <button class="tb" data-act="fit" title="Zoom to fit (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-      <span class="tsep"></span>
-      <button class="tb" data-act="share" title="Copy share link"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/></svg> Share</button>
-      <span class="tsep"></span>
-      <button class="tb on" data-act="grid" title="Show grid (G)"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 12h16M12 4v16"/></svg></button>
-      <button class="tb on" data-act="snap" title="Snap to grid (N)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg> Snap</button>
-      <select id="gridSel" class="tb" title="Grid pitch" style="background:var(--panel-2);border-color:var(--line)"></select>
-      <button class="tb" data-act="linemode" id="lineModeBtn" title="Wire angle mode: 90° (Shift+Space)" style="display:none;min-width:44px;font:12px var(--mono)">90°</button>
-      <button class="tb" data-act="checkpoint" title="Create a named checkpoint"><svg viewBox="0 0 24 24"><path d="M12 3v12M6 9l6 6 6-6M4 21h16"/></svg> Checkpoint</button>
-      <span style="flex:1"></span>
-      <span class="muted" id="hint">scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes</span>
-    </div>
-    <div id="ltools">
-      <button class="tb on" data-tool="select" title="Select / move (S)"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg></button>
-      <button class="tb" data-tool="pan" title="Pan (H)"><svg viewBox="0 0 24 24"><path d="M8 13V6a1.5 1.5 0 013 0v5M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8a5 5 0 01-10 0v-2a1.5 1.5 0 013 0"/></svg></button>
-      <button class="tb" data-tool="comment" title="Add comment (C)"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
-      <button class="tb" data-tool="follow" title="Follow a collaborator"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg></button>
-    </div>
-    <div id="stage">
-      <canvas id="canvas"></canvas>
-      <div id="world">
-        <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
-        <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="ovRoot"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></g></svg>
+    <div id="tbTop" class="ktb"></div>
+    <div id="tbAux" class="ktb" hidden></div>
+    <div id="editorBody">
+      <aside id="dockL" class="kdock">
+        <section class="kpane" data-pane="props"><header>Properties<button class="kx" data-pane-close="props" title="Close">×</button></header>
+          <div class="kbody" id="props"><p class="note">No objects selected</p></div></section>
+        <section class="kpane" data-pane="hier" data-editor="sch"><header>Schematic Hierarchy<button class="kx" data-pane-close="hier" title="Close">×</button></header>
+          <div class="kbody ktree" id="hier"></div></section>
+        <section class="kpane" data-pane="filter"><header>Selection Filter<button class="kx" data-pane-close="filter" title="Close">×</button></header>
+          <div class="kbody kfilter"></div></section>
+        <section class="kpane" data-pane="history"><header>History<button class="kx" data-pane-close="history" title="Close">×</button></header>
+          <div class="kbody" id="history" style="padding:0"></div>
+          <div class="kbtns"><button class="kbtn" data-uiact="save">Checkpoint...</button><button class="kbtn" id="restoreBtn" disabled>Restore</button><button class="kbtn" data-uiact="refreshHistory">Refresh</button></div></section>
+        <section class="kpane" data-pane="peers" data-default="hidden"><header>Collaborators<span class="n" id="peerN" style="margin-left:6px;font-weight:400;color:var(--ink-3)">0</span><button class="kx" data-pane-close="peers" title="Close">×</button></header>
+          <div class="kbody" id="peers"></div></section>
+        <section class="kpane" data-pane="comments" data-default="hidden"><header>Comments<span class="n" id="cmtN" style="margin-left:6px;font-weight:400;color:var(--ink-3)">0</span><button class="kx" data-pane-close="comments" title="Close">×</button></header>
+          <div class="kbody"><div class="actions" style="margin:0 0 8px"><button class="kbtn" data-uiact="collabComment">+ Add comment</button></div><div id="threads"></div></div></section>
+      </aside>
+      <div id="tbLeft" class="ktb ktb-v"></div>
+      <div id="stage">
+        <canvas id="canvas"></canvas>
+        <div id="world">
+          <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
+          <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="ovRoot"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></g></svg>
+        </div>
+        <svg id="crosshair"><line id="chH" x1="0" x2="100%" stroke="var(--silk)" stroke-opacity=".6" stroke-width="1"/><line id="chV" y1="0" y2="100%" stroke="var(--silk)" stroke-opacity=".6" stroke-width="1"/></svg>
+        <div id="cmtPanel"></div>
+        <div id="signinOverlay">Viewing as a guest. <a id="signinLink" href="/auth/github/login">Sign in</a> to edit, comment and see live cursors.</div>
       </div>
-      <div id="cmtPanel"></div>
-      <div id="signinOverlay">Viewing as a guest. <a id="signinLink" href="/auth/github/login">Sign in</a> to edit, comment and see live cursors.</div>
+      <div id="tbRight" class="ktb ktb-v"></div>
+      <aside id="dockR" class="kdock">
+        <section class="kpane" data-pane="appearance"><header>Appearance<button class="kx" data-pane-close="appearance" title="Close">×</button></header>
+          <div class="kbody">
+            <div class="ktabs"><button class="on" data-atab="layers">Layers</button><button data-atab="objects">Objects</button><button data-atab="nets">Nets</button></div>
+            <div id="layers"></div>
+            <div id="objects" hidden></div>
+            <div id="nets" hidden><p class="note">Net colours and highlighting are set in the desktop app.</p></div>
+          </div></section>
+      </aside>
     </div>
-    <aside id="dock">
-      <div id="dockTabs">
-        <button data-tab="appearance" class="active">Layers</button>
-        <button data-tab="props">Props</button>
-        <button data-tab="peers">Peers<span class="n" id="peerN">0</span></button>
-        <button data-tab="comments">Comments<span class="n" id="cmtN">0</span></button>
-        <button data-tab="history">History</button>
-      </div>
-      <div class="pane active" data-pane="appearance"><h3>Layers</h3><div id="layers"></div><h3>Objects</h3><div id="objects"></div></div>
-      <div class="pane" data-pane="props"><div id="props"><p class="note">Select a footprint on the board to see its properties.</p></div></div>
-      <div class="pane" data-pane="peers"><div id="peers"></div></div>
-      <div class="pane" data-pane="comments"><div class="actions"><button class="btn sm" data-tool="comment">+ Add comment</button></div><div id="threads"></div></div>
-      <div class="pane" data-pane="history"><div class="actions"><button class="btn sm" data-act="checkpoint">+ Checkpoint…</button><button class="btn sm" data-act="refreshHistory">Refresh</button></div><div id="history"></div></div>
-    </aside>
   </section>
 
   <div id="statusbar">
-    <span class="conn" id="conn">offline</span>
-    <span id="sbProject"></span>
-    <span class="spacer"></span>
-    <span id="sbGrid"></span>
-    <span id="sbMode"></span>
-    <span id="sbCursor">X 0.000  Y 0.000 mm</span>
-    <span id="sbZoom">100%</span>
-    <span id="sbEdits"></span>
+    <span class="sbmsg" id="sbMsg"></span>
+    <span class="sbcell conn" id="conn">offline</span>
+    <span class="sbcell" id="sbProject"></span>
+    <span class="sbcell" id="sbEdits"></span>
+    <span class="sbcell" id="sbMode"></span>
+    <span class="sbcell" id="sbZoom">Z 1.00</span>
+    <span class="sbcell" id="sbCursor">X 0.0000  Y 0.0000</span>
+    <span class="sbcell" id="sbDelta">dx 0  dy 0  dist 0</span>
+    <span class="sbcell" id="sbGrid">grid 1.27 mm</span>
+    <span class="sbcell" id="sbUnits">mm</span>
   </div>
 </div>
 <div id="toast"></div>
@@ -382,6 +411,8 @@
 <script src="/static/sch-tools.js"></script>
 <script src="/static/pcb-tools.js"></script>
 <script src="/static/props.js"></script>
+<script src="/static/kicad-ui-spec.js"></script>
+<script src="/static/kicad-ui.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
