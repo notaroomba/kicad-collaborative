@@ -42,7 +42,7 @@ public:
 
     DIALOG_COLLAB_SYNC( wxWindow* aParent, const wxString& aProjectName,
                         const wxString& aOnlineName, const wxString& aServer,
-                        const wxString& aRole, bool aOwner, bool aOnlineReachable,
+                        const wxString& aRole, bool aOwner, bool aOnlineReachable, bool aSignedIn,
                         const wxString& aLocalPath );
 
     CHOICE GetChoice() const;

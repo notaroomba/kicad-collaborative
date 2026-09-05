@@ -178,14 +178,39 @@ wxString COLLAB_AUTH::StoredToken( const wxString& aServerUrl )
 
     SECURE_TOKEN_STORE store;
 
+    auto usable = []( const OAUTH_TOKEN_SET& aTokens )
+    {
+        // Leave ~1 day of slack so we don't hand out a token that dies mid-session.
+        return aTokens.expires_at == 0
+               || aTokens.expires_at > wxDateTime::Now().GetTicks() + 24 * 3600;
+    };
+
     if( std::optional<OAUTH_TOKEN_SET> tokens =
                 store.LoadTokens( ProviderId(), accountIdFor( aServerUrl ) ) )
     {
-        // Leave ~1 day of slack so we don't hand out a token that dies mid-session.
-        if( tokens->expires_at == 0
-            || tokens->expires_at > wxDateTime::Now().GetTicks() + 24 * 3600 )
-        {
+        if( usable( *tokens ) )
             return tokens->access_token;
+    }
+
+    // The default server moved from its Railway host to kicad.notaroomba.dev —
+    // same backend, same tokens.  A sign-in stored under the old host is adopted
+    // under the new one so an update does not look like a sign-out.
+    static const wxString legacyHosts[] = {
+        wxS( "https://kicad-collab-production.up.railway.app" ),
+    };
+
+    if( accountIdFor( aServerUrl ) == wxS( "kicad.notaroomba.dev" ) )
+    {
+        for( const wxString& legacy : legacyHosts )
+        {
+            std::optional<OAUTH_TOKEN_SET> tokens =
+                    store.LoadTokens( ProviderId(), accountIdFor( legacy ) );
+
+            if( tokens && usable( *tokens ) )
+            {
+                store.StoreTokens( ProviderId(), accountIdFor( aServerUrl ), *tokens );
+                return tokens->access_token;
+            }
         }
     }
 

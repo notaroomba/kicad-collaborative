@@ -27,7 +27,8 @@
 DIALOG_COLLAB_SYNC::DIALOG_COLLAB_SYNC( wxWindow* aParent, const wxString& aProjectName,
                                         const wxString& aOnlineName, const wxString& aServer,
                                         const wxString& aRole, bool aOwner,
-                                        bool aOnlineReachable, const wxString& aLocalPath ) :
+                                        bool aOnlineReachable, bool aSignedIn,
+                                        const wxString& aLocalPath ) :
         DIALOG_SHIM( aParent, wxID_ANY, _( "Online Sync" ), wxDefaultPosition, wxDefaultSize,
                      wxDEFAULT_DIALOG_STYLE )
 {
@@ -38,8 +39,18 @@ DIALOG_COLLAB_SYNC::DIALOG_COLLAB_SYNC( wxWindow* aParent, const wxString& aProj
                                            "Local copy: %s" ),
                                         aProjectName, aOnlineName, aServer, aRole, aLocalPath );
 
-    if( !aOnlineReachable )
-        status += _( "\n\nThe online project could not be reached right now." );
+    if( !aSignedIn )
+    {
+        status += wxString::Format( _( "\n\nYou are not signed in to %s on this computer, so the "
+                                       "online project could not be checked.  Sign in from "
+                                       "File > Sign In to Collaboration." ),
+                                    aServer );
+    }
+    else if( !aOnlineReachable )
+    {
+        status += _( "\n\nThe online project could not be reached right now (no connection, "
+                     "or your access to it was removed)." );
+    }
 
     mainSizer->Add( new wxStaticText( this, wxID_ANY, status ), 0, wxALL | wxEXPAND, 10 );
 
