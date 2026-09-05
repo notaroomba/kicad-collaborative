@@ -87,6 +87,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let writer = tokio::spawn(async move {
         let mut ping = tokio::time::interval(PING_INTERVAL);
+        // The first tick fires immediately; a ping before the client's hello
+        // makes the browser answer with a pong that would be read as the hello.
+        ping.tick().await;
         ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
@@ -106,13 +109,19 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     });
 
     // --- Handshake ---
-    let hello = tokio::time::timeout(HELLO_TIMEOUT, ws_rx.next())
-        .await
-        .map_err(|_| anyhow::anyhow!("hello timeout"))?
-        .ok_or_else(|| anyhow::anyhow!("closed before hello"))??;
-    let hello_text = match hello.to_text() {
-        Ok(t) => t.to_string(),
-        Err(_) => anyhow::bail!("first frame was not text"),
+    // The hello is the first TEXT frame; control frames (a pong to our ping,
+    // a stray ping) may legitimately arrive ahead of it and must be skipped.
+    let hello_text = loop {
+        let frame = tokio::time::timeout(HELLO_TIMEOUT, ws_rx.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("hello timeout"))?
+            .ok_or_else(|| anyhow::anyhow!("closed before hello"))??;
+        match frame {
+            Message::Text(t) => break t.to_string(),
+            Message::Ping(_) | Message::Pong(_) => continue,
+            Message::Close(_) => anyhow::bail!("closed before hello"),
+            _ => anyhow::bail!("first frame was not text"),
+        }
     };
     let hello: ClientMsg = match serde_json::from_str(&hello_text) {
         Ok(m) => m,
