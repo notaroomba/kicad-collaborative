@@ -1507,10 +1507,11 @@ function wireEndsAt(doc, x, y, tol) {
   return out;
 }
 /** Screen-space quads of an item's field texts (symbol / footprint properties): [{name, pts:[[x,y]×4], geom}] */
-function fieldBoxes(item) {
+function fieldBoxes(item, hidden) {
   const out = [];
   for (const g of item.geom || []) {
     if (g.t !== "text" || !g.field) continue;
+    if (hidden && g.layer && hidden.has(g.layer)) continue;             // a field on a hidden layer is not on screen
     const w = textWidth(g.text || "", g.size, g.w), h = g.size, pad = 0.18 * g.size;
     const lx0 = (g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2) - pad, lx1 = lx0 + w + 2 * pad;
     const ly0 = (g.v === "top" ? 0 : g.v === "bottom" ? -h : -h / 2) - pad, ly1 = ly0 + h + 2 * pad;
@@ -1529,12 +1530,12 @@ function pointInQuad(pts, x, y) {
   return inside;
 }
 /** The field of any symbol / footprint under (x, y) mm, or null: {item, name, pts} */
-function fieldAt(doc, x, y) {
+function fieldAt(doc, x, y, hidden) {
   let best = null;
   for (const it of doc.items.values()) {
     if (it.kind !== "symbol" && it.kind !== "footprint") continue;
     const b = it.bbox; if (b && (x < b[0] - 5 || x > b[2] + 5 || y < b[1] - 5 || y > b[3] + 5)) continue;
-    for (const f of fieldBoxes(it)) if (pointInQuad(f.pts, x, y)) { const area = Math.abs((f.pts[1][0] - f.pts[0][0]) * (f.pts[3][1] - f.pts[0][1]) - (f.pts[3][0] - f.pts[0][0]) * (f.pts[1][1] - f.pts[0][1])); if (!best || area < best.area) best = { item: it, name: f.name, pts: f.pts, area }; }
+    for (const f of fieldBoxes(it, hidden)) if (pointInQuad(f.pts, x, y)) { const area = Math.abs((f.pts[1][0] - f.pts[0][0]) * (f.pts[3][1] - f.pts[0][1]) - (f.pts[3][0] - f.pts[0][0]) * (f.pts[1][1] - f.pts[0][1])); if (!best || area < best.area) best = { item: it, name: f.name, pts: f.pts, area }; }
   }
   return best;
 }
@@ -1561,6 +1562,7 @@ function geomBox(g) {
   case "circle": case "arc": return [g.x - g.r - w, g.y - g.r - w, g.x + g.r + w, g.y + g.r + w];
   case "rect": return [g.x - w, g.y - w, g.x + g.w + w, g.y + g.h + w];
   case "image": return [g.x - g.w / 2, g.y - g.h / 2, g.x + g.w / 2, g.y + g.h / 2];
+  case "pad": { const r = g.rot ? Math.hypot(g.w, g.h) / 2 : 0; return g.rot ? [g.x - r, g.y - r, g.x + r, g.y + r] : [g.x - g.w / 2, g.y - g.h / 2, g.x + g.w / 2, g.y + g.h / 2]; }
   case "text": { const tw = textWidth(g.text || "", g.size || 1, g.w || 0), th = g.size || 1; const r = Math.max(tw, th); return [g.x - r, g.y - r, g.x + r, g.y + r]; }
   default: return null;
   }
@@ -1575,6 +1577,13 @@ function geomHit(g, x, y, tol) {
   case "circle": { const d = Math.hypot(x - g.x, y - g.y); return g.fill ? d <= g.r + tol : Math.abs(d - g.r) <= w; }
   case "arc": { const d = Math.hypot(x - g.x, y - g.y); return Math.abs(d - g.r) <= w; }
   case "rect": return x >= g.x - w && x <= g.x + g.w + w && y >= g.y - w && y <= g.y + g.h + w;
+  case "pad": {   // the pad's own outline in its rotated frame (circles / ovals by radius, everything else by the box)
+    const a = (g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), dx = x - g.x, dy = y - g.y;
+    const lx = dx * c + dy * sn, ly = -dx * sn + dy * c;
+    if (g.shape === "circle") return Math.hypot(lx, ly) <= g.w / 2 + tol;
+    if (g.shape === "oval") { const rr = Math.min(g.w, g.h) / 2; const ex = Math.max(0, Math.abs(lx) - (g.w / 2 - rr)), ey = Math.max(0, Math.abs(ly) - (g.h / 2 - rr)); return Math.hypot(ex, ey) <= rr + tol; }
+    return Math.abs(lx) <= g.w / 2 + tol && Math.abs(ly) <= g.h / 2 + tol;
+  }
   case "image": case "text": { const b = geomBox(g); return !!b && x >= b[0] - tol && x <= b[2] + tol && y >= b[1] - tol && y <= b[3] + tol; }
   default: return false;
   }
@@ -1593,18 +1602,22 @@ function hitTestDetail(doc, x, y, slopMm, opts) {
     if (!it.movable || !it.bbox) continue;
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-    let onGeom = false, hitLayer = null, vis = null;
+    let onGeom = false, hitLayer = null, vis = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
     for (const g of it.geom) {
       if (hidden && g.layer && hidden.has(g.layer)) continue;
       const gb = geomBox(g); if (!gb) continue;
       if (!vis) vis = gb.slice(); else { if (gb[0] < vis[0]) vis[0] = gb[0]; if (gb[1] < vis[1]) vis[1] = gb[1]; if (gb[2] > vis[2]) vis[2] = gb[2]; if (gb[3] > vis[3]) vis[3] = gb[3]; }
-      if (!onGeom && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) { onGeom = true; hitLayer = g.layer || null; }
+      if (g.padText || g.padNum || g.noBox) continue;                       // pad numbers / net names are labels, not selectable geometry
+      if (hitClass > 0 && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) {
+        onGeom = true; const cls = (g.t === "pad" || (g.t !== "text" && /\.Cu$/.test(g.layer || ""))) ? 0 : 1;   // a pad under the cursor beats another part's silkscreen / courtyard / text over it
+        if (cls < hitClass) { hitClass = cls; hitLayer = g.layer || null; }
+      }
     }
     if (!vis) continue;                                                   // nothing of it is visible: not selectable
     if (x < vis[0] - slopMm || x > vis[2] + slopMm || y < vis[1] - slopMm || y > vis[3] + slopMm) continue;
     const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
     const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
-    const score = (onGeom ? 0 : 1e12) + (side && itemSide !== side ? 1e9 : 0) + area;
+    const score = hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;
     if (!best || score < best.score) best = { id: it.id, onGeom, layer: hitLayer, box: vis, score };
   }
   return best;
