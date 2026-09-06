@@ -305,8 +305,8 @@ function renderFacts(el, ctx) {
 }
 
 /** Accumulates rows and their change handlers, then writes the DOM once. */
-function panel(el, ctx, item, appSelected) {
-  const parts = [], handlers = new Map(); let n = 0;
+function panel(el, ctx, item, appSelected, opts) {
+  const parts = [], handlers = new Map(); let n = 0; opts = opts || {};
   const ro = !!ctx.viewOnly;
   const key = (fn) => { const k = "k" + n++; handlers.set(k, fn); return k; };
   const P = {
@@ -348,6 +348,7 @@ function panel(el, ctx, item, appSelected) {
     },
     /** Apply fn to a clone of the node and commit the whole item; fn may return false for "nothing to do". */
     edit(label, fn) {
+      if (opts.stage) { opts.stage(label, fn); return; }   // a dialog stages edits and commits once on OK
       const K = ctx.K; const node = clone(item.node);
       if (fn(node) === false) return;
       const change = K.replaceChange(ctx.doc, Object.assign({}, item, { node, geom: [], bbox: null }));
@@ -375,8 +376,18 @@ function panel(el, ctx, item, appSelected) {
       });
     },
   };
+  if (opts.quiet) return P;
   if (ro) P.raw(`<p class="note">View-only access — properties are read-only.</p>`);
   else if (!ctx.live) P.raw(`<p class="note">Not connected — edits stay local until you rejoin.</p>`);
+  return P;
+}
+/** Render an item's property rows into any element; opts.stage(label, fn) receives edits instead of committing them. */
+function renderInto(el, ctx, item, opts) {
+  const P = panel(el, ctx, item, false, opts);
+  if (ctx.isSch && item.kind === "symbol") renderSymbol(P, item);
+  else if (!ctx.isSch && item.kind === "footprint") renderFootprint(P, item);
+  else renderOther(P, item);
+  P.flush();
   return P;
 }
 
@@ -524,6 +535,6 @@ function renderOther(P, item) {
 }
 
 root.CollabTools = root.CollabTools || {};
-root.CollabTools.props = { render, refresh, inspect, helpers };
+root.CollabTools.props = { render, refresh, inspect, renderInto, helpers, KIND_NAMES };
 if (typeof module !== "undefined" && module.exports) module.exports = root.CollabTools.props;
 })(typeof window !== "undefined" ? window : globalThis);

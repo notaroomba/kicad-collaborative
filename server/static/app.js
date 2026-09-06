@@ -227,7 +227,17 @@ const docNav = { list: [], idx: -1, lock: false };
 // primary footprint/symbol the Properties panel shows.  highlightIds = the net-highlight tool's set.
 let selection = new Set(), selMode = "rect", boxSel = null, highlightIds = null;
 function selectedSet() { const s = new Set(selection); if (selected) s.add(selected.id); return s.size ? s : null; }
-function clearSelection() { selection.clear(); selected = null; if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null); }
+let selField = null, fdrag = null;   // a selected symbol / footprint field {id, name} and its drag {id, name, startMm, orig, moved}
+function clearSelection() { selection.clear(); selected = null; selField = null; if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null); }
+/** World-space delta → the field's own coordinate frame (schematic fields are absolute; footprint fields ride the footprint's rotation/scale). */
+function fieldLocalDelta(item, dx, dy) {
+  if (isSch() || item.kind !== "footprint") return [dx, dy];
+  const [, , frot] = KiCadCanvas.atOf(item.node); const tr = KiCadCanvas.kid(item.node, "transform"), sc = tr && KiCadCanvas.kid(tr, "scale");
+  const sx = sc ? KiCadCanvas.num(sc[1], 1) || 1 : 1, sy = sc ? KiCadCanvas.num(sc[2], 1) || 1 : 1;
+  const r = frot * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+  return [(dx * c - dy * sn) / sx, (dx * sn + dy * c) / sy];
+}
+function fieldOf(item, name) { return window.KDialogs && KDialogs._ ? KDialogs._.fieldNode(item.node, name) : null; }
 // KiCad's selection filter categories for an item kind.
 function filterKey(kind) {
   if (isSch()) return kind === "symbol" ? "symbols" : (kind === "wire" || kind === "bus") ? "wires" : /label|netclass_flag/.test(kind) ? "labels" : kind === "image" ? "images" : (kind === "text" || kind === "text_box") ? "text" : /rectangle|circle|arc|polyline|bezier|rule_area/.test(kind) ? "graphics" : "other";
@@ -249,6 +259,14 @@ function drawCanvas() {
   KiCadCanvas.render(kdoc, cctx, view, Object.assign({ hidden: hiddenLayers, grid: gridOn ? gridPitch : 0, selected: selectedSet(), highlight: highlightIds }, renderOpts));
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
+  if (selField) {
+    const it = kdoc.items.get(selField.id); if (!it) { selField = null; return; }
+    cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
+    const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
+    cctx.fillStyle = "rgba(102,178,255,0.35)"; cctx.strokeStyle = "#4D7FC4"; cctx.lineWidth = 1.5 * px;
+    for (const f of KiCadCanvas.fieldBoxes(it)) { if (f.name !== selField.name) continue; cctx.beginPath(); f.pts.forEach((q, i) => i ? cctx.lineTo(q[0], q[1]) : cctx.moveTo(q[0], q[1])); cctx.closePath(); cctx.fill(); cctx.stroke(); }
+    cctx.restore();
+  }
 }
 function syncItemsFromDoc() {
   if (!kdoc) return;
@@ -689,11 +707,27 @@ function breakFollow() {
 // ---- pointer interaction ----
 stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
 stage.addEventListener("dblclick", (ev) => {
-  if (!isSch() || !sheets.length) return;
-  const [x, y] = worldMm(ev);
-  const sh = sheets.find((r) => x >= r.x / IU && x <= (r.x + r.w) / IU && y >= r.y / IU && y <= (r.y + r.h) / IU);
-  if (sh) enterSheet(sh.file);
+  if (!kdoc || !window.KDialogs || (tool !== "select" && tool !== "highlight")) return;
+  if (ev.target.closest("#cmtPanel") || ev.target.closest("[data-schtools]")) return;
+  const [x, y] = worldMm(ev); const ctx = toolCtx();
+  const f = KiCadCanvas.fieldAt(kdoc, x, y);
+  if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
+  const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
+  if (best) { const it = kdoc.items.get(best.id); if (it) KDialogs.openItem(ctx, it); return; }
+  if (isSch()) { const sh = sheets.find((r) => x >= r.x / IU && x <= (r.x + r.w) / IU && y >= r.y / IU && y <= (r.y + r.h) / IU); if (sh) { const it = kdoc.items.get(sh.id); if (it) { KDialogs.openItem(ctx, it); return; } } }
+  const other = hitAny([x, y]); const it = other && kdoc.items.get(other.id);
+  if (it) KDialogs.openItem(ctx, it);
 });
+/** E: KiCad's "Edit properties" for whatever is selected — a field, the app selection, or a tool module's own selection. */
+function openSelectionProperties() {
+  if (!kdoc || !window.KDialogs) return false;
+  const ctx = toolCtx();
+  if (selField) { const it = kdoc.items.get(selField.id); if (it) { KDialogs.openField(ctx, it, selField.name); return true; } }
+  const modSel = isSch() ? (CollabTools.sch && CollabTools.sch.state && CollabTools.sch.state.sel) : (CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel);
+  const id = selected ? selected.id : modSel;
+  const it = id && kdoc.items.get(id); if (!it) return false;
+  KDialogs.openItem(ctx, it); return true;
+}
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0 || tool !== "select" || !kdoc || selection.size < 2 || viewOnly || ev.shiftKey) return;
   const mm = worldMm(ev); const hit = hitAny(mm);
@@ -714,6 +748,15 @@ stage.addEventListener("pointerdown", (ev) => {
   const [x, y] = worldMm(ev);
   const mod = activeModule();
   if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly && tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
+  if (tool === "select" && kdoc && !ev.shiftKey && window.KDialogs) {   // KiCad: a click on a field selects (and drags) the field, not its symbol
+    const f = KiCadCanvas.fieldAt(kdoc, x, y);
+    if (f) {
+      clearSelection(); selField = { id: f.item.id, name: f.name }; drawSelection(); renderProps(); renderObjects(); requestRender();
+      const pn = fieldOf(f.item, f.name), at = pn && KiCadCanvas.kid(pn, "at");
+      if (at && !viewOnly && ws && ws.readyState === 1) { fdrag = { id: f.item.id, name: f.name, startMm: [x, y], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], moved: false }; stage.setPointerCapture(ev.pointerId); }
+      ev.preventDefault(); return;
+    }
+  }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (!best) {
@@ -748,6 +791,18 @@ stage.addEventListener("pointermove", (ev) => {
   if (pan) { viewTouched = true; panX = ev.clientX - pan.x; panY = ev.clientY - pan.y; breakFollow(); applyView(); return; }
   const modM = activeModule();
   if (modM && moduleTool(tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
+  if (fdrag) {
+    if (!fdrag.moved && Math.hypot(mm[0] - fdrag.startMm[0], mm[1] - fdrag.startMm[1]) > 0.4) fdrag.moved = true;
+    if (fdrag.moved) {
+      const it = kdoc && kdoc.items.get(fdrag.id), pn = it && fieldOf(it, fdrag.name), at = pn && KiCadCanvas.kid(pn, "at");
+      if (at) {
+        const w = snapMm([mm[0] - fdrag.startMm[0], mm[1] - fdrag.startMm[1]]); const [ldx, ldy] = fieldLocalDelta(it, w[0], w[1]);
+        at[1] = +(fdrag.orig[0] + ldx).toFixed(4); at[2] = +(fdrag.orig[1] + ldy).toFixed(4);
+        KiCadCanvas.replaceChange(kdoc, it); requestRender();
+      }
+    }
+    sendPresence(mm); return;
+  }
   if (!drag) { sendPresence(mm); return; }
   if (drag.group) { moveGroupDrag(mm); sendPresence(mm); return; }
   if (drag.engine) {
@@ -783,6 +838,20 @@ stage.addEventListener("pointermove", (ev) => {
 });
 stage.addEventListener("pointerup", (ev) => {
   if (pan) { pan = null; return; }
+  if (fdrag) {
+    const fd = fdrag; fdrag = null;
+    const it = kdoc && kdoc.items.get(fd.id), pn = it && fieldOf(it, fd.name), at = pn && KiCadCanvas.kid(pn, "at");
+    if (fd.moved && at) {
+      const nx = at[1], ny = at[2];
+      at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(kdoc, it);          // original back so commit records the inverse
+      if (nx !== fd.orig[0] || ny !== fd.orig[1]) {
+        const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2, "at"); a2[1] = nx; a2[2] = ny;
+        commitChanges([KiCadCanvas.replaceChange(kdoc, Object.assign({}, it, { node, geom: [], bbox: null }))], "move " + fd.name.toLowerCase());
+      }
+      requestRender();
+    }
+    return;
+  }
   if (zoomRect) { finishZoomRect(ev); return; }
   if (boxSel) { finishBoxSel(ev); return; }
   const modU = activeModule();
@@ -817,7 +886,9 @@ stage.addEventListener("pointerup", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (["TEXTAREA", "INPUT"].includes(ev.target.tagName) || state.view !== "editor") return;
   const k = ev.key;
+  if (window.KDialogs && KDialogs.isOpen()) return;                     // the dialog owns the keyboard
   if (k === "Escape") { if ($("#popover").style.display === "block") { closePopover(); return; }
+    if (selField || fdrag) { selField = null; fdrag = null; requestRender(); }
     if (drag && drag.engine && CollabTools.sch && CollabTools.sch.cancelDrag) { try { CollabTools.sch.cancelDrag(toolCtx()); } catch (e) { console.warn(e); } }
     drag = null; boxSel = null; clearSelection(); if (highlightIds) { highlightIds = null; } dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
   if ((k === "Delete" || k === "Backspace") && selection.size > 1 && !viewOnly) { ev.preventDefault(); deleteSelection(); return; }
@@ -833,6 +904,7 @@ document.addEventListener("keydown", (ev) => {
   const modK = activeModule();
   if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); syncSchModes(); return; } } catch (e) { console.warn(e); } }
   if (k === " " && !ev.shiftKey) { ev.preventDefault(); localOrigin = lastCursorMm.slice(); KUI.status({ dx: 0, dy: 0, polar: polarCoords }); return; }
+  if ((k === "e" || k === "E") && !ev.metaKey && !ev.ctrlKey) { if (openSelectionProperties()) { ev.preventDefault(); return; } }
   if (k === "g" || k === "G") { gridOn = !gridOn; updateGridStatus(); requestRender(); return; }
   if (k === "n" || k === "N") { snapOn = !snapOn; updateGridStatus(); return; }
   if (!selected || viewOnly || !ws || ws.readyState !== 1) return;
@@ -938,7 +1010,7 @@ function drawPeers(peers) {
 function showTab(name) { KUI.showPane(name, true); }
 function renderProps() {
   const el = $("#props");
-  if (kdoc && CollabTools.props && CollabTools.props.render) { try { CollabTools.props.render(el, selected, toolCtx()); return; } catch (e) { console.warn(e); } }
+  if (kdoc && CollabTools.props && CollabTools.props.render) { try { CollabTools.props.render(el, selected || (selField ? { id: selField.id } : null), toolCtx()); return; } catch (e) { console.warn(e); } }
   if (!selected) { el.innerHTML = `<p class="note">Select a footprint on the board to see its properties.</p>`; return; }
   const ro = viewOnly ? "disabled" : "";
   if (isSch()) {

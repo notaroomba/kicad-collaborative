@@ -143,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/pcb-tools.js", get(pages::pcb_tools_js))
         .route("/static/props.js", get(pages::props_js))
         .route("/static/kicad-ui.js", get(pages::kicad_ui_js))
+        .route("/static/kicad-dialogs.js", get(pages::kicad_dialogs_js))
         .route("/static/kicad-ui-spec.js", get(pages::kicad_ui_spec_js))
         .route("/welcome", get(pages::index))
         .route("/api/projects/{id}/info", get(http::project_info))
