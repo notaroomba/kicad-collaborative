@@ -224,14 +224,16 @@ function base64ToBytes(b64) {
 // Directive label (netclass flag) with its Netclass field where SCH_DIRECTIVE_LABEL::AutoplaceFields puts it
 // for the spin style of the angle: symbol size 20 mil + text offset (0.15 × size) beside the pin-length flag.
 const FLAG_LENGTH = 2.54, FLAG_SYMBOL = 0.508, FLAG_MARGIN = r4(0.15 * 1.27);
-function classLabelNode(name, p, rot) {
-  rot = ((Math.round(rot || 0) % 360) + 360) % 360;
+function flagFieldAt(p, rot) {
   const off = rot === 180 ? [FLAG_SYMBOL + FLAG_MARGIN, FLAG_LENGTH] : rot === 90 ? [-FLAG_LENGTH, -(FLAG_SYMBOL + FLAG_MARGIN)]
     : rot === 270 ? [FLAG_LENGTH, -(FLAG_SYMBOL + FLAG_MARGIN)] : [FLAG_SYMBOL + FLAG_MARGIN, -FLAG_LENGTH];
-  const fieldRot = rot === 90 || rot === 270 ? 90 : 0;
+  return ["at", r4(p[0] + off[0]), r4(p[1] + off[1]), rot === 90 || rot === 270 ? 90 : 0];
+}
+function classLabelNode(name, p, rot) {
+  rot = ((Math.round(rot || 0) % 360) + 360) % 360;
   return ["netclass_flag", "", ["length", FLAG_LENGTH], ["shape", "round"], ["at", r4(p[0]), r4(p[1]), rot], ["fields_autoplaced", "yes"],
     ["effects", fontNode(1.27), ["justify", "left", "bottom"]], ["uuid", K.newUuid()],
-    ["property", "Netclass", name, ["at", r4(p[0] + off[0]), r4(p[1] + off[1]), fieldRot], ["effects", fontNode(1.27), ["justify", "left", "bottom"]]]];
+    ["property", "Netclass", name, flagFieldAt(p, rot), ["effects", fontNode(1.27), ["justify", "left", "bottom"]]]];
 }
 const MANDATORY = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
 function symbolNode(doc, libId, p, rot, mirror) {
@@ -506,11 +508,16 @@ function undoLeg(ctx) {
 function finishWire(ctx) {
   const w = S.wire; S.wire = null; if (!w) return;
   const pts = simplify(w.pts);
-  if (pts.length < 2) { ctx.requestRender(); return; }
-  const doc = ctx.doc, changes = [];
-  for (let i = 1; i < pts.length; i++) changes.push(addNode(doc, lineNode(w.kind, pts[i - 1], pts[i])).change);
+  if (pts.length < 2) { S.unfold = null; ctx.requestRender(); return; }
+  const doc = ctx.doc, changes = []; let lastNode = null;
+  for (let i = 1; i < pts.length; i++) { lastNode = lineNode(w.kind, pts[i - 1], pts[i]); changes.push(addNode(doc, lastNode).change); }
   changes.push(...junctionChanges(doc, w.pts, w.kind));
   ctx.commit(changes, w.kind);
+  rememberPlaced(w.kind, lastNode);
+  if (S.unfold) {                              // the unfolded member label rides to the end of the wire (KiCad moves it with the cursor)
+    const u = S.unfold; S.unfold = null; const lb = doc.items.get(u.labelId), last = pts[pts.length - 1];
+    if (lb && !same(atOf(lb.node), last)) { const n = deep(lb.node); setAt(n, last[0], last[1]); ctx.commit([modChange(doc, lb, n)], "unfold bus"); }
+  }
   ctx.requestRender();
 }
 
@@ -538,6 +545,7 @@ function dropCarry(ctx) {
   if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
   else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
   ctx.commit(changes, c.kind === "symbol" ? "place " + (item.ref || "symbol") : c.kind.replace("_", " "));
+  rememberPlaced(item.kind, item.node);
   if (c.kind === "symbol" || c.kind === "sheet") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
   ctx.requestRender();
   return item;
@@ -546,6 +554,7 @@ function dropCarry(ctx) {
 function placeText(ctx, kind, text, p, rot) {
   const doc = ctx.doc; const { item, change } = addNode(doc, labelNode(kind, text, p, rot || 0));
   ctx.commit([change], kind.replace("_", " "));
+  rememberPlaced(item.kind, item.node);
   S.sel = item.id; ctx.setSelected(null); ctx.requestRender();
   return item;
 }
@@ -879,13 +888,19 @@ function mergeAt(doc, p, kind) {
 
 // ---------------------------------------------------------------- edits on the current selection
 function selectedItem(ctx) { const id = ctx.selected ? ctx.selected.id : S.sel; return id ? ctx.doc.items.get(id) || null : null; }
+// op: "ccw" | "cw" | "x" (KiCad's Mirror Vertically, (mirror x)) | "y" (Mirror Horizontally, (mirror y)).
+// One item turns about its own anchor (or, for items without an orientation of their own, about
+// its half-grid box centre); a multi-selection turns as a whole about the selection centre.
 function orientSelected(ctx, op) {
   const c = S.carry;
-  if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok !== false) refreshCarry(ctx); return true; }
-  const it = selectedItem(ctx); if (!it) return false;
+  if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node)); refreshCarry(ctx); return true; }
+  const items = selectedItems(ctx);
+  if (items.length > 1) return transformSelected(ctx, op, items);
+  const it = items[0]; if (!it) return false;
+  if (ctx.viewOnly) return false;
   const node = deep(it.node);
   const ok = op === "x" || op === "y" ? mirrorNode(it.kind, node, op) : rotateNode(it.kind, node, op === "cw");
-  if (ok === false) return false;
+  if (ok === false) { if (!DRAG_KINDS.has(it.kind)) return false; return transformSelected(ctx, op, [it], rotationCentre([it])); }
   ctx.commit([modChange(ctx.doc, it, node)], op === "x" || op === "y" ? "mirror" : "rotate");
   return true;
 }
@@ -1081,6 +1096,7 @@ function promptClassLabel(ctx, mm, client) {
 function placeClassLabel(ctx, name, p, rot) {
   const doc = ctx.doc; const { item, change } = addNode(doc, classLabelNode(name, p, rot || 0));
   ctx.commit([change], "directive label");
+  rememberPlaced(item.kind, item.node);
   S.sel = item.id; ctx.setSelected(null); ctx.requestRender();
   return item;
 }
@@ -1161,6 +1177,7 @@ function placeSheet(ctx, a, b, name, file) {
       const inst = sheetInstance(ctx, doc, nextPage(ctx, doc)); if (inst) node.push(inst);
       const { item, change } = addNode(doc, node);
       ctx.commit([change], "sheet");
+      rememberPlaced(item.kind, item.node);
       ctx.setSelected({ id: item.id });
       return item;
     } catch (e) { ctx.toast("Could not create the sheet: " + ((e && e.message) || e), 4000); return null; }
@@ -1311,6 +1328,7 @@ function finishDraw(ctx) {
 function commitShape(ctx, node, label) {
   const { item, change } = addNode(ctx.doc, node);
   ctx.commit([change], label);
+  rememberPlaced(item.kind, item.node);
   S.sel = item.id; ctx.setSelected(null);
   return item;
 }
@@ -1346,6 +1364,12 @@ function drawOverlay(c, view, ctx) {
   if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
   if (S.highlight && typeof ctx.setHighlight !== "function") {   // app.js paints the highlight when it can; else a plain outline
     for (const id of S.highlight) { const it = doc.items.get(id); if (it) outline(c, it, "#FF40FF", px, 2); }
+  }
+  if (S.markers.length && S.markersDoc === doc && typeof ctx.setMarkers !== "function") {   // ERC markers: KiCad's little arrow, red for errors
+    for (const m of S.markers) {
+      const s = 6 * px; c.save(); c.fillStyle = m.severity === "error" ? "rgba(255,0,0,0.85)" : "rgba(255,180,0,0.9)"; c.strokeStyle = "#000"; c.lineWidth = px;
+      c.beginPath(); c.moveTo(m.x, m.y); c.lineTo(m.x + 1.6 * s, m.y - 0.6 * s); c.lineTo(m.x + 1.1 * s, m.y - 1.1 * s); c.lineTo(m.x + 0.6 * s, m.y - 1.6 * s); c.closePath(); c.fill(); c.stroke(); c.restore();
+    }
   }
   if (S.drag) {
     for (const e of S.drag.items) outline(c, e.item, CLR.sel, px, 2);
@@ -1518,9 +1542,14 @@ function onKey(key, ev, ctx) {
   case "a": case "A": return armTool("place");
   case "r": return orientSelected(ctx, "ccw");
   case "R": return orientSelected(ctx, ev && ev.shiftKey ? "cw" : "ccw");
-  case "x": case "X": return orientSelected(ctx, "x");
-  case "y": case "Y": return orientSelected(ctx, "y");
+  case "x": case "X": return orientSelected(ctx, "y");     // KiCad's X is Mirror Horizontally: (mirror y)
+  case "y": case "Y": return orientSelected(ctx, "x");     // Y is Mirror Vertically: (mirror x)
   case "d": case "D": return duplicateSelected(ctx);
+  case "Insert": return repeatLast(ctx);
+  case "o": case "O": return autoplaceSelection(ctx);
+  case "u": case "U": return editFieldPrompt(ctx, "Reference", "Reference", true);
+  case "v": case "V": return editFieldPrompt(ctx, "Value", "Value", true);
+  case "~": if (!S.highlight) return false; setHighlight(ctx, null); return true;
   case "g": case "G": case "m": case "M": {
     setDragMode(ctx, lower === "m" ? "move" : "drag");
     if (S.drag) return true;                                // switched mid-drag: the preview re-resolved
@@ -1535,10 +1564,1182 @@ function onKey(key, ev, ctx) {
 function onDocChanged(ctx) {
   S.ctx = ctx; installDom(ctx);
   S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null; S.draw = null; S.sheetJob = null; S.imageWait = false;
+  if (S.docRef !== ctx.doc) {                   // a different sheet (app.js also calls this after every commit, same doc): repeat memory, ERC markers and an unfold in progress belong to the old one
+    S.docRef = ctx.doc; S.lastPlaced = null; S.unfold = null;
+    if (S.markersDoc !== ctx.doc) { S.markers = []; S.markersDoc = null; }
+  }
   if (S.highlight) setHighlight(ctx, null);
   closePrompt(); closePicker(); announceModes(ctx);
   S.tool = curTool();
 }
+
+// ================================================================ commands (CollabTools.sch.actions)
+// Everything below is KiCad's non-tool command set: clipboard, select connection, repeat, type
+// conversions, autoplace fields, annotation, ERC, swap / align / move exactly, group rotate and
+// mirror, the symbol fields table and bus unfolding.  app.js binds menus and keys to the `actions`
+// map at the bottom; every run(ctx) returns true when it handled the request.  The pure helpers are
+// exported on `_` for the tests.
+S.markers = [];                    // ERC findings [{ x, y, severity, text, ids, code }] (app.js renders them)
+S.markersDoc = null;
+S.lastPlaced = null;               // { kind, node } of the last item placed, for Insert
+S.repeatOffset = [0, 2.54];        // eeschema's default_repeat_offset (0 mil, 100 mil)
+S.repeatIncrement = 1;             // repeat_label_increment
+S.annotateAuto = false;            // toggleAnnotateAuto: pasted / repeated symbols get the next free number
+S.unfold = null;                   // { labelId } while a bus unfold's wire is being drawn
+S.docRef = null;
+
+// ---------------------------------------------------------------- selection, cursor and clipboard plumbing
+// ctx carries `selection` (Set of ids), `selected` (primary), `setSelection(ids)`, `clipboard` ({ get(), set(text) })
+// and `cursor` (mm); each has a fallback so the module also runs against today's ctx.
+function selectedItems(ctx) {
+  const doc = ctx.doc, out = [], seen = new Set();
+  const take = (id) => { if (!id || seen.has(id)) return; const it = doc.items.get(id); if (it) { seen.add(id); out.push(it); } };
+  // the multi-selection when there is one, else the app's primary item, else this module's own pick (selectedItem's precedence)
+  if (ctx.selection && typeof ctx.selection.forEach === "function" && ctx.selection.size) { ctx.selection.forEach((id) => take(id)); if (ctx.selected) take(ctx.selected.id); }
+  else if (ctx.selected) take(ctx.selected.id);
+  else take(S.sel);
+  return out;
+}
+function setSelectionIds(ctx, ids) {
+  ids = Array.from(ids || []).filter((id) => ctx.doc.items.has(id));
+  S.sel = null; S.hover = null; S.pending = null;
+  if (typeof ctx.setSelection === "function") ctx.setSelection(ids);
+  else {
+    if (ctx.selection && typeof ctx.selection.clear === "function") { ctx.selection.clear(); for (const id of ids) ctx.selection.add(id); }
+    const prim = ids.map((id) => ctx.doc.items.get(id)).find((it) => it.kind === "symbol" || it.kind === "sheet");
+    if (prim) ctx.setSelected({ id: prim.id }); else { ctx.setSelected(null); S.sel = ids[0] || null; }
+  }
+  ctx.requestRender();
+}
+function cursorOf(ctx) { return ctx.cursor || S.cursor || [ctx.doc.page[0] / 2, ctx.doc.page[1] / 2]; }
+function snapCursor(ctx) { const c = cursorOf(ctx); return ctx.snap([c[0], c[1]]).map(r4); }
+function editable(ctx) { if (ctx.viewOnly) { ctx.toast("View-only access"); return false; } return true; }
+const CLIP = { text: "" };         // internal buffer when the page has no clipboard access
+function clipWrite(ctx, text) {
+  CLIP.text = text;
+  if (ctx.clipboard && typeof ctx.clipboard.set === "function") { try { ctx.clipboard.set(text); } catch (e) { /* buffer only */ } }
+  else if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {});
+}
+function clipRead(ctx) {           // a string, or a Promise of one when the browser clipboard must be asked
+  if (ctx.clipboard && typeof ctx.clipboard.get === "function") { try { const v = ctx.clipboard.get(); if (v !== undefined && v !== null) return v; } catch (e) { /* fall through */ } }
+  if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) return navigator.clipboard.readText().then((t) => t || CLIP.text, () => CLIP.text);
+  return CLIP.text;
+}
+const PASTE_KINDS = new Set(["symbol", "wire", "bus", "polyline", "junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label",
+  "text", "text_box", "rectangle", "circle", "arc", "bezier", "rule_area", "sheet", "table", "image"]);
+
+// ---------------------------------------------------------------- copy / cut / paste / duplicate
+// What the desktop puts on the clipboard (SCH_IO_KICAD_SEXPR::Format for a selection): the library
+// symbols used, then the items — no (kicad_sch …) wrapper, which its copyable-only parser rejects.
+// opts.wrap gives the document form for anything that wants a whole sheet.
+function clipboardText(doc, items, opts) {
+  const libs = new Map();
+  for (const it of items) if (it.kind === "symbol") { const name = str((kid(it.node, "lib_id") || [])[1]); const lib = doc.lib.get(name); if (lib && !libs.has(name)) libs.set(name, lib); }
+  const parts = [];
+  if (libs.size) parts.push("(lib_symbols " + Array.from(libs.values()).map((l) => K.serialize(l)).join(" ") + ")");
+  for (const it of items) {
+    let node = it.node;
+    if (it.kind === "rule_area" && kid(node, "uuid")) { node = deep(node); dropKid(node, "uuid"); }
+    let s = K.serialize(node); if (it.kind === "sheet") s = s.replace(/\(page (\d+)\)/g, '(page "$1")');
+    parts.push(s);
+  }
+  const body = parts.join("\n");
+  return opts && opts.wrap ? `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0")\n${body}\n)` : body;
+}
+// Both clipboard forms: a bare item sequence (the desktop's) or a (kicad_sch …) document.
+function parseClipboard(text) {
+  let trees; try { trees = K.parseAll(str(text)); } catch (e) { return null; }
+  const nodes = [], libs = [];
+  const takeLibs = (ls) => { for (const s of kids(ls, "symbol")) libs.push(s); };
+  for (const t of trees || []) {
+    if (!Array.isArray(t)) continue;
+    if (t[0] === "kicad_sch") { const ls = kid(t, "lib_symbols"); if (ls) takeLibs(ls); for (const c of t.slice(1)) if (Array.isArray(c) && PASTE_KINDS.has(c[0])) nodes.push(c); }
+    else if (t[0] === "lib_symbols") takeLibs(t);
+    else if (PASTE_KINDS.has(t[0])) nodes.push(t);
+  }
+  return nodes.length ? { nodes, libs } : null;
+}
+const refPrefix = (ref) => str(ref).replace(/\?$/, "").replace(/\d+$/, "");
+const unannotated = (ref) => refPrefix(ref) + "?";
+const refNumber = (ref) => { const m = str(ref).match(/(\d+)$/); return m ? +m[1] : -1; };
+function usedReferences(doc, skip) { const used = new Set(); for (const it of doc.items.values()) if (it.kind === "symbol" && it.ref && !(skip && skip.has(it.id))) used.add(it.ref); return used; }
+function refField(node) { return kids(node, "property").find((p) => str(p[1]) === "Reference") || null; }
+// Set a symbol node's reference designator, keeping its instance data in step.
+function setReference(node, ref) {
+  const p = refField(node); if (p) p[2] = ref;
+  for (const inst of kids(node, "instances")) for (const pr of kids(inst, "project")) for (const pa of kids(pr, "path")) { const r = kid(pa, "reference"); if (r) r[1] = ref; }
+}
+// Pasted / repeated symbols keep a reference that is still free on the sheet; anything else becomes "R?"
+// (or, with automatic annotation on, the next free number for its prefix).
+function assignPastedRef(doc, node, used) {
+  const p = refField(node); if (!p) return;
+  const ref = str(p[2]);
+  if (!/\?$/.test(ref) && !used.has(ref)) { used.add(ref); return; }
+  let next = unannotated(ref);
+  if (S.annotateAuto) { const prefix = refPrefix(ref); let n = 1; while (used.has(prefix + n)) n++; next = prefix + n; used.add(next); }
+  setReference(node, next);
+}
+// Junctions the new items need: every connection point of every new item (items must be in the doc).
+function junctionsForNew(doc, items) {
+  const out = [], seen = new Set();
+  for (const it of items) {
+    const line = isNetLine(it.kind);
+    for (const p of line ? ptsOf(it.node) : connPoints(doc, it)) {
+      const key = r4(p[0]) + "," + r4(p[1]); if (seen.has(key)) continue; seen.add(key);
+      if (junctionAt(doc, p[0], p[1])) continue;
+      const need = line ? needsJunction(doc, p[0], p[1], it.kind) : needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus");
+      if (need) out.push(addNode(doc, junctionNode(p)).change);
+    }
+  }
+  return out;
+}
+// Fresh copies of clipboard nodes landed at `at` (mm): the first symbol's anchor (else the first
+// item's) goes to the point, like the desktop's paste-then-move.  Returns { changes, ids }.
+function pasteChanges(doc, parsed, at, opts) {
+  for (const lib of parsed.libs) { const name = str(lib[1]); if (!doc.lib.has(name)) doc.lib.set(name, lib); }   // the sheet's own copy wins (ChoosePasteLibSymbol)
+  const fresh = parsed.nodes.map((n) => cloneNode({ kind: n[0], node: deep(n) }));
+  const used = usedReferences(doc);
+  for (const n of fresh) if (n[0] === "symbol" && !(opts && opts.keepAnnotations)) assignPastedRef(doc, n, used);
+  const lead = fresh.find((n) => n[0] === "symbol") || fresh[0], a = anchorOf(lead[0], lead);
+  const dx = r4(at[0] - a[0]), dy = r4(at[1] - a[1]);
+  for (const n of fresh) shiftNode(n[0], n, dx, dy);
+  const changes = [], items = [];
+  for (const n of fresh) { const { item, change } = addNode(doc, n); changes.push(change); items.push(item); }
+  changes.push(...junctionsForNew(doc, items));
+  return { changes, ids: items.map((it) => it.id) };
+}
+function copySelection(ctx) {
+  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  clipWrite(ctx, clipboardText(ctx.doc, items)); return true;
+}
+function cutSelection(ctx) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  clipWrite(ctx, clipboardText(ctx.doc, items));
+  const changes = deleteChanges(ctx.doc, items);
+  setSelectionIds(ctx, []); ctx.commit(changes, "cut"); ctx.requestRender();
+  return true;
+}
+function pasteText(ctx, text, opts) {
+  const parsed = parseClipboard(text);
+  if (!parsed) { if (str(text).trim()) ctx.toast("Clipboard has no schematic items"); return false; }
+  const { changes, ids } = pasteChanges(ctx.doc, parsed, (opts && opts.at) || snapCursor(ctx), opts);
+  ctx.commit(changes, (opts && opts.label) || "paste");
+  setSelectionIds(ctx, ids);
+  return true;
+}
+function pasteSelection(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const v = clipRead(ctx);
+  if (v && typeof v.then === "function") { v.then((t) => pasteText(ctx, t, opts)); return true; }
+  return pasteText(ctx, v, opts);
+}
+function duplicateSelection(ctx) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  if (items.length === 1 && items[0].kind !== "sheet") { if (ctx.selected && ctx.selected.id !== items[0].id) ctx.setSelected({ id: items[0].id }); S.sel = items[0].id; return duplicateSelected(ctx); }
+  return pasteText(ctx, clipboardText(ctx.doc, items), { label: "duplicate" });
+}
+function copyAsText(ctx) {
+  const items = selectedItems(ctx); if (!items.length) return false;
+  const lines = [];
+  for (const it of items) {
+    if (it.kind === "symbol") lines.push([it.ref, it.value].filter(Boolean).join(" "));
+    else if (TEXT_KINDS.has(it.kind) || it.kind === "text_box") lines.push(str(it.node[1]));
+    else if (it.kind === "netclass_flag" || it.kind === "directive_label") { const nc = kids(it.node, "property").find((p) => str(p[1]) === "Netclass"); if (nc) lines.push(str(nc[2])); }
+    else if (it.kind === "sheet") lines.push([it.name, it.file].filter(Boolean).join(" "));
+  }
+  clipWrite(ctx, lines.join("\n")); return true;
+}
+
+// ---------------------------------------------------------------- select connection / node, net walking
+function selectConnection(ctx) {
+  const doc = ctx.doc, ids = new Set();
+  for (const it of selectedItems(ctx)) if (NET_PICK.has(it.kind) || it.kind === "symbol" || it.kind === "sheet") for (const id of netItems(doc, it, cursorOf(ctx))) ids.add(id);
+  if (!ids.size) { const pick = pickNet(ctx, cursorOf(ctx)); if (pick) for (const id of netItems(doc, pick.item, pick.at)) ids.add(id); }
+  if (!ids.size) return false;
+  setSelectionIds(ctx, ids); return true;
+}
+function selectNode(ctx) {
+  const hit = hitNonSymbol(ctx.doc, cursorOf(ctx)[0], cursorOf(ctx)[1], Math.max(0.3, 5 * mmPerPx(ctx)));
+  if (!hit || !isNetLine(hit.kind)) return false;
+  setSelectionIds(ctx, [hit.id]); return true;
+}
+function stepNetItem(ctx, dir) {
+  const items = selectedItems(ctx); if (!items.length) return false;
+  const ids = Array.from(netItems(ctx.doc, items[0], cursorOf(ctx))).sort(); if (ids.length < 2) return false;
+  const i = ids.indexOf(items[0].id), next = ids[((i < 0 ? 0 : i) + dir + ids.length) % ids.length];
+  setSelectionIds(ctx, [next]); return true;
+}
+function unselectAll(ctx) { setSelectionIds(ctx, []); return true; }
+
+// ---------------------------------------------------------------- repeat last item (Insert)
+function rememberPlaced(kind, node) { S.lastPlaced = { kind, node: deep(node) }; }
+// common/increment.cpp IncrementString: the last run of digits steps, leading zeros kept; null below zero.
+function incrementText(text, delta) {
+  const m = str(text).match(/^([\s\S]*?)(\d+)(\D*)$/); if (!m) return str(text);
+  const n = parseInt(m[2], 10) + (delta === undefined ? 1 : delta); if (n < 0) return null;
+  return m[1] + String(n).padStart(m[2].length, "0") + m[3];
+}
+function repeatLast(ctx) {
+  if (!editable(ctx)) return false;
+  const lp = S.lastPlaced; if (!lp) { ctx.toast("Nothing to repeat yet"); return false; }
+  const doc = ctx.doc, node = cloneNode({ kind: lp.kind, node: deep(lp.node) });
+  if (LABEL_KINDS.has(lp.kind) && lp.kind !== "netclass_flag" && lp.kind !== "directive_label") {
+    const t = incrementText(node[1], S.repeatIncrement); if (t === null) ctx.toast("Label value cannot go below zero"); else node[1] = t;
+  }
+  if (lp.kind === "symbol") { const p = snapCursor(ctx), a = anchorOf("symbol", node); shiftNode("symbol", node, r4(p[0] - a[0]), r4(p[1] - a[1])); assignPastedRef(doc, node, usedReferences(doc)); }
+  else shiftNode(lp.kind, node, S.repeatOffset[0], S.repeatOffset[1]);
+  const { item, change } = addNode(doc, node);
+  const changes = [change, ...junctionsForNew(doc, [item])];
+  ctx.commit(changes, "repeat");
+  S.lastPlaced = { kind: item.kind, node: deep(item.node) };
+  setSelectionIds(ctx, [item.id]);
+  return true;
+}
+function incrementSelection(ctx, delta) {
+  if (!editable(ctx)) return false;
+  const changes = [];
+  for (const it of selectedItems(ctx)) {
+    if (!TEXT_KINDS.has(it.kind) && it.kind !== "text_box") continue;
+    const t = incrementText(it.node[1], delta); if (t === null || t === str(it.node[1])) continue;
+    const n = deep(it.node); n[1] = t; changes.push(modChange(ctx.doc, it, n));
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, delta < 0 ? "decrement" : "increment"); return true;
+}
+
+// ---------------------------------------------------------------- type conversions (SCH_EDIT_TOOL::ChangeTextType)
+const CONVERT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text", "text_box", "netclass_flag", "directive_label"]);
+const LABEL_SIZE_RATIO = 0.375;    // SCHEMATIC_SETTINGS::m_LabelSizeRatio
+function copyFont(from, to) {
+  const ef = kid(from, "effects"), f = ef && kid(ef, "font"); if (!f) return;
+  const tef = kid(to, "effects"); if (!tef) return;
+  replaceKid(tef, deep(f));
+}
+// KiCad's getValidNetname: line breaks and tabs become underscores, so do spaces unless it is a bus group.
+function validNetname(text) {
+  let t = str(text).replace(/[\r\n\t]/g, "_");
+  if (!/^[^\s{}]*\{.*\}$/.test(t)) t = t.replace(/ /g, "_");
+  return t || "<empty>";
+}
+function convertNode(item, toKind, gridPitch) {
+  const n = item.node, from = item.kind;
+  let text = str(n[1]), p = atOf(n).slice(0, 2), rot = atOf(n)[2] || 0;
+  const shapeN = kid(n, "shape"), shape = shapeN && (from === "global_label" || from === "hierarchical_label") ? str(shapeN[1]) : null;
+  if (from === "netclass_flag" || from === "directive_label") { const nc = kids(n, "property").find((q) => str(q[1]) === "Netclass"); text = nc ? str(nc[2]) : "<empty>"; }
+  if (from === "text") rot = 0;                                   // a text's angle is not a spin style: labels start out reading right
+  if (from === "text_box") {
+    const s = kid(n, "size"), mg = kid(n, "margins"), size = fontSize(n);
+    const m = mg ? [num(mg[1]), num(mg[2]), num(mg[3]), num(mg[4])] : [TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN];
+    let box = [p[0] + m[0], p[1] + m[1], p[0] + num(s && s[1]) - m[2], p[1] + num(s && s[2]) - m[3]];
+    if (toKind === "label" || toKind === "global_label" || toKind === "hierarchical_label") { const inf = LABEL_SIZE_RATIO * size; box = [box[0] - inf, box[1] - inf, box[2] + inf, box[3] + inf]; }
+    const ef = kid(n, "effects"), j = ef && kid(ef, "justify"), right = !!(j && j.includes("right")), vertical = rot === 90 || rot === 270;
+    const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
+    if (vertical) { rot = right ? 270 : 90; p = right ? [cx, box[1]] : [cx, box[3]]; } else { rot = right ? 180 : 0; p = right ? [box[2], cy] : [box[0], cy]; }
+    const g = gridPitch || 1.27; p = [r4(K.snap(p[0], g)), r4(K.snap(p[1], g))];
+  }
+  let out;
+  if (toKind === "text_box") {
+    const r = TEXT_KINDS.has(from) ? textRect(item) : (item.bbox || [p[0], p[1] - 1.27, p[0] + 5, p[1]]);
+    const size = fontSize(n), mg = r4(0.75 * size), slop = r4(mg / 20);
+    let x0 = r[0] - mg, y0 = r[1] - mg, x1 = r[2] + mg, y1 = r[3] + mg;
+    if (rot === 90 || rot === 270) { if (rot === 270) y1 += slop; else y0 -= slop; } else if (rot === 180) x0 -= slop; else x1 += slop;
+    out = textBoxNode(text, [x0, y0], [x1, y1]);
+  } else if (toKind === "netclass_flag" || toKind === "directive_label") out = classLabelNode(from === "netclass_flag" || from === "directive_label" ? text : text, p, rot);
+  else if (toKind === "text") out = labelNode("text", text, p, rot);
+  else { out = labelNode(toKind, validNetname(text), p, rot); if (shape && toKind !== "label") replaceKid(out, ["shape", shape]); }
+  if (!uuidOf(out)) out.push(["uuid", K.newUuid()]);
+  copyFont(n, out);
+  return out;
+}
+function convertSelection(ctx, toKind) {
+  if (!editable(ctx)) return false;
+  const doc = ctx.doc, changes = [], ids = [];
+  for (const it of selectedItems(ctx)) {
+    if (!CONVERT_KINDS.has(it.kind) || it.kind === toKind || (toKind === "netclass_flag" && it.kind === "directive_label")) continue;
+    const node = convertNode(it, toKind, ctx.gridPitch);
+    const added = addNode(doc, node); doc.items.delete(added.item.id);       // commit adds it; keep the doc untouched until then
+    changes.push(removeChange(it), added.change); ids.push(added.item.id);
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, "change to " + toKind.replace("_", " "));
+  setSelectionIds(ctx, ids); return true;
+}
+
+// ---------------------------------------------------------------- symbol pins with their electrical type (lib symbol + transform)
+function symbolPins(doc, item) {
+  const n = item.node, out = [];
+  const libId = str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1]);
+  const lib = K.resolveLib(doc, libId) || K.resolveLib(doc, str((kid(n, "lib_id") || [])[1])); if (!lib) return out;
+  const [ax, ay, rot] = atOf(n), mN = kid(n, "mirror"), T = K.symbolTransform(rot, mN ? str(mN[1]) : "");
+  const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1, styleN = kid(n, "body_style") || kid(n, "convert"), style = styleN ? num(styleN[1], 1) : 1;
+  const tf = (lx, ly) => [r4(ax + T[0] * lx + T[1] * ly), r4(ay + T[2] * lx + T[3] * ly)];
+  for (const sub of kids(lib, "symbol")) {
+    const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
+    if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+    for (const g of kids(sub, "pin")) {
+      const [px, py, pr] = atOf(g), lenN = kid(g, "length"), len = lenN ? num(lenN[1]) : 2.54;
+      const dir = ((Math.round(pr) % 360) + 360) % 360, d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
+      const pos = tf(px, py), root = tf(px + d[0] * len, py + d[1] * len);
+      const h = kid(g, "hide"); const hidden = h ? str(h[1]) !== "no" : g.includes("hide");
+      let ox = pos[0] - root[0], oy = pos[1] - root[1]; const ol = Math.hypot(ox, oy) || 1; ox = Math.round(ox / ol); oy = Math.round(oy / ol);
+      if (!ox && !oy) { const tip = tf(px - d[0], py - d[1]); ox = Math.sign(tip[0] - pos[0]); oy = Math.sign(tip[1] - pos[1]); }
+      out.push({ x: pos[0], y: pos[1], root, number: str((kid(g, "number") || [])[1]), name: str((kid(g, "name") || [])[1]), type: str(g[1]) || "passive", hidden, len,
+        side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom" });
+    }
+  }
+  return out;
+}
+function symbolLibId(node) { return str((kid(node, "lib_id") || [])[1]); }
+function symbolIsPower(doc, item) { return isPowerSymbol(doc, symbolLibId(item.node)); }
+
+// ---------------------------------------------------------------- autoplace fields (eeschema/autoplace_fields.cpp)
+const AP_HPADDING = 0.635, AP_VPADDING = 0.381, AP_GRID = 1.27, AP_WIRE_V = 2.54, AP_FIELD_PADDING = 0.381;
+const SIDES = { right: [1, 0], top: [0, -1], left: [-1, 0], bottom: [0, 1] };
+// round_n on positive IU: up or down to the next multiple of n
+function roundN(v, n, up) { const q = v / n, r = Math.round(q); if (Math.abs(q - r) < 1e-6) return r4(r * n); return r4((up ? Math.ceil(q) : Math.floor(q)) * n); }
+function fieldHidden(p) { const h = kid(p, "hide"); if (h) return str(h[1]) !== "no"; const ef = kid(p, "effects"); return !!(ef && (ef.includes("hide") || (kid(ef, "hide") && str(kid(ef, "hide")[1]) !== "no"))); }
+function fieldFont(p) { const ef = kid(p, "effects"), f = ef && kid(ef, "font"), s = f && kid(f, "size"), th = f && kid(f, "thickness"); const size = s ? num(s[2], num(s[1], 1.27)) : 1.27; const bold = !!(f && (f.includes("bold") || (kid(f, "bold") && str(kid(f, "bold")[1]) !== "no"))); const thick = th && num(th[1]) > 0.001 ? num(th[1]) : Math.min(bold ? size / 5 : size / 8, size / 4); return { size, thick, bold }; }
+// EDA_TEXT::GetTextBox for the stroke font: glyph extents inflated by 1.5 × pen, 17% taller.
+function fieldExtent(p) {
+  const { size, thick } = fieldFont(p), text = str(p[2]);
+  const lines = text.split("\n"), w = Math.max(...lines.map((l) => K.textWidth(l, size, 0))) + 3 * thick;
+  return { w: r4(w), h: r4((size + 3 * thick) * 1.17 + (lines.length - 1) * size * 1.61) };
+}
+// The body box: the library drawing (no pins, no fields) plus the visible pin roots, on the sheet.
+function bodyBox(doc, item) {
+  const n = item.node, libId = str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1]);
+  const lib = K.resolveLib(doc, libId) || K.resolveLib(doc, symbolLibId(n));
+  const [ax, ay, rot] = atOf(n), mN = kid(n, "mirror"), T = K.symbolTransform(rot, mN ? str(mN[1]) : "");
+  const tf = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
+  let b = null; const take = (p) => { b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]]; };
+  if (lib) {
+    const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1, styleN = kid(n, "body_style") || kid(n, "convert"), style = styleN ? num(styleN[1], 1) : 1;
+    for (const sub of kids(lib, "symbol")) {
+      const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
+      if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+      for (const g of sub.slice(2)) {
+        if (!Array.isArray(g)) continue;
+        const gk = g[0];
+        if (gk === "rectangle") { const a = kid(g, "start"), e = kid(g, "end"); take(tf(num(a[1]), num(a[2]))); take(tf(num(e[1]), num(e[2]))); }
+        else if (gk === "circle") { const c = kid(g, "center"), r = num((kid(g, "radius") || [])[1]); for (const [dx, dy] of [[-r, -r], [r, r], [-r, r], [r, -r]]) take(tf(num(c[1]) + dx, num(c[2]) + dy)); }
+        else if (gk === "arc") { for (const key of ["start", "mid", "end"]) { const k = kid(g, key); if (k) take(tf(num(k[1]), num(k[2]))); } }
+        else if (gk === "polyline" || gk === "bezier") { for (const [x, y] of ptsOf(g)) take(tf(x, y)); }
+        else if (gk === "text") { const [tx, ty] = atOf(g), ef = K.effectsOf(g); if (!ef.hide) { const w = K.textWidth(str(g[1]), ef.size, 0) / 2; take(tf(tx - w, ty - ef.size / 2)); take(tf(tx + w, ty + ef.size / 2)); } }
+      }
+    }
+  }
+  for (const pin of symbolPins(doc, item)) if (!pin.hidden) take(pin.root);
+  return (b || [ax, ay, ax, ay]).map(r4);
+}
+const boxW = (b) => b[2] - b[0], boxH = (b) => b[3] - b[1];
+function boxesIntersect(a, b) { return a && b && a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]; }
+function autoplaceNode(doc, item, opts) {
+  opts = opts || {};
+  const node = deep(item.node), power = symbolIsPower(doc, item), pins = symbolPins(doc, item).filter((p) => !p.hidden || power);
+  const fields = kids(node, "property").filter((p) => !fieldHidden(p) && !str(p[1]).startsWith("ki_") && str(p[2]) !== "");
+  if (!fields.length) return null;
+  const [, , rot] = atOf(node), mN = kid(node, "mirror"), mirror = mN ? str(mN[1]) : "", T = K.symbolTransform(rot, mirror);
+  const fieldRot = T[1] !== 0 ? 90 : 0;                          // vertical storage counters the transform: fields always display horizontally
+  const flipStored = (T[1] !== 0 ? T[1] : T[0]) < 0;             // the canvas (and IsHorizJustifyFlipped) render the stored justify flipped
+  const body = bodyBox(doc, item), symW = boxW(body), symH = boxH(body);
+  const ext = fields.map(fieldExtent);
+  let fbox = { w: Math.max(...ext.map((e) => e.w)), h: ext.reduce((t, e) => t + roundN(e.h, AP_GRID, true), 0) };
+  const pinsOn = (side) => pins.filter((p) => p.side === side).length;
+  // getPreferredSides
+  let sides = ["right", "top", "left", "bottom"].map((s) => ({ side: s, pins: pinsOn(s) }));
+  const swap = (i, j) => { const t = sides[i]; sides[i] = sides[j]; sides[j] = t; };
+  if (power) { if (rot === 0) { swap(0, 1); swap(1, 3); } else if (rot === 90) { swap(0, 2); swap(1, 2); } else if (rot === 180) swap(0, 3); else if (rot === 270) swap(1, 2); }
+  else { if (mirror === "x" && (rot === 0 || rot === 180)) swap(0, 2); if (symH > 0 && symW / symH > 3) { swap(0, 1); swap(1, 3); } }
+  // fieldBoxPlacement
+  const place = (sp, size) => {
+    const [sx, sy] = SIDES[sp.side], cx = (body[0] + body[2]) / 2, cy = (body[1] + body[3]) / 2;
+    let ox = (symW + size.w) / 2, oy = (symH + size.h) / 2; if (sx) ox += AP_HPADDING; else if (sy) oy += AP_VPADDING;
+    let x = cx + sx * ox - size.w / 2, y = cy + sy * oy - size.h / 2;
+    if (sp.pins > 0) {
+      let pb = null; for (const p of pins) if (p.side === sp.side) for (const q of [[p.x, p.y], p.root]) pb = pb ? [Math.min(pb[0], q[0]), Math.min(pb[1], q[1]), Math.max(pb[2], q[0]), Math.max(pb[3], q[1])] : [q[0], q[1], q[0], q[1]];
+      if (pb) { if (sy) x = pb[2] + 2 * AP_HPADDING; else y = pb[1] - (size.h + 2 * AP_VPADDING); }
+    }
+    return [x, y];
+  };
+  // chooseSideForFields (manual: sides whose field box collides with other items go last)
+  const others = Array.from(doc.items.values()).filter((it) => it !== item && it.id !== item.id && it.bbox);
+  const collision = (sp) => {
+    const [x, y] = place(sp, fbox), box = [x, y, x + fbox.w, y + fbox.h]; let coll = "none";
+    for (const it of others) { if (!boxesIntersect(it.bbox, box)) continue; if (isNetLine(it.kind) && !SIDES[sp.side][0] && ptsOf(it.node).every((p) => Math.abs(p[1] - ptsOf(it.node)[0][1]) < 1e-6) && coll !== "objects") coll = "hwires"; else coll = "objects"; }
+    return coll;
+  };
+  sides.reverse();
+  let side = { side: "right", pins: Infinity };
+  if (opts.manual !== false) {
+    const colliding = new Map(); for (const sp of sides) { const c = collision(sp); if (c !== "none") colliding.set(sp.side, c); }
+    for (const kind of ["objects", "hwires"]) sides = sides.filter((sp) => { if (colliding.get(sp.side) !== kind) return true; if (sp.pins <= side.pins) side = { side: sp.side, pins: sp.pins }; return false; });
+  }
+  let chosen = null;
+  for (let i = sides.length - 1; i >= 0; i--) if (!sides[i].pins) { chosen = sides[i]; break; }
+  if (!chosen) { for (const sp of sides) if (sp.pins <= side.pins) side = { side: sp.side, pins: sp.pins }; chosen = side; }
+  let [bx, by] = place(chosen, fbox);
+  const [sx, sy] = SIDES[chosen.side];
+  // fitFieldsBetweenWires: only horizontal wires in the way -> fixed 100 mil rows on the wire pitch
+  let wireSpacing = false;
+  if (opts.manual !== false && sy) {
+    const box = [bx, by, bx + fbox.w, by + fbox.h], hits = others.filter((it) => boxesIntersect(it.bbox, box));
+    if (hits.length && hits.every((it) => isNetLine(it.kind) && ptsOf(it.node).length > 1 && Math.abs(ptsOf(it.node)[0][1] - ptsOf(it.node)[1][1]) < 1e-6)) {
+      const offs = new Set(hits.map((it) => r4(1.5 * AP_WIRE_V - (ptsOf(it.node)[0][1] % AP_WIRE_V))));
+      if (offs.size === 1) { wireSpacing = true; fbox = { w: fbox.w, h: fields.length * AP_WIRE_V }; by = roundN(by, AP_WIRE_V, chosen.side === "bottom"); }
+    }
+  }
+  // move the fields
+  let lastY = by;
+  fields.forEach((p, i) => {
+    let hj = sx ? (sx > 0 ? "left" : "right") : "center";
+    if (chosen.pins > 0) hj = sy ? "left" : "center";
+    let x = hj === "left" ? bx : hj === "right" ? bx + fbox.w : bx + fbox.w / 2;
+    const fh = wireSpacing ? AP_WIRE_V / 2 : ext[i].h, pad = wireSpacing ? AP_WIRE_V / 2 : roundN(fh, AP_GRID, true) - fh;
+    let y = lastY + pad / 2 + fh / 2; lastY += pad + fh;
+    if (sx) x = roundN(x, AP_GRID, sx >= 0);
+    if (sy) y = roundN(y, AP_GRID, sy >= 0);
+    const a = kid(p, "at"); const keep = a ? a.slice(4) : [];
+    replaceKid(p, ["at", r4(x), r4(y), fieldRot, ...keep]);
+    const stored = flipStored ? (hj === "left" ? "right" : hj === "right" ? "left" : "center") : hj;
+    let ef = kid(p, "effects"); if (!ef) { ef = ["effects", fontNode(1.27)]; p.push(ef); }
+    if (stored === "center") dropKid(ef, "justify"); else replaceKid(ef, ["justify", stored]);
+  });
+  dropKid(node, "fields_autoplaced");
+  const ui = node.findIndex((c) => Array.isArray(c) && c[0] === "uuid");
+  node.splice(ui >= 0 ? ui : node.length, 0, ["fields_autoplaced", "yes"]);
+  return node;
+}
+function autoplaceSelection(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const changes = [];
+  for (const it of selectedItems(ctx)) { if (it.kind !== "symbol") continue; const n = autoplaceNode(ctx.doc, it, opts); if (n) changes.push(modChange(ctx.doc, it, n)); }
+  if (!changes.length) return false;
+  ctx.commit(changes, "autoplace fields"); return true;
+}
+
+// ---------------------------------------------------------------- annotation (sch_reference_list.cpp Annotate / sortByXPosition)
+function splitRef(ref) {
+  ref = str(ref); if (!ref) return { prefix: "U", num: -1, isNew: true };
+  if (/\?$/.test(ref)) return { prefix: ref.slice(0, -1), num: -1, isNew: true };
+  const m = ref.match(/^(.*?)(\d+)$/); if (!m) return { prefix: ref, num: -1, isNew: true };
+  return { prefix: m[1], num: +m[2], isNew: false };
+}
+// opts: { order: "x" | "y", keep: true (incremental) | false (renumber everything), start: 0, sheetInterval: 0 | 100 | 1000, sheetNumber: 1, only: Set of ids }
+function annotateChanges(doc, opts) {
+  opts = opts || {};
+  const order = opts.order === "y" ? "y" : "x", keep = opts.keep !== false, start = opts.start | 0, interval = opts.sheetInterval | 0, sheetNum = opts.sheetNumber || 1;
+  const refs = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol") continue;
+    const p = refField(it.node); if (!p) continue;
+    const r = splitRef(p[2]); const [x, y] = atOf(it.node); const unitN = kid(it.node, "unit");
+    refs.push({ item: it, prefix: r.prefix, num: r.num, isNew: (r.isNew || !keep) && (!opts.only || opts.only.has(it.id)), old: str(p[2]), x, y, unit: unitN ? num(unitN[1], 1) : 1 });
+  }
+  refs.sort((a, b) => a.prefix.localeCompare(b.prefix) || (order === "x" ? (a.x - b.x || a.y - b.y) : (a.y - b.y || a.x - b.x)) || (a.item.id < b.item.id ? -1 : 1));
+  const used = new Map();       // prefix -> Set of numbers in use
+  const take = (prefix, n) => { if (!used.has(prefix)) used.set(prefix, new Set()); used.get(prefix).add(n); };
+  for (const r of refs) if (!r.isNew && r.num >= 0) take(r.prefix, r.num);
+  const minRef = interval ? sheetNum * interval + 1 : start + 1;
+  const assigned = new Map();   // old full reference of a multi-unit package -> its new number
+  const changes = [];
+  for (const r of refs) {
+    if (!r.isNew) continue;
+    let n;
+    // units of one multi-unit package (same old reference) stay together, like KiCad's locked-unit map
+    const packageKey = r.old && !/\?$/.test(r.old) && libUnits(doc, r.item.node).units > 1 ? r.prefix + ":" + r.old : null;
+    if (packageKey && assigned.has(packageKey)) n = assigned.get(packageKey);
+    else { n = minRef; const set = used.get(r.prefix); while (set && set.has(n)) n++; take(r.prefix, n); if (packageKey) assigned.set(packageKey, n); }
+    const ref = r.prefix + n; if (ref === r.old) continue;
+    const node = deep(r.item.node); setReference(node, ref); changes.push(modChange(doc, r.item, node));
+  }
+  return changes;
+}
+function clearAnnotationChanges(doc, only) {
+  const changes = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" || (only && !only.has(it.id))) continue;
+    const p = refField(it.node); if (!p || /\?$/.test(str(p[2]))) continue;
+    const node = deep(it.node); setReference(node, unannotated(str(p[2]))); changes.push(modChange(doc, it, node));
+  }
+  return changes;
+}
+function annotate(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const changes = annotateChanges(ctx.doc, Object.assign({ sheetNumber: ctx.pageNumber }, opts || {}));
+  if (!changes.length) { ctx.toast("Nothing to annotate"); return true; }
+  ctx.commit(changes, "annotate"); ctx.toast(`Annotated ${changes.length} symbol${changes.length === 1 ? "" : "s"}`); return true;
+}
+function clearAnnotation(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const changes = clearAnnotationChanges(ctx.doc, opts && opts.only);
+  if (!changes.length) return true;
+  ctx.commit(changes, "clear annotation"); return true;
+}
+function editFieldPrompt(ctx, name, title, quiet) {
+  if (!editable(ctx)) return false;
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) { if (!quiet) ctx.toast("Select a symbol first"); return false; }
+  const p = kids(it.node, "property").find((q) => str(q[1]) === name); const cur = p ? str(p[2]) : "";
+  promptImpl(title, cur, S.cursorClient, (text) => {
+    if (text === null || text === undefined || text === cur) return;
+    const node = deep(it.node);
+    if (name === "Reference") setReference(node, text);
+    else { let q = kids(node, "property").find((z) => str(z[1]) === name); if (!q) { q = ["property", name, "", ["at", ...atOf(node).slice(0, 2), 0], ["hide", "yes"], ["effects", fontNode(1.27)]]; insertField(node, q); } q[2] = text; }
+    ctx.commit([modChange(ctx.doc, it, node)], name.toLowerCase());
+  });
+  return true;
+}
+function insertField(node, p) { const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, p); else node.push(p); }
+const FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"] };
+function toggleSymbolFlag(ctx, which) {
+  if (!editable(ctx)) return false;
+  const [key, onVal, offVal] = FLAG_KEYS[which], changes = [];
+  const items = selectedItems(ctx).filter((it) => it.kind === "symbol"); if (!items.length) return false;
+  const allOn = items.every((it) => { const k = kid(it.node, key); return k && str(k[1]) === onVal; });
+  for (const it of items) { const node = deep(it.node); replaceKid(node, [key, allOn ? offVal : onVal]); changes.push(modChange(ctx.doc, it, node)); }
+  ctx.commit(changes, which.replace(/^set/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase()); return true;
+}
+function libUnits(doc, node) {
+  const lib = K.resolveLib(doc, symbolLibId(node)); const units = new Set(), styles = new Set();
+  if (lib) for (const sub of kids(lib, "symbol")) { const m = str(sub[1]).match(/_(\d+)_(\d+)$/); if (m) { if (+m[1] > 0) units.add(+m[1]); styles.add(+m[2]); } }
+  return { units: Math.max(1, ...units), styles: Math.max(1, ...styles) };
+}
+function stepUnit(ctx, dir) {
+  if (!editable(ctx)) return false;
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
+  const { units } = libUnits(ctx.doc, it.node); if (units < 2) { ctx.toast("Symbol has a single unit"); return false; }
+  const cur = kid(it.node, "unit") ? num(kid(it.node, "unit")[1], 1) : 1, next = ((cur - 1 + dir + units) % units) + 1;
+  const node = deep(it.node); replaceKid(node, ["unit", next]);
+  for (const inst of kids(node, "instances")) for (const pr of kids(inst, "project")) for (const pa of kids(pr, "path")) { const u = kid(pa, "unit"); if (u) u[1] = next; }
+  ctx.commit([modChange(ctx.doc, it, node)], "unit"); return true;
+}
+function cycleBodyStyle(ctx) {
+  if (!editable(ctx)) return false;
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
+  const { styles } = libUnits(ctx.doc, it.node); if (styles < 2) { ctx.toast("Symbol has no alternate body style"); return false; }
+  const cur = kid(it.node, "body_style") ? num(kid(it.node, "body_style")[1], 1) : 1;
+  const node = deep(it.node); replaceKid(node, ["body_style", (cur % styles) + 1]);
+  ctx.commit([modChange(ctx.doc, it, node)], "body style"); return true;
+}
+function placeNextUnit(ctx) {
+  if (!editable(ctx)) return false;
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
+  const { units } = libUnits(ctx.doc, it.node); if (units < 2) { ctx.toast("Symbol has a single unit"); return false; }
+  const inUse = new Set(); for (const o of ctx.doc.items.values()) if (o.kind === "symbol" && o.ref === it.ref) inUse.add(kid(o.node, "unit") ? num(kid(o.node, "unit")[1], 1) : 1);
+  let next = 1; while (inUse.has(next) && next <= units) next++;
+  if (next > units) { ctx.toast("All units of " + it.ref + " are placed"); return false; }
+  const node = cloneNode(it); replaceKid(node, ["unit", next]);
+  S.carry = { kind: "symbol", node, item: ghost(ctx.doc, node), pos: anchorOf("symbol", node) };
+  S.sel = null; ctx.setSelected(null); ctx.setTool("place"); ctx.requestRender(); return true;
+}
+function showDatasheet(ctx) {
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
+  const p = kids(it.node, "property").find((q) => str(q[1]) === "Datasheet"); const url = p ? str(p[2]).trim() : "";
+  if (!url || url === "~") { ctx.toast("No datasheet defined"); return false; }
+  if (typeof window !== "undefined" && window.open && /^https?:/i.test(url)) window.open(url, "_blank"); else ctx.toast("Datasheet: " + url);
+  return true;
+}
+
+// ---------------------------------------------------------------- ERC (eeschema/erc/erc.cpp subset)
+const PIN_TYPES = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"];
+const PIN_TYPE_TEXT = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-state", passive: "Passive", free: "Free", unspecified: "Unspecified", power_in: "Power input", power_out: "Power output", open_collector: "Open collector", open_emitter: "Open emitter", no_connect: "Unconnected" };
+// ERC_SETTINGS::m_defaultPinMap: 0 ok, 1 warning, 2 error
+const PIN_MATRIX = [
+  [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2], [0, 2, 0, 1, 0, 0, 1, 0, 2, 2, 2, 2], [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2], [0, 1, 0, 0, 0, 0, 1, 1, 2, 1, 1, 2],
+  [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 2], [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 2],
+  [0, 2, 1, 2, 0, 0, 1, 0, 2, 2, 2, 2], [0, 2, 0, 1, 0, 0, 1, 0, 2, 0, 0, 2], [0, 2, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2], [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]];
+const DRIVING = new Set(["output", "power_out", "passive", "tri_state", "bidirectional"]), DRIVEN = new Set(["input", "power_in"]);
+const pinTypeIndex = (t) => { const i = PIN_TYPES.indexOf(t); return i < 0 ? 6 : i; };
+const ptKey = (p) => r4(p[0]) + "," + r4(p[1]);
+// Every terminal on the sheet joined into nets (the rules of netItems, evaluated once with union-find).
+function ercNets(doc) {
+  const terms = [];
+  for (const it of doc.items.values()) {
+    if (it.kind === "symbol") {
+      const power = symbolIsPower(doc, it), value = kids(it.node, "property").find((p) => str(p[1]) === "Value");
+      for (const pin of symbolPins(doc, it)) {
+        let key; if (power && value) key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
+        terms.push({ item: it, p: [pin.x, pin.y], net: "wire", key, pin, power });
+      }
+    } else if (it.kind === "sheet") { for (const pin of kids(it.node, "pin")) terms.push({ item: it, p: atOf(pin).slice(0, 2).map(r4), net: "any", sheetPin: str(pin[1]) }); }
+    else for (const t of terminalsOf(doc, it)) terms.push(Object.assign({ item: it }, t));
+  }
+  const parent = terms.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
+  const byItem = new Map(), byPoint = new Map(), byKey = new Map(), touch = terms.map(() => false);
+  terms.forEach((t, i) => {
+    if (!byItem.has(t.item)) byItem.set(t.item, []); byItem.get(t.item).push(i);
+    const pk = ptKey(t.p); if (!byPoint.has(pk)) byPoint.set(pk, []); byPoint.get(pk).push(i);
+    if (t.key) { if (!byKey.has(t.key)) byKey.set(t.key, []); byKey.get(t.key).push(i); }
+  });
+  for (const [it, idx] of byItem) if (conducts(it)) for (let k = 1; k < idx.length; k++) union(idx[0], idx[k]);
+  for (const idx of byPoint.values()) for (let a = 0; a < idx.length; a++) for (let b = a + 1; b < idx.length; b++) if (terms[idx[a]].item !== terms[idx[b]].item && joins(terms[idx[a]], terms[idx[b]])) { union(idx[a], idx[b]); touch[idx[a]] = touch[idx[b]] = true; }
+  for (const [it, idx] of byItem) {
+    if (!isNetLine(it.kind)) continue;
+    const sg = segs(it), lineT = { net: it.kind };
+    terms.forEach((u, i) => { if (u.item === it || !joins(lineT, u)) return; if (sg.some(([a, b]) => onSegMid(u.p, a, b))) { union(idx[0], i); touch[i] = true; } });
+  }
+  for (const idx of byKey.values()) for (let k = 1; k < idx.length; k++) union(idx[0], idx[k]);
+  const nets = new Map();
+  terms.forEach((t, i) => { const r = find(i); if (!nets.has(r)) nets.set(r, { terms: [], ids: new Set() }); const n = nets.get(r); n.terms.push(t); n.ids.add(t.item.id); t.attached = touch[i]; });
+  return { terms, nets: Array.from(nets.values()) };
+}
+// A no-connect flag at p, a sheet pin at p, any net line end / middle at p.
+function noConnectAt(doc, p) { return noConnectsAt(doc, p).length > 0; }
+function pinLabel(t) { return `${t.item.ref || "?"} pin ${t.pin.number}${t.pin.name && t.pin.name !== "~" ? " (" + t.pin.name + ")" : ""}`; }
+function ercCheck(doc, opts) {
+  opts = opts || {};
+  const markers = [], mark = (code, severity, p, text, ids) => markers.push({ code, severity, x: r4(p[0]), y: r4(p[1]), text, ids: Array.from(new Set(ids || [])) });
+  const { nets } = ercNets(doc);
+  // symbols: annotation and duplicate references
+  const byRef = new Map();
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol") continue;
+    const ref = it.ref || "", [x, y] = atOf(it.node);
+    if (!ref || /\?$/.test(ref)) { mark("unannotated", "error", [x, y], `Symbol ${ref || "(no reference)"} is not annotated`, [it.id]); continue; }
+    const unit = kid(it.node, "unit") ? num(kid(it.node, "unit")[1], 1) : 1, k = ref + "#" + unit;
+    if (byRef.has(k)) mark("duplicate_reference", "error", [x, y], `Duplicate reference designators ${ref}`, [it.id, byRef.get(k).id]); else byRef.set(k, it);
+  }
+  // nets: pins, drivers, labels
+  for (const net of nets) {
+    const pins = net.terms.filter((t) => t.pin), labels = net.terms.filter((t) => LABEL_KINDS.has(t.item.kind));
+    const leaves = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label" || t.item.kind === "global_label" || t.power || (t.pin && t.key));
+    for (const t of pins) {
+      if (t.pin.hidden || t.pin.type === "no_connect" || t.key) continue;
+      if (!t.attached && !noConnectAt(doc, t.p)) mark("pin_not_connected", "error", t.p, `Pin not connected: ${pinLabel(t)}`, [t.item.id]);
+      if (t.pin.type === "no_connect" || (noConnectAt(doc, t.p) && net.terms.some((u) => u !== t && u.item !== t.item)))
+        mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id]);
+    }
+    const visible = pins.filter((t) => !t.pin.hidden || t.power);
+    let hasDriver = false, isPower = visible.some((t) => t.pin.type === "power_in"), needs = null, worst = null;
+    for (let i = 0; i < visible.length; i++) {
+      const a = visible[i];
+      if (isPower ? a.pin.type === "power_out" : DRIVING.has(a.pin.type)) hasDriver = true;
+      if (DRIVEN.has(a.pin.type) && (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in"))) needs = a;
+      for (let j = i + 1; j < visible.length; j++) {
+        const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
+        const e = PIN_MATRIX[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];
+        if (e && (!worst || e > worst.e)) worst = { e, a, b };
+      }
+    }
+    if (worst) mark(worst.e === 2 ? "pin_to_pin_error" : "pin_to_pin_warning", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id]);
+    if (needs && !hasDriver && visible.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
+      const leavesSheet = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label");
+      if (!leavesSheet) mark(isPower ? "power_pin_not_driven" : "pin_not_driven", leaves ? "warning" : "error", needs.p,
+        (isPower ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(needs) + (leaves ? " (no driver on this sheet)" : ""), [needs.item.id]);
+    }
+    for (const t of labels) {
+      if (t.item.kind === "netclass_flag" || t.item.kind === "directive_label") continue;
+      const text = str(t.item.node[1]);
+      if (!text.trim()) mark("empty_label_name", "error", t.p, "Label has an empty name", [t.item.id]);
+      if (!t.attached) mark("label_dangling", "error", t.p, `Label not connected: ${text}`, [t.item.id]);
+      else if (t.item.kind === "label" && pins.length === 1 && labels.length === 1 && !leaves) mark("isolated_pin_label", "warning", t.p, `Label connected to only one pin: ${text}`, [t.item.id]);
+      const wires = new Set(); for (const it of doc.items.values()) if (it.kind === "wire" && (K.wireEndsAt(doc, t.p[0], t.p[1], 1e-3).some((e) => e.item === it) || segs(it).some(([a, b]) => onSegMid(t.p, a, b)))) wires.add(it.id);
+      if (wires.size > 1) mark("label_multiple_wires", "warning", t.p, `Label connects more than one wire: ${text}`, [t.item.id, ...wires]);
+    }
+  }
+  // wires: dangling ends
+  for (const it of doc.items.values()) {
+    if (!isNetLine(it.kind)) continue;
+    const pts = ptsOf(it.node); if (pts.length < 2) continue;
+    const loose = [pts[0], pts[pts.length - 1]].filter((p) => {
+      if (K.wireEndsAt(doc, p[0], p[1], 1e-3).some((e) => e.item !== it)) return false;
+      if (lineMidsAt(doc, p[0], p[1], "wire").length || lineMidsAt(doc, p[0], p[1], "bus").length) return false;
+      if (it.kind === "wire" && pinsAt(doc, p[0], p[1]).length) return false;
+      return !labelsAt(doc, p).length && !sheetPinsAt(doc, p).length && !busEntriesAt(doc, p).length && !noConnectsAt(doc, p).length;
+    });
+    if (loose.length === 2) mark("wire_dangling", "error", [(pts[0][0] + pts[pts.length - 1][0]) / 2, (pts[0][1] + pts[pts.length - 1][1]) / 2], "Wires not connected to anything", [it.id]);
+    else for (const p of loose) mark("unconnected_wire_endpoint", "warning", p, "Unconnected wire endpoint", [it.id]);
+  }
+  // no-connect flags on nothing, four-way junctions
+  for (const it of doc.items.values()) {
+    if (it.kind === "no_connect") { const [x, y] = atOf(it.node); if (!pinsAt(doc, x, y).length && !K.wireEndsAt(doc, x, y, 1e-3).length) mark("no_connect_dangling", "warning", [x, y], 'Unconnected "no connection" flag', [it.id]); }
+    if (it.kind === "junction") { const [x, y] = atOf(it.node); if (lineEndsAt(doc, x, y, "wire").length >= 4) mark("four_way_junction", "warning", [x, y], "Four connection points are joined together", [it.id]); }
+  }
+  // similar labels (case-insensitive twins)
+  const names = new Map();
+  for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") { const t = str(it.node[1]); const k = t.toLowerCase(); if (!names.has(k)) names.set(k, new Map()); names.get(k).set(t, it); }
+  for (const m of names.values()) if (m.size > 1) { const its = Array.from(m.values()); mark("similar_labels", "warning", atOf(its[0].node), `Labels are similar: ${Array.from(m.keys()).join(", ")}`, its.map((x) => x.id)); }
+  // sheet pins vs the sub-sheet's hierarchical labels (when the sub-sheet document is known)
+  const sheetDocs = opts.sheetDocs || null;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "sheet") continue;
+    const sub = sheetDocs ? subsheetDoc(sheetDocs, it) : null;
+    const pinNames = new Map(); for (const pin of kids(it.node, "pin")) pinNames.set(str(pin[1]), pin);
+    if (sub) {
+      const hier = new Set(); for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str(o.node[1]));
+      for (const [name, pin] of pinNames) if (!hier.has(name)) mark("hier_label_mismatch", "error", atOf(pin), `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id]);
+      const [x, y] = atOf(it.node);
+      for (const name of hier) if (!pinNames.has(name)) mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id]);
+    }
+  }
+  if (opts.parentPins) { const pp = new Set(opts.parentPins); for (const it of doc.items.values()) if (it.kind === "hierarchical_label" && !pp.has(str(it.node[1]))) mark("hier_label_mismatch", "error", atOf(it.node), `Hierarchical label ${str(it.node[1])} has no sheet pin on the parent sheet`, [it.id]); }
+  markers.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1) || a.y - b.y || a.x - b.x);
+  return markers;
+}
+// ctx.sheetDocs: a Map or object of Sheetfile (or docId / path) -> parsed doc or its text.
+function subsheetDoc(sheetDocs, sheet) {
+  const get = (k) => (typeof sheetDocs.get === "function" ? sheetDocs.get(k) : sheetDocs[k]);
+  const file = sheet.file || str((kids(sheet.node, "property").find((p) => str(p[1]) === "Sheetfile") || [])[2]);
+  let d = get(file) || get(baseName(file)) || get(sheet.id); if (!d) return null;
+  if (typeof d === "string") { try { d = K.parseDoc(d); } catch (e) { return null; } if (typeof sheetDocs.set === "function") sheetDocs.set(file, d); }
+  return d && d.items ? d : null;
+}
+function runERC(ctx, opts) {
+  const markers = ercCheck(ctx.doc, Object.assign({ sheetDocs: ctx.sheetDocs, parentPins: ctx.parentSheetPins }, opts || {}));
+  S.markers = markers; S.markersDoc = ctx.doc;
+  if (typeof ctx.setMarkers === "function") ctx.setMarkers(markers);
+  const errors = markers.filter((m) => m.severity === "error").length;
+  ctx.toast(markers.length ? `ERC: ${errors} error${errors === 1 ? "" : "s"}, ${markers.length - errors} warning${markers.length - errors === 1 ? "" : "s"}` : "ERC: no problems found");
+  ctx.requestRender(); return true;
+}
+// Sheet pins the sub-sheet's hierarchical labels ask for (syncSheetPins); cleanupSheetPins removes the orphans.
+function syncSheetPins(ctx) {
+  if (!editable(ctx)) return false;
+  const doc = ctx.doc, changes = []; let added = 0;
+  for (const it of selectedItems(ctx)) {
+    if (it.kind !== "sheet") continue;
+    const sub = ctx.sheetDocs ? subsheetDoc(ctx.sheetDocs, it) : null; if (!sub) { ctx.toast("The sheet's file is not loaded"); continue; }
+    const have = new Set(kids(it.node, "pin").map((p) => str(p[1]))); const node = deep(it.node);
+    const [x, y] = atOf(node), s = kid(node, "size"), h = num(s && s[2]); let row = 0;
+    for (const o of sub.items.values()) {
+      if (o.kind !== "hierarchical_label" || have.has(str(o.node[1]))) continue;
+      const py = Math.min(y + h, r4(y + 1.27 * (++row)));
+      const pin = sheetPinNode(str(o.node[1]), [x, py], "left"); const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (at >= 0) node.splice(at, 0, pin); else node.push(pin);
+      have.add(str(o.node[1])); added++;
+    }
+    if (added) changes.push(modChange(doc, it, node));
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, "sync sheet pins"); return true;
+}
+function cleanupSheetPins(ctx) {
+  if (!editable(ctx)) return false;
+  const doc = ctx.doc, changes = [];
+  for (const it of selectedItems(ctx)) {
+    if (it.kind !== "sheet") continue;
+    const sub = ctx.sheetDocs ? subsheetDoc(ctx.sheetDocs, it) : null; if (!sub) { ctx.toast("The sheet's file is not loaded"); continue; }
+    const hier = new Set(); for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str(o.node[1]));
+    const node = deep(it.node); const before = kids(node, "pin").length;
+    for (let i = node.length - 1; i > 0; i--) if (Array.isArray(node[i]) && node[i][0] === "pin" && !hier.has(str(node[i][1]))) node.splice(i, 1);
+    if (kids(node, "pin").length !== before) changes.push(modChange(doc, it, node));
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, "cleanup sheet pins"); return true;
+}
+
+// ---------------------------------------------------------------- group transforms: rotate / mirror about the selection centre, swap, align, move exactly
+const HALF_GRID = 0.635;
+const halfGrid = (v) => r4(Math.round(v / HALF_GRID) * HALF_GRID);
+function itemsBox(items) { let b = null; for (const it of items) { const r = it.bbox || rectOf(it); if (!r) continue; b = b ? [Math.min(b[0], r[0]), Math.min(b[1], r[1]), Math.max(b[2], r[2]), Math.max(b[3], r[3])] : r.slice(); } return b; }
+function selectionCentre(items) { const b = itemsBox(items); return b ? [halfGrid((b[0] + b[2]) / 2), halfGrid((b[1] + b[3]) / 2)] : [0, 0]; }
+// SCH_EDIT_TOOL::Rotate's pivot: a lone connectable item turns about its position, anything else about its
+// half-grid box centre; a multi-selection about the selection centre.
+function rotationCentre(items) {
+  if (items.length !== 1) return selectionCentre(items);
+  const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
+  return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
+}
+// op: "ccw" | "cw" | "x" (KiCad's Mirror Vertically: y flips) | "y" (Mirror Horizontally: x flips)
+function mapPoint(op, C, p) { const [dx, dy] = SCREEN_OP[op](p[0] - C[0], p[1] - C[1]); return [r4(C[0] + dx), r4(C[1] + dy)]; }
+function setFlagRot(node, rot) {
+  rot = ((rot % 360) + 360) % 360; const a = kid(node, "at"); if (!a) return; if (a.length >= 4) a[3] = rot; else a.push(rot);
+  const p = [num(a[1]), num(a[2])]; for (const pr of kids(node, "property")) replaceKid(pr, flagFieldAt(p, rot));
+}
+function sideOfEdge(p, box) { const d = [["left", Math.abs(p[0] - box[0])], ["right", Math.abs(p[0] - box[2])], ["top", Math.abs(p[1] - box[1])], ["bottom", Math.abs(p[1] - box[3])]]; d.sort((a, b) => a[1] - b[1]); return d[0][0]; }
+function transformNode(kind, node, op, C) {
+  const rot = op === "ccw" || op === "cw";
+  const mapAt = (n) => { const a = kid(n, "at"); if (!a) return; const q = mapPoint(op, C, [num(a[1]), num(a[2])]); a[1] = q[0]; a[2] = q[1]; };
+  const mapPts = (n) => setPts(n, ptsOf(n).map((p) => mapPoint(op, C, p)));
+  const moveTo = (p0) => { const p1 = mapPoint(op, C, p0); shiftNode(kind, node, r4(p1[0] - p0[0]), r4(p1[1] - p0[1])); };
+  switch (kind) {
+  case "symbol": { const p0 = anchorOf(kind, node); orientSymbol(node, op); moveTo(p0); return true; }
+  case "label": case "global_label": case "hierarchical_label": case "text": {
+    const p0 = anchorOf(kind, node);
+    if (rot) setTextRot(kind, node, atOf(node)[2] + (op === "cw" ? 270 : 90)); else mirrorNode(kind, node, op);
+    moveTo(p0); return true;
+  }
+  case "netclass_flag": case "directive_label": {
+    const p0 = anchorOf(kind, node), r0 = atOf(node)[2] || 0;
+    if (rot) setFlagRot(node, r0 + (op === "cw" ? 270 : 90)); else { const flip = op === "y" ? { 0: 180, 180: 0 } : { 90: 270, 270: 90 }; if (flip[r0] !== undefined) setFlagRot(node, flip[r0]); }
+    moveTo(p0); return true;
+  }
+  case "junction": case "no_connect": case "image": mapAt(node); return true;
+  case "bus_entry": { mapAt(node); const s = kid(node, "size"); if (s) { const [dx, dy] = SCREEN_OP[op](num(s[1]), num(s[2])); s[1] = r4(dx); s[2] = r4(dy); } return true; }
+  case "wire": case "bus": case "polyline": case "bezier": mapPts(node); return true;
+  case "rule_area": for (const pl of kids(node, "polyline")) mapPts(pl); return true;
+  case "rectangle": { const a = kid(node, "start"), b = kid(node, "end"); const [x0, y0, x1, y1] = corners(mapPoint(op, C, [num(a[1]), num(a[2])]), mapPoint(op, C, [num(b[1]), num(b[2])])); a[1] = x0; a[2] = y0; b[1] = x1; b[2] = y1; return true; }
+  case "circle": { const c = kid(node, "center"); const p = mapPoint(op, C, [num(c[1]), num(c[2])]); c[1] = p[0]; c[2] = p[1]; return true; }
+  case "arc": { for (const key of ["start", "mid", "end"]) { const k = kid(node, key); if (k) { const p = mapPoint(op, C, [num(k[1]), num(k[2])]); k[1] = p[0]; k[2] = p[1]; } } return true; }
+  case "text_box": {
+    const [x, y, a] = atOf(node), s = kid(node, "size"); if (!s) return false;
+    const [x0, y0, x1, y1] = corners(mapPoint(op, C, [x, y]), mapPoint(op, C, [x + num(s[1]), y + num(s[2])]));
+    const vertical = a === 90 || a === 270;
+    setAt(node, x0, y0, rot ? (vertical ? 0 : 90) : a); s[1] = r4(x1 - x0); s[2] = r4(y1 - y0);
+    if (!rot && ((op === "y" && !vertical) || (op === "x" && vertical))) { const ef = kid(node, "effects"), j = ef && kid(ef, "justify"); if (j) { const i = j.indexOf("left") > 0 ? j.indexOf("left") : j.indexOf("right"); if (i > 0) j[i] = j[i] === "left" ? "right" : "left"; } }
+    return true;
+  }
+  case "table": { const cells = kid(node, "cells"), c0 = cells && kid(cells, "table_cell"); if (!c0) return false; moveTo(atOf(c0).slice(0, 2)); return true; }   // tables keep their orientation
+  case "sheet": {
+    const [x, y] = atOf(node), s = kid(node, "size"); if (!s) return false;
+    const [x0, y0, x1, y1] = corners(mapPoint(op, C, [x, y]), mapPoint(op, C, [x + num(s[1]), y + num(s[2])]));
+    setAt(node, x0, y0); s[1] = r4(x1 - x0); s[2] = r4(y1 - y0);
+    for (const pin of kids(node, "pin")) {
+      const pp = mapPoint(op, C, atOf(pin).slice(0, 2)), [prot, just] = PIN_SIDE[sideOfEdge(pp, [x0, y0, x1, y1])];
+      setAt(pin, pp[0], pp[1], prot); let ef = kid(pin, "effects"); if (!ef) { ef = ["effects", fontNode(1.27)]; pin.push(ef); } replaceKid(ef, ["justify", just]);
+    }
+    const auto = kid(node, "fields_autoplaced") && str(kid(node, "fields_autoplaced")[1]) !== "no";
+    for (const pr of kids(node, "property")) {
+      const name = str(pr[1]);
+      if (auto && name === "Sheetname") replaceKid(pr, ["at", x0, r4(y0 - SHEET_NAME_OFF), 0]);
+      else if (auto && name === "Sheetfile") replaceKid(pr, ["at", x0, r4(y1 + SHEET_FILE_OFF), 0]);
+      else shiftAt(pr, r4(x0 - x), r4(y0 - y));
+    }
+    return true;
+  }
+  default: return false;
+  }
+}
+// MODIFIED changes for the items transformed about C, plus the junction / merge cleanup around every connection point.
+function transformChanges(ctx, items, op, C, times) {
+  const doc = ctx.doc, out = [], touched = [], keep = new Set();
+  for (const it of items) {
+    if (!DRAG_KINDS.has(it.kind)) continue;
+    const n = deep(it.node); let ok = true;
+    for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C) !== false;
+    if (!ok) continue;
+    for (const p of connPoints(doc, it)) touched.push(p);
+    for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
+    out.push(modChange(doc, it, n)); keep.add(it.id);
+  }
+  if (!out.length) return out;
+  const extra = cleanupAt(doc, out, touched, keep, ctx.IU || 1e4);
+  for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
+  return out.concat(extra);
+}
+function transformSelected(ctx, op, items, centre) {
+  if (!editable(ctx)) return false;
+  items = items || selectedItems(ctx); if (!items.length) return false;
+  const C = centre || selectionCentre(items);
+  const changes = transformChanges(ctx, items, op, C);
+  if (!changes.length) return false;
+  ctx.commit(changes, op === "x" || op === "y" ? "mirror" : "rotate");
+  return true;
+}
+function moveExactChanges(ctx, items, dx, dy, rot) {
+  const doc = ctx.doc, turns = ((Math.round((rot || 0) / 90) % 4) + 4) % 4, C = rotationCentre(items);
+  const out = [], touched = [], keep = new Set();
+  for (const it of items) {
+    if (!DRAG_KINDS.has(it.kind)) continue;
+    const n = deep(it.node); let ok = true;
+    for (let k = 0; k < turns && ok; k++) ok = transformNode(it.kind, n, "ccw", C) !== false;
+    if (!ok) continue;
+    shiftNode(it.kind, n, r4(dx || 0), r4(dy || 0));
+    for (const p of connPoints(doc, it)) touched.push(p);
+    for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
+    out.push(modChange(doc, it, n)); keep.add(it.id);
+  }
+  if (!out.length) return out;
+  const extra = cleanupAt(doc, out, touched, keep, ctx.IU || 1e4);
+  for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);
+  return out.concat(extra);
+}
+function moveExactly(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const apply = (dx, dy, rot) => { const changes = moveExactChanges(ctx, items, dx, dy, rot); if (changes.length) ctx.commit(changes, "move exactly"); return changes.length > 0; };
+  if (opts && (opts.dx !== undefined || opts.dy !== undefined || opts.rot !== undefined)) return apply(num(opts.dx), num(opts.dy), num(opts.rot));
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null; if (!KD) return false;
+  KD.open({ title: "Move Exactly", width: 360,
+    build(body) { body.innerHTML = '<div class="kv"><label>Move X (mm)</label><input id="kd-mx" type="number" step="0.01" value="0"><label>Move Y (mm)</label><input id="kd-my" type="number" step="0.01" value="0"><label>Rotate (°)</label><select id="kd-mr"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></select></div><p class="kd-note">Rotation is about the centre of the selection, counterclockwise.</p>'; },
+    ok() { const g = (id) => document.getElementById(id); apply(num(g("kd-mx").value), num(g("kd-my").value), num(g("kd-mr").value)); } });
+  return true;
+}
+// Swap the positions of the selected items pairwise in selection order (SCH_EDIT_TOOL::Swap).
+function swapNodes(items) {
+  const nodes = items.map((it) => deep(it.node));
+  if (items.length < 2) return nodes;
+  for (let i = 0; i < items.length - 1; i++) {
+    const A = nodes[i], B = nodes[i + 1], ka = items[i].kind, kb = items[i + 1].kind;
+    const pa = anchorOf(ka, A), pb = anchorOf(kb, B);
+    shiftNode(ka, A, r4(pb[0] - pa[0]), r4(pb[1] - pa[1])); shiftNode(kb, B, r4(pa[0] - pb[0]), r4(pa[1] - pb[1]));
+    if (ka !== kb) continue;
+    if (TEXT_KINDS.has(ka)) { const ra = atOf(A)[2] || 0, rb = atOf(B)[2] || 0; setTextRot(ka, A, rb); setTextRot(kb, B, ra); }
+    else if (ka === "symbol" && symbolLibId(A) === symbolLibId(B)) {
+      const oa = symOrient(A), ob = symOrient(B);
+      for (const [n, o] of [[A, ob], [B, oa]]) { setAt(n, undefined, undefined, o.rot); dropKid(n, "mirror"); if (o.mirror) { const ai = n.findIndex((c) => Array.isArray(c) && c[0] === "at"); n.splice(ai + 1, 0, ["mirror", o.mirror]); } }
+    }
+  }
+  return nodes;
+}
+function swapChanges(doc, items) { if (items.length < 2) return []; const nodes = swapNodes(items); return items.map((it, i) => modChange(doc, it, nodes[i])); }
+function swapSelection(ctx) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx).filter((it) => DRAG_KINDS.has(it.kind));
+  if (items.length < 2) { ctx.toast("Select two or more items to swap"); return false; }
+  const doc = ctx.doc, nodes = swapNodes(items), changes = items.map((it, i) => modChange(doc, it, nodes[i])), touched = [];
+  items.forEach((it, i) => { touched.push(...connPoints(doc, it), ...connPoints(doc, { kind: it.kind, node: nodes[i], id: it.id })); });
+  const extra = cleanupAt(doc, changes, touched, new Set(items.map((it) => it.id)), ctx.IU || 1e4);
+  for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);
+  ctx.commit(changes.concat(extra), "swap"); return true;
+}
+// Align to grid (SCH_MOVE_TOOL::AlignToGrid): pins, line ends and anchors land on the grid; sheets by their corners.
+function alignToGridChanges(ctx, items) {
+  const doc = ctx.doc, out = [], touched = [], keep = new Set();
+  const snap = (p) => ctx.snap([p[0], p[1]]).map(r4);
+  for (const it of items) {
+    if (!DRAG_KINDS.has(it.kind)) continue;
+    const n = deep(it.node);
+    if (LINE_KINDS.has(it.kind) || it.kind === "bezier") setPts(n, ptsOf(n).map(snap));
+    else if (it.kind === "sheet") {
+      const [x, y] = atOf(n), s = kid(n, "size"), tl = snap([x, y]), br = snap([x + num(s[1]), y + num(s[2])]);
+      setAt(n, tl[0], tl[1]); s[1] = r4(br[0] - tl[0]); s[2] = r4(br[1] - tl[1]);
+      for (const pr of kids(n, "property")) shiftAt(pr, r4(tl[0] - x), r4(tl[1] - y));
+      for (const pin of kids(n, "pin")) { const [px, py, prot] = atOf(pin), q = snap([px, py]); const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v)); if (prot === 180) setAt(pin, tl[0], clamp(q[1], tl[1], br[1])); else if (prot === 0) setAt(pin, br[0], clamp(q[1], tl[1], br[1])); else if (prot === 90) setAt(pin, clamp(q[0], tl[0], br[0]), tl[1]); else setAt(pin, clamp(q[0], tl[0], br[0]), br[1]); }
+    } else {
+      const pins = it.kind === "symbol" ? connPoints(doc, it) : [];
+      const a = pins[0] || anchorOf(it.kind, n), q = snap(a);
+      shiftNode(it.kind, n, r4(q[0] - a[0]), r4(q[1] - a[1]));
+    }
+    if (JSON.stringify(n) === JSON.stringify(it.node)) continue;
+    for (const p of connPoints(doc, it)) touched.push(p);
+    for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
+    out.push(modChange(doc, it, n)); keep.add(it.id);
+  }
+  if (!out.length) return out;
+  const extra = cleanupAt(doc, out, touched, keep, ctx.IU || 1e4);
+  for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);
+  return out.concat(extra);
+}
+function alignToGrid(ctx) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const changes = alignToGridChanges(ctx, items); if (!changes.length) { ctx.toast("Already on the grid"); return true; }
+  ctx.commit(changes, "align to grid"); return true;
+}
+// Edge alignment (sch_align_tool.cpp): every item's box edge moves to the extreme edge of the selection.
+function alignEdgeChanges(ctx, items, which) {
+  const doc = ctx.doc, boxes = items.map((it) => it.bbox || rectOf(it)).filter(Boolean); if (boxes.length < 2) return [];
+  const target = which === "top" ? Math.min(...boxes.map((b) => b[1])) : which === "bottom" ? Math.max(...boxes.map((b) => b[3])) : which === "left" ? Math.min(...boxes.map((b) => b[0])) : which === "right" ? Math.max(...boxes.map((b) => b[2]))
+    : which === "centerX" ? boxes.reduce((t, b) => t + (b[0] + b[2]) / 2, 0) / boxes.length : boxes.reduce((t, b) => t + (b[1] + b[3]) / 2, 0) / boxes.length;
+  const out = [], touched = [], keep = new Set();
+  for (const it of items) {
+    const b = it.bbox || rectOf(it); if (!b || !DRAG_KINDS.has(it.kind)) continue;
+    const cur = which === "top" ? b[1] : which === "bottom" ? b[3] : which === "left" ? b[0] : which === "right" ? b[2] : which === "centerX" ? (b[0] + b[2]) / 2 : (b[1] + b[3]) / 2;
+    const d = ctx.snap ? r4(K.snap(target - cur, ctx.gridPitch || 1.27)) : r4(target - cur); if (!d) continue;
+    const n = deep(it.node); shiftNode(it.kind, n, which === "left" || which === "right" || which === "centerX" ? d : 0, which === "top" || which === "bottom" || which === "centerY" ? d : 0);
+    for (const p of connPoints(doc, it)) touched.push(p);
+    for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
+    out.push(modChange(doc, it, n)); keep.add(it.id);
+  }
+  if (!out.length) return out;
+  const extra = cleanupAt(doc, out, touched, keep, ctx.IU || 1e4);
+  for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);
+  return out.concat(extra);
+}
+function alignEdges(ctx, which) {
+  if (!editable(ctx)) return false;
+  const items = selectedItems(ctx); if (items.length < 2) { ctx.toast("Select two or more items"); return false; }
+  const changes = alignEdgeChanges(ctx, items, which); if (!changes.length) return true;
+  ctx.commit(changes, "align " + which.toLowerCase()); return true;
+}
+// Break the wire under the cursor (or the selected one) into two at the grid point.
+function breakWireChanges(doc, item, p) {
+  if (!isNetLine(item.kind)) return [];
+  const pts = ptsOf(item.node); if (pts.length !== 2) return [];
+  const q = closestOnSeg(p, pts[0], pts[1]); if (same(q, pts[0]) || same(q, pts[1])) return [];
+  const a = deep(item.node); setPts(a, [pts[0], q]);
+  const b = addNode(doc, lineNode(item.kind, q, pts[1])); doc.items.delete(b.item.id);
+  return [modChange(doc, item, a), b.change];
+}
+function closestOnSeg(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return [r4(a[0] + t * dx), r4(a[1] + t * dy)]; }
+function breakWire(ctx) {
+  if (!editable(ctx)) return false;
+  const c = cursorOf(ctx); let it = selectedItems(ctx).find((x) => isNetLine(x.kind));
+  if (!it) { const hit = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (hit && isNetLine(hit.kind)) it = hit; }
+  if (!it) { ctx.toast("Point at a wire"); return false; }
+  const changes = breakWireChanges(ctx.doc, it, snapCursor(ctx)); if (!changes.length) return false;
+  ctx.commit(changes, "break wire"); setSelectionIds(ctx, [changes[1].id]); return true;
+}
+
+// ---------------------------------------------------------------- symbol fields table (Tools → Symbol Fields Table)
+const refCmp = (a, b) => { const ma = str(a).match(/^(.*?)(\d*)$/), mb = str(b).match(/^(.*?)(\d*)$/); return ma[1].localeCompare(mb[1]) || ((+ma[2] || 0) - (+mb[2] || 0)) || str(a).localeCompare(str(b)); };
+function fieldsTableRows(doc) {
+  const fields = ["Reference", "Value", "Footprint", "Datasheet"], rows = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol") continue;
+    const values = {};
+    for (const p of kids(it.node, "property")) { const nm = str(p[1]); if (nm.startsWith("ki_")) continue; values[nm] = str(p[2]); if (!fields.includes(nm)) fields.push(nm); }
+    rows.push({ id: it.id, ref: values.Reference || "", values });
+  }
+  rows.sort((a, b) => refCmp(a.ref, b.ref));
+  return { fields, rows };
+}
+// edits: [{ id, values: { name: text } }] -> one MODIFIED change per symbol that actually changed
+function fieldsTableChanges(doc, edits) {
+  const out = [];
+  for (const e of edits || []) {
+    const it = doc.items.get(e.id); if (!it || it.kind !== "symbol") continue;
+    const n = deep(it.node); let changed = false;
+    for (const [name, text] of Object.entries(e.values || {})) {
+      let p = kids(n, "property").find((q) => str(q[1]) === name);
+      if (!p) { if (str(text) === "") continue; p = ["property", name, "", ["at", ...atOf(n).slice(0, 2), 0], ["hide", "yes"], ["effects", fontNode(1.27)]]; insertField(n, p); }
+      if (str(p[2]) === str(text)) continue;
+      if (name === "Reference") setReference(n, str(text)); else p[2] = str(text);
+      changed = true;
+    }
+    if (changed) out.push(modChange(doc, it, n));
+  }
+  return out;
+}
+function openFieldsTable(ctx) {
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null; if (!KD) return false;
+  const doc = ctx.doc, table = fieldsTableRows(doc); if (!table.rows.length) { ctx.toast("No symbols on this sheet"); return false; }
+  const escapeHtml = (s) => str(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  let fields = table.fields.slice(), body = null;
+  const render = () => {
+    const ro = ctx.viewOnly ? " disabled" : "";
+    body.innerHTML = `<div style="overflow:auto;max-height:60vh"><table class="kd-table" style="border-collapse:collapse;font:12px var(--mono,ui-monospace,monospace)"><thead><tr>${fields.map((f) => `<th style="text-align:left;padding:2px 6px;border-bottom:1px solid var(--line,#ccc)">${escapeHtml(f)}</th>`).join("")}</tr></thead><tbody>${
+      table.rows.map((r) => `<tr>${fields.map((f) => `<td style="padding:1px 3px"><input data-id="${escapeHtml(r.id)}" data-field="${escapeHtml(f)}" value="${escapeHtml(r.values[f] || "")}" style="width:${f === "Reference" ? 60 : 130}px"${ro}></td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="kd-note" style="margin-top:8px">Edit any cell; OK commits every changed symbol as one change.${ctx.viewOnly ? "" : ' <button class="btn sm" id="kd-addfield">Add field…</button>'}</p>`;
+    const add = body.querySelector("#kd-addfield");
+    if (add) add.addEventListener("click", () => { const name = (typeof window !== "undefined" && window.prompt) ? window.prompt("New field name") : null; if (name && !fields.includes(name)) { collect(); fields.push(name); render(); } });
+  };
+  const collect = () => { for (const inp of body.querySelectorAll("input[data-id]")) { const r = table.rows.find((x) => x.id === inp.dataset.id); if (r) r.values[inp.dataset.field] = inp.value; } };
+  const original = new Map(table.rows.map((r) => [r.id, Object.assign({}, r.values)]));
+  KD.open({ title: "Symbol Fields Table", width: Math.min(960, 80 + fields.length * 150), readOnly: !!ctx.viewOnly,
+    build(b) { body = b; render(); },
+    ok() {
+      if (ctx.viewOnly) return; collect();
+      const edits = [];
+      for (const r of table.rows) { const o = original.get(r.id), values = {}; let any = false; for (const [k, v] of Object.entries(r.values)) if (str(o[k] || "") !== str(v)) { values[k] = v; any = true; } if (any) edits.push({ id: r.id, values }); }
+      const changes = fieldsTableChanges(doc, edits); if (changes.length) ctx.commit(changes, "symbol fields");
+    } });
+  return true;
+}
+
+// ---------------------------------------------------------------- unfold bus (SCH_LINE_WIRE_BUS_TOOL::UnfoldBus)
+// NET_SETTINGS::ParseBusVector / ParseBusGroup: "DATA[0..3]" -> DATA0..DATA3 (a +-PN suffix rides along),
+// "{A B C}" -> A B C, "NAME{A B}" -> NAME.A NAME.B; vectors nest inside groups.
+function busMembers(text) {
+  text = str(text).trim();
+  const v = text.match(/^([^\s\[\]{}]*)\[(\d+)\.\.(\d+)\]([+\-PN]*)$/);
+  if (v) { let a = +v[2], b = +v[3]; if (a === b) return null; if (a > b) { const t = a; a = b; b = t; } const members = []; for (let i = a; i <= b; i++) members.push(v[1] + i + v[4]); return { name: v[1], members, vector: true }; }
+  const g = text.match(/^([^\s\[\]{}]*)\{(.*)\}$/);
+  if (g) {
+    const prefix = g[1] ? g[1] + "." : "", members = [];
+    for (const m of g[2].split(/[\s,]+/).filter(Boolean)) { const sub = busMembers(m); if (sub && sub.vector) members.push(...sub.members.map((x) => prefix + x)); else members.push(prefix + m); }
+    return members.length ? { name: g[1], members, group: true } : null;
+  }
+  return null;
+}
+function busLabelsOf(doc, bus) {
+  const out = [];
+  for (const id of netItems(doc, bus)) { const it = doc.items.get(id); if (it && (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label")) { const m = busMembers(it.node[1]); if (m) out.push(Object.assign({ label: it }, m)); } }
+  return out;
+}
+function unfoldMembers(doc, bus) { const seen = new Set(), out = []; for (const b of busLabelsOf(doc, bus)) for (const m of b.members) if (!seen.has(m)) { seen.add(m); out.push(m); } return out; }
+function nearestOnLine(item, p) { let best = null, bd = Infinity; for (const [a, b] of segs(item)) { const q = closestOnSeg(p, a, b), d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = q; } } return best; }
+// Bus entry at the point, the member label on its far end (spun away from the bus like
+// SCH_SCREEN::GetLabelOrientationForPoint), then the wire tool takes over from that end.
+function unfoldBus(ctx, bus, member, at) {
+  const doc = ctx.doc, c = at || cursorOf(ctx), snapped = ctx.snap([c[0], c[1]]).map(r4);
+  const p = nearestOnLine(bus, snapped); if (!p) return null;
+  const seg = segs(bus)[0], horizontal = Math.abs(seg[0][1] - seg[1][1]) < 1e-6, vertical = Math.abs(seg[0][0] - seg[1][0]) < 1e-6;
+  const sx = c[0] < p[0] ? -1 : 1, sy = c[1] < p[1] ? -1 : 1;
+  const dx = 2.54 * sx, dy = 2.54 * sy, end = [r4(p[0] + dx), r4(p[1] + dy)];
+  let rot = 0; if (vertical) rot = end[0] < p[0] ? 180 : 0; else if (horizontal) rot = end[1] < p[1] ? 90 : 270;
+  const entry = addNode(doc, busEntryNode(p, r4(dx), r4(dy))), label = addNode(doc, labelNode("label", member, end, rot));
+  ctx.commit([entry.change, label.change], "unfold bus");
+  ctx.setTool("wire");
+  startWire(ctx, "wire", end);
+  S.unfold = { labelId: label.item.id, entryId: entry.item.id };
+  return { entry: entry.item, label: label.item, start: end };
+}
+function unfoldAction(ctx, opts) {
+  if (!editable(ctx)) return false;
+  opts = opts || {};
+  const doc = ctx.doc; let bus = opts.bus ? (typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus) : selectedItems(ctx).find((it) => it.kind === "bus");
+  if (!bus) { const c = cursorOf(ctx), hit = hitNonSymbol(doc, c[0], c[1], Math.max(0.6, 8 * mmPerPx(ctx))); if (hit && hit.kind === "bus") bus = hit; }
+  if (!bus) { ctx.toast("Select a bus first"); return false; }
+  const members = unfoldMembers(doc, bus); if (!members.length) { ctx.toast("No bus label names this bus's members"); return false; }
+  const go = (m) => { if (m && members.includes(m)) unfoldBus(ctx, bus, m, opts.at); };
+  if (opts.member) { go(opts.member); return true; }
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+  if (!KD) { go(members[0]); return true; }
+  KD.open({ title: "Unfold from Bus", width: 320,
+    build(body) { body.innerHTML = `<div class="kv"><label>Net</label><select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</select></div>`; },
+    ok() { go(document.getElementById("kd-member").value); } });
+  return true;
+}
+
+// ---------------------------------------------------------------- the actions map (ids stable: app.js binds menus and keys to them)
+function act(id, label, key, run) { return { id, label, key, run }; }
+const ACTION_LIST = [
+  act("cut", "Cut", "Ctrl+X", (ctx) => cutSelection(ctx)),
+  act("copy", "Copy", "Ctrl+C", (ctx) => copySelection(ctx)),
+  act("copyAsText", "Copy as Text", "Ctrl+Shift+C", (ctx) => copyAsText(ctx)),
+  act("paste", "Paste", "Ctrl+V", (ctx, opts) => pasteSelection(ctx, opts)),
+  act("pasteSpecial", "Paste Special...", "Ctrl+Shift+V", (ctx, opts) => pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}))),
+  act("duplicate", "Duplicate", "Ctrl+D", (ctx) => duplicateSelection(ctx)),
+  act("unselectAll", "Unselect All", "Ctrl+Shift+A", (ctx) => unselectAll(ctx)),
+  act("selectConnection", "Select/Expand Connection", "Ctrl+4", (ctx) => selectConnection(ctx)),
+  act("selectNode", "Select Node", "Alt+3", (ctx) => selectNode(ctx)),
+  act("nextNetItem", "Next Net Item", "Tab", (ctx) => stepNetItem(ctx, 1)),
+  act("previousNetItem", "Previous Net Item", "Shift+Tab", (ctx) => stepNetItem(ctx, -1)),
+  act("repeatLast", "Repeat Last Item", "Insert", (ctx) => repeatLast(ctx)),
+  act("increment", "Increment", "", (ctx) => incrementSelection(ctx, 1)),
+  act("decrement", "Decrement", "", (ctx) => incrementSelection(ctx, -1)),
+  act("toLabel", "Change to Label", "", (ctx) => convertSelection(ctx, "label")),
+  act("toGLabel", "Change to Global Label", "", (ctx) => convertSelection(ctx, "global_label")),
+  act("toHLabel", "Change to Hierarchical Label", "", (ctx) => convertSelection(ctx, "hierarchical_label")),
+  act("toDLabel", "Change to Directive Label", "", (ctx) => convertSelection(ctx, "netclass_flag")),
+  act("toText", "Change to Text", "", (ctx) => convertSelection(ctx, "text")),
+  act("toTextBox", "Change to Text Box", "", (ctx) => convertSelection(ctx, "text_box")),
+  act("autoplace", "Autoplace Fields", "O", (ctx, opts) => autoplaceSelection(ctx, opts)),
+  act("editReference", "Edit Reference Designator...", "U", (ctx) => editFieldPrompt(ctx, "Reference", "Reference", false)),
+  act("editValue", "Edit Value...", "V", (ctx) => editFieldPrompt(ctx, "Value", "Value", false)),
+  act("editFootprint", "Edit Footprint...", "F", (ctx) => editFieldPrompt(ctx, "Footprint", "Footprint", false)),
+  act("setDNP", "Do not Populate", "", (ctx) => toggleSymbolFlag(ctx, "setDNP")),
+  act("setExcludeFromBOM", "Exclude from Bill of Materials", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromBOM")),
+  act("setExcludeFromSim", "Exclude from Simulation", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromSim")),
+  act("setExcludeFromBoard", "Exclude from Board", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromBoard")),
+  act("nextUnit", "Next Symbol Unit", "", (ctx) => stepUnit(ctx, 1)),
+  act("previousUnit", "Previous Symbol Unit", "", (ctx) => stepUnit(ctx, -1)),
+  act("placeNextSymbolUnit", "Place Next Symbol Unit", "", (ctx) => placeNextUnit(ctx)),
+  act("cycleBodyStyle", "Cycle Body Style", "", (ctx) => cycleBodyStyle(ctx)),
+  act("showDatasheet", "Show Datasheet", "D", (ctx) => showDatasheet(ctx)),
+  act("annotate", "Annotate Schematic...", "", (ctx, opts) => annotate(ctx, opts)),
+  act("clearAnnotation", "Clear Annotation", "", (ctx, opts) => clearAnnotation(ctx, opts)),
+  act("toggleAnnotateAuto", "Annotate Automatically", "", (ctx) => { S.annotateAuto = !S.annotateAuto; if (ctx && ctx.toast) ctx.toast("Automatic annotation " + (S.annotateAuto ? "on" : "off")); return true; }),
+  act("runERC", "Electrical Rules Checker", "", (ctx, opts) => runERC(ctx, opts)),
+  act("clearMarkers", "Clear ERC Markers", "", (ctx) => { S.markers = []; if (typeof ctx.setMarkers === "function") ctx.setMarkers([]); ctx.requestRender(); return true; }),
+  act("swap", "Swap", "Alt+S", (ctx) => swapSelection(ctx)),
+  act("alignToGrid", "Align Items to Grid", "", (ctx) => alignToGrid(ctx)),
+  act("alignTop", "Align to Top", "", (ctx) => alignEdges(ctx, "top")),
+  act("alignBottom", "Align to Bottom", "", (ctx) => alignEdges(ctx, "bottom")),
+  act("alignLeft", "Align to Left", "", (ctx) => alignEdges(ctx, "left")),
+  act("alignRight", "Align to Right", "", (ctx) => alignEdges(ctx, "right")),
+  act("alignCenterX", "Align to Horizontal Center", "", (ctx) => alignEdges(ctx, "centerX")),
+  act("alignCenterY", "Align to Vertical Center", "", (ctx) => alignEdges(ctx, "centerY")),
+  act("moveExactly", "Move Exactly...", "", (ctx, opts) => moveExactly(ctx, opts)),
+  act("rotateSelection", "Rotate Counterclockwise", "R", (ctx) => orientSelected(ctx, "ccw")),
+  act("rotateSelectionCW", "Rotate Clockwise", "Shift+R", (ctx) => orientSelected(ctx, "cw")),
+  act("mirrorSelectionX", "Mirror Horizontally", "X", (ctx) => orientSelected(ctx, "y")),
+  act("mirrorSelectionY", "Mirror Vertically", "Y", (ctx) => orientSelected(ctx, "x")),
+  act("breakWire", "Break", "", (ctx) => breakWire(ctx)),
+  act("slice", "Slice", "", (ctx) => breakWire(ctx)),
+  act("fieldsTable", "Symbol Fields Table...", "", (ctx) => openFieldsTable(ctx)),
+  act("unfoldBus", "Unfold from Bus", "C", (ctx, opts) => unfoldAction(ctx, opts)),
+  act("syncSheetPins", "Sync Sheet Pins...", "", (ctx) => syncSheetPins(ctx)),
+  act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx) => cleanupSheetPins(ctx)),
+  act("highlightNet", "Highlight Net", "`", (ctx) => { ctx.setTool("highlight"); return true; }),
+  act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => { setHighlight(ctx, null); return true; }),
+];
+const actions = {}; for (const a of ACTION_LIST) actions[a.id] = a;
+function runAction(id, ctx, opts) { const a = actions[id]; if (!a) return false; S.ctx = ctx; installDom(ctx); try { return !!a.run(ctx, opts); } catch (e) { console.warn(e); if (ctx && ctx.toast) ctx.toast(a.label + " failed: " + (e && e.message)); return false; } }
 
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.sch = {
@@ -1550,7 +2751,16 @@ root.CollabTools.sch = {
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet
   deleteChanges, netItems,
-  _: { lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
+  // KiCad's non-tool commands: { id: { id, label, key, run(ctx, opts) -> handled } }; app.js binds menus and keys to them
+  actions, runAction, markers() { return S.markers; },
+  // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
+  clipboardText, parseClipboard, ercCheck, annotateChanges, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
+  _: { selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
+    convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
+    ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
+    alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
+    selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
+    lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
     tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool

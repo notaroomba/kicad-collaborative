@@ -313,3 +313,57 @@ t("zone name and priority", () => {
   H.setZoneName(node, ""); H.setZonePriority(node, 0);
   assert.equal(H.kid(node, "name"), null); assert.equal(H.kid(node, "priority"), null);
 });
+
+// ---------------------------------------------------------------- pads (board): DIALOG_PAD_PROPERTIES on the footprint node, without the sample
+const PAD_BOARD = (style) => `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (37 "F.SilkS" user))
+  (net 0 "") (net 1 "GND") (net 2 "/SIG")
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50 -90)
+    (property "Reference" "R1" (at 0 -1.5 -90) (layer "F.SilkS") (uuid "p-1") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd roundrect (at -0.9 0 -90) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (roundrect_rratio 0.25) ${style === "code" ? '(net 1 "GND")' : '(net "GND")'} (pintype "passive") (uuid "pad-1"))
+    (pad "2" thru_hole circle (at 0.9 0 -90) (size 1.6 1.6) (drill 0.8 (offset 0.1 0)) (layers "*.Cu" "*.Mask") (remove_unused_layers no) ${style === "code" ? '(net 2 "/SIG")' : '(net "/SIG")'} (solder_mask_margin 0.1) (uuid "pad-2"))
+    (pad "3" smd rect (at 0 2) (size 0.5 0.5) (layers "F.Cu" "F.Mask") (uuid "pad-3")))
+  (segment (start 110 50) (end 115 50) (width 0.25) (layer "F.Cu") ${style === "code" ? "(net 1)" : '(net "GND")'} (uuid "s-1"))
+)`;
+const padDoc = (style) => K.parseDoc(PAD_BOARD(style), "kicad_pcb");
+const order = (pad) => pad.slice(6).filter(Array.isArray).map((c) => c[0]);   // the children after (at) and (size)
+
+test("padInfo reads the dialog's fields; boardNetNames and numberedNets see both net styles", () => {
+  const doc = padDoc("code"); const fp = doc.items.get("fp-1");
+  const p1 = H.padInfo(doc, H.padNode(fp.node, 0)), p2 = H.padInfo(doc, H.padNode(fp.node, 1)), p3 = H.padInfo(doc, H.padNode(fp.node, 2));
+  assert.deepEqual(p1, { number: "1", type: "smd", shape: "roundrect", w: 1, h: 1.2, rot: -90, drill: "", layers: ["F.Cu", "F.Mask", "F.Paste"], net: "GND", maskMargin: null, pasteMargin: null, rratio: 0.25 });
+  assert.deepEqual([p2.type, p2.shape, p2.w, p2.drill, p2.net, p2.maskMargin, p2.rratio], ["thru_hole", "circle", 1.6, "0.8", "/SIG", 0.1, null]);
+  assert.deepEqual([p3.net, p3.rot, p3.layers], ["", 0, ["F.Cu", "F.Mask"]]);
+  assert.deepEqual(H.boardNetNames(doc), ["/SIG", "GND"]); assert.equal(H.numberedNets(doc), true); assert.equal(H.numberedNets(padDoc("name")), false);
+  assert.equal(H.netCodeOf(doc, "/SIG"), 2); assert.equal(H.netCodeOf(doc, "nope"), 0); assert.equal(H.padNode(fp.node, 9), null); assert.equal(H.setPad(clone(fp.node), 9, {}), false);
+});
+
+test("setPad edits number, type, shape, size, orientation, hole, layers, net and margins in the writer's child order and round-trips", () => {
+  for (const style of ["code", "name"]) {
+    const doc = padDoc(style); const item = doc.items.get("fp-1"); const node = clone(item.node);
+    H.setPad(node, 0, { number: "A1", type: "thru_hole", shape: "oval", w: 1.5, h: 2, rot: 0, drill: "0.8x1.2", layers: ["*.Cu", "*.Mask"], net: "/SIG", maskMargin: 0.05, pasteMargin: -0.02 }, doc);
+    const pad = H.padNode(node, 0);
+    assert.deepEqual(pad.slice(0, 6), ["pad", "A1", "thru_hole", "oval", ["at", -0.9, 0], ["size", 1.5, 2]], style + ": a zero angle drops off the (at)");
+    assert.deepEqual(H.kid(pad, "drill"), ["drill", "oval", 0.8, 1.2]); assert.deepEqual(H.kid(pad, "layers"), ["layers", "*.Cu", "*.Mask"]);
+    assert.deepEqual(H.kid(pad, "net"), style === "code" ? ["net", 2, "/SIG"] : ["net", "/SIG"]);
+    assert.deepEqual(H.kid(pad, "solder_mask_margin"), ["solder_mask_margin", 0.05]); assert.deepEqual(H.kid(pad, "solder_paste_margin"), ["solder_paste_margin", -0.02]);
+    assert.equal(H.kid(pad, "roundrect_rratio"), null, "an oval has no corner ratio");
+    assert.deepEqual(order(pad), ["drill", "layers", "net", "pintype", "solder_mask_margin", "solder_paste_margin", "uuid"], style + ": pcb_io_kicad_sexpr's order");
+    const fresh = roundtrip(doc, item, node); const g = fresh.geom.filter((x) => x.pad && x.layer === "F.Cu");
+    assert.equal(g.length, 3, "pad 1 on every copper layer now, pad 2 through-hole, pad 3 still on F.Cu"); const big = g.find((x) => x.w === 1.5); assert.ok(big && big.h === 2 && big.shape === "oval");
+    assert.equal(H.padList(doc, fresh.node)[0].net, "/SIG"); assert.equal(H.padList(doc, fresh.node)[0].drill, "0.8×1.2"); assert.equal(H.str(H.padNode(fresh.node, 0)[1]), "A1");
+    assert.equal(item.node !== node && H.str(H.padNode(item.node, 0)[1]), "1", "the original is untouched");
+  }
+  // clearing: an empty hole (keeping the shape offset), no net, no margins; rect drops the corner ratio, roundrect gets one back
+  const doc = padDoc("code"); const node = clone(doc.items.get("fp-1").node);
+  H.setPad(node, 1, { drill: "", net: "", maskMargin: null, shape: "rect" }, doc); const p2 = H.padNode(node, 1);
+  assert.deepEqual(H.kid(p2, "drill"), ["drill", ["offset", 0.1, 0]], "the offset survives an empty hole"); assert.equal(H.kid(p2, "net"), null); assert.equal(H.kid(p2, "solder_mask_margin"), null); assert.equal(H.kid(p2, "roundrect_rratio"), null);
+  H.setPad(node, 1, { drill: 0.9 }, doc); assert.deepEqual(H.kid(p2, "drill"), ["drill", 0.9, ["offset", 0.1, 0]]);
+  H.setPad(node, 2, { shape: "roundrect", rot: 45, net: "GND" }, doc); const p3 = H.padNode(node, 2);
+  assert.deepEqual(H.kid(p3, "roundrect_rratio"), ["roundrect_rratio", 0.25]); assert.deepEqual(H.kid(p3, "at"), ["at", 0, 2, 45]); assert.deepEqual(H.kid(p3, "net"), ["net", 1, "GND"]);
+  assert.deepEqual(order(p3), ["layers", "roundrect_rratio", "net", "uuid"]);
+  H.setPad(node, 2, { rratio: 0.4, net: "unknown" }, doc); assert.deepEqual(H.kid(p3, "roundrect_rratio"), ["roundrect_rratio", 0.4]); assert.deepEqual(H.kid(p3, "net"), ["net", 0, "unknown"], "a numbered board has no code for a new name");
+  H.setPad(node, 2, { shape: "rect" }, doc); assert.equal(H.kid(p3, "roundrect_rratio"), null);
+  assert.ok(K.applyChange(doc, { id: "fp-1", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K.serializeItem(doc, Object.assign({}, doc.items.get("fp-1"), { node })) }, 1e6));
+  assert.equal(doc.items.get("fp-1").geom.filter((x) => x.layer === "holes").length, 2, "pad 2 keeps a drawn hole (plating wall and hole)");
+});

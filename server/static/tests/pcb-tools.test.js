@@ -686,3 +686,318 @@ test("deleteChanges returns REMOVED changes for a mixed multi-selection; every n
   for (const t of pcb.tools) assert.ok(t.label && t.icon && t.cursor, t.id);
   assert.equal(typeof pcb.setPrompt, "function"); assert.equal(typeof pcb.setImagePicker, "function");
 });
+
+// ================================================================ parity pass: connectivity, DRC, clipboard, placement, cleanup, pads, groups, actions
+require(path.join(__dirname, "..", "props.js"));   // the pad dialog edits pads through props.js's setPad
+const T = (v) => +v.toFixed(5);
+const tn = (a, b, tol) => assert.ok(near(a, b, tol || 1e-5), `${a} ≈ ${b}`);
+const ids = (changes) => changes.map((c) => c.id);
+const kinds = (changes) => changes.map((c) => c.kind);
+const node = (c) => K.parse(c.sexpr)[0] === "kicad_pcb" ? K.parse(c.sexpr).find((x, i) => i > 0 && Array.isArray(x) && x[0] !== "version" && x[0] !== "generator") : K.parse(c.sexpr);
+// a fuller fake ctx: app.js's multi-selection, setSelection, a clipboard and the snapped cursor
+function fullCtx(doc) {
+  const { ctx, log } = fakeCtx(doc); log.clip = ""; log.selection = null; log.highlight = null;
+  Object.assign(ctx, { selection: new Set(), cursor: null, activeLayer: "F.Cu",
+    setSelection(list) { log.selection = Array.from(list); ctx.selection = new Set(list); },
+    setHighlight(s) { log.highlight = s ? new Set(s) : null; },
+    clipboard: { get: () => log.clip, set: (t) => { log.clip = t; } } });
+  pcb.onDocChanged(ctx); return { ctx, log };
+}
+const A = pcb.actions;
+
+test("netlist clusters touching copper per net; the ratsnest spans the clusters with a minimum tree", () => {
+  const doc = fixture(); const nl = P.netlist(doc);
+  const gnd = nl.nets.get("GND"), sig = nl.nets.get("/SIG");
+  assert.equal(gnd.pads.length, 1); assert.equal(gnd.vias.length, 1); assert.equal(gnd.tracks.length, 5, "four segments and an arc");
+  assert.equal(gnd.clusters.length, 4, "pad, the via run, the lone segment, the arc"); assert.equal(gnd.unconnected, 3); assert.equal(sig.unconnected, 0);
+  assert.ok(gnd.clusters.some((c) => c.items.map((i) => i.id).sort().join() === "s-1,s-2,s-3,v-1"), "the via bridges F.Cu and B.Cu");
+  const lines = P.ratsnest(doc, nl);
+  assert.equal(lines.length, 3); assert.ok(lines.every((l) => l.net === "GND" && l.name === "GND"));
+  const padLine = lines.find((l) => l.ids.includes("fp-1")); assert.deepEqual([padLine.a, padLine.b], [[100, 49.1], [110, 50]]); assert.deepEqual(padLine.ids, ["fp-1", "s-1"]);
+  assert.ok(lines.some((l) => near(l.length, 5) && l.ids.includes("s-4") && l.ids.includes("a-1")), "nearest anchors: the segment's end to the arc's start");
+  assert.equal(P.localRatsnest(doc, "fp-1", nl).length, 1); assert.equal(P.localRatsnest(doc, "s-4", nl).length, 2); assert.equal(P.localRatsnest(doc, "a-1", nl).length, 1);
+  // a track from the pad to the run joins their clusters; a filled zone joins whatever sits in its copper
+  P.addedChange(doc, P.segmentNode(doc, [100, 49.1], [110, 50], 0.25, "F.Cu", { code: -1, name: "GND" }));
+  assert.equal(P.ratsnest(doc).length, 2);
+  const z = ["zone", ["net", "GND"], ["layer", "F.Cu"], ["hatch", "edge", 0.5], ["connect_pads", ["clearance", 0.5]], ["min_thickness", 0.25], ["fill", "yes"],
+    ["polygon", ["pts", ["xy", 128, 48], ["xy", 144, 48], ["xy", 144, 52], ["xy", 128, 52]]], ["filled_polygon", ["layer", "F.Cu"], ["pts", ["xy", 128, 48], ["xy", 144, 48], ["xy", 144, 52], ["xy", 128, 52]]]];
+  P.addedChange(doc, z); const nl2 = P.netlist(doc);
+  assert.equal(nl2.nets.get("GND").clusters.length, 2); assert.equal(P.ratsnest(doc, nl2).length, 1);
+  assert.equal(P.netItemIds(doc, "GND", nl2).size, 9, "footprint, six tracks, via and zone");
+  // a net-less track takes the net of what it touches (KiCad's propagation); one touching two nets is a short
+  const doc2 = fixture(); P.addedChange(doc2, P.segmentNode(doc2, [100, 49.1], [100, 50.9], 0.25, "F.Cu", { code: 0, name: "" }));
+  const nl3 = P.netlist(doc2); assert.equal(nl3.nets.get("GND").shorts.length + nl3.nets.get("/SIG").shorts.length, 1, "the bridge shorts GND to /SIG");
+});
+
+test("netInspector counts pads, vias, routed length (arcs by arc length) and missing connections per net", () => {
+  const rows = P.netInspector(fixture());
+  assert.deepEqual(rows.map((r) => r.name), ["/SIG", "GND"]);
+  const gnd = rows[1]; assert.equal(gnd.padCount, 1); assert.equal(gnd.viaCount, 1); assert.equal(gnd.unconnected, 3);
+  tn(gnd.trackLength, 5 + Math.hypot(3, 3) + 7 + 5 + Math.PI, 1e-4);
+  assert.deepEqual(rows[0], { name: "/SIG", code: 0, padCount: 1, viaCount: 0, trackLength: 0, zoneCount: 0, unconnected: 0 });
+});
+
+const DRC_BOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user) (37 "F.SilkS" user) (43 "F.CrtYd" user))
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50 -90)
+    (property "Reference" "R1" (at 0 -1.5 -90) (layer "F.SilkS") (uuid "p-1") (effects (font (size 1 1) (thickness 0.15))))
+    (fp_rect (start -1.5 -1) (end 1.5 1) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "c-1"))
+    (pad "1" smd roundrect (at -0.9 0 -90) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (roundrect_rratio 0.25) (net "GND") (uuid "pad-1"))
+    (pad "2" smd roundrect (at 0.9 0 -90) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (roundrect_rratio 0.25) (net "/SIG") (uuid "pad-2")))
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-2") (at 102.2 50)
+    (property "Reference" "R2" (at 0 -1.5) (layer "F.SilkS") (uuid "p-2") (effects (font (size 1 1) (thickness 0.15))))
+    (fp_rect (start -1.5 -1) (end 1.5 1) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "c-2"))
+    (pad "1" smd rect (at -0.9 0) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (net "GND") (uuid "pad-3")))
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-3") (at 105.2 50)
+    (property "Reference" "R3" (at 0 -1.5) (layer "F.SilkS") (uuid "p-3") (effects (font (size 1 1) (thickness 0.15))))
+    (fp_rect (start -1.5 -1) (end 1.5 1) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "c-3"))
+    (pad "1" smd rect (at -0.9 0) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (net "/SIG") (uuid "pad-4")))
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-4") (at 200 200)
+    (property "Reference" "R4" (at 0 -1.5) (layer "F.SilkS") (uuid "p-4") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at 0 0) (size 1 1.2) (layers "F.Cu" "F.Mask" "F.Paste") (net "GND") (uuid "pad-5")))
+  (segment (start 110 50) (end 115 50) (width 0.25) (layer "F.Cu") (net "GND") (uuid "s-1"))
+  (segment (start 110 50.35) (end 115 50.35) (width 0.25) (layer "F.Cu") (net "/SIG") (uuid "s-2"))
+  (segment (start 100 40.3) (end 105 40.3) (width 0.25) (layer "F.Cu") (net "GND") (uuid "s-3"))
+  (segment (start 120 45) (end 120 45) (width 0.25) (layer "F.Cu") (net "GND") (uuid "s-0"))
+  (via (at 125 60) (size 0.8) (drill 0.8) (layers "F.Cu" "B.Cu") (net "GND") (uuid "v-bad"))
+  (gr_rect (start 90 40) (end 150 90) (stroke (width 0.05) (type default)) (fill no) (layer "Edge.Cuts") (uuid "edge"))
+)`;
+test("DRC: clearance, board edge, missing connections, dangling and zero-length tracks, annular width, courtyards and the outline", () => {
+  const doc = K.parseDoc(DRC_BOARD, "kicad_pcb"); const m = P.drc(doc);
+  const by = (code) => m.filter((x) => x.code === code);
+  const clr = by("clearance"); assert.equal(clr.length, 1); assert.equal(clr[0].text, "Clearance violation (netclass 'Default' clearance 0.2000 mm; actual 0.1000 mm)");
+  assert.deepEqual(clr[0].ids.sort(), ["s-1", "s-2"]); assert.equal(clr[0].severity, "error"); assert.ok(clr[0].x > 110 && clr[0].x < 115 && near(clr[0].y, 50.175, 1e-3));
+  const edge = by("copper_edge_clearance"); assert.equal(edge.length, 1); assert.deepEqual(edge[0].ids, ["s-3"]); assert.ok(/edge clearance 0\.5000 mm; actual 0\.1500 mm/.test(edge[0].text));
+  assert.equal(by("unconnected_items").length, P.ratsnest(doc).length); assert.ok(by("unconnected_items").every((x) => x.severity === "error" && /Missing connection/.test(x.text)));
+  assert.deepEqual(by("zero_length").map((x) => x.ids[0]), ["s-0"]);
+  const dang = by("track_dangling"); assert.deepEqual(dang.map((x) => x.ids[0]).sort(), ["s-1", "s-2", "s-3"], "one marker per loose track"); assert.ok(dang.every((x) => x.severity === "warning"));
+  const ann = by("annular_width"); assert.equal(ann.length, 1); assert.deepEqual([ann[0].ids[0], ann[0].x, ann[0].y], ["v-bad", 125, 60]);
+  assert.deepEqual(by("via_dangling").map((x) => x.ids[0]), ["v-bad"]);
+  const cy = by("courtyards_overlap"); assert.equal(cy.length, 1, "R1 and R2 overlap; R2 and R3 only share an edge"); assert.deepEqual(cy[0].ids, ["fp-1", "fp-2"]);
+  const out = by("outside_outline"); assert.deepEqual(out.map((x) => x.ids[0]), ["fp-4"]); assert.equal(out[0].severity, "warning");
+  assert.equal(by("invalid_outline").length, 0); assert.equal(by("shorting_items").length, 0);
+  assert.ok(m.every((x) => typeof x.x === "number" && typeof x.y === "number" && x.text && Array.isArray(x.ids)));
+  // a .kicad_pro's rules: a looser clearance and edge clearance pass, ignored rules vanish, severities follow the project
+  const pro = { board: { design_settings: { rules: { min_clearance: 0.05, min_copper_edge_clearance: 0.1, min_track_width: 0.3 }, rule_severities: { courtyards_overlap: "ignore", track_dangling: "error" } } },
+    net_settings: { classes: [{ name: "Default", clearance: 0.05, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 }, { name: "Power", clearance: 0.4, track_width: 0.5, via_diameter: 0.8, via_drill: 0.4 }], netclass_patterns: [{ pattern: "GND", netclass: "Power" }] } };
+  const s = P.designSettings(pro); assert.equal(s.clearance, 0.05); assert.equal(s.edgeClearance, 0.1); assert.equal(P.netclassOf(s, "GND").track_width, 0.5); assert.equal(P.netClearance(s, "/SIG"), 0.05);
+  const m2 = P.drc(doc, s);
+  assert.equal(m2.filter((x) => x.code === "courtyards_overlap").length, 0); assert.ok(m2.filter((x) => x.code === "track_dangling").every((x) => x.severity === "error"));
+  assert.equal(m2.filter((x) => x.code === "copper_edge_clearance").length, 0);
+  const c2 = m2.filter((x) => x.code === "clearance"); assert.equal(c2.length, 2, "GND's 0.4 mm class now also catches R1's /SIG pad against R2's GND pad");
+  assert.ok(c2.every((x) => /netclass 'Power' clearance 0\.4000 mm/.test(x.text)), "the stricter class of the pair names the rule"); assert.ok(c2.some((x) => /actual 0\.2028 mm/.test(x.text) && x.ids.join() === "fp-1,fp-2"));
+  assert.equal(m2.filter((x) => x.code === "track_width").length, 3, "the 0.25 mm tracks under a 0.3 mm minimum (the zero-length one is reported as such)");
+  // a legacy board's (setup …) block and a broken outline
+  const legacy = P.designSettings('(kicad_pcb (version 20171130) (setup (trace_clearance 0.3) (edge_clearance 0.2)) (net_class Default "" (clearance 0.3) (trace_width 0.35) (via_dia 0.9) (via_drill 0.45) (add_net GND)))');
+  assert.equal(legacy.clearance, 0.3); assert.equal(legacy.edgeClearance, 0.2); assert.equal(P.netclassOf(legacy, "GND").via_diameter, 0.9);
+  const open = fixture(); assert.equal(P.boardOutline(open).outline, null); assert.ok(P.boardOutline(open).hasEdges);
+  assert.ok(P.drc(open).some((x) => x.code === "invalid_outline"));
+  assert.ok(P.boardOutline(doc).outline.length === 4 && near(P.boardOutline(doc).area, 3000));
+  assert.deepEqual(P.inspectClearance(doc, "s-1", "s-2"), { gap: 0.1, required: 0.2, sameNet: false, nets: ["GND", "/SIG"] });
+});
+
+test("clipboard: copy writes KiCad's kicad_pcb clipboard document; paste lands at the cursor with fresh uuids, kept nets and unique references", () => {
+  const doc = fixture(); const text = P.clipboardText(doc, ["fp-1", "s-1"], [100, 50]);
+  const tree = K.parse(text); assert.equal(tree[0], "kicad_pcb"); assert.equal(K.kid(tree, "generator")[1], "kicad-collab-web"); assert.equal(K.kid(tree, "version")[1], P.BOARD_VERSION);
+  assert.deepEqual(K.kid(tree, "layers").slice(1, 3), [[0, "F.Cu", "signal"], [2, "B.Cu", "signal"]], "copper first, in stack order");
+  assert.deepEqual(K.kids(tree, "net"), [["net", 0, ""], ["net", 1, "GND"], ["net", 2, "/SIG"]]);
+  const fp = K.kid(tree, "footprint"), seg = K.kid(tree, "segment"); assert.deepEqual(K.atOf(fp).slice(0, 2), [0, 0], "the reference point sits at the origin"); assert.deepEqual(K.kid(seg, "start").slice(1), [10, 0]);
+  assert.equal(K.uuidOf(fp), "fp-1", "copies keep their ids; paste mints new ones");
+  const r = P.pasteChanges(doc, text, [200, 100]);
+  assert.equal(r.changes.length, 2); assert.ok(r.changes.every((c) => c.kind === "ADDED")); assert.ok(!r.ids.includes("fp-1") && !r.ids.includes("s-1"));
+  const nfp = doc.items.get(r.ids[0]), nseg = doc.items.get(r.ids[1]);
+  assert.equal(nfp.kind, "footprint"); assert.deepEqual([nfp.x, nfp.y, nfp.rot], [200, 100, -90]); assert.equal(nfp.ref, "R2", "R1 is taken");
+  assert.ok(!K.kids(nfp.node, "pad").some((p) => K.uuidOf(p) === "pad-1" || K.uuidOf(p) === "pad-2"), "pads get fresh ids too");
+  assert.deepEqual(K.kid(K.kids(nfp.node, "pad")[0], "net"), ["net", "GND"]); assert.equal(r.changes[0].padNets["1"], "GND");
+  assert.deepEqual(K.kid(nseg.node, "start").slice(1), [210, 100]); assert.deepEqual(K.kid(nseg.node, "net"), ["net", "GND"]); assert.equal(r.changes[1].netName, "GND");
+  assert.equal(P.pasteChanges(doc, text, [0, 0], { annotations: "keep" }).changes.length && [...doc.items.values()].filter((it) => it.ref === "R1").length, 2);
+  const cleared = P.pasteChanges(doc, text, [0, 0], { annotations: "clear" }); assert.equal(doc.items.get(cleared.ids[0]).ref, "REF**");
+  assert.deepEqual(P.pasteChanges(doc, "not a board", [0, 0]), { changes: [], ids: [] });
+  // a group travels with its members and comes back pointing at the copies
+  const g = P.groupChanges(doc, ["s-4", "a-1"], "pair"); const gid = g[0].id;
+  const t2 = P.clipboardText(doc, ["s-4"], [0, 0]); assert.ok(/\(group pair/.test(t2) && /\(arc /.test(t2), "the group and its other member come along");
+  const r2 = P.pasteChanges(doc, t2, [0, 0]); const ng = r2.ids.map((id) => doc.items.get(id)).find((it) => it.kind === "group");
+  assert.ok(ng && ng.id !== gid); assert.deepEqual(P.groupMembers(ng.node).sort(), r2.ids.filter((id) => id !== ng.id).sort());
+  // into a numbered-net board the names become that board's codes; unknown names go unconnected
+  const coded = K.parseDoc(CODE_STYLE.replace("(segment", '(footprint "X" (layer "F.Cu") (uuid "cfp") (at 0 0) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "GND") (uuid "cpad")))\n  (segment'), "kicad_pcb");
+  const r3 = P.pasteChanges(coded, text, [5, 5]); const cfp = coded.items.get(r3.ids[0]), cseg = coded.items.get(r3.ids[1]);
+  assert.deepEqual(K.kid(K.kids(cfp.node, "pad")[0], "net"), ["net", 2, "GND"]); assert.deepEqual(K.kid(K.kids(cfp.node, "pad")[1], "net"), ["net", 0, ""]); assert.deepEqual(K.kid(cseg.node, "net"), ["net", 2]);
+  // duplicate: same place, new ids
+  const d = P.duplicateChanges(fixture(), ["s-1"]); assert.equal(d.ids.length, 1); assert.notEqual(d.ids[0], "s-1"); assert.deepEqual(K.kid(node(d.changes[0]), "start").slice(1), [110, 50]);
+  const arr = P.arrayChanges(fixture(), ["s-1"], { nx: 3, ny: 2, dx: 10, dy: 5 }); assert.equal(arr.ids.length, 5);
+  assert.equal(P.referencePoint(doc, ["s-1"], [114, 51])[0], 115, "the item anchor nearest the cursor");
+});
+
+test("align and distribute move by bounding boxes like ALIGN_DISTRIBUTE_TOOL; the delta math matches kimath", () => {
+  assert.deepEqual(P.distributeDeltasGaps([[0, 2], [3, 5], [10, 12]]), [0, 2, 0]); assert.deepEqual(P.distributeDeltasPoints([0, 3, 10]), [0, 2, 0]); assert.deepEqual(P.distributeDeltasGaps([[0, 1], [5, 6]]), [0, 0]);
+  const doc = fixture(); const a = P.addedChange(doc, P.rectNode([0, 0], [2, 2], "F.SilkS")).id, b = P.addedChange(doc, P.rectNode([3, 5], [5, 7], "F.SilkS")).id, c = P.addedChange(doc, P.rectNode([10, 1], [12, 3], "F.SilkS")).id;
+  const start = (id) => pt(doc.items.get(id).node, "start");
+  const apply = (ch) => { for (const x of ch) assert.ok(K.applyChange(doc, x, IU)); return ch; };
+  assert.equal(apply(P.alignChanges(doc, [a, b, c], "left")).length, 2); assert.deepEqual([start(b)[0], start(c)[0]], [0, 0]);
+  apply(P.alignChanges(doc, [a, b, c], "top")); assert.deepEqual([start(b)[1], start(c)[1]], [0, 0]);
+  apply(P.alignChanges(doc, [a, b, c], "right")); assert.deepEqual(start(a), [0, 0], "all share the rightmost edge already: nothing moves");
+  const doc2 = fixture(); const ids2 = [P.addedChange(doc2, P.rectNode([0, 0], [2, 2], "F.SilkS")).id, P.addedChange(doc2, P.rectNode([3, 5], [5, 7], "F.SilkS")).id, P.addedChange(doc2, P.rectNode([10, 1], [12, 3], "F.SilkS")).id];
+  const ch = P.distributeChanges(doc2, ids2, "x", false); assert.equal(ch.length, 1); assert.equal(ch[0].id, ids2[1]); assert.deepEqual(K.kid(node(ch[0]), "start").slice(1), [5, 5]);
+  assert.deepEqual(P.distributeChanges(doc2, ids2.slice(0, 2), "x", false), [], "three items at least");
+  const cy = P.alignChanges(doc2, ids2, "centerY", [4, 6]); assert.equal(cy.length, 2, "the item under the cursor is the target"); assert.ok(cy.every((x) => x.id !== ids2[1]));
+});
+function pt(n, key) { const k = K.kid(n, key); return [k[1], k[2]]; }
+
+test("move exactly, position relative, rotate / flip / mirror about the selection centre, swap and pack", () => {
+  const doc = fixture();
+  const me = P.moveExactChanges(doc, ["s-4"], { dx: 1, dy: 2, rotation: 0 }); assert.deepEqual([pt(node(me[0]), "start"), pt(node(me[0]), "end")], [[131, 52], [136, 52]]);
+  const me2 = P.moveExactChanges(doc, ["s-4"], { dx: 1, dy: 2, rotation: 180, about: "center" }); assert.deepEqual([pt(node(me2[0]), "start"), pt(node(me2[0]), "end")], [[136, 52], [131, 52]]);
+  const pr = P.positionRelativeChanges(doc, ["s-4", "a-1"], [0, 0], 10, 20); assert.equal(pr.length, 2); assert.deepEqual(pt(node(pr.find((c) => c.id === "s-4")), "start"), [10, 20]); assert.deepEqual(pt(node(pr.find((c) => c.id === "a-1")), "start"), [20, 20]);
+  assert.deepEqual(P.selectionCenter([doc.items.get("s-1"), doc.items.get("s-4")]), [122.5, 50]); assert.deepEqual(P.selectionCenter([doc.items.get("fp-1")]), [100, 50], "a lone item turns about its anchor");
+  const rot = P.rotateChanges(doc, ["s-1", "s-4"], 122.5, 50, 90); const r1 = node(rot.find((c) => c.id === "s-1"));
+  assert.deepEqual([pt(r1, "start"), pt(r1, "end")], [[122.5, 62.5], [122.5, 57.5]], "+90 is counter-clockwise on screen");
+  const rt = P.addedChange(doc, P.textNode("t", 10, 10, "F.SilkS")).id; const rr = node(P.rotateChanges(doc, [rt], 10, 10, 45)[0]); assert.deepEqual(K.kid(rr, "at"), ["at", 10, 10, 45]);
+  const rect = P.addedChange(doc, P.rectNode([0, 0], [4, 2], "F.SilkS")).id; const rp = node(P.rotateChanges(doc, [rect], 2, 1, 30)[0]); assert.equal(rp[0], "gr_poly"); assert.equal(K.ptsOf(rp).length, 4, "an off-axis rectangle becomes a polygon");
+  assert.equal(node(P.rotateChanges(doc, [rect], 2, 1, 90)[0])[0], "gr_rect");
+  const fl = P.flipChanges(doc, ["fp-1", "s-1"], 105); const fs = node(fl.find((c) => c.id === "s-1")), ff = node(fl.find((c) => c.id === "fp-1"));
+  assert.deepEqual([pt(fs, "start"), pt(fs, "end"), K.kid(fs, "layer")[1]], [[100, 50], [95, 50], "B.Cu"]); assert.deepEqual([K.atOf(ff)[0], K.atOf(ff)[1], K.kid(ff, "layer")[1]], [110, 50, "B.Cu"]);
+  assert.deepEqual(P.mirrorChanges(doc, ["fp-1"], 100, 50, "h"), [], "footprints refuse to mirror");
+  const mv = node(P.mirrorChanges(doc, ["s-4"], 132.5, 50, "v")[0]); assert.deepEqual(pt(mv, "start"), [130, 50]); const mh = node(P.mirrorChanges(doc, [rt], 10, 10, "h")[0]); assert.ok(K.kid(K.kid(mh, "effects"), "justify").includes("mirror"));
+  const sw = P.swapChanges(doc, ["s-1", "s-4"]); assert.deepEqual(pt(node(sw.find((c) => c.id === "s-1")), "start"), [130, 50]); assert.deepEqual(pt(node(sw.find((c) => c.id === "s-4")), "start"), [110, 50]);
+  const doc2 = K.parseDoc(DRC_BOARD, "kicad_pcb"); const pk = P.packChanges(doc2, ["fp-1", "fp-2", "fp-3", "fp-4"]); assert.ok(pk.length >= 3);
+  const boxes = pk.map((c) => { K.applyChange(doc2, c, IU); return doc2.items.get(c.id).bbox; }); for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(boxes[i][2] <= boxes[j][0] + 1e-6 || boxes[j][2] <= boxes[i][0] + 1e-6 || boxes[i][3] <= boxes[j][1] + 1e-6 || boxes[j][3] <= boxes[i][1] + 1e-6, "packed footprints do not overlap");
+});
+
+test("cleanup tracks & vias plans KiCad's options: null, duplicate, contained and collinear segments, tracks in pads, shorts, dangling ends", () => {
+  const doc = fixture(); const seg = (a, b, net) => P.addedChange(doc, P.segmentNode(doc, a, b, 0.25, "F.Cu", net || { code: -1, name: "GND" })).id;
+  const z = seg([50, 50], [50, 50]), d1 = seg([60, 50], [65, 50]), d2 = seg([60, 50], [65, 50]), c1 = seg([70, 50], [75, 50]), c2 = seg([75, 50], [80, 50]), big = seg([90, 50], [100, 50]), inner = seg([92, 50], [95, 50]);
+  const v = P.addedChange(doc, P.viaNode(doc, 75, 50, 0.8, 0.4, { code: -1, name: "GND" })).id;
+  const inPad = seg([99.8, 49.1], [100.2, 49.1]); const short = seg([100, 49.1], [100, 50.9]); const stub = seg([100, 49.1], [100, 45]);
+  const plan = P.cleanupPlan(doc, { dangling: false, danglingVias: false });
+  const code = (id) => plan.items.filter((i) => i.ids.includes(id)).map((i) => i.code);
+  assert.deepEqual(code(z), ["null_segment"]); assert.deepEqual(code(d2), ["duplicate_track"]); assert.deepEqual(code(inner), ["contained_track"]);
+  assert.deepEqual(code(inPad), ["track_in_pad"]); assert.deepEqual(code(short), ["shorting_track"]);
+  assert.ok(!plan.remove.has(c1) && !plan.remove.has(c2), "a via at the joint keeps the collinear pair apart");
+  assert.ok(plan.remove.has(z) && plan.remove.has(d2) && plan.remove.has(inner) && !plan.remove.has(d1) && !plan.remove.has(big) && !plan.remove.has(stub));
+  // without the via the pair merges into one segment; the lone stub then dangles
+  K.applyChange(doc, P.removedChange(doc.items.get(v)), IU);
+  const plan2 = P.cleanupPlan(doc, { dangling: false, danglingVias: false }); const merged = plan2.replace.find((r) => r.item.id === c1);
+  assert.ok(merged && plan2.remove.has(c2)); assert.deepEqual([pt(merged.node, "start"), pt(merged.node, "end")], [[70, 50], [80, 50]]);
+  assert.ok(plan2.items.some((i) => i.code === "merge_collinear" && i.ids.includes(c1) && i.ids.includes(c2)));
+  const plan3 = P.cleanupPlan(doc, {});
+  assert.ok(plan3.remove.has(stub) && plan3.items.some((i) => i.code === "dangling_track" && i.ids[0] === stub));
+  assert.ok(plan3.remove.has(c1) && plan3.remove.has(d1), "the merged segment and the lone duplicate touch nothing and go with the dangling pass");
+  assert.equal(plan3.replace.length, 0, "a merged segment that is then removed is not also replaced");
+  const ch = P.cleanupChanges(doc, plan3); assert.ok(ch.every((c) => c.kind === "REMOVED" || c.kind === "MODIFIED")); for (const c of ch) assert.ok(K.applyChange(doc, c, IU));
+  assert.equal(P.cleanupPlan(doc, {}).items.length, 0, "a second pass finds nothing");
+  // width edits, netclass sizes, layer moves, breaking a track
+  const w = P.trackEditChanges(fixture(), ["s-1", "v-1"], { width: 0.5, viaSize: 1, viaDrill: 0.5, viaType: "through" }); assert.equal(K.kid(node(w[0]), "width")[1], 0.5); assert.deepEqual([K.kid(node(w[1]), "size")[1], K.kid(node(w[1]), "drill")[1]], [1, 0.5]);
+  const nc = P.trackEditChanges(fixture(), ["s-1", "v-1"], { netclass: true }, P.designSettings({ net_settings: { classes: [{ name: "Default", clearance: 0.2, track_width: 0.3, via_diameter: 0.7, via_drill: 0.35 }] } }));
+  assert.equal(K.kid(node(nc[0]), "width")[1], 0.3); assert.equal(K.kid(node(nc[1]), "size")[1], 0.7);
+  const bl = node(P.trackEditChanges(fixture(), ["v-1"], { viaType: "blind", viaLayers: ["F.Cu", "B.Cu"] })[0]); assert.equal(bl[1], "blind");
+  assert.equal(K.kid(node(P.trackLayerChanges(fixture(), ["s-1"], 1)[0]), "layer")[1], "B.Cu");
+  const br = P.breakTrackChanges(fixture(), [112, 50.05]); assert.deepEqual(kinds(br), ["MODIFIED", "ADDED"]); assert.deepEqual(pt(node(br[0]), "end"), [112, 50]); assert.deepEqual(pt(node(br[1]), "start"), [112, 50]); assert.notEqual(br[1].id, "s-1");
+  assert.deepEqual(P.breakTrackChanges(fixture(), [110, 50]), [], "not at an end");
+  const nl = P.netlist(fixture()); assert.deepEqual([...P.connectedCopperIds(nl, new Set(["s-1"]))].sort(), ["s-1", "s-2", "s-3", "v-1"], "unroute takes the whole run");
+});
+
+test("groups: KiCad's (group …) node, membership queries, ungroup and member edits; locks land where each writer puts them", () => {
+  const doc = fixture(); const g = P.groupChanges(doc, ["v-1", "s-1"], ""); assert.equal(g.length, 1); assert.equal(g[0].kind, "ADDED"); assert.equal(g[0].typeName, "PCB_GROUP");
+  const gn = K.kid(K.parse(g[0].sexpr), "group"); assert.deepEqual(gn, ["group", "", ["uuid", g[0].id], ["members", "s-1", "v-1"]], "members sorted, name first, then the uuid");
+  assert.equal(P.groupOf(doc, "s-1").id, g[0].id); assert.equal(P.groupOf(doc, "s-2"), null);
+  assert.deepEqual([...P.expandGroups(doc, ["s-1"])].sort(), [g[0].id, "s-1", "v-1"].sort()); assert.deepEqual([...P.expandGroups(doc, [g[0].id])].sort(), [g[0].id, "s-1", "v-1"].sort());
+  const add = P.groupMembersChanges(doc, doc.items.get(g[0].id), ["s-2"], []); assert.deepEqual(K.kid(node(add[0]), "members").slice(1), ["s-1", "s-2", "v-1"]);
+  assert.equal(P.groupMembersChanges(doc, doc.items.get(g[0].id), [], ["s-1", "v-1"])[0].kind, "REMOVED", "an emptied group goes");
+  const un = P.ungroupChanges(doc, ["v-1"]); assert.deepEqual(un.map((c) => [c.kind, c.id, c.typeName]), [["REMOVED", g[0].id, "PCB_GROUP"]]);
+  assert.deepEqual(P.groupChanges(doc, [g[0].id], ""), [], "a group of groups is refused");
+  const at = (n) => n.findIndex((c) => Array.isArray(c) && c[0] === "locked");
+  const seg = P.setLocked(clone(doc.items.get("s-1").node), true); assert.equal(at(seg), 4); assert.equal(seg[5][0], "layer"); assert.ok(P.isLocked(seg));
+  const fp = P.setLocked(clone(doc.items.get("fp-1").node), true); assert.equal(at(fp), 2); assert.equal(fp[3][0], "layer");
+  const gl = P.setLocked(clone(doc.items.get("g-1").node), true); assert.equal(gl[at(gl) - 1][0], "stroke"); assert.equal(gl[at(gl) + 1][0], "layer");
+  const tx = P.setLocked(P.textNode("x", 1, 1, "F.SilkS"), true); assert.equal(at(tx), 2); assert.equal(tx[3][0], "at");
+  const via = P.setLocked(clone(doc.items.get("v-1").node), true); assert.equal(via[at(via) + 1][0], "net");
+  assert.equal(at(P.setLocked(seg, false)), -1); assert.equal(P.lockChanges(doc, ["s-1"], false).length, 0, "already unlocked");
+  assert.equal(P.lockChanges(doc, ["s-1", "fp-1"], true).length, 2);
+});
+function clone(n) { return JSON.parse(JSON.stringify(n)); }
+
+test("conversions, selection helpers, statistics and the small edits", () => {
+  const doc = fixture(); const rect = P.addedChange(doc, P.rectNode([10, 10], [14, 12], "F.SilkS")).id;
+  const lines = P.convertChanges(doc, [rect], "lines"); assert.deepEqual(kinds(lines), ["ADDED", "ADDED", "ADDED", "ADDED", "REMOVED"]); assert.ok(lines.slice(0, 4).every((c) => node(c)[0] === "gr_line"));
+  const doc2 = fixture(); const r2 = P.addedChange(doc2, P.rectNode([10, 10], [14, 12], "F.SilkS")).id;
+  const poly = P.convertChanges(doc2, [r2], "poly"); assert.equal(node(poly[0])[0], "gr_poly"); assert.deepEqual(K.ptsOf(node(poly[0])), [[10, 10], [14, 10], [14, 12], [10, 12]]); assert.equal(poly[1].kind, "REMOVED");
+  const l = [P.lineNode([0, 0], [4, 0], "F.SilkS"), P.lineNode([4, 0], [2, 3], "F.SilkS"), P.lineNode([2, 3], [0, 0], "F.SilkS")].map((n) => P.addedChange(doc2, n).id);
+  const tri = P.convertChanges(doc2, l, "poly"); assert.equal(K.ptsOf(node(tri[0])).length, 3, "a closed chain of lines becomes one polygon");
+  const cu = P.addedChange(doc2, P.rectNode([20, 20], [30, 30], "F.Cu")).id; const zn = P.convertChanges(doc2, [cu], "zone", { net: { code: -1, name: "GND" } });
+  assert.equal(node(zn[0])[0], "zone"); assert.deepEqual(K.kid(node(zn[0]), "net"), ["net", "GND"]); assert.deepEqual(K.kid(node(zn[0]), "layer"), ["layer", "F.Cu"]); assert.equal(K.ptsOf(K.kid(node(zn[0]), "polygon")).length, 4); assert.equal(zn[0].netName, "GND");
+  const ko = P.convertChanges(doc2, [P.addedChange(doc2, P.rectNode([40, 40], [45, 45], "F.Cu")).id], "keepout"); assert.ok(K.kid(node(ko[0]), "keepout")); assert.deepEqual(K.kid(node(ko[0]), "layer"), ["layer", "F.Cu"]);
+  const cl = P.addedChange(doc2, P.lineNode([110, 50], [110, 55], "F.Cu")).id; const tr = P.convertChanges(doc2, [cl], "tracks"); assert.equal(node(tr[0])[0], "segment"); assert.deepEqual(K.kid(node(tr[0]), "net"), ["net", "GND"], "the copper it starts on gives the net"); assert.equal(K.kid(node(tr[0]), "width")[1], 0.2, "the copper line width becomes the track width");
+  assert.deepEqual([...P.idsOnLayer(fixture(), "B.Cu")].sort(), ["s-3", "v-1"]); assert.deepEqual([...P.idsOnLayer(fixture(), "F.SilkS")], ["fp-1"]);
+  const all = [...fixture().items.keys()]; assert.ok(!P.filterIds(fixture(), all, { footprints: false }).includes("fp-1")); assert.deepEqual(P.filterIds(fixture(), all, { tracks: false, vias: false, graphics: false }), ["fp-1"]);
+  const st = P.boardStatistics(fixture()); assert.equal(st.footprints.total, 1); assert.equal(st.pads.smd, 2); assert.equal(st.vias.through, 1); assert.equal(st.tracks.count, 5); tn(st.tracks.length, 21.242641 + Math.PI, 1e-4);
+  const st2 = P.boardStatistics(K.parseDoc(DRC_BOARD, "kicad_pcb")); assert.deepEqual([st2.width, st2.height, st2.area, st2.drills], [60, 50, 3000, 1]);
+  const t = P.addedChange(doc2, P.textNode("j", 1, 1, "B.SilkS")).id; assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "right")[0]), "effects"), "justify"), ["justify", "right", "mirror"]);
+  assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "center")[0]), "effects"), "justify"), ["justify", "mirror"]);
+  const z1 = P.addedChange(doc2, P.zoneNode(doc2, [[0, 0], [1, 0], [1, 1]], "F.Cu", { code: -1, name: "GND" })).id;
+  assert.deepEqual(K.kid(doc2.items.get(z1).node, "priority"), ["priority", 1], "the zone from the rectangle took 0, so the new one gets the next free priority");
+  assert.deepEqual(K.kid(node(P.zonePriorityChanges(doc2, [z1], "raise")[0]), "priority"), ["priority", 2]); assert.equal(K.kid(node(P.zonePriorityChanges(doc2, [z1], "bottom")[0]), "priority"), null); assert.equal(P.zonePriorityChanges(doc2, [zn[0].id], "lower").length, 0);
+  assert.deepEqual(K.kid(node(P.footprintAttrChanges(doc2, ["fp-1"], "dnp")[0]), "attr"), ["attr", "dnp"]);
+});
+
+test("pads: padAt hit-tests pads in board space; the pad dialog commits a MODIFIED footprint through props.setPad", () => {
+  const doc = fixture(); const hit = P.padAt(doc, 100, 49.1); assert.ok(hit && hit.item.id === "fp-1" && hit.index === 0 && hit.pad.number === "1");
+  assert.equal(P.padAt(doc, 100.4, 51.2).index, 1); assert.equal(P.padAt(doc, 100, 50), null, "between the pads"); assert.equal(P.padAt(doc, 100, 49.1, "B.Cu"), null);
+  const { ctx, log } = fullCtx(doc); let spec = null; pcb.setForm((s) => { spec = s; return true; });
+  assert.ok(pcb.padProperties(ctx, doc.items.get("fp-1"), 0)); assert.ok(/Pad Properties — R1 pad 1/.test(spec.title));
+  const f = Object.fromEntries(spec.fields.map((x) => [x.k, x.value])); assert.deepEqual([f.number, f.type, f.shape, f.w, f.h, f.rot, f.net, f.layers], ["1", "smd", "roundrect", 1, 1.2, 0, "GND", "F.Cu F.Mask F.Paste"]);
+  spec.apply({ number: "1", type: "smd", shape: "oval", w: 1.2, h: 1.6, rot: 0, drill: "", layers: "F.Cu F.Paste F.Mask", net: "/SIG", maskMargin: 0.05, rratio: NaN });
+  const c = log.commits.at(-1); assert.equal(c.label, "pad"); assert.deepEqual([c.changes[0].kind, c.changes[0].typeName, c.changes[0].padNets["1"]], ["MODIFIED", "FOOTPRINT", "/SIG"]);
+  const pad = K.kids(doc.items.get("fp-1").node, "pad")[0];
+  assert.deepEqual(pad.slice(0, 6), ["pad", "1", "smd", "oval", ["at", -0.9, 0, -90], ["size", 1.2, 1.6]]); assert.deepEqual(K.kid(pad, "layers").slice(1), ["F.Cu", "F.Paste", "F.Mask"]);
+  assert.deepEqual(K.kid(pad, "net"), ["net", "/SIG"]); assert.deepEqual(K.kid(pad, "solder_mask_margin"), ["solder_mask_margin", 0.05]); assert.equal(K.kid(pad, "roundrect_rratio"), null, "no corner ratio on an oval");
+  assert.equal(pad.indexOf(K.kid(pad, "solder_mask_margin")), pad.indexOf(K.kid(pad, "net")) + 1); assert.equal(pad[pad.length - 1][0], "uuid");
+  assert.equal(P.padsOf(doc.items.get("fp-1"))[0].shape, "oval"); assert.equal(doc.items.get("fp-1").geom.filter((g) => g.pad && g.layer === "F.Cu")[0].w, 1.2);
+  pcb.setForm(null);
+});
+
+test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / duplicate / group / align / rotate / DRC / net inspector run through ctx", () => {
+  const keys = Object.fromEntries(Object.values(A).map((a) => [a.id, a.key]));
+  assert.deepEqual(["copy", "cut", "paste", "pasteSpecial", "duplicate", "selectConnection", "selectUnconnected", "grabUnconnected", "moveExactly", "positionRelative", "rotateSelection", "flipSelection", "toggleLock", "highlightNet", "clearHighlight", "swap", "pack", "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "deleteFull"].map((id) => keys[id]),
+    ["Ctrl+C", "Ctrl+X", "Ctrl+V", "Ctrl+Shift+V", "Ctrl+D", "U", "O", "Shift+O", "Shift+M", "Shift+P", "R", "F", "L", "`", "~", "Alt+S", "P", "W", "Shift+W", "\\", "|", "Shift+Delete"]);
+  for (const id of ["selectNet", "alignLeft", "alignRight", "alignTop", "alignBottom", "alignCenterX", "alignCenterY", "distributeH", "distributeV", "swapLayers", "changeTrackWidth", "cleanupTracks", "runDRC", "netInspector", "showRatsnest", "group", "ungroup", "mirrorH", "mirrorV", "convertToPoly", "convertToTracks", "boardStatistics", "unrouteSelected", "breakTrack", "createArray", "filterSelection", "selectAllOnLayer", "lock", "unlock", "showNetInspector", "rotateCcw", "rotateCw", "flip", "moveExact", "localRatsnestTool"])
+    assert.ok(A[id] && A[id].label && typeof A[id].run === "function" && typeof A[id].key === "string", id);
+  assert.ok(Object.isFrozen(A));
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  // copy takes the anchor nearest the cursor as the reference; paste puts it under the cursor and selects the copies
+  ctx.selection = new Set(["s-1"]); ctx.cursor = [110, 50];
+  assert.equal(pcb.onKey("Copy", ev(), ctx), true); assert.ok(/^\(kicad_pcb \(version/.test(log.clip) && /\(segment \(start 0 0\) \(end 5 0\)/.test(log.clip));
+  ctx.cursor = [200, 100]; assert.equal(pcb.onKey("Paste", ev(), ctx), true);
+  let c = log.commits.at(-1); assert.equal(c.label, "paste"); assert.equal(c.changes[0].kind, "ADDED"); assert.deepEqual(log.selection, [c.changes[0].id]); assert.deepEqual(pt(doc.items.get(c.changes[0].id).node, "start"), [200, 100]);
+  ctx.selection = new Set(["s-4"]); assert.equal(pcb.runAction("duplicate", ctx), true); c = log.commits.at(-1); assert.equal(c.label, "duplicate"); assert.notEqual(c.changes[0].id, "s-4"); assert.deepEqual(pt(doc.items.get(c.changes[0].id).node, "start"), [130, 50]);
+  ctx.selection = new Set(["a-1"]); assert.equal(pcb.onKey("Cut", ev(), ctx), true); c = log.commits.at(-1); assert.deepEqual(c.changes.map((x) => [x.kind, x.id]), [["REMOVED", "a-1"]]); assert.ok(/\(arc /.test(log.clip)); assert.deepEqual(log.selection, []);
+  ctx.selection = new Set(["s-1", "s-2"]); assert.equal(pcb.runAction("group", ctx), true); c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_GROUP"); const gid = c.changes[0].id;
+  ctx.selection = new Set(["s-1"]); assert.equal(pcb.runAction("ungroup", ctx), true); assert.deepEqual(log.commits.at(-1).changes.map((x) => [x.kind, x.id]), [["REMOVED", gid]]);
+  // R turns a multi-selection about its centre, F flips it; Shift+M moves exactly through the (stubbed) dialog
+  ctx.selection = new Set(["s-1", "s-4"]); assert.equal(pcb.onKey("r", ev(), ctx), true); assert.equal(log.commits.at(-1).label, "rotate"); assert.equal(log.commits.at(-1).changes.length, 2); assert.deepEqual(pt(doc.items.get("s-1").node, "start"), [122.5, 62.5]);
+  assert.equal(pcb.onKey("Flip", ev(), ctx), true); assert.equal(K.kid(doc.items.get("s-4").node, "layer")[1], "B.Cu");
+  pcb.setForm((spec) => { assert.equal(spec.title, "Move Item Exactly"); spec.apply({ dx: 1, dy: 0, rotation: 0, about: "center" }); return true; });
+  ctx.selection = new Set(["s-3"]); assert.equal(pcb.onKey("M", ev({ shiftKey: true }), ctx), true); assert.equal(log.commits.at(-1).label, "move exactly"); assert.deepEqual(pt(doc.items.get("s-3").node, "start"), [119, 53]);
+  pcb.setForm((spec) => { spec.apply({ ref: "origin", px: 0, py: 0, dx: 5, dy: 6 }); return true; }); assert.equal(pcb.onKey("P", ev({ shiftKey: true }), ctx), true); assert.deepEqual(pt(doc.items.get("s-3").node, "start"), [5, 6]);
+  pcb.setForm((spec) => { spec.apply({ netclass: false, width: 0.4, viaSize: 0.9, viaDrill: 0.45, viaType: "through", l0: "F.Cu", l1: "B.Cu" }); return true; });
+  ctx.selection = new Set(["s-3", "v-1"]); assert.equal(pcb.runAction("changeTrackWidth", ctx), true); assert.equal(K.kid(doc.items.get("s-3").node, "width")[1], 0.4); assert.equal(K.kid(doc.items.get("v-1").node, "size")[1], 0.9);
+  // alignment needs two items; locks toggle; select net and connection grow the selection
+  const rects = [P.addedChange(doc, P.rectNode([0, 0], [2, 2], "F.SilkS")).id, P.addedChange(doc, P.rectNode([3, 5], [5, 7], "F.SilkS")).id]; ctx.selection = new Set(rects);
+  assert.equal(pcb.runAction("alignLeft", ctx), true); assert.equal(log.commits.at(-1).label, "align to left"); assert.deepEqual(pt(doc.items.get(rects[1]).node, "start"), [0, 5]);
+  ctx.selection = new Set(["s-4"]); assert.equal(pcb.onKey("l", ev(), ctx), true); assert.ok(P.isLocked(doc.items.get("s-4").node)); assert.equal(pcb.onKey("l", ev(), ctx), true); assert.ok(!P.isLocked(doc.items.get("s-4").node));
+  ctx.selection = new Set(["v-1"]); assert.equal(pcb.runAction("selectNet", ctx), true); assert.ok(log.selection.includes("s-4") && log.selection.includes("v-1") && !log.selection.includes("fp-1"), "the net's copper, not its footprints");
+  ctx.selection = new Set(["v-1"]); assert.equal(pcb.runAction("selectConnection", ctx), true); assert.deepEqual(log.selection.sort(), ["s-2", "v-1"], "s-1 was turned and s-3 moved away above");
+  ctx.selection = new Set(["s-2"]); assert.equal(pcb.runAction("highlightNet", ctx), true); assert.ok(log.highlight.has("fp-1") && log.highlight.has("s-2") && log.highlight.has("v-1"));
+  assert.equal(pcb.onKey("~", ev(), ctx), true); assert.equal(log.highlight, null);
+  // DRC keeps its markers on the module until the document changes; the net inspector is a dialog
+  let title = null; pcb.setForm((spec) => { title = spec.title; return true; });
+  assert.equal(pcb.runDRC(ctx), true); assert.equal(title, "DRC Control"); assert.ok(pcb.markers.length > 0 && pcb.markers.every((m) => m.code && m.text));
+  assert.equal(pcb.runAction("netInspector", ctx), true); assert.equal(title, "Net Inspector");
+  assert.equal(pcb.runAction("boardStatistics", ctx), true); assert.equal(title, "Board Statistics");
+  pcb.onDocChanged(ctx); assert.ok(pcb.markers.length > 0, "an edit keeps the markers"); pcb.onDocChanged(Object.assign({}, ctx, { doc: fixture() })); assert.equal(pcb.markers.length, 0, "a new document clears them");
+  // Shift+Delete removes the connected run; view-only refuses edits
+  pcb.onDocChanged(ctx); P.state.sel = new Set(["s-2"]); ctx.selection = new Set(); assert.equal(pcb.onKey("Delete", ev({ shiftKey: true }), ctx), true); assert.equal(log.commits.at(-1).label, "delete full track"); assert.ok(!doc.items.has("s-2") && !doc.items.has("v-1"));
+  ctx.viewOnly = true; ctx.selection = new Set(["s-4"]); const n = log.commits.length; assert.equal(pcb.runAction("duplicate", ctx), true); assert.equal(log.commits.length, n); assert.ok(log.toasts.at(-1).includes("View-only"));
+  ctx.viewOnly = false; pcb.setForm(null);
+  // the overlay draws the ratsnest and the markers without a DOM
+  P.state.showRatsnest = true; pcb.runDRC(ctx); const c2 = stubCtx(800, 600); pcb.drawOverlay(c2, VIEW, ctx); assert.ok(c2.calls.stroke > 0 && c2.calls.arc > 0);
+});

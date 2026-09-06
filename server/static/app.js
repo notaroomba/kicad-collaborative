@@ -1,6 +1,13 @@
 "use strict";
 // KiCad Collaborative web app: home (recent / explore / open link) + online
 // board editor.  Talks to the same REST + WebSocket API the desktop uses.
+//
+// This file is the editor core: the document (kicad-canvas.js), the websocket
+// snapshot/op protocol, presence, selection, drags through the tool engines,
+// undo/redo, comments, follow mode and pointer handling on #stage.  The chrome
+// around the stage (menus, toolbars, docked panels, status bar, overlays) is
+// React (server/web → /static/dist/ui.js) and renders from the observable store
+// published on window.CollabApp below; it sends intents back via dispatch().
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -32,12 +39,44 @@ const state = {
   role: null,
 };
 
+// ---------- observable store: what the React chrome renders from ----------
+// Slices are replaced, never mutated, so subscribers can compare by identity.  The
+// shape is typed in server/web/store.ts (AppState) — keep the two in step.
+const APP_TOOLS = ["select", "pan", "comment", "follow", "zoomtool", "measure"];
+const store = (() => {
+  let S = {
+    view: "home", me: null, project: null, role: null, canJoin: false, viewOnly: true,
+    connection: { status: "offline", text: "offline", edits: 0 },
+    viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
+      crosshair: "small", selMode: "rect", lineMode: null, dragMode: null, renderOpts: {}, activeLayer: "" },
+    document: { editor: null, docType: null, docId: null, doc: null, docs: [], rootDocId: null, sheets: [], layers: [], hiddenLayers: [], copperLayers: [], items: [], hasDoc: false, notice: null, version: 0 },
+    selection: { ids: [], primary: null, field: null, version: 0 },
+    peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
+    tool: { current: "select", appTools: APP_TOOLS, moduleTools: [], moduleActions: [], handled: [] },
+    toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null,
+  };
+  const subs = new Set();
+  const notify = () => { for (const fn of Array.from(subs)) { try { fn(S); } catch (e) { console.warn(e); } } };
+  return {
+    get: () => S,
+    set(patch) { S = Object.assign({}, S, patch); notify(); },
+    slice(key, patch) { S = Object.assign({}, S, { [key]: Object.assign({}, S[key], patch) }); notify(); },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el) };
+const setStatusBar = (f) => store.slice("status", f);                      // { message, mode }
+const setToggles = (map) => store.set({ toggles: Object.assign({}, store.get().toggles, map) });
+const setToggle = (id, on) => setToggles({ [id]: !!on });
+const setGroupCurrent = (group, id) => store.set({ groupCurrent: Object.assign({}, store.get().groupCurrent, { [group]: id }) });
+const RADIO = { Units: ["millimetersUnits", "inchesUnits", "milsUnits"], "Crosshair modes": ["cursorSmallCrosshairs", "cursorFullCrosshairs", "cursor45Crosshairs"],
+  "Line modes": ["lineModeFree", "lineMode90", "lineMode45"], "Selection modes": ["selectSetRect", "selectSetLasso"] };
+function setRadio(group, id) { const m = {}; for (const other of RADIO[group] || []) m[other] = other === id; setToggles(m); setGroupCurrent(group, id); }
+
 // ---------- tiny helpers ----------
 function esc(t) { const d = document.createElement("span"); d.textContent = t ?? ""; return d.innerHTML; }
-function toast(msg, ms = 2200) {
-  const el = $("#toast"); el.textContent = msg; el.classList.add("show");
-  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove("show"), ms);
-}
+let toastN = 0;
+function toast(msg, ms = 2200) { store.set({ toast: { id: ++toastN, text: String(msg), ms } }); }
 function ago(iso) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
   if (s < 60) return "just now";
@@ -52,38 +91,15 @@ async function api(path, opts = {}) {
   const ct = r.headers.get("content-type") || "";
   return ct.includes("json") ? r.json() : r.text();
 }
-function popover(html, anchorEl) {
-  const p = $("#popover");
-  p.innerHTML = html;
-  p.style.display = "block";
-  const r = anchorEl ? anchorEl.getBoundingClientRect() : { left: innerWidth / 2 - 160, bottom: 60 };
-  p.style.left = Math.min(r.left, innerWidth - p.offsetWidth - 12) + "px";
-  p.style.top = Math.min(r.bottom + 6, innerHeight - p.offsetHeight - 12) + "px";
-  return p;
-}
-function closePopover() { $("#popover").style.display = "none"; }
-document.addEventListener("pointerdown", (ev) => {
-  if (!ev.target.closest("#popover") && !ev.target.closest("[data-act]")) closePopover();
-  if (!ev.target.closest(".menu")) $$(".menu.open").forEach((m) => m.classList.remove("open"));
-});
+// Popovers are React components (Overlays.tsx) rendered from store.popover: an anchor rect and a kind
+// (desktop-only explanation, about, share, kicad, find, grid) with the data each kind shows.
+function anchorRect(a) { if (!a) return null; if (a instanceof Element) { const r = a.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; } return a; }
+function showPopover(kind, extra, anchor) { store.set({ popover: Object.assign({ kind, anchor: anchorRect(anchor) }, extra || {}) }); }
+function closePopover() { if (store.get().popover) store.set({ popover: null }); }
 
-// ---------- menus ----------
-$$(".menu > button").forEach((b) => b.addEventListener("click", (ev) => {
-  const m = b.parentElement, was = m.classList.contains("open");
-  $$(".menu.open").forEach((x) => x.classList.remove("open"));
-  if (!was) m.classList.add("open");
-  ev.stopPropagation();
-}));
+// ---------- home navigation (the home view is still rendered here) ----------
 document.addEventListener("click", (ev) => {
-  const act = ev.target.closest("[data-act]");
-  if (act) { $$(".menu.open").forEach((x) => x.classList.remove("open")); runAction(act.dataset.act, act); }
-  const tool = ev.target.closest("[data-tool]");
-  if (tool) setTool(tool.dataset.tool);
-  const pc = ev.target.closest("[data-pane-close]");
-  if (pc) KUI.showPane(pc.dataset.paneClose, false);
-  const atab = ev.target.closest("[data-atab]");
-  if (atab) { $$("[data-atab]").forEach((b) => b.classList.toggle("on", b === atab)); for (const id of ["layers", "objects", "nets"]) $("#" + id).hidden = id !== atab.dataset.atab; }
-  const nav = ev.target.closest("#home nav [data-nav]");
+  const nav = ev.target.closest("#home [data-nav]");
   if (nav) { state.homeTab = nav.dataset.nav; renderHome(); }
 });
 
@@ -103,19 +119,18 @@ function route() {
 // ---------- session ----------
 async function loadMe() {
   try { state.me = await api("/api/me"); } catch { state.me = null; }
-  const box = $("#userBox");
-  if (state.me) {
-    box.innerHTML = `${state.me.avatarUrl ? `<img src="${esc(state.me.avatarUrl)}" alt="">` : ""}<span>${esc(state.me.name || state.me.login)}</span>`;
-  } else {
-    box.innerHTML = `<a class="btn sm" href="/auth/github/login?next=${encodeURIComponent(location.pathname)}">Sign in with GitHub</a>`;
-  }
+  store.set({ me: state.me });
 }
 
 // ================================================================ HOME
 function showView(name) {
   state.view = name;
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === name));
-  if (name === "home") { leaveEditor(); $("#sbProject").textContent = ""; delete document.body.dataset.editor; KUI.closePopup(); }
+  if (name === "home") {
+    leaveEditor(); delete document.body.dataset.editor;
+    store.slice("document", { editor: null, docType: null, docId: null, doc: null });
+    store.set({ view: "home", project: null, role: null, popover: null });
+  } else store.set({ view: name });
 }
 
 function showHome() {
@@ -222,6 +237,12 @@ let gridOn = true, snapOn = true, gridPitch = 1.27;
 // KiCad-frame state: local origin for dx/dy (Space resets it), polar readout, crosshair mode,
 // render display options (hidden pins, outline modes, high contrast), measure/zoom tools, sheet navigation
 let localOrigin = [0, 0], lastCursorMm = [0, 0], polarCoords = false, crosshairMode = "small", renderOpts = {}, measure = null, zoomRect = null, activeLayer = "";
+let markers = [], proSettings = null;   // ERC/DRC markers handed over by the tool modules; the project's .kicad_pro text (design rules)
+// KiCad's clipboard is s-expression text: the modules write it here and to the system clipboard when allowed.
+const appClipboard = { text: "", get() { return appClipboard.text; }, set(t) { appClipboard.text = String(t || ""); if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(appClipboard.text).catch(() => {}); },
+  async read() { try { if (navigator.clipboard && navigator.clipboard.readText) { const t = await navigator.clipboard.readText(); if (t && /^\s*\((kicad_sch|kicad_pcb|lib_symbols|symbol|wire|footprint|segment|via|zone|gr_|label|junction)/.test(t)) return t; } } catch (e) { /* permission denied: use the buffer */ } return appClipboard.text; } };
+/** Board groups: a member drags/deletes with its whole group (KiCad's default). */
+function groupExpand(ids) { const m = CollabTools.pcb; if (isSch() || !kdoc || !m || !m.expandGroups) return new Set(ids); try { return new Set(m.expandGroups(kdoc, [...ids])); } catch (e) { return new Set(ids); } }
 const docNav = { list: [], idx: -1, lock: false };
 // Multi-selection (box / lasso, Shift-click, Ctrl+A): ids of any document items; `selected` stays the
 // primary footprint/symbol the Properties panel shows.  highlightIds = the net-highlight tool's set.
@@ -243,7 +264,7 @@ function filterKey(kind) {
   if (isSch()) return kind === "symbol" ? "symbols" : (kind === "wire" || kind === "bus") ? "wires" : /label|netclass_flag/.test(kind) ? "labels" : kind === "image" ? "images" : (kind === "text" || kind === "text_box") ? "text" : /rectangle|circle|arc|polyline|bezier|rule_area/.test(kind) ? "graphics" : "other";
   return kind === "footprint" ? "footprints" : (kind === "segment" || kind === "arc") ? "tracks" : kind === "via" ? "vias" : kind === "zone" ? "zones" : kind === "dimension" ? "dimensions" : (kind === "gr_text" || kind === "gr_text_box") ? "text" : /^gr_|image|table/.test(kind) ? "graphics" : "other";
 }
-function filterAllows(kind) { const f = KUI.filter(); const k = filterKey(kind); return f[k] !== false; }
+function filterAllows(kind) { const f = selFilter(); const k = filterKey(kind); return f[k] !== false; }
 let renderReq = 0;
 const GRID_CHOICES = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
 function requestRender() { if (renderReq || !kdoc) return; renderReq = requestAnimationFrame(() => { renderReq = 0; drawCanvas(); }); }
@@ -285,46 +306,46 @@ function setDocFromText(text) {
   base.replaceChildren(); base.setAttribute("viewBox", vb.join(" ")); overlay.setAttribute("viewBox", vb.join(" "));
   $("#ovRoot").setAttribute("transform", "scale(1)");
   if (!layersSeeded) { hiddenLayers = new Set(isSch() ? [] : Array.from(KiCadCanvas.PCB_HIDDEN_DEFAULT)); layersSeeded = true; }
-  renderLayersFromDoc(); syncItemsFromDoc(); renderModuleTools();
+  renderLayersFromDoc(); syncItemsFromDoc(); renderModuleTools(); bumpDoc();
   const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } }
   canvas.style.display = "block"; requestRender();
   return true;
 }
+const layerRow = (l) => ({ key: l.key, name: l.name, color: l.color, count: l.count });
 function renderLayersFromDoc() {
   const list = KiCadCanvas.layerList(kdoc);
-  $("#layers").innerHTML = list.map((l) => `<label class="layer"><input type="checkbox" data-lkey="${esc(l.key)}" ${hiddenLayers.has(l.key) ? "" : "checked"}>
-     <span class="sw" style="background:${l.color}"></span><span>${esc(l.name)}</span><span class="cnt">${l.count}</span></label>`).join("") || `<p class="note">Nothing to show yet.</p>`;
-  $$("#layers input").forEach((cb) => cb.addEventListener("change", () => { if (cb.checked) hiddenLayers.delete(cb.dataset.lkey); else hiddenLayers.add(cb.dataset.lkey); requestRender(); }));
-  const ls = $("#layerSel");
-  if (ls && !isSch()) {
-    const cu = list.filter((l) => /\.Cu$/.test(l.name));
-    ls.innerHTML = cu.map((l) => `<option value="${esc(l.name)}" style="color:${l.color}">${esc(l.name)}</option>`).join("");
-    if (!cu.some((l) => l.name === activeLayer)) activeLayer = cu[0] ? cu[0].name : "";
-    ls.value = activeLayer; renderOpts.activeLayer = activeLayer;
-    ls.onchange = () => { activeLayer = ls.value; renderOpts.activeLayer = activeLayer; if (CollabTools.pcb && CollabTools.pcb.setLayer) { try { CollabTools.pcb.setLayer(toolCtx(), activeLayer); } catch (e) { /* module without layer API */ } } requestRender(); };
-  }
+  const cu = isSch() ? [] : list.filter((l) => /\.Cu$/.test(l.name));
+  if (!isSch()) { if (!cu.some((l) => l.name === activeLayer)) activeLayer = cu[0] ? cu[0].name : ""; renderOpts.activeLayer = activeLayer; }
+  store.slice("document", { layers: list.map(layerRow), hiddenLayers: Array.from(hiddenLayers), copperLayers: cu.map(layerRow), notice: null, hasDoc: true });
+  store.slice("viewport", { activeLayer });
 }
+function setActiveLayer(name) {
+  activeLayer = name; renderOpts.activeLayer = activeLayer; store.slice("viewport", { activeLayer });
+  if (CollabTools.pcb && CollabTools.pcb.setLayer) { try { CollabTools.pcb.setLayer(toolCtx(), activeLayer); } catch (e) { /* module without layer API */ } }
+  requestRender();
+}
+function setLayerVisible(key, visible) {
+  if (kdoc) { if (visible) hiddenLayers.delete(key); else hiddenLayers.add(key); store.slice("document", { hiddenLayers: Array.from(hiddenLayers) }); requestRender(); return; }
+  const l = layers[key]; if (!l) return;                       // the desktop-pushed SVG render: toggle its nodes
+  l.visible = visible; for (const n of l.nodes) n.style.display = visible ? "" : "none";
+  renderLayers();
+}
+/** Every applied change bumps the document version (the Properties island re-reads on it). */
+function bumpDoc() { store.slice("document", { version: store.get().document.version + 1 }); }
 function applyChanges(changes) {
   if (!kdoc) return;
   let any = false;
   for (const c of changes || []) { try { if (KiCadCanvas.applyChange(kdoc, c, IU)) any = true; } catch (e) { console.warn("change not applied", e); } }
-  if (any) { if (!isSch()) KiCadCanvas.computeBBox(kdoc); syncItemsFromDoc(); drawSelection(); renderProps(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
+  if (any) { if (!isSch()) KiCadCanvas.computeBBox(kdoc); syncItemsFromDoc(); drawSelection(); renderProps(); bumpDoc(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
 }
 function setupGridControls() {
-  const sel = $("#gridSel"); const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
+  const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;   // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
   gridPitch = choices[0][0];
-  if (sel) {                                     // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
-    sel.innerHTML = choices.map(([v, label]) => `<option value="${v}">${label}</option>`).join("");
-    sel.value = String(gridPitch);
-    sel.onchange = () => { gridPitch = Number(sel.value) || gridPitch; requestRender(); updateGridStatus(); };
-  }
+  store.slice("viewport", { gridChoices: choices.map((c) => c.slice()) });
   updateGridStatus();
 }
-function updateGridStatus() {
-  KUI.setOn("toggleGrid", gridOn);
-  KUI.status({ grid: gridPitch });
-  const g = $("#gridSel"); if (g && String(gridPitch) !== g.value) g.value = String(gridPitch);
-}
+function updateGridStatus() { setToggle("toggleGrid", gridOn); store.slice("viewport", { gridOn, gridPitch, snapOn }); }
+function setGridPitch(v) { gridPitch = Number(v) || gridPitch; updateGridStatus(); requestRender(); }
 function snapMm(mm) { return snapOn ? [KiCadCanvas.snap(mm[0], gridPitch), KiCadCanvas.snap(mm[1], gridPitch)] : mm; }
 
 // ---- editing tools (schematic / board modules register on window.CollabTools) ----
@@ -337,14 +358,17 @@ const undoStack = [], redoStack = [];
 function activeModule() { if (!kdoc) return null; return isSch() ? CollabTools.sch : CollabTools.pcb; }
 function toolCtx(extra) {
   return Object.assign({
-    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool, selFilter: KUI.filter(), activeLayer,
+    K: KiCadCanvas, doc: kdoc, IU, isSch: isSch(), zoom, pxPerMm: pxPerMm(), gridPitch, snapOn, snap: snapMm, tool, selFilter: selFilter(), activeLayer,
     selected, items, sheets, viewOnly, live: !!(ws && ws.readyState === 1), stage, worldMm, selection, docs: state.docs, project: state.project, api, docId: state.docId,
     setHighlight(ids) { highlightIds = ids && ids.size ? new Set(ids) : null; requestRender(); },
+    cursor: lastCursorMm, clipboard: appClipboard, designSettings: proSettings,
+    setSelection(ids) { selection = new Set([...(ids || [])].filter((id) => kdoc && kdoc.items.has(id))); selected = null; selField = null; for (const id of selection) { const f = items.find((x) => x.id === id); if (f) { selected = f; break; } } store.slice("selection", { ids: [...selection], primary: selected ? selected.id : null, version: (state.selection ? state.selection.version || 0 : 0) + 1 }); drawSelection(); renderProps(); renderObjects(); requestRender(); },
+    setMarkers(list) { markers = Array.isArray(list) ? list : []; renderOpts.markers = markers.length ? markers : undefined; store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); if (markers.length) toast(`${markers.length} marker${markers.length === 1 ? "" : "s"}`); },
     setSelected(fp) { selected = fp ? (items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     commit(changes, label) { commitChanges(changes, label); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender, toast, enterSheet, setTool,
-    setStatus(text) { const el = $("#sbMode"); if (el) el.textContent = text || ""; },
+    setStatus(text) { setStatusBar({ mode: text || "" }); },
   }, extra || {});
 }
 // Local apply + broadcast, with an inverse recorded for undo.
@@ -360,21 +384,48 @@ function commitChanges(changes, label) {
   applyChanges(changes);
   if (ws && ws.readyState === 1) sendOp(changes); else toast("Not connected — change kept locally");
   undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift();
-  redoStack.length = 0;
-  if (isSch() && label === "sheet") { renderHierarchy(); renderDocSwitcher(); }   // a new sheet file joined the project
+  redoStack.length = 0; publishUndo();
+  if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
 }
+function publishUndo() { store.set({ undo: { undo: undoStack.length, redo: redoStack.length } }); }
 function undoLast() {
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
   const redo = e.changes.map((c) => { const it = kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(kdoc, it) } : c); });
   applyChanges(e.inverse); if (ws && ws.readyState === 1) sendOp(e.inverse);
-  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); toast("Undo " + e.label);
+  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); publishUndo(); toast("Undo " + e.label);
 }
 function redoLast() {
   const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
   applyChanges(e.changes); if (ws && ws.readyState === 1) sendOp(e.changes);
-  undoStack.push(e); toast("Redo " + e.label);
+  undoStack.push(e); publishUndo(); toast("Redo " + e.label);
 }
-function renderModuleTools() { const m = activeModule(); KUI.setModuleTools(m && m.tools ? m.tools : []); }
+/** The active module's tools and menu actions ({id: {label, key, run(ctx)}}), for the toolbar and the menus. */
+function renderModuleTools() {
+  const m = activeModule();
+  const tools = m && m.tools ? m.tools.map((t) => ({ id: t.id, label: t.label, key: t.key || "", icon: t.icon || "", cursor: t.cursor || "" })) : [];
+  const actions = m && m.actions ? Object.entries(m.actions).map(([id, a]) => ({ id, label: (a && a.label) || id, key: (a && a.key) || null, menu: (a && a.menu) || null })) : [];
+  store.slice("tool", { moduleTools: tools, moduleActions: actions });
+}
+/** Run a module action; false means the module declined it (its run() returned false), anything else counts as handled. */
+function runModuleAction(id) {
+  const m = activeModule(); const a = m && m.actions && m.actions[id];
+  if (!a || typeof a.run !== "function") return false;
+  try { return a.run(toolCtx()) !== false; } catch (e) { console.warn(e); toast("Action failed: " + e.message, 3000); return true; }
+}
+// Hotkeys in the spec's notation ("Ctrl+Shift+G", "Del", "Space"); Cmd counts as Ctrl on a Mac.
+const KEY_NAMES = { Del: "Delete", Esc: "Escape", Space: " ", Ins: "Insert", PgUp: "PageUp", PgDn: "PageDown", Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight" };
+function hotkeyMatches(ev, key) {
+  if (!key) return false;
+  const parts = String(key).split("+"); const k = parts.pop();
+  if (parts.includes("Ctrl") !== (ev.ctrlKey || ev.metaKey) || parts.includes("Shift") !== ev.shiftKey || parts.includes("Alt") !== ev.altKey) return false;
+  const want = KEY_NAMES[k] || k;
+  return want.length === 1 ? ev.key.toUpperCase() === want.toUpperCase() : ev.key === want;
+}
+function runModuleHotkey(ev) {
+  const m = activeModule(); if (!m || !m.actions) return false;
+  for (const [id, a] of Object.entries(m.actions)) if (a && a.key && hotkeyMatches(ev, a.key)) { if (runModuleAction(id)) return true; }
+  return false;
+}
 function moduleTool(id) { const m = activeModule(); return m && m.tools ? m.tools.find((t) => t.id === id) : null; }
 
 function leaveEditor() {
@@ -393,19 +444,13 @@ async function openEditor(id) {
   state.project = info;
   state.role = info.role;
   document.title = `${info.name} — KiCad Collaborative`;
-  $("#projName").textContent = info.name;
-  $("#roleChip").textContent = info.role || "guest";
-  $("#roleChip").className = "pill " + (info.role || "");
-  $("#sbProject").textContent = `${info.name} · ${info.ownerLogin}`;
   state.docs = [];
   canJoin = !!state.me;
   viewOnly = !canJoin || info.role === "viewer" || !info.role;
-  $("#signinOverlay").style.display = canJoin ? "none" : "block";
-  $("#signinLink").href = `/auth/github/login?next=${encodeURIComponent(location.pathname)}`;
-  $$("[data-act=share],[data-act=checkpoint]").forEach((b) => { b.disabled = viewOnly; });
   state.docs = info.docs.filter((d) => d.docType === "kicad_pcb" || d.docType === "kicad_sch")
     .sort((a, b) => (a.docType === "kicad_pcb" ? 0 : 1) - (b.docType === "kicad_pcb" ? 0 : 1) || a.path.localeCompare(b.path));
-  renderDocSwitcher();
+  store.set({ project: info, role: info.role || null, canJoin, viewOnly });
+  publishDocs();
   loadHistory();
   const wanted = new URLSearchParams(location.search).get("doc");
   // Open what has something to show: a rendered board first, else the root
@@ -415,7 +460,7 @@ async function openEditor(id) {
     || (rootSchematic() && rootSchematic().hasPreview ? rootSchematic() : null)
     || state.docs.find((d) => d.docType === "kicad_pcb") || rootSchematic() || null;
   if (!doc) {
-    base.replaceChildren(); $("#layers").innerHTML = `<p class="note">This project has no board or schematic yet. Open it in the desktop app.</p>`;
+    base.replaceChildren(); setDocNotice("This project has no board or schematic yet. Open it in the desktop app.");
     setConn("err", "nothing to show"); return;
   }
   await openDoc(doc);
@@ -424,6 +469,7 @@ async function openEditor(id) {
 function rootSchematic() {
   const sch = state.docs.filter((d) => d.docType === "kicad_sch");
   const pro = state.project.docs.find((d) => d.docType === "kicad_pro");
+  if (pro && proSettings === null) { proSettings = ""; api(`/api/docs/${pro.docId}/content`).then((t) => { proSettings = typeof t === "string" ? t : JSON.stringify(t); if (CollabTools.pcb && CollabTools.pcb.setDesignSettings) { try { CollabTools.pcb.setDesignSettings(proSettings); } catch (e) { /* module without rules */ } } }).catch(() => { proSettings = ""; }); }
   const stem = pro && pro.path.split("/").pop().replace(/\.kicad_pro$/, "");
   return sch.find((d) => d.path.split("/").pop() === stem + ".kicad_sch")
     || sch.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0];
@@ -438,14 +484,13 @@ function enterSheet(file) {
   if (doc) openDoc(doc); else toast("That sheet isn't in the shared project yet");
 }
 
-function docLabel(d) { return d.docType === "kicad_pcb" ? "Board · " + d.path.split("/").pop() : "Sheet · " + d.path; }
-
-function renderDocSwitcher() {
-  const sel = $("#docSel");
-  sel.innerHTML = state.docs.map((d) => `<option value="${esc(d.docId)}">${esc(docLabel(d))}</option>`).join("");
-  sel.onchange = () => { const d = state.docs.find((x) => x.docId === sel.value); if (d) openDoc(d); };
-  sel.style.display = state.docs.length > 1 ? "" : "none";
+/** The document list, the root sheet and the open document, for the hierarchy pane and the doc switcher. */
+function publishDocs() {
+  const root = state.project ? rootSchematic() : null;
+  store.slice("document", { docs: state.docs.slice(), rootDocId: root ? root.docId : null, doc: state.doc || null, docId: state.docId || null });
 }
+/** A note shown in the Appearance pane instead of the layer list (nothing to render yet). */
+function setDocNotice(text) { store.slice("document", { notice: text || null, layers: [], copperLayers: [], hasDoc: false }); }
 
 function leaveDoc() {
   connectGen++;   // any connect() still waiting for its ticket must give up
@@ -454,8 +499,10 @@ function leaveDoc() {
   items = []; sheets = []; selected = null; drag = null; boxSel = null; selection = new Set(); highlightIds = null; peerState = {}; comments = []; followPeer = null; layers = {};
   kdoc = null; layersSeeded = false; canvas.style.display = "none"; if (renderReq) { cancelAnimationFrame(renderReq); renderReq = 0; }
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
-  cmtPanel.style.display = "none"; objFilter = "";
-  const objs = $("#objects"); objs.innerHTML = ""; delete objs.dataset.ready;
+  cmtPanel.style.display = "none";
+  store.slice("document", { layers: [], hiddenLayers: [], copperLayers: [], items: [], sheets: [], hasDoc: false, notice: null });
+  store.set({ comments: [], peers: { list: [], follow: null } });
+  renderProps();
 }
 
 async function openDoc(doc) {
@@ -464,13 +511,12 @@ async function openDoc(doc) {
   DOC_TYPE = doc.docType;
   IU = isSch() ? 1e4 : 1e6;
   ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";
-  { const sm = $("#sbMode"); if (sm) sm.textContent = ""; }
+  setStatusBar({ mode: "" });
   if (!docNav.lock) { docNav.list.length = docNav.idx + 1; docNav.list.push(doc.docId); docNav.idx = docNav.list.length - 1; }
-  setupEditorChrome(); renderHierarchy();
-  $("#docSel").value = doc.docId;
+  setupEditorChrome(); publishDocs();
   const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
-  KUI.status({ message: isSch()
+  setStatusBar({ message: isSch()
     ? "scroll to zoom · right-drag to pan · click a symbol to select · drag to move · Del deletes · double-click a sheet to enter it"
     : "scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes" });
   world.style.width = stage.clientWidth + "px";
@@ -496,7 +542,7 @@ async function openDoc(doc) {
     const okSvg = await loadBase(true);
     if (!okSvg) {
       base.replaceChildren();
-      $("#layers").innerHTML = `<p class="note">Nothing to show yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session.</p>`;
+      setDocNotice(`Nothing to show yet for this ${isSch() ? "sheet" : "board"} — it appears once a desktop editor has the project open in a live session.`);
     }
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
@@ -550,44 +596,28 @@ function tagLayers(hidden) {
   renderLayers();
 }
 
-function renderLayers() {
+function renderLayers() {   // the desktop-pushed SVG render's layers (keyed by plot colour)
   const order = Object.entries(layers).sort((a, b) => b[1].nodes.length - a[1].nodes.length);
-  $("#layers").innerHTML = order.map(([hex, l]) => `<label class="layer"><input type="checkbox" data-layer="${hex}" ${l.visible ? "checked" : ""}>
-     <span class="sw" style="background:#${hex}"></span><span>${esc(l.name)}</span><span class="cnt">${l.nodes.length}</span></label>`).join("")
-    || `<p class="note">No render yet — the board renders once a desktop editor pushes a preview.</p>`;
-  $$("#layers input").forEach((cb) => cb.addEventListener("change", () => {
-    const l = layers[cb.dataset.layer]; l.visible = cb.checked;
-    for (const n of l.nodes) n.style.display = cb.checked ? "" : "none";
-  }));
+  store.slice("document", { layers: order.map(([hex, l]) => ({ key: hex, name: l.name, color: "#" + hex, count: l.nodes.length })),
+    hiddenLayers: order.filter(([, l]) => !l.visible).map(([hex]) => hex), copperLayers: [],
+    notice: order.length ? null : "No render yet — the board renders once a desktop editor pushes a preview." });
 }
 
-let objFilter = "";
 function fpName(fp) { return isSch() ? (fp.ref ? `${fp.ref}  ${fp.value || ""}`.trim() : (fp.lib || "?").split(":").pop()) : (fp.lib || "?").split(":").pop(); }
+/** The Objects tab reads the movable items (and a schematic's sheets) from the store. */
 function renderObjects() {
-  const el = $("#objects");
-  const q = objFilter.toLowerCase();
-  const list = items.filter((fp) => !q || fpName(fp).toLowerCase().includes(q))
-    .sort((a, b) => fpName(a).localeCompare(fpName(b)));
-  if (!el.dataset.ready) {
-    el.innerHTML = `<input id="objSearch" placeholder="${isSch() ? "Filter symbols…" : "Filter footprints…"}" style="width:100%;margin-bottom:6px;background:var(--canvas);border:1px solid var(--line);border-radius:4px;padding:4px 6px;color:var(--text)"><div id="objList"></div>`;
-    el.dataset.ready = "1";
-    $("#objSearch").oninput = (ev) => { objFilter = ev.target.value; renderObjects(); };
-  }
-  const sheetRows = isSch() && sheets.length ? `<div class="layer"><span class="muted">Sheets</span><span class="cnt">${sheets.length}</span></div>` +
-    sheets.map((sh) => `<div class="layer" data-sheet="${esc(sh.file)}" style="cursor:pointer;padding-left:14px"><span>${esc(sh.name || sh.file)}</span><span class="cnt">↗</span></div>`).join("") : "";
-  $("#objList").innerHTML = sheetRows + `<div class="layer"><span class="muted">${isSch() ? "Symbols" : "Footprints"}</span><span class="cnt">${list.length}/${items.length}</span></div>` +
-    list.slice(0, 300).map((fp) => `<div class="layer" data-fp="${esc(fp.id)}" style="cursor:pointer;padding-left:14px${selected && selected.id === fp.id ? ";background:var(--panel-2)" : ""}"><span>${esc(fpName(fp))}</span><span class="cnt">${Math.round(fp.rot || 0)}°</span></div>`).join("");
-  $$("[data-sheet]", el).forEach((row) => row.onclick = () => enterSheet(row.dataset.sheet));
-  $$("[data-fp]", el).forEach((row) => row.onclick = () => {
-    const fp = items.find((f) => f.id === row.dataset.fp); if (!fp) return;
-    selected = fp; drawSelection(); renderProps(); centerOn(fp.x / IU, fp.y / IU); renderObjects();
-  });
+  store.slice("document", { items: items.map((fp) => ({ id: fp.id, ref: fp.ref, value: fp.value, lib: fp.lib, layer: fp.layer, x: fp.x, y: fp.y, rot: fp.rot || 0 })),
+    sheets: sheets.map((sh) => ({ id: sh.id, name: sh.name, file: sh.file, x: sh.x, y: sh.y, w: sh.w, h: sh.h })) });
+}
+function selectItemAction(id) {
+  const fp = items.find((f) => f.id === id); if (!fp) return;
+  selected = fp; drawSelection(); renderProps(); centerOn(fp.x / IU, fp.y / IU);
 }
 
 // ---- view transform ----
 function applyView() {
   world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  KUI.status({ zoom });
+  store.slice("viewport", { zoom });
   // Everything on the overlay is sized in screen pixels, so a zoom or fit
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).
@@ -665,10 +695,10 @@ function visibleRectNm() {
 function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
   const prev = tool; tool = t;
-  KUI.setActiveTool(t);
+  store.slice("tool", { current: t });
   const mt = moduleTool(t);
   stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : t === "zoomtool" ? "zoomtool" : t === "measure" ? "measure" : "";
-  if (t !== "measure" && measure) { measure = null; dragG.replaceChildren(); KUI.status({ message: "" }); }
+  if (t !== "measure" && measure) { measure = null; dragG.replaceChildren(); setStatusBar({ message: "" }); }
   if (mt && mt.cursor) stage.style.cursor = mt.cursor; else stage.style.cursor = "";
   if (t === "comment" && !canJoin) { toast("Sign in to comment"); setTool("select"); return; }
   const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }
@@ -712,6 +742,10 @@ stage.addEventListener("dblclick", (ev) => {
   const [x, y] = worldMm(ev); const ctx = toolCtx();
   const f = KiCadCanvas.fieldAt(kdoc, x, y);
   if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
+  if (!isSch() && CollabTools.pcb && CollabTools.pcb.padAt && CollabTools.pcb.padProperties) {
+    let pad = null; try { pad = CollabTools.pcb.padAt(kdoc, x, y); } catch (e) { pad = null; }
+    if (pad && pad.item) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
+  }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (best) { const it = kdoc.items.get(best.id); if (it) KDialogs.openItem(ctx, it); return; }
   if (isSch()) { const sh = sheets.find((r) => x >= r.x / IU && x <= (r.x + r.w) / IU && y >= r.y / IU && y <= (r.y + r.h) / IU); if (sh) { const it = kdoc.items.get(sh.id); if (it) { KDialogs.openItem(ctx, it); return; } } }
@@ -757,7 +791,12 @@ stage.addEventListener("pointerdown", (ev) => {
       ev.preventDefault(); return;
     }
   }
-  const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
+  let best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
+  // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
+  // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
+  if (!isSch() && best && lastFpHit && !lastFpHit.onGeom && mod && mod.onSelectDown && tool === "select") {
+    try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { clearSelection(); drawSelection(); renderProps(); renderObjects(); stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); }
+  }
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (!best) {
     if (!ev.shiftKey) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
@@ -772,6 +811,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!selection.has(best.id)) selection.clear();
   selected = best; drawSelection(); renderProps(); renderObjects();
   if (viewOnly || !ws || ws.readyState !== 1) return;
+  if (!isSch()) { const g = groupExpand([best.id]); if (g.size > 1) { selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
   drag = { fp: best, startMm: [x, y], curMm: [best.x / IU, best.y / IU], moved: false, grabOff: [x - best.x / IU, y - best.y / IU], wires: [], engine: false };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
   // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
@@ -783,7 +823,7 @@ stage.addEventListener("pointerdown", (ev) => {
 });
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
-  lastCursorMm = mm; KUI.status({ x: mm[0], y: mm[1], dx: mm[0] - localOrigin[0], dy: mm[1] - localOrigin[1], polar: polarCoords });
+  lastCursorMm = mm; store.slice("viewport", { cursor: mm });
   if (crosshairMode !== "small") { const r = stage.getBoundingClientRect(); const cy = ev.clientY - r.top, cx = ev.clientX - r.left; $("#chH").setAttribute("y1", cy); $("#chH").setAttribute("y2", cy); $("#chV").setAttribute("x1", cx); $("#chV").setAttribute("x2", cx); }
   if (zoomRect) { drawZoomRect(ev); return; }
   if (boxSel) { boxSel.cur = mm; if (boxSel.lasso) boxSel.pts.push(mm); drawBoxSel(); return; }
@@ -878,7 +918,7 @@ stage.addEventListener("pointerup", (ev) => {
     // inverse: put the symbol and the wire ends back
     const inverse = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];
     for (const w of wires) { const p = KiCadCanvas.ptsOf(w.item.node).map((q) => q.slice()); p[w.index] = w.orig; inverse.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: "(kicad_sch (version 20250114) (generator \"kicad-collab-web\") " + KiCadCanvas.serialize(Object.assign([], w.item.node, { })).replace(/\(pts[^]*?\)\)/, "(pts " + p.map((q) => `(xy ${q[0]} ${q[1]})`).join(" ") + ")") + ")" }); }
-    undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0;
+    undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   }
   fp.x = nx; fp.y = ny; if (kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 });
@@ -887,7 +927,7 @@ document.addEventListener("keydown", (ev) => {
   if (["TEXTAREA", "INPUT"].includes(ev.target.tagName) || state.view !== "editor") return;
   const k = ev.key;
   if (window.KDialogs && KDialogs.isOpen()) return;                     // the dialog owns the keyboard
-  if (k === "Escape") { if ($("#popover").style.display === "block") { closePopover(); return; }
+  if (k === "Escape") { if (store.get().popover) { closePopover(); return; }
     if (selField || fdrag) { selField = null; fdrag = null; requestRender(); }
     if (drag && drag.engine && CollabTools.sch && CollabTools.sch.cancelDrag) { try { CollabTools.sch.cancelDrag(toolCtx()); } catch (e) { console.warn(e); } }
     drag = null; boxSel = null; clearSelection(); if (highlightIds) { highlightIds = null; } dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
@@ -901,9 +941,12 @@ document.addEventListener("keydown", (ev) => {
   if (k === "c" || k === "C") { setTool("comment"); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "z" || k === "Z")) { ev.preventDefault(); if (ev.shiftKey) redoLast(); else undoLast(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "y" || k === "Y")) { ev.preventDefault(); redoLast(); return; }
+  // The module's menu actions ({id: {label, key, run(ctx) -> handled}}) bind KiCad's default hotkeys after the
+  // editor's own fixed keys (F, S, H, C, ±, undo); an action that reports "not handled" lets the key fall through.
+  if (runModuleHotkey(ev)) { ev.preventDefault(); return; }
   const modK = activeModule();
   if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); syncSchModes(); return; } } catch (e) { console.warn(e); } }
-  if (k === " " && !ev.shiftKey) { ev.preventDefault(); localOrigin = lastCursorMm.slice(); KUI.status({ dx: 0, dy: 0, polar: polarCoords }); return; }
+  if (k === " " && !ev.shiftKey) { ev.preventDefault(); localOrigin = lastCursorMm.slice(); store.slice("viewport", { origin: localOrigin.slice() }); return; }
   if ((k === "e" || k === "E") && !ev.metaKey && !ev.ctrlKey) { if (openSelectionProperties()) { ev.preventDefault(); return; } }
   if (k === "g" || k === "G") { gridOn = !gridOn; updateGridStatus(); requestRender(); return; }
   if (k === "n" || k === "N") { snapOn = !snapOn; updateGridStatus(); return; }
@@ -932,8 +975,11 @@ function moveOp(fp, nx, ny) {
     { name: "Position X", before: { type: "int", v: fp.x }, after: { type: "int", v: nx } },
     { name: "Position Y", before: { type: "int", v: fp.y }, after: { type: "int", v: ny } }] };
 }
+/** Hit-test options: hidden layers never count and the active layer's side is preferred (KiCad's candidate rules). */
+function hitOpts() { return { hidden: hiddenLayers, side: !isSch() && activeLayer && /^B\./.test(activeLayer) ? "B" : "F" }; }
+let lastFpHit = null;   // {id, onGeom} of the latest nearestFootprint() call
 function nearestFootprint(x, y, radiusMm) {
-  if (kdoc) { const f = KUI.filter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; const id = KiCadCanvas.hitTest(kdoc, x, y, Math.min(radiusMm, 0.5)); return id ? items.find((f2) => f2.id === id) || null : null; }
+  if (kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; lastFpHit = KiCadCanvas.hitTestDetail(kdoc, x, y, Math.min(radiusMm, 0.5), hitOpts()); const id = lastFpHit ? lastFpHit.id : null; return id ? items.find((f2) => f2.id === id) || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of items) { const d = Math.hypot(fp.x / IU - x, fp.y / IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
@@ -1007,9 +1053,16 @@ function drawPeers(peers) {
 }
 
 // ---- panels ----
-function showTab(name) { KUI.showPane(name, true); }
+// The docked panes are React (server/web/components/panes); app.js publishes what they show.
+/** Publish the selection; bumping its version makes the Properties island redraw (props.js). */
 function renderProps() {
-  const el = $("#props");
+  const v = store.get().selection.version + 1;
+  store.set({ selection: { ids: Array.from(selectedSet() || []), primary: selected ? Object.assign({}, selected) : null, field: selField ? { id: selField.id, name: selField.name } : null, version: v } });
+}
+/** The Properties pane's imperative island: props.js draws into the pane's div (window.CollabApp.renderProps). */
+function renderPropsInto(el) {
+  if (!el) return;
+  const $ = (sel) => el.querySelector(sel);
   if (kdoc && CollabTools.props && CollabTools.props.render) { try { CollabTools.props.render(el, selected || (selField ? { id: selField.id } : null), toolCtx()); return; } catch (e) { console.warn(e); } }
   if (!selected) { el.innerHTML = `<p class="note">Select a footprint on the board to see its properties.</p>`; return; }
   const ro = viewOnly ? "disabled" : "";
@@ -1055,25 +1108,11 @@ function renderProps() {
   $("#pRotBtn").onclick = rotateSelected; $("#pDelBtn").onclick = deleteSelected;
 }
 function renderPeers() {
-  const el = $("#peers"), ids = Object.keys(peerState);
-  $("#peerN").textContent = ids.length;
-  const meRow = state.me ? `<div class="peer"><span class="dot" style="background:#ffb43a"></span><span class="who">${esc(state.me.name || state.me.login)}</span><span class="me">you</span></div>` : "";
-  el.innerHTML = meRow + (ids.length ? ids.map((cid) => { const p = peerState[cid]; const c = (p.user && p.user.color) || "#4477ee";
-    return `<div class="peer"><span class="dot" style="background:${esc(c)}"></span><span class="who">${esc(peerName(p))}</span>
-      <button class="btn sm" data-follow="${esc(cid)}">${followPeer === cid ? "Following ✔" : "Follow"}</button></div>`; }).join("")
-    : `<p class="note">No one else is here right now. Share the link to invite collaborators.</p>`);
-  $$("[data-follow]", el).forEach((b) => b.onclick = () => { const cid = b.dataset.follow; followPeer = followPeer === cid ? null : cid; applyFollowWeb(peerState); renderPeers(); });
+  store.set({ peers: { list: Object.keys(peerState).map((cid) => { const p = peerState[cid]; return { cid, name: peerName(p), color: (p.user && p.user.color) || "#4477ee" }; }), follow: followPeer } });
 }
-function renderThreads() {
-  const roots = comments.filter((c) => !c.parentId);
-  $("#cmtN").textContent = roots.filter((c) => !c.resolved).length;
-  $("#threads").innerHTML = roots.length ? roots.map((c) => `<div class="thread ${c.resolved ? "resolved" : ""}" data-thread="${c.id}">
-      <div class="meta"><span>${esc(c.authorLogin)}</span><span>${ago(c.createdAt)}</span></div>
-      <div class="body">${esc(c.body)}</div>
-      <div class="meta"><span>${comments.filter((x) => x.parentId === c.id).length} repl${comments.filter((x) => x.parentId === c.id).length === 1 ? "y" : "ies"}</span><span>${c.resolved ? "resolved" : ""}</span></div></div>`).join("")
-    : `<p class="note">No comments yet. Use the comment tool to pin a note to the board.</p>`;
-  $$("[data-thread]").forEach((t) => t.onclick = () => { const c = comments.find((x) => x.id === +t.dataset.thread); if (c) { centerOn(c.x / IU, c.y / IU); showThread(c.id); } });
-}
+function followAction(cid) { followPeer = cid && peerState[cid] ? cid : null; applyFollowWeb(peerState); renderPeers(); }
+function renderThreads() { store.set({ comments: comments.slice() }); }
+function openThreadAction(id) { const c = comments.find((x) => x.id === id); if (c) { centerOn(c.x / IU, c.y / IU); showThread(c.id); } }
 function centerOn(xMm, yMm) {
   const w = world.clientWidth, h = w * mmH() / mmW();
   panX = stage.clientWidth / 2 - ((xMm - mmX0()) / mmW()) * w * zoom;
@@ -1081,24 +1120,19 @@ function centerOn(xMm, yMm) {
   applyView();
 }
 async function loadHistory() {
-  const el = $("#history");
+  store.slice("history", { loading: true });
   try {
     const j = await api(`/api/projects/${state.project.projectId}/checkpoints`);
     const byName = {};
     for (const c of j.checkpoints || []) (byName[c.name] ||= { name: c.name, at: c.createdAt, docs: [] }).docs.push(c);
     const list = Object.values(byName).sort((a, b) => new Date(b.at) - new Date(a.at));
-    el.innerHTML = `<table class="ktable"><thead><tr><th>Checkpoint</th><th>When</th><th>Docs</th></tr></thead><tbody>` +
-      (list.length ? list.map((c) => `<tr data-restore="${esc(c.name)}"><td title="${esc(c.name)}">${esc(c.name)}</td><td>${ago(c.at)}</td><td>${c.docs.length}</td></tr>`).join("")
-        : `<tr><td colspan="3" class="note">No checkpoints yet. Create one to name the current state so you can come back to it.</td></tr>`) + `</tbody></table>`;
-    const restoreBtn = $("#restoreBtn"); let picked = null;
-    restoreBtn.disabled = true;
-    $$("tr[data-restore]", el).forEach((tr) => tr.onclick = () => { picked = tr.dataset.restore; $$("tr[data-restore]", el).forEach((x) => x.classList.toggle("sel", x === tr)); restoreBtn.disabled = viewOnly || !picked; });
-    restoreBtn.onclick = async () => {
-      if (!picked || !confirm(`Restore "${picked}"? Everyone in the session gets this version.`)) return;
-      try { await api(`/api/projects/${state.project.projectId}/restore`, { method: "POST", body: JSON.stringify({ name: picked }) }); toast("Restored — rendering…"); scheduleRenderRefresh(); }
-      catch (e) { toast("Restore failed: " + e.message, 4000); }
-    };
-  } catch (e) { el.innerHTML = `<p class="note">${esc(e.message)}</p>`; }
+    store.set({ history: { groups: list.map((c) => ({ name: c.name, at: c.at, docs: c.docs.length })), loading: false, error: null } });
+  } catch (e) { store.set({ history: { groups: [], loading: false, error: e.message } }); }
+}
+async function restoreCheckpoint(name) {
+  if (!name || viewOnly || !state.project || !confirm(`Restore "${name}"? Everyone in the session gets this version.`)) return;
+  try { await api(`/api/projects/${state.project.projectId}/restore`, { method: "POST", body: JSON.stringify({ name }) }); toast("Restored — rendering…"); scheduleRenderRefresh(); }
+  catch (e) { toast("Restore failed: " + e.message, 4000); }
 }
 
 // ---- comments ----
@@ -1177,7 +1211,8 @@ function placeComment(ev) {
 }
 
 // ---- websocket / presence / ops ----
-function setConn(cls, text) { const c = $("#conn"); c.className = "conn " + cls; c.textContent = text || (cls === "live" ? "live" : "offline"); }
+function setConn(cls, text) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
+function setViewOnly(v) { viewOnly = !!v; store.set({ viewOnly }); }
 let connectGen = 0;   // bumped by every connect()/leaveDoc(); a stale socket's events are ignored
 async function connect() {
   const gen = ++connectGen;
@@ -1236,7 +1271,7 @@ async function connect() {
     if (msg.type === "presence") { for (const [cid, e] of Object.entries(msg.peers || {})) { if (cid === myClientId || cid.endsWith(":" + myClientId)) continue; if (e === null) delete peerState[cid]; else peerState[cid] = e; }
       drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
     if (msg.type === "peer_left" && msg.clientId) { delete peerState[msg.clientId]; drawPeers(peerState); applyFollowWeb(peerState); renderPeers(); }
-    if (msg.type === "error" && msg.code === "permission_denied") { viewOnly = true; drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here"); }
+    if (msg.type === "error" && msg.code === "permission_denied") { setViewOnly(true); drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here"); }
     if (msg.type === "error" && msg.code === "desynced") { sock.send(JSON.stringify({ type: "resync", docId: state.docId })); }
     if (msg.type === "comment") noteCommentMsg(msg);
     if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
@@ -1247,7 +1282,7 @@ async function connect() {
     if (msg.type === "reset" && msg.docId === state.docId) { sock.send(JSON.stringify({ type: "resync", docId: state.docId })); }
   };
 }
-function bumpEdits() { $("#sbEdits").textContent = editsSeen ? `${editsSeen} edit${editsSeen === 1 ? "" : "s"}` : ""; }
+function bumpEdits() { store.slice("connection", { edits: editsSeen }); }
 function noteRemoteOp(msg) {
   for (const c of msg.changes || []) {
     if (c.typeName !== ITEM_TYPE) continue;
@@ -1286,7 +1321,7 @@ function scheduleRenderRefresh() {
   }, 8000);
 }
 
-// ---- actions ----
+// ---- actions (the home menu's entries and the collab items of the editor menus) ----
 async function runAction(act, el) {
   const id = state.project && state.project.projectId;
   switch (act) {
@@ -1296,66 +1331,104 @@ async function runAction(act, el) {
     case "fit": fitView(); break;
     case "grid": gridOn = !gridOn; updateGridStatus(); requestRender(); break;
     case "snap": snapOn = !snapOn; updateGridStatus(); break;
-    case "linemode": if (CollabTools.sch && CollabTools.sch.cycleLineMode) CollabTools.sch.cycleLineMode(toolCtx()); break;
-    case "tab-appearance": showTab("appearance"); break;
-    case "tab-props": showTab("props"); break;
-    case "tab-peers": showTab("peers"); break;
-    case "tab-comments": showTab("comments"); break;
-    case "tab-history": showTab("history"); break;
+    case "linemode": if (CollabTools.sch && CollabTools.sch.cycleLineMode) { CollabTools.sch.cycleLineMode(toolCtx()); syncSchModes(); } break;
+    case "tab-appearance": showPane("appearance", true); break;
+    case "tab-props": showPane("props", true); break;
+    case "tab-peers": showPane("peers", true); break;
+    case "tab-comments": showPane("comments", true); break;
+    case "tab-history": showPane("history", true); break;
     case "refreshHistory": loadHistory(); break;
-    case "about": popover(`<h4>KiCad Collaborative 1.0</h4><p class="note">Real-time collaboration for KiCad, based on KiCad 10.99.<br>Web editor v1: move, rotate, delete footprints; comments; history; live presence.</p>`, el); break;
+    case "about": showPopover("about", null, el); break;
     case "archive": if (id) location.href = `/api/projects/${id}/archive`; break;
     case "clone": if (!id) break; if (!state.me) { toast("Sign in to clone"); break; }
       try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + e.message, 4000); } break;
     case "share": if (!id) break; if (!state.me || !state.role || state.role === "viewer") { toast("Only editors can create share links"); break; }
       try { const j = await api(`/api/projects/${id}/links`, { method: "POST", body: JSON.stringify({ role: "editor" }) });
         await navigator.clipboard.writeText(j.url).catch(() => {});
-        popover(`<h4>Share link (editor)</h4><input value="${esc(j.url)}" readonly onclick="this.select()"><p class="note">Copied to your clipboard. Anyone with it can join in the browser or from KiCad Collaborative → File → Join Shared Project…</p>`, el);
+        showPopover("share", { url: j.url }, el);
         toast("Share link copied"); } catch (e) { toast("Couldn't create link: " + e.message, 4000); } break;
     case "checkpoint": if (!id) break; if (viewOnly) { toast("Only editors can create checkpoints"); break; }
       { const name = prompt("Checkpoint name", `checkpoint ${new Date().toLocaleString()}`); if (!name) break;
-        try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); KUI.showPane("history", true); }
+        try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); showPane("history", true); }
         catch (e) { toast("Checkpoint failed: " + e.message, 4000); } } break;
-    case "kicad": popover(`<h4>Open in KiCad Collaborative</h4><p class="note">1. Install the desktop app from the <a href="https://github.com/notaroomba/kicad-collaborative/releases" target="_blank">releases page</a>.<br>2. File → Join Shared Project… and paste a share link (File → Copy share link… here).<br>3. Edits sync both ways, live.</p>`, el); break;
+    case "kicad": showPopover("kicad", null, el); break;
   }
 }
 
-// ================================================================ KiCad frame (kicad-ui.js)
+// ================================================================ KiCad frame (the React chrome reads the store)
+// Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
+const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance"];
+const PANE_EDITOR_ONLY = { hier: "sch" };
+const PANE_DEFAULT_HIDDEN = { sch: ["peers", "comments", "appearance"], pcb: ["peers", "comments"] };
+let panes = {};
+const editorId = () => (isSch() ? "sch" : "pcb");
+const paneKey = (ed) => "kui.panes." + (ed || "x");
+function savedPanes(ed) { try { return JSON.parse(localStorage.getItem(paneKey(ed)) || "{}"); } catch (e) { return {}; } }
+function loadPanes(ed) {
+  const saved = savedPanes(ed), out = {};
+  for (const n of PANE_NAMES) { const allowed = !PANE_EDITOR_ONLY[n] || PANE_EDITOR_ONLY[n] === ed; out[n] = allowed && (saved[n] !== undefined ? !!saved[n] : !PANE_DEFAULT_HIDDEN[ed].includes(n)); }
+  return out;
+}
+function showPane(name, show) {
+  const ed = editorId();
+  if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed)) return;
+  const next = show === undefined ? !panes[name] : !!show;
+  panes = Object.assign({}, panes, { [name]: next });
+  const saved = savedPanes(ed); saved[name] = next;
+  try { localStorage.setItem(paneKey(ed), JSON.stringify(saved)); } catch (e) { /* no storage */ }
+  store.set({ panes });
+  requestRender();
+}
+// Selection filter (panel_*selection_filter_base): per editor, a category is enabled unless set false.
+const FILTER_KEYS = { sch: ["symbols", "pins", "wires", "labels", "graphics", "images", "text", "other"], pcb: ["footprints", "text", "tracks", "vias", "pads", "graphics", "zones", "dimensions", "other"] };
+const filters = {};
+function selFilter() { return filters[editorId()] || {}; }
+function setFilter(key, on) {
+  const ed = editorId(); const f = filters[ed] = filters[ed] || {};
+  if (key === "all") { for (const k of FILTER_KEYS[ed]) f[k] = !!on; } else f[key] = !!on;
+  store.set({ filter: Object.assign({}, f) });
+  selected = null; drawSelection(); renderProps();
+}
+// Theme (kui.theme): light/dark override of the system preference.
+function applyTheme() {
+  const saved = (() => { try { return localStorage.getItem("kui.theme"); } catch (e) { return null; } })();
+  if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+}
+function toggleTheme() {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("kui.theme", next); } catch (e) { /* no storage */ }
+}
+// Status-bar units (EDA_DRAW_FRAME::UpdateStatusBar); the bar formats through server/web/units.ts, this is for messages.
+const UNITS = { mm: { name: "mm", f: (v) => v, d: 4 }, in: { name: "in", f: (v) => v / 25.4, d: 4 }, mil: { name: "mils", f: (v) => v / 0.0254, d: 2 } };
+let units = "mm";
+function fmtLen(mm) { const u = UNITS[units]; return u.f(mm).toFixed(u.d).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""); }
+
 function setupEditorChrome() {
-  const ed = isSch() ? "sch" : "pcb";
-  const app = $('.kpane[data-pane="appearance"]'), filt = $('.kpane[data-pane="filter"]'), hier = $('.kpane[data-pane="hier"]');
-  if (isSch()) { app.dataset.default = "hidden"; hier.after(filt); $("#dockL").appendChild(app); }          // Properties · Hierarchy · Selection Filter · History
-  else { app.dataset.default = ""; $("#dockR").appendChild(app); $("#dockR").appendChild(filt); }         // Appearance with the Selection Filter below it
-  const mod = isSch() ? CollabTools.sch : CollabTools.pcb;
-  KUI.setEditor(ed, mod && mod.tools ? mod.tools : []);
-  KUI.setRadio("Units", { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" }[KUI.units()]);
-  KUI.setRadio("Selection modes", selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
-  KUI.setRadio("Crosshair modes", crosshairMode === "full" ? "cursorFullCrosshairs" : crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
+  const ed = editorId();
+  document.body.dataset.editor = ed;
+  filters[ed] = filters[ed] || {};
+  panes = loadPanes(ed);
+  renderModuleTools();
+  store.set({ document: Object.assign({}, store.get().document, { editor: ed, docType: DOC_TYPE }), panes: Object.assign({}, panes), filter: Object.assign({}, filters[ed]) });
+  setRadio("Units", { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" }[units]);
+  setRadio("Selection modes", selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
+  setRadio("Crosshair modes", crosshairMode === "full" ? "cursorFullCrosshairs" : crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
   $("#crosshair").classList.toggle("on", crosshairMode !== "small");
-  KUI.setOn("toggleGrid", gridOn); KUI.setOn("togglePolarCoords", polarCoords); KUI.setOn("toggleHiddenPins", !!renderOpts.showHiddenPins);
-  KUI.setOn("highContrastMode", !!renderOpts.highContrast); KUI.setOn("padDisplayMode", !!renderOpts.outlinePads); KUI.setOn("viaDisplayMode", !!renderOpts.outlineVias); KUI.setOn("trackDisplayMode", !!renderOpts.outlineTracks);
-  KUI.setOn("zoneDisplayFilled", !renderOpts.zoneOutline); KUI.setOn("zoneDisplayOutline", !!renderOpts.zoneOutline);
+  setToggles({ toggleGrid: gridOn, togglePolarCoords: polarCoords, toggleHiddenPins: !!renderOpts.showHiddenPins, highContrastMode: !!renderOpts.highContrast,
+    padDisplayMode: !!renderOpts.outlinePads, viaDisplayMode: !!renderOpts.outlineVias, trackDisplayMode: !!renderOpts.outlineTracks,
+    zoneDisplayFilled: !renderOpts.zoneOutline, zoneDisplayOutline: !!renderOpts.zoneOutline });
   syncSchModes();
-  const zs = $("#zoomSel"); if (zs) zs.onchange = () => { if (zs.value === "auto") fitView(); else { zoom = Number(zs.value) / 100; applyView(); } };
-  for (const [id, vals] of [["trackWidthSel", [0.2, 0.25, 0.3, 0.4, 0.5, 0.8, 1, 1.5, 2]], ["viaSizeSel", [0.6, 0.8, 1, 1.2, 1.6]]]) {
-    const el = $("#" + id); if (el && !el.options.length) el.innerHTML = vals.map((v) => `<option value="${v}">${v} mm</option>`).join("");
-  }
-  KUI.status({ grid: gridPitch, zoom, x: 0, y: 0, dx: 0, dy: 0, polar: polarCoords });
-  KUI.setActiveTool(tool);
+  store.slice("viewport", { units, selMode, crosshair: crosshairMode, polar: polarCoords, renderOpts: Object.assign({}, renderOpts), gridPitch, zoom, cursor: [0, 0], origin: localOrigin.slice() });
+  store.slice("tool", { current: tool });
 }
 // The schematic module owns its line / drag modes (Shift+Space, G, M); mirror them on the toolbar.
 function syncSchModes() {
-  if (!isSch() || !CollabTools.sch || !CollabTools.sch.state) return;
+  if (!isSch() || !CollabTools.sch || !CollabTools.sch.state) { store.slice("viewport", { lineMode: null, dragMode: null }); return; }
   const lm = CollabTools.sch.state.lineMode;
-  KUI.setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
-}
-function renderHierarchy() {
-  const el = $("#hier"); if (!el) return;
-  const root = rootSchematic();
-  const sch = state.docs.filter((d) => d.docType === "kicad_sch").sort((a, b) => (a === root ? -1 : b === root ? 1 : a.path.localeCompare(b.path)));
-  el.innerHTML = sch.map((d) => `<div class="node ${state.doc && d.docId === state.doc.docId ? "cur" : ""}" data-doc="${esc(d.docId)}" style="padding-left:${d === root ? 4 : 18}px" title="${esc(d.path)}">${d === root ? "▾ " : "· "}${esc(d === root ? (state.project.name || "Root") : d.path.split("/").pop().replace(/\.kicad_sch$/, ""))}${d === root ? "" : ' <span class="muted">(page)</span>'}</div>`).join("")
-    || `<p class="note">No schematic sheets in this project.</p>`;
-  $$("[data-doc]", el).forEach((n) => n.onclick = () => { const d = state.docs.find((x) => x.docId === n.dataset.doc); if (d && d !== state.doc) openDoc(d); });
+  setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
+  store.slice("viewport", { lineMode: lm === "free" ? "free" : lm === "45" ? "45" : "90", dragMode: CollabTools.sch.state.dragMode || null });
 }
 function openDocId(id) { const d = state.docs.find((x) => x.docId === id); if (d) openDoc(d); }
 function navigateDocs(dir) {
@@ -1366,9 +1439,44 @@ function switchEditor() {
   const target = isSch() ? state.docs.find((d) => d.docType === "kicad_pcb") : rootSchematic();
   if (target) openDoc(target); else toast(isSch() ? "This project has no board yet" : "This project has no schematic yet");
 }
-function setUnitsAction(u, id) { KUI.setUnits(u); KUI.setRadio("Units", id); KUI.status({ grid: gridPitch, x: lastCursorMm[0], y: lastCursorMm[1], dx: lastCursorMm[0] - localOrigin[0], dy: lastCursorMm[1] - localOrigin[1], polar: polarCoords }); }
-function setCrosshair(mode, id) { crosshairMode = mode; KUI.setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); }
-function toggleRenderOpt(key, id, exclusive) { renderOpts[key] = !renderOpts[key]; KUI.setOn(id, !!renderOpts[key]); if (exclusive) for (const [k2, id2] of exclusive) KUI.setOn(id2, k2 ? !!renderOpts[k2] : !renderOpts[key]); requestRender(); }
+function setUnitsAction(u, id) { if (UNITS[u]) units = u; setRadio("Units", id); store.slice("viewport", { units }); }
+function setCrosshair(mode, id) { crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); }
+/** File → Plot: SVG or PNG of the current document (KiCad's plot dialog, the web's subset). */
+function plotDialog() {
+  if (!kdoc || !window.KDialogs) return;
+  const name = (state.docs.find((d) => d.docId === state.docId) || {}).path || (isSch() ? "sheet.kicad_sch" : "board.kicad_pcb");
+  const stem = name.split("/").pop().replace(/\.kicad_(sch|pcb)$/, "");
+  KDialogs.open({ title: "Plot", width: 460,
+    build(body) {
+      body.innerHTML = `<div class="kv"><label>Format</label><select id="kd-fmt"><option value="svg">SVG</option><option value="png">PNG</option></select>
+        <label>Resolution (PNG)</label><input id="kd-dpi" type="number" value="300" min="72" max="1200" step="1">
+        <label>Content</label><select id="kd-scope"><option value="all">Whole ${isSch() ? "sheet" : "board"}</option><option value="sel"${selection.size ? "" : " disabled"}>Selection only</option></select>
+        <label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="kd-bg" type="checkbox" style="width:auto;margin:0"> Include background</label>
+        <label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="kd-hid" type="checkbox" style="width:auto;margin:0"${isSch() ? "" : " disabled"}> Show hidden pins</label></div>
+        <p class="kd-note" style="margin-top:10px">Hidden layers stay hidden; the file downloads as ${esc(stem)}.svg / .png.</p>`;
+    },
+    okLabel: "Plot",
+    ok() {
+      const g = (id) => document.querySelector("#" + id);
+      const fmt = g("kd-fmt").value, dpi = Math.max(72, Math.min(1200, +g("kd-dpi").value || 300));
+      const opts = { hidden: hiddenLayers, background: g("kd-bg").checked ? undefined : false, showHiddenPins: !!g("kd-hid").checked, zoneOutline: !!renderOpts.zoneOutline };
+      if (g("kd-scope").value === "sel" && selection.size) opts.ids = [...selection];
+      const download = (blob, ext) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${stem}.${ext}`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
+      try {
+        if (fmt === "svg") { download(new Blob([KiCadCanvas.renderSvg(kdoc, opts)], { type: "image/svg+xml" }), "svg"); toast("Plotted " + stem + ".svg"); }
+        else { toast("Rendering PNG…"); KiCadCanvas.renderPng(kdoc, Object.assign({ dpi }, opts, renderOpts)).then((blob) => { download(blob, "png"); toast("Plotted " + stem + ".png"); }).catch((e) => { console.warn(e); toast("PNG export failed"); }); }
+      } catch (e) { console.warn(e); toast("Plot failed: " + (e.message || e)); }
+    } });
+}
+/** File → Print: the document as SVG in a print window. */
+function printDocument() {
+  if (!kdoc) return;
+  let svg; try { svg = KiCadCanvas.renderSvg(kdoc, { hidden: hiddenLayers, background: false, zoneOutline: !!renderOpts.zoneOutline }); } catch (e) { toast("Print failed: " + (e.message || e)); return; }
+  const w = window.open("", "_blank"); if (!w) { toast("Allow pop-ups to print"); return; }
+  w.document.write(`<!doctype html><title>Print</title><style>html,body{margin:0;background:#fff}svg{width:100%;height:auto;max-height:100vh}@page{margin:10mm}</style>${svg}`); w.document.close();
+  w.addEventListener("load", () => setTimeout(() => w.print(), 200)); setTimeout(() => { try { w.print(); } catch (e) { /* already printed */ } }, 800);
+}
+function toggleRenderOpt(key, id) { renderOpts[key] = !renderOpts[key]; setToggle(id, !!renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); }
 function schKey(k) { const m = CollabTools.sch; if (!m || !isSch()) return false; try { return !!m.onKey(k, {}, toolCtx()); } catch (e) { console.warn(e); return false; } }
 function orientSelected(kind) {
   if (isSch()) { if (!schKey({ ccw: "r", cw: "R", mv: "y", mh: "x" }[kind])) toast("Select a symbol or item first"); return; }
@@ -1377,30 +1485,28 @@ function orientSelected(kind) {
   else { const h = CollabTools.props && CollabTools.props.helpers; if (h && h.setFootprintSide) { const it = kdoc.items.get(selected.id); const side = (it && it.layer === "B.Cu") ? "F.Cu" : "B.Cu"; try { h.setFootprintSide(toolCtx(), it, side); } catch (e) { toast("Flip failed: " + e.message); } } else toast("Flip runs in the desktop app"); }
 }
 function deleteAction() { if (schKey("Delete")) return; if (selected && !viewOnly) deleteSelected(); else toast("Nothing selected"); }
-function findPopover(el) {
-  popover(`<h4>Find</h4><input id="findQ" placeholder="Reference or value…"><p class="note" id="findHits"></p>`, el);
-  const q = $("#findQ"), hits = $("#findHits"); q.focus();
-  const run = () => { const v = q.value.trim().toLowerCase(); const m = v ? items.filter((fp) => fpName(fp).toLowerCase().includes(v)).sort((x, y) => (fpName(y).toLowerCase() === v) - (fpName(x).toLowerCase() === v) || (fpName(y).toLowerCase().startsWith(v)) - (fpName(x).toLowerCase().startsWith(v))) : []; hits.textContent = v ? `${m.length} match${m.length === 1 ? "" : "es"}` : ""; if (m.length) { selected = m[0]; drawSelection(); renderProps(); centerOn(m[0].x / IU, m[0].y / IU); renderObjects(); } };
-  q.addEventListener("input", run); q.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { run(); closePopover(); } ev.stopPropagation(); });
+function findPopover(el) { showPopover("find", { hits: null, query: "" }, el); }
+/** The Find popover's query: select and centre the best match, report the count. */
+function findAction(query) {
+  const v = String(query || "").trim().toLowerCase();
+  const m = v ? items.filter((fp) => fpName(fp).toLowerCase().includes(v)).sort((x, y) => (fpName(y).toLowerCase() === v) - (fpName(x).toLowerCase() === v) || (fpName(y).toLowerCase().startsWith(v)) - (fpName(x).toLowerCase().startsWith(v))) : [];
+  if (m.length) { selected = m[0]; drawSelection(); renderProps(); centerOn(m[0].x / IU, m[0].y / IU); }
+  const p = store.get().popover; if (p && p.kind === "find") store.set({ popover: Object.assign({}, p, { hits: v ? m.length : null, query: String(query || "") }) });
 }
-function gridMenu(ev, el) {
-  const choices = GRID_CHOICES[DOC_TYPE] || GRID_CHOICES.kicad_pcb;
-  popover(`<h4>Grid</h4>` + choices.map(([v, label]) => `<button class="kbtn" data-grid="${v}" style="display:block;width:100%;text-align:left;margin:2px 0${Number(v) === gridPitch ? ";border-color:var(--blue)" : ""}">${esc(label)}</button>`).join(""), el);
-  $$("#popover [data-grid]").forEach((b) => b.onclick = () => { gridPitch = Number(b.dataset.grid) || gridPitch; updateGridStatus(); requestRender(); closePopover(); });
-}
+function gridMenu(el) { showPopover("grid", null, el); }
 // measure tool: two clicks, the distance goes to the status bar
 function measureClick(mm) {
-  if (!measure || measure.b) { measure = { a: mm }; dragG.replaceChildren(); KUI.status({ message: "Measure — click the second point" }); return; }
+  if (!measure || measure.b) { measure = { a: mm }; dragG.replaceChildren(); setStatusBar({ message: "Measure — click the second point" }); return; }
   measure.b = mm; drawMeasure(mm);
   const dx = mm[0] - measure.a[0], dy = mm[1] - measure.a[1];
-  KUI.status({ message: `dist ${KUI.fmtLen(Math.hypot(dx, dy))} ${KUI.units()} · dx ${KUI.fmtLen(dx)} · dy ${KUI.fmtLen(dy)} · ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1)}°` });
+  setStatusBar({ message: `dist ${fmtLen(Math.hypot(dx, dy))} ${UNITS[units].name} · dx ${fmtLen(dx)} · dy ${fmtLen(dy)} · ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1)}°` });
 }
 function drawMeasure(mm) {
   if (!measure) return; dragG.replaceChildren();
   const s = pxPerMm(), a = measure.a;
   const line = document.createElementNS(NS, "line"); line.setAttribute("x1", a[0]); line.setAttribute("y1", a[1]); line.setAttribute("x2", mm[0]); line.setAttribute("y2", mm[1]);
   line.setAttribute("stroke", "#ffb43a"); line.setAttribute("stroke-width", 1.5 / s); dragG.appendChild(line);
-  const t = svgText((a[0] + mm[0]) / 2, (a[1] + mm[1]) / 2 - 6 / s, 11 / s, "#ffb43a", `${KUI.fmtLen(Math.hypot(mm[0] - a[0], mm[1] - a[1]))} ${KUI.units()}`); t.setAttribute("text-anchor", "middle"); dragG.appendChild(t);
+  const t = svgText((a[0] + mm[0]) / 2, (a[1] + mm[1]) / 2 - 6 / s, 11 / s, "#ffb43a", `${fmtLen(Math.hypot(mm[0] - a[0], mm[1] - a[1]))} ${UNITS[units].name}`); t.setAttribute("text-anchor", "middle"); dragG.appendChild(t);
 }
 // zoom-area tool: drag a rectangle, the view fits it
 function drawZoomRect(ev) {
@@ -1454,16 +1560,17 @@ function finishBoxSel(ev) {
   selected = prim ? (items.find((f) => f.id === prim.id) || selected) : (b.add ? selected : null);
   if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
   drawSelection(); renderProps(); renderObjects();
-  KUI.status({ message: selection.size ? `${selection.size} item${selection.size === 1 ? "" : "s"} selected` : "" });
+  setStatusBar({ message: selection.size ? `${selection.size} item${selection.size === 1 ? "" : "s"} selected` : "" });
 }
 function selectAll() {
   if (!kdoc) return; selection.clear();
   for (const it of kdoc.items.values()) if (it.bbox && filterAllows(it.kind)) selection.add(it.id);
   selected = items.find((f) => selection.has(f.id)) || null;
-  drawSelection(); renderProps(); renderObjects(); KUI.status({ message: `${selection.size} items selected` });
+  drawSelection(); renderProps(); renderObjects(); setStatusBar({ message: `${selection.size} items selected` });
 }
 function deleteSelection() {
   if (!kdoc || !selection.size) return;
+  selection = groupExpand(selection);
   const its = [...selection].map((id) => kdoc.items.get(id)).filter(Boolean);
   const m = activeModule(); let changes = null;
   if (m && m.deleteChanges) { try { changes = m.deleteChanges(kdoc, its); } catch (e) { console.warn(e); } }
@@ -1472,6 +1579,7 @@ function deleteSelection() {
   toast(`Deleted ${its.length} item${its.length === 1 ? "" : "s"}`);
 }
 function startGroupDrag(hit, mm, ev) {
+  selection = groupExpand(selection);
   const its = [...selection].map((id) => kdoc.items.get(id)).filter(Boolean);
   const fp = hit.fp || { id: hit.id, x: Math.round(KiCadCanvas.atOf(hit.item.node)[0] * IU), y: Math.round(KiCadCanvas.atOf(hit.item.node)[1] * IU) };
   if (isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
@@ -1496,45 +1604,85 @@ function finishGroupDrag() {
   const changes = g.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y));
   const inverse = g.group.map((m) => moveOp({ id: m.fp.id, x: m.fp.x, y: m.fp.y }, m.ox, m.oy));
   if (ws && ws.readyState === 1) sendOp(changes);
-  undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0;
+  undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   if (kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 }
-function desktopOnly(label, why, el) {
-  popover(`<h4>${esc(label)}</h4><p class="note">${esc(why)}</p><p class="note"><a href="#" data-act="kicad">Open this project in KiCad Collaborative…</a></p>`, el);
+// Every chrome action the web editor handles, by KiCad action id (or one of ours).  An id missing here
+// that maps to a tool (server/web/tables.ts TOOL_MAP) activates the tool; anything else is dimmed and
+// explained as desktop-only by the chrome itself.  Handlers get the anchor rect of the clicked control.
+const HANDLERS = {
+  selectSetRect: () => { selMode = "rect"; setRadio("Selection modes", "selectSetRect"); store.slice("viewport", { selMode }); setTool("select"); },
+  selectSetLasso: () => { selMode = "lasso"; setRadio("Selection modes", "selectSetLasso"); store.slice("viewport", { selMode }); setTool("select"); },
+  selectAll: () => selectAll(),
+  save: (a) => runAction("checkpoint", a), refreshHistory: () => loadHistory(),
+  undo: () => undoLast(), redo: () => redoLast(), find: (a) => findPopover(a), doDelete: () => deleteAction(),
+  zoomRedraw: () => requestRender(), zoomInCenter: () => zoomBy(1.25), zoomOutCenter: () => zoomBy(0.8), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitView(),
+  navigateBack: () => navigateDocs(-1), navigateForward: () => navigateDocs(1), navigateUp: () => { const r = rootSchematic(); if (r && state.doc !== r) openDoc(r); else toast("Already at the root sheet"); },
+  rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
+  mirrorV: () => orientSelected("mv"), mirrorH: () => orientSelected("mh"),
+  showPcbNew: () => switchEditor(), showEeschema: () => switchEditor(),
+  toggleGrid: () => { gridOn = !gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": (a) => gridMenu(a),
+  millimetersUnits: () => setUnitsAction("mm", "millimetersUnits"), inchesUnits: () => setUnitsAction("in", "inchesUnits"), milsUnits: () => setUnitsAction("mil", "milsUnits"),
+  cursorSmallCrosshairs: () => setCrosshair("small", "cursorSmallCrosshairs"), cursorFullCrosshairs: () => setCrosshair("full", "cursorFullCrosshairs"), cursor45Crosshairs: () => setCrosshair("45", "cursor45Crosshairs"),
+  togglePolarCoords: () => { polarCoords = !polarCoords; setToggle("togglePolarCoords", polarCoords); store.slice("viewport", { polar: polarCoords }); },
+  toggleHiddenPins: () => toggleRenderOpt("showHiddenPins", "toggleHiddenPins"),
+  highContrastMode: () => toggleRenderOpt("highContrast", "highContrastMode"),
+  padDisplayMode: () => toggleRenderOpt("outlinePads", "padDisplayMode"), viaDisplayMode: () => toggleRenderOpt("outlineVias", "viaDisplayMode"), trackDisplayMode: () => toggleRenderOpt("outlineTracks", "trackDisplayMode"),
+  zoneDisplayFilled: () => { renderOpts.zoneOutline = false; setToggles({ zoneDisplayFilled: true, zoneDisplayOutline: false }); store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); },
+  zoneDisplayOutline: () => { renderOpts.zoneOutline = true; setToggles({ zoneDisplayFilled: false, zoneDisplayOutline: true }); store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); },
+  showNetNames: () => toggleRenderOpt("netNames", "showNetNames"),
+  flipBoard: () => toggleRenderOpt("flip", "flipBoard"),
+  showHiddenText: () => toggleRenderOpt("showHiddenText", "showHiddenText"),
+  zoneFillPreview: () => toggleRenderOpt("zoneFill", "zoneFillPreview"),
+  showPadNumbers: () => { renderOpts.padNumbers = renderOpts.padNumbers === false; setToggle("showPadNumbers", renderOpts.padNumbers !== false); store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); },
+  clearMarkers: () => { markers = []; renderOpts.markers = undefined; const m = activeModule(); if (m && m.actions && m.actions.clearMarkers) { try { m.actions.clearMarkers.run(toolCtx()); } catch (e) { /* module without markers */ } } store.slice("viewport", { renderOpts: Object.assign({}, renderOpts) }); requestRender(); },
+  plot: () => plotDialog(),
+  print: () => printDocument(),
+  lineModeFree: () => { CollabTools.sch.setLineMode(toolCtx(), "free"); syncSchModes(); }, lineMode90: () => { CollabTools.sch.setLineMode(toolCtx(), "90"); syncSchModes(); }, lineMode45: () => { CollabTools.sch.setLineMode(toolCtx(), "45"); syncSchModes(); },
+  showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
+  showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
+  collabCopyLink: (a) => runAction("share", a), collabComments: () => showPane("comments", true), collabFollow: () => cycleFollow(), collabHistory: () => showPane("history", true),
+  collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
+  theme: () => toggleTheme(), about: (a) => runAction("about", a),
+  // the home view's menu entries
+  share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),
+  zoomin: () => zoomBy(1.25), zoomout: () => zoomBy(0.8), fit: () => fitView(), grid: () => runAction("grid"), snap: () => runAction("snap"), linemode: () => runAction("linemode"),
+  "tab-appearance": () => showPane("appearance", true), "tab-props": () => showPane("props", true), "tab-peers": () => showPane("peers", true), "tab-comments": () => showPane("comments", true), "tab-history": () => showPane("history", true),
+};
+store.slice("tool", { handled: Object.keys(HANDLERS) });
+
+/** window.CollabApp.dispatch: the chrome's intents (typed as AppAction in server/web/store.ts). */
+function dispatchAction(a) {
+  if (!a || typeof a !== "object") return;
+  try {
+    switch (a.type) {
+      case "action": {
+        if (typeof a.id !== "string") return;
+        if (a.id.startsWith("module:")) { runModuleAction(a.id.slice(7)); return; }
+        const h = HANDLERS[a.id]; if (h) h(a.anchor || null); return;
+      }
+      case "setTool": setTool(a.tool); return;
+      case "setGroupCurrent": setGroupCurrent(a.group, a.id); return;
+      case "showPane": showPane(a.pane, a.show); return;
+      case "openDoc": openDocId(a.docId); return;
+      case "enterSheet": enterSheet(a.file); return;
+      case "setLayerVisible": setLayerVisible(a.key, a.visible); return;
+      case "setActiveLayer": setActiveLayer(a.layer); return;
+      case "setGrid": setGridPitch(a.pitch); return;
+      case "setZoom": if (a.zoom === "auto") fitView(); else { viewTouched = true; zoom = Math.min(400, Math.max(0.2, Number(a.zoom) / 100)); applyView(); } return;
+      case "setFilter": setFilter(a.key, a.on); return;
+      case "follow": followAction(a.cid); return;
+      case "openThread": openThreadAction(a.id); return;
+      case "selectItem": selectItemAction(a.id); return;
+      case "restore": restoreCheckpoint(a.name); return;
+      case "find": findAction(a.query); return;
+      case "popover": store.set({ popover: a.popover || null }); return;
+      case "toastDone": return;
+      default: console.warn("unknown chrome action", a);
+    }
+  } catch (e) { console.warn("chrome action failed", a, e); }
 }
-KUI.init({
-  appTools: ["select", "pan", "comment", "follow", "zoomtool", "measure"],
-  handlers: {
-    __setTool: (t) => setTool(t), __desktopOnly: desktopOnly,
-    selectSetRect: () => { selMode = "rect"; KUI.setRadio("Selection modes", "selectSetRect"); setTool("select"); },
-    selectSetLasso: () => { selMode = "lasso"; KUI.setRadio("Selection modes", "selectSetLasso"); setTool("select"); },
-    selectAll: () => selectAll(), __filterChanged: () => { selected = null; drawSelection(); renderProps(); }, __layout: () => requestRender(),
-    save: (ev, el) => runAction("checkpoint", el), refreshHistory: () => loadHistory(),
-    undo: () => undoLast(), redo: () => redoLast(), find: (ev, el) => findPopover(el), doDelete: () => deleteAction(),
-    zoomRedraw: () => requestRender(), zoomInCenter: () => zoomBy(1.25), zoomOutCenter: () => zoomBy(0.8), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitView(),
-    navigateBack: () => navigateDocs(-1), navigateForward: () => navigateDocs(1), navigateUp: () => { const r = rootSchematic(); if (r && state.doc !== r) openDoc(r); else toast("Already at the root sheet"); },
-    rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
-    mirrorV: () => orientSelected("mv"), mirrorH: () => orientSelected("mh"),
-    showPcbNew: () => switchEditor(), showEeschema: () => switchEditor(),
-    toggleGrid: () => { gridOn = !gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": gridMenu,
-    millimetersUnits: () => setUnitsAction("mm", "millimetersUnits"), inchesUnits: () => setUnitsAction("in", "inchesUnits"), milsUnits: () => setUnitsAction("mil", "milsUnits"),
-    cursorSmallCrosshairs: () => setCrosshair("small", "cursorSmallCrosshairs"), cursorFullCrosshairs: () => setCrosshair("full", "cursorFullCrosshairs"), cursor45Crosshairs: () => setCrosshair("45", "cursor45Crosshairs"),
-    togglePolarCoords: () => { polarCoords = !polarCoords; KUI.setOn("togglePolarCoords", polarCoords); KUI.status({ dx: lastCursorMm[0] - localOrigin[0], dy: lastCursorMm[1] - localOrigin[1], polar: polarCoords }); },
-    toggleHiddenPins: () => toggleRenderOpt("showHiddenPins", "toggleHiddenPins"),
-    highContrastMode: () => toggleRenderOpt("highContrast", "highContrastMode"),
-    padDisplayMode: () => toggleRenderOpt("outlinePads", "padDisplayMode"), viaDisplayMode: () => toggleRenderOpt("outlineVias", "viaDisplayMode"), trackDisplayMode: () => toggleRenderOpt("outlineTracks", "trackDisplayMode"),
-    zoneDisplayFilled: () => { renderOpts.zoneOutline = false; KUI.setOn("zoneDisplayFilled", true); KUI.setOn("zoneDisplayOutline", false); requestRender(); },
-    zoneDisplayOutline: () => { renderOpts.zoneOutline = true; KUI.setOn("zoneDisplayFilled", false); KUI.setOn("zoneDisplayOutline", true); requestRender(); },
-    lineModeFree: () => { CollabTools.sch.setLineMode(toolCtx(), "free"); syncSchModes(); }, lineMode90: () => { CollabTools.sch.setLineMode(toolCtx(), "90"); syncSchModes(); }, lineMode45: () => { CollabTools.sch.setLineMode(toolCtx(), "45"); syncSchModes(); },
-    showHierarchy: () => KUI.showPane("hier"), showProperties: () => KUI.showPane("props"), showLayersManager: () => KUI.showPane("appearance"), showAppearance: () => KUI.showPane("appearance"),
-    showSelectionFilter: () => KUI.showPane("filter"), showHistory: () => KUI.showPane("history"), showPeers: () => KUI.showPane("peers"), showComments: () => KUI.showPane("comments"),
-    collabCopyLink: (ev, el) => runAction("share", el), collabComments: () => { KUI.showPane("comments", true); }, collabFollow: () => cycleFollow(), collabHistory: () => KUI.showPane("history", true),
-    collabLeave: () => navigate("/"), archive: (ev, el) => runAction("archive", el), clone: (ev, el) => runAction("clone", el), openInKicad: (ev, el) => runAction("kicad", el), home: () => navigate("/"),
-    theme: () => KUI.toggleTheme(), about: (ev, el) => runAction("about", el),
-    downloadDesktop: () => window.open("https://github.com/notaroomba/kicad-collaborative/releases", "_blank"), sourceCode: () => window.open("https://github.com/notaroomba/kicad-collaborative", "_blank"),
-    help: () => window.open("https://docs.kicad.org/", "_blank"), gettingStarted: () => window.open("https://docs.kicad.org/master/en/getting_started_in_kicad/getting_started_in_kicad.html", "_blank"),
-  },
-});
 
 // ---------- boot ----------
+applyTheme();
 (async () => { await loadMe(); route(); })();

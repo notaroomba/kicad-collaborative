@@ -214,6 +214,63 @@ function padList(doc, node) {
     return { number: str(p[1]), type: str(p[2]), shape: str(p[3]), net: netNameOf(doc, p), w, h, drill, layers: (kid(p, "layers") || []).slice(1).map(str) };
   });
 }
+// ---- pads: DIALOG_PAD_PROPERTIES on the footprint node (children kept in pcb_io_kicad_sexpr's order)
+const PAD_TYPES = ["smd", "thru_hole", "np_thru_hole", "connect"], PAD_SHAPES = ["circle", "rect", "oval", "roundrect", "trapezoid", "custom"];
+const PAD_LAYER_PRESETS = ["F.Cu F.Paste F.Mask", "B.Cu B.Paste B.Mask", "*.Cu *.Mask", "F.Cu F.Mask", "B.Cu B.Mask", "*.Cu"];
+// what follows each optional child in the writer, so a new one lands in its place
+const PAD_AFTER_NET = ["pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp"];
+function padNode(node, index) { return kids(node, "pad")[index] || null; }
+/** The pad dialog's fields: number, type, shape, size, absolute angle, drill as text ("0.8", "0.8x1.2" or ""), layers, net name, margins, corner ratio. */
+function padInfo(doc, pad) {
+  const sz = kid(pad, "size"); const w = sz ? num(sz[1]) : 0, h = sz ? num(sz[2], w) : 0; const dr = kid(pad, "drill");
+  const drill = !dr ? "" : str(dr[1]) === "oval" ? num(dr[2]) + "x" + num(dr[3], num(dr[2])) : (typeof dr[1] === "number" ? String(dr[1]) : "");
+  const mm = kid(pad, "solder_mask_margin"), pm = kid(pad, "solder_paste_margin"), rr = kid(pad, "roundrect_rratio"); const shape = str(pad[3]);
+  return { number: str(pad[1]), type: str(pad[2]), shape, w, h, rot: atOf(pad)[2], drill, layers: (kid(pad, "layers") || []).slice(1).map(str), net: netNameOf(doc, pad),
+    maskMargin: mm ? num(mm[1]) : null, pasteMargin: pm ? num(pm[1]) : null, rratio: rr ? num(rr[1]) : (shape === "roundrect" ? 0.25 : null) };
+}
+/** Whether the board numbers its nets — (net 3 "GND") on pads — or names them inline. */
+function numberedNets(doc) { if (!doc) return false; for (const it of doc.items.values()) if (it.kind === "footprint") for (const p of kids(it.node, "pad")) { const n = kid(p, "net"); if (n) return typeof n[1] === "number"; } return false; }
+/** A numbered board's code for a net name (from any pad carrying it), else 0. */
+function netCodeOf(doc, name) { if (!name || !doc) return 0; for (const it of doc.items.values()) if (it.kind === "footprint") for (const p of kids(it.node, "pad")) { const n = kid(p, "net"); if (n && typeof n[1] === "number" && n.length > 2 && str(n[2]) === name) return n[1]; } return 0; }
+/** Every net name the board's pads, tracks, vias and zones carry, sorted. */
+function boardNetNames(doc) { const s = new Set(); for (const it of doc.items.values()) { if (it.kind === "footprint") { for (const p of kids(it.node, "pad")) { const n = netNameOf(doc, p); if (n) s.add(n); } } else if (kid(it.node, "net")) { const n = netNameOf(doc, it.node); if (n) s.add(n); } } return [...s].sort(); }
+/**
+ * Edit pad `index` of a footprint node: patch = { number, type, shape, w, h, rot (absolute, degrees), drill ("" | n | [w, h] | "WxH"),
+ * layers [names], net (name; "" clears), maskMargin / pasteMargin (null clears), rratio }.  Returns false when there is no such pad.
+ */
+function setPad(node, index, patch, doc) {
+  const pad = padNode(node, index); if (!pad) return false;
+  if (patch.number !== undefined) pad[1] = str(patch.number);
+  if (patch.type && PAD_TYPES.includes(patch.type)) pad[2] = patch.type;
+  if (patch.shape && PAD_SHAPES.includes(patch.shape)) pad[3] = patch.shape;
+  if (patch.w !== undefined || patch.h !== undefined) {
+    const sz = kid(pad, "size") || setKid(pad, "size", [1, 1], ["rect_delta", "drill", "property", "layers"]);
+    const w = patch.w !== undefined ? num(patch.w, num(sz[1])) : num(sz[1]), h = patch.h !== undefined ? num(patch.h, num(sz[2], w)) : num(sz[2], num(sz[1]));
+    sz.length = 1; sz.push(r6(Math.max(0, w)), r6(Math.max(0, h)));
+  }
+  if (patch.rot !== undefined) { const at = kid(pad, "at"); if (at) { const a = r6(normDeg(num(patch.rot))); if (at.length >= 4) { if (a) at[3] = a; else at.length = 3; } else if (a) at.push(a); } }
+  if (patch.drill !== undefined) {
+    let d = patch.drill; if (typeof d === "string") d = /x/i.test(d) ? d.split(/x/i).map((s) => num(s)) : d.trim() === "" ? 0 : num(d);
+    const old = kid(pad, "drill"); const off = old && kid(old, "offset");
+    const vals = isList(d) ? (d.length > 1 && Math.abs(d[1] - d[0]) > 1e-9 ? ["oval", r6(d[0]), r6(d[1])] : [r6(d[0])]) : (d > 0 ? [r6(d)] : []);
+    if (!vals.length && !off) delKid(pad, "drill"); else { const n = setKid(pad, "drill", vals, ["backdrill", "property", "sim_electrical_type", "layers"]); if (off) n.push(off); }
+  }
+  if (patch.layers) { const ls = patch.layers.map(str).filter(Boolean); if (ls.length) setKid(pad, "layers", ls, ["remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net"].concat(PAD_AFTER_NET)); }
+  if (patch.rratio !== undefined || patch.shape) {
+    const shape = str(pad[3]); const before = ["chamfer_ratio", "chamfer", "net"].concat(PAD_AFTER_NET);
+    if (shape === "roundrect") { if (patch.rratio !== undefined && patch.rratio !== null && !isNaN(patch.rratio)) setKid(pad, "roundrect_rratio", [r6(Math.max(0, Math.min(0.5, num(patch.rratio))))], before); else if (!kid(pad, "roundrect_rratio")) setKid(pad, "roundrect_rratio", [0.25], before); }
+    else if (shape !== "custom") delKid(pad, "roundrect_rratio");
+  }
+  if (patch.net !== undefined) {
+    const name = str(patch.net); const cur = kid(pad, "net"); const numbered = cur ? typeof cur[1] === "number" : numberedNets(doc);
+    if (!name) delKid(pad, "net"); else setKid(pad, "net", numbered ? [netCodeOf(doc, name), name] : [name], PAD_AFTER_NET);
+  }
+  for (const [key, prop] of [["solder_mask_margin", "maskMargin"], ["solder_paste_margin", "pasteMargin"]]) {
+    if (patch[prop] === undefined) continue; const v = patch[prop];
+    if (v === null || v === "" || isNaN(v)) delKid(pad, key); else setKid(pad, key, [r6(num(v))], PAD_AFTER_NET.slice(PAD_AFTER_NET.indexOf(key) + 1));
+  }
+  return true;
+}
 
 // ---------------------------------------------------------------- other items
 function strokeWidth(node) { const s = kid(node, "stroke"); const w = s && kid(s, "width"); return w ? num(w[1]) : 0; }
@@ -246,7 +303,7 @@ function boardLayers(doc, copperOnly) {
   return [...names].filter((l) => !copperOnly || /\.Cu$/.test(l)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-const helpers = { kid, kids, num, str, setKid, delKid, yes, setYesNo, field, fieldList, setField, isHidden, setFieldHidden, symbolT, mirrorOf, setSymbolTransform, setSymbolRotation, setSymbolMirror, setSymbolPosition, setSymbolUnit, setSymbolFlag, libUnitCount, flipLayer, setFootprintPosition, setFootprintRotation, setFootprintSide, footprintAttrs, setFootprintAttrs, netNameOf, padList, strokeWidth, setStrokeWidth, setWidth, setLayer, setText, textSize, setTextSize, setRotation, setShape, setDiameter, setViaSize, setViaDrill, setViaLayers, setZoneName, setZonePriority, boardLayers, normDeg, deg360 };
+const helpers = { kid, kids, num, str, setKid, delKid, yes, setYesNo, field, fieldList, setField, isHidden, setFieldHidden, symbolT, mirrorOf, setSymbolTransform, setSymbolRotation, setSymbolMirror, setSymbolPosition, setSymbolUnit, setSymbolFlag, libUnitCount, flipLayer, setFootprintPosition, setFootprintRotation, setFootprintSide, footprintAttrs, setFootprintAttrs, netNameOf, padList, padNode, padInfo, setPad, numberedNets, netCodeOf, boardNetNames, PAD_TYPES, PAD_SHAPES, PAD_LAYER_PRESETS, strokeWidth, setStrokeWidth, setWidth, setLayer, setText, textSize, setTextSize, setRotation, setShape, setDiameter, setViaSize, setViaDrill, setViaLayers, setZoneName, setZonePriority, boardLayers, normDeg, deg360 };
 
 // ================================================================ panel (DOM from here on)
 const KIND_NAMES = { symbol: "Symbol", footprint: "Footprint", wire: "Wire", bus: "Bus", polyline: "Line", segment: "Track", via: "Via", label: "Label", global_label: "Global label", hierarchical_label: "Hierarchical label", netclass_flag: "Netclass directive", directive_label: "Directive label", text: "Text", gr_text: "Text", text_box: "Text box", gr_text_box: "Text box", junction: "Junction", zone: "Zone", no_connect: "No connect", bus_entry: "Bus entry", sheet: "Sheet", gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", rectangle: "Rectangle", circle: "Circle", dimension: "Dimension", group: "Group" };
@@ -462,8 +519,33 @@ function renderFootprint(P, item) {
   P.raw(`<div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:2px 10px;font:11px var(--mono);max-height:200px;overflow:auto">
     <span class="muted">#</span><span class="muted">net</span><span class="muted">shape</span><span class="muted">size</span>
     ${pads.slice(0, 400).map((p) => `<span>${esc(p.number)}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.net)}">${esc(p.net) || "<span class=muted>–</span>"}</span><span>${esc(p.shape)}</span><span title="${esc(p.type)}${p.drill ? " drill " + esc(p.drill) : ""}">${mm(p.w, 2)}×${mm(p.h, 2)}</span>`).join("")}</div>`);
+  if (pads.length) renderPadEditor(P, item, pads);
   P.open(); P.ro("UUID", item.id); P.close();
   P.actions([["Delete", () => P.remove(), "danger"]]);
+}
+const padEditIndex = new Map();   // footprint id -> the pad the editor shows
+/** KiCad's pad properties for one pad of the footprint: every row commits the whole footprint through setPad. */
+function renderPadEditor(P, item, pads) {
+  const n = item.node, doc = P.ctx.doc; let idx = padEditIndex.get(item.id) || 0; if (idx >= pads.length) idx = 0;
+  const pad = padNode(n, idx); if (!pad) return; const info = padInfo(doc, pad); const frot = atOf(n)[2];
+  const edit = (label, patch) => P.edit("pad " + label, (m) => setPad(m, idx, patch, doc));
+  P.h3("Pad properties");
+  P.open();
+  P.select("Pad", idx, pads.map((p, i) => [i, `${p.number}${p.net ? " · " + p.net : ""}`]), (v) => { padEditIndex.set(item.id, +v); refresh(); });
+  P.text("Number", info.number, (v) => edit("number", { number: v }));
+  P.select("Type", info.type, [["smd", "SMD"], ["thru_hole", "Through-hole"], ["np_thru_hole", "NPTH, mechanical"], ["connect", "Edge connector"]], (v) => edit("type", { type: v }));
+  P.select("Shape", info.shape, [["circle", "Circular"], ["oval", "Oval"], ["rect", "Rectangular"], ["roundrect", "Rounded rectangle"], ["trapezoid", "Trapezoid"], ["custom", "Custom"]], (v) => edit("shape", { shape: v }));
+  P.num("Size X (mm)", info.w, (v) => edit("size", { w: v }), { min: 0 });
+  P.num("Size Y (mm)", info.h, (v) => edit("size", { h: v }), { min: 0 });
+  P.num("Orientation (°)", normDeg(info.rot - frot), (v) => edit("orientation", { rot: v + frot }), { step: "any", digits: 1 });
+  P.text("Hole (mm or WxH)", info.drill, (v) => edit("drill", { drill: v }));
+  const layerSet = info.layers.join(" ");
+  P.select("Layers", layerSet, (PAD_LAYER_PRESETS.includes(layerSet) ? [] : [layerSet]).concat(PAD_LAYER_PRESETS), (v) => edit("layers", { layers: v.split(/\s+/) }));
+  const nets = boardNetNames(doc);
+  P.select("Net", info.net, [["", "<no net>"]].concat(info.net && !nets.includes(info.net) ? [[info.net, info.net]] : []).concat(nets.map((x) => [x, x])), (v) => edit("net", { net: v }));
+  P.num("Mask margin (mm)", info.maskMargin === null ? 0 : info.maskMargin, (v) => edit("mask margin", { maskMargin: v || null }), { step: "0.01" });
+  if (info.shape === "roundrect") P.num("Corner ratio", info.rratio === null ? 0.25 : info.rratio, (v) => edit("corner ratio", { rratio: v }), { step: "0.05", min: 0 });
+  P.close();
 }
 
 function renderOther(P, item) {

@@ -1,0 +1,121 @@
+/* tailwind.css — the Tailwind v4 entry for the React chrome (web/**.tsx).  Built by
+   `@tailwindcss/cli -i web/styles/tailwind.css -o static/dist/ui.css` (see package.json).
+   It is the chrome's only stylesheet: every rule of the former chrome.css is now a utility on the
+   element that needs it, and the classes that other code still queries (`kb`, `on`, `desk`, `kbody`,
+   `#ltools .tb.on`, …) are bare hooks with no rule of their own.
+
+   The colour tokens (--bench, --paper, --ink, …, light AND dark) live in static/app.html and are the
+   only colour source: the @theme below just maps them into Tailwind's namespaces, so `bg-bench`
+   emits `background-color: var(--color-bench)` → `var(--bench)` and follows the theme automatically.
+
+   Preflight is deliberately NOT imported.  ui.css is loaded before app.html's <style>, and the home
+   view, the stage, the KiCad dialogs (.kd-*), props.js and the tool modules render markup that
+   relies on UA defaults (unclassed <button>s, <p>/<h3> margins, `ol.lead` numbering, textarea
+   resize, …) — preflight would reset all of it.  Only the theme and the utilities are used. */
+
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme" layer(theme);
+
+/* Only the React sources are scanned (no automatic cwd detection — static/*.js and the generated
+   spec would otherwise contribute stray candidates). */
+@source "../main.tsx";
+@source "../components/**/*.tsx";
+@source "../*.ts";
+@source not "../generated";
+
+@theme {
+  /* Wipe Tailwind's stock palette / fonts / shadows / type scale so only the app.html tokens exist:
+     `bg-red-500` or `text-slate-400` fail to build instead of shipping a hard-coded colour. */
+  --color-*: initial;
+  --font-*: initial;
+  --shadow-*: initial;
+  --text-*: initial;
+
+  /* ---- surfaces & lines (app.html :root, both themes) ---- */
+  --color-bench: var(--bench);        /* chrome: toolbars, docks, captions      → bg-bench   */
+  --color-paper: var(--paper);        /* the sheet; pane bodies, hover fill      → bg-paper   */
+  --color-panel: var(--panel);        /* inputs, menus, raised surfaces          → bg-panel   */
+  --color-panel-2: var(--panel-2);    /* legacy alias of --paper                 → bg-panel-2 */
+  --color-line: var(--line);          /* 1px rules                               → border-line */
+  --color-line-2: var(--line-2);      /* grid dots                               → border-line-2 */
+  /* ---- text ---- */
+  --color-ink: var(--ink);            /* primary text                            → text-ink   */
+  --color-ink-2: var(--ink-2);        /* secondary                               → text-ink-2 */
+  --color-ink-3: var(--ink-3);        /* tertiary / mono captions                → text-ink-3 */
+  /* ---- accents (KiCad layer colours) ---- */
+  --color-copper: var(--copper);      /* F.Cu — primary action                   → bg-copper  */
+  --color-copper-2: var(--copper-2);  /* pressed/border of primary               → border-copper-2 */
+  --color-blue: var(--blue);          /* B.Cu — links, selection, menu hover     → bg-blue    */
+  --color-teal: var(--teal);          /* values & references                     → text-teal  */
+  --color-wire: var(--wire);          /* live / ok                               → bg-wire    */
+  --color-warn: var(--warn);          /* ERC warning                             → text-warn  */
+  --color-err: var(--err);            /* ERC error                               → text-err   */
+  --color-silk: var(--silk);          /* silkscreen (canvas labels)              → text-silk  */
+  --color-canvas: var(--canvas);      /* board background                        → bg-canvas  */
+  /* legacy aliases app.html also defines */
+  --color-accent: var(--accent);      /* = --blue */
+  --color-hot: var(--hot);            /* = --warn */
+  --color-ok: var(--ok);              /* = --wire */
+  --color-danger: var(--danger);      /* = --err  */
+  /* theme-invariant colours the chrome hard-codes on purpose (text on a --blue/--copper fill) */
+  --color-white: #fff;
+  --color-black: #000;
+
+  /* ---- derived mixes the chrome uses for states (opaque, in srgb — NOT Tailwind's `/22` opacity
+          modifier, which mixes with transparent in oklab and renders differently) ---- */
+  --color-on: color-mix(in srgb, var(--blue) 22%, var(--paper));           /* .kb.on fill          → bg-on         */
+  --color-on-line: color-mix(in srgb, var(--blue) 60%, var(--line));       /* .kb.on border        → border-on-line */
+  --color-sel: color-mix(in srgb, var(--blue) 25%, var(--paper));          /* selected row / node  → bg-sel        */
+  --color-sel-soft: color-mix(in srgb, var(--blue) 12%, var(--paper));     /* table row hover      → bg-sel-soft   */
+  --color-line-soft: color-mix(in srgb, var(--line) 50%, transparent);     /* table cell rule      → border-line-soft */
+
+  /* ---- fonts ---- */
+  --font-sans: var(--font);           /* IBM Plex Sans stack                     → font-sans  */
+  --font-mono: var(--mono);           /* IBM Plex Mono stack                     → font-mono  */
+
+  /* ---- shadows ---- */
+  --shadow-panel: var(--shadow);      /* menus, palettes, popover                → shadow-panel */
+
+  /* ---- type scale: the chrome's px sizes, font-size ONLY (no paired line-height, so the inherited
+          13px/1.45 body leading is kept exactly as the old chrome.css did) ---- */
+  --text-2xs: 10px;                   /* pane h3 captions                        → text-2xs */
+  --text-xs: 11px;                    /* mono meta, kbd, status bar              → text-xs  */
+  --text-sm: 12px;                    /* pane bodies, buttons, controls          → text-sm  */
+  --text-base: 13px;                  /* body default                            → text-base */
+  --text-lg: 14px;                    /* pane close glyph                        → text-lg  */
+}
+
+/* ---- variants ---- */
+/* Tailwind wraps `hover:` in `@media (hover: hover)`; the old chrome.css applied :hover unconditionally.
+   Restore the plain pseudo-class so touch devices behave exactly as before. */
+@custom-variant hover (&:hover);
+/* The chrome's state classes.  They stay as class names (other code queries `.on`, `.desk`, …) and
+   the variant styles them in the same className string: `kb on:bg-on on:border-on-line`. */
+@custom-variant on (&.on);
+@custom-variant desk (&.desk);
+@custom-variant cur (&.cur);
+@custom-variant sel (&.sel);
+@custom-variant show (&.show);
+@custom-variant open (&.open);
+@custom-variant live (&.live);
+@custom-variant err (&.err);
+@custom-variant resolved (&.resolved);
+@custom-variant primary (&.primary);
+@custom-variant long (&.long);
+/* app.html sets [data-theme] on <html>; system dark is the media query without an explicit light. */
+@custom-variant dark {
+  &:where(:root[data-theme="dark"] *) { @slot; }
+  @media (prefers-color-scheme: dark) { &:where(:root:not([data-theme="light"]) *) { @slot; } }
+}
+
+/* ---- utilities Tailwind lacks ---- */
+/* Vertical toolbars: scroll in one column, never wrap, and hide the scrollbar (both engines). */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+/* `display: grid` WITHOUT Tailwind's `grid` class: app.html's `.grid` (the home-view card grid,
+   auto-fill columns + 14px gap) shares that name and, loading after ui.css, would win. */
+@utility d-grid { display: grid; }
+
+@tailwind utilities source(none);
