@@ -407,6 +407,287 @@ test("selected: a halo for every id in the set; polylines with a fill", () => {
   ctx = stubCtx(800, 600); K.render(K.parseDoc(poly("(type background)", "p6")), ctx, view, {}); assert(ctx.calls.fill >= 1);
 });
 
+// ---------------------------------------------------------------- display options: stroke styles, nets, ratsnest, markers, net names, zone previews, flip, hidden text, exports
+/** Recording context that also logs the composite mode, line width, text alignment and the transform in force at each drawing call. */
+function fullCtx(w, h) {
+  const calls = {}; const ops = []; const transforms = []; const rec = (n) => { calls[n] = (calls[n] || 0) + 1; };
+  let stroke = "", fill = "", alpha = 1, dash = [], comp = "source-over", lw = 1, align = "", tf = null;
+  const ctx = { canvas: { width: w, height: h }, calls, ops, transforms, font: "", textBaseline: "", lineCap: "", lineJoin: "" };
+  for (const n of ["beginPath", "moveTo", "lineTo", "closePath", "arc", "rect", "save", "restore", "translate", "rotate", "scale", "strokeText", "clearRect", "clip"]) ctx[n] = () => rec(n);
+  for (const n of ["stroke", "fill", "strokeRect", "fillRect", "fillText", "drawImage"]) ctx[n] = (...args) => { rec(n); ops.push({ op: n, stroke, fill, alpha, dash: dash.slice(), comp, lw, align, tf, args }); };
+  ctx.setTransform = (...a) => { rec("setTransform"); tf = a; transforms.push(a); };
+  Object.defineProperty(ctx, "strokeStyle", { set: (v) => { stroke = v; }, get: () => stroke });
+  Object.defineProperty(ctx, "fillStyle", { set: (v) => { fill = v; }, get: () => fill });
+  Object.defineProperty(ctx, "globalAlpha", { set: (v) => { alpha = +(+v).toFixed(3); }, get: () => alpha });
+  Object.defineProperty(ctx, "globalCompositeOperation", { set: (v) => { comp = v; }, get: () => comp });
+  Object.defineProperty(ctx, "lineWidth", { set: (v) => { lw = v; }, get: () => lw });
+  Object.defineProperty(ctx, "textAlign", { set: (v) => { align = v; }, get: () => align });
+  ctx.setLineDash = (d) => { rec("setLineDash"); dash = d; }; ctx.measureText = (t) => ({ width: t.length * 0.7 });
+  return ctx;
+}
+const PENDING = [];
+function testAsync(name, fn) { PENDING.push(Promise.resolve().then(fn).then(() => { passed++; }, (e) => { failed++; console.error("FAIL", name + ":", e.message); })); }
+const NET_HEAD = '(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user) (44 "Edge.Cuts" user) (49 "Dwgs.User" user)) (net 0 "") (net 1 "GND") (net 2 "VCC") ';
+const V40 = { ppm: 40, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };   // 40 css px per mm, 1000×800 shows x −5..20, y −5..15
+const textOps = (ctx, t) => ctx.ops.filter((o) => o.op === "fillText" && (t === undefined || o.args[0] === t));
+
+test("stroke types: dash / dot / dash_dot / dash_dot_dot records, KiCad's ISO 128-2 dash pattern, solid geometry untouched", () => {
+  const sch = K.parseDoc(SCH_HEAD + '(polyline (pts (xy 0 0) (xy 10 0)) (stroke (width 0.2) (type dash)) (uuid "p1")) (rectangle (start 0 0) (end 5 5) (stroke (width 0.1) (type dot)) (fill (type none)) (uuid "r1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w1")) (circle (center 20 20) (radius 2) (stroke (width 0) (type dash_dot_dot)) (fill (type none)) (uuid "c1")))');
+  const p1 = sch.items.get("p1").geom[0]; assert.strictEqual(p1.dash, true); assert.strictEqual(p1.dashType, "dash");
+  const r1 = sch.items.get("r1").geom[0]; assert.strictEqual(r1.dashType, "dot"); assert.strictEqual(sch.items.get("c1").geom[0].dashType, "dash_dot_dot");
+  const w1 = sch.items.get("w1").geom[0]; assert.strictEqual(w1.dash, undefined); assert.strictEqual(w1.dashType, undefined);
+  assert.deepStrictEqual(K.strokeOf(K.parse("(x (stroke (width 0.1) (type dash_dot)))"), 0), { w: 0.1, color: null, dash: true, type: "dash_dot" });
+  assert.deepStrictEqual(K.strokeOf(K.parse("(x (stroke (width 0.1) (type solid)))"), 0).type, null);
+  // STROKE_PARAMS::Stroke with the render settings' ratios (12 / 3, correction 1): dash 11 w, gap 4 w, dot 0.2 w
+  assert.deepStrictEqual(K.dashPattern("dash", 0.2).map((v) => +v.toFixed(6)), [2.2, 0.8]);
+  assert.deepStrictEqual(K.dashPattern("dot", 1).map((v) => +v.toFixed(6)), [0.2, 4]);
+  assert.deepStrictEqual(K.dashPattern("dash_dot", 1), [11, 4, 0.2, 4]); assert.deepStrictEqual(K.dashPattern("dash_dot_dot", 1).length, 6);
+  const pcb = K.parseDoc(NET_HEAD + '(gr_line (start 0 0) (end 10 0) (stroke (width 0.2) (type dash_dot)) (layer "Dwgs.User") (uuid "l1")) (gr_circle (center 5 5) (end 6 5) (stroke (width 0.1) (type dash)) (fill none) (layer "Dwgs.User") (uuid "c1")) (gr_text_box "tb" (start 0 8) (end 10 12) (stroke (width 0.1) (type dot)) (border yes) (layer "Dwgs.User") (uuid "tb1") (effects (font (size 1 1)))) (gr_line (start 0 14) (end 10 14) (stroke (width 0.2) (type solid)) (layer "Dwgs.User") (uuid "l2")))');
+  assert.strictEqual(pcb.items.get("l2").geom[0].dash, undefined);
+  assert.strictEqual(pcb.items.get("l1").geom[0].dashType, "dash_dot"); assert.strictEqual(pcb.items.get("c1").geom[0].dashType, "dash"); assert.strictEqual(pcb.items.get("tb1").geom.find((g) => g.t === "poly").dashType, "dot");
+  const ctx = fullCtx(1000, 800); K.render(pcb, ctx, V40, {});
+  const dashed = ctx.ops.filter((o) => o.op === "stroke" && o.dash.length);
+  assert(dashed.some((o) => o.dash.map((v) => +v.toFixed(6)).join() === "2.2,0.8,0.04,0.8"), "gr_line dash_dot pattern from its 0.2 mm width");
+  assert(dashed.some((o) => o.dash.map((v) => +v.toFixed(6)).join() === "1.1,0.4"), "dashed circle");
+  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && !o.dash.length).length, 1, "the solid line stays solid"); assert.strictEqual(ctx.calls.setLineDash, 6, "every dashed stroke sets and resets the dash");
+});
+test("board net table and net numbers on copper geometry; pad tags for padAt / net colours", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (arc (start 10 0) (mid 12 2) (end 10 4) (width 0.5) (layer "F.Cu") (net 2) (uuid "a1")) (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (zone (net 2) (net_name "VCC") (layer "B.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.25)) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))) (filled_polygon (layer "B.Cu") (pts (xy 1 1) (xy 9 1) (xy 9 9) (xy 1 9)))) (zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "z2") (hatch edge 0.5) (polygon (pts (xy 20 0) (xy 30 0) (xy 30 10) (xy 20 10)))) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 40 0) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 1 "GND") (uuid "p1")) (pad "2" thru_hole circle (at 3 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu") (net 2 "VCC") (uuid "p2")) (pad "" np_thru_hole circle (at 6 0) (size 1 1) (drill 1) (layers "*.Cu") (uuid "p3"))))');
+  assert.deepStrictEqual([...doc.nets], [[0, ""], [1, "GND"], [2, "VCC"]]);
+  assert.strictEqual(doc.items.get("s1").geom[0].net, 1); assert.strictEqual(doc.items.get("s1").net, 1); assert.strictEqual(doc.items.get("a1").geom[0].net, 2);
+  const via = doc.items.get("v1"); assert.deepStrictEqual(via.geom.map((g) => [g.net, !!g.hole, g.viaLabel]), [[1, false, true], [1, false, undefined], [1, false, undefined], [1, true, undefined]], "three copper layers: three rings (the first carries the label) + the hole"); assert.strictEqual(via.geom[0].viaSize, 0.8);
+  const z1 = doc.items.get("z1"); const o1 = z1.geom.find((g) => g.zoneOutline); assert(o1); assert.strictEqual(o1.net, 2); assert.strictEqual(o1.zoneClearance, 0.25); assert.strictEqual(o1.zoneUnfilled, false); assert.strictEqual(z1.geom.find((g) => g.zoneFill).net, 2);
+  const o2 = doc.items.get("z2").geom.find((g) => g.zoneOutline); assert.strictEqual(o2.zoneUnfilled, true); assert.strictEqual(o2.zoneClearance, 0.5, "0.5 mm default clearance");
+  const fp = doc.items.get("fp1"); const p1 = fp.geom.filter((g) => g.pad && g.padIndex === 0); assert.deepStrictEqual(p1.map((g) => g.layer).sort(), ["F.Cu", "F.Mask"]);
+  assert.strictEqual(p1[0].padNumber, "1"); assert.strictEqual(p1[0].net, 1); assert.strictEqual(p1[0].netName, "GND"); assert.strictEqual(p1[0].padType, "smd");
+  const p2 = fp.geom.filter((g) => g.padIndex === 1); assert(p2.some((g) => g.pad && g.layer === "In1.Cu" && g.net === 2)); assert.strictEqual(p2.filter((g) => g.hole).length, 2, "plated hole: wall + hole"); assert(!p2.some((g) => g.npth));
+  const p3 = fp.geom.filter((g) => g.padIndex === 2); assert.strictEqual(p3.length, 1); assert(p3[0].npth && p3[0].hole && !p3[0].pad, "NPTH: hole only, no copper");
+  assert(fp.geom.some((g) => g.padNum && g.text === "1") && fp.geom.some((g) => g.padNet && g.text === "GND"));
+  // the existing records are untouched: pad shapes, fills, colours, bbox
+  assert.strictEqual(p1.find((g) => g.layer === "F.Cu").fill, "#C83434"); near(fp.bbox[0], 40 - Math.hypot(1, 1) / 2, 1e-9);
+});
+test("ratsnest: LAYER_RATSNEST hairlines above copper and holes, below the user layers; nets filter; cross for coincident ends; net colours", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (gr_line (start -1 -1) (end 12 -1) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e1")))');
+  const rats = [{ net: 1, name: "GND", a: [10, 0], b: [5, 5] }, { net: 2, name: "VCC", a: [2, 2], b: [8, 8] }, { net: 2, name: "VCC", a: [3, 3], b: [3, 3] }, { net: 1, name: "GND", a: [100, 100], b: [120, 120] }];
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ratsnest: rats });
+  const rs = ctx.ops.filter((o) => o.op === "stroke" && o.stroke === K.RATSNEST_COLOR); assert.strictEqual(rs.length, 1, "one batched stroke"); near(rs[0].lw, 0.5 / 40, 1e-9, "0.5 device px"); assert.strictEqual(rs[0].alpha, 1);
+  assert.strictEqual(K.RATSNEST_COLOR, "rgba(0,248,255,0.35)");
+  const idx = ctx.ops.indexOf(rs[0]); const lastCu = ctx.ops.map((o, i) => (o.op === "stroke" && o.stroke === "#C83434") || (o.op === "fill" && (o.fill === "#C83434" || o.fill === "#E3B72E")) ? i : -1).filter((i) => i >= 0).pop();
+  const edge = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === "#D0D2CD"); assert(lastCu < idx && idx < edge, "ratsnest between the copper/holes and Edge.Cuts: " + lastCu + " < " + idx + " < " + edge);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ratsnest: rats, ratsnestNets: new Set([2]) });
+  const base = fullCtx(1000, 800); K.render(doc, base, V40, {});
+  assert.strictEqual(ctx.calls.moveTo - base.calls.moveTo, 3, "one line + the cross (two moves) for net 2; net 1 filtered; off-screen line culled");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ratsnest: rats, netColors: new Map([[2, "#abcdef"]]) });
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#abcdef") && ctx.ops.some((o) => o.op === "stroke" && o.stroke === K.RATSNEST_COLOR), "net colour per batch");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ratsnest: [] }); assert(!ctx.ops.some((o) => o.stroke === K.RATSNEST_COLOR));
+  const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")))'); ctx = fullCtx(800, 600); K.render(sch, ctx, V40, { ratsnest: rats }); assert(!ctx.ops.some((o) => o.stroke === K.RATSNEST_COLOR), "board only");
+});
+test("markers: MARKER_BASE flag polygon, DRC / ERC colours, zoom scale, shadow, draw order, markerAt", () => {
+  assert.deepStrictEqual(K.MARKER_CORNERS, [[0, 0], [8, 1], [4, 3], [13, 8], [9, 9], [8, 13], [3, 4], [1, 8]]);
+  assert.deepStrictEqual(K.MARKER_SCALE, { pcb: 0.1625, sch: 0.15 });
+  assert.deepStrictEqual(K.markerPolygon({ x: 10, y: 20 }, 0.1625)[3].map((v) => +v.toFixed(6)), [10 + 13 * 0.1625, 20 + 8 * 0.1625]);
+  // PCB_MARKER::SetZoom( 1 / sqrt( zoom ) ): the flag shrinks with √zoom; schematic markers keep 0.15 mm per unit
+  const z1 = { ppm: K.PX_PER_MM_ZOOM1, zoom: 1 }; near(K.zoomFactor(z1), 1, 1e-9); near(K.markerScale("pcb", z1), 0.1625, 1e-9); near(K.markerScale("pcb", { ppm: K.PX_PER_MM_ZOOM1, zoom: 4 }), 0.1625 / 2, 1e-9);
+  near(K.markerScale("sch", { ppm: 100, zoom: 3 }), 0.15, 1e-12); near(K.PX_PER_MM_ZOOM1, 91 / 25.4, 1e-9);
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")))');
+  const markers = [{ x: 1, y: 1, severity: "error", text: "Clearance" }, { x: 5, y: 5, severity: "warning", text: "Silk" }, { x: 8, y: 2, severity: "exclusion", text: "x" }, { x: 9, y: 9, severity: "bogus" }];
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { markers, selected: new Set(["s1"]) });
+  const fills = ctx.ops.filter((o) => o.op === "fill" && Object.values(K.MARKER_COLORS.pcb).includes(o.fill));
+  assert.deepStrictEqual(fills.map((o) => o.fill), [K.MARKER_COLORS.pcb.error, K.MARKER_COLORS.pcb.warning, K.MARKER_COLORS.pcb.exclusion, K.MARKER_COLORS.pcb.error], "unknown severities draw as errors");
+  assert.strictEqual(K.MARKER_COLORS.pcb.error, "rgba(215,91,107,0.8)"); assert.strictEqual(K.MARKER_COLORS.pcb.warning, "rgba(255,208,66,0.8)"); assert.strictEqual(K.MARKER_COLORS.sch.error, "rgba(230,9,13,0.8)"); assert.strictEqual(K.MARKER_COLORS.sch.warning, "rgba(209,146,0,0.8)");
+  const shadows = ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "rgba(0,16,35,0.5)"); assert.strictEqual(shadows.length, 4, "LAYER_MARKER_SHADOWS: background @ 0.5"); near(shadows[0].lw, K.markerScale("pcb", V40), 1e-9, "shadow one scale unit wide");
+  const track = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === "#C83434"), first = ctx.ops.indexOf(fills[0]), sel = ctx.ops.findIndex((o) => o.stroke === "#66B2FF");
+  assert(track < first && first < sel, "markers above the geometry, below the selection halo");
+  assert.strictEqual(ctx.calls.moveTo - 8 * 0, ctx.calls.moveTo); assert(ctx.calls.lineTo >= 4 * 7, "8 corners per flag");
+  const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")))');
+  ctx = fullCtx(800, 600); K.render(sch, ctx, V40, { markers: [{ x: 2, y: 2, severity: "warning" }] });
+  assert(ctx.ops.some((o) => o.op === "fill" && o.fill === K.MARKER_COLORS.sch.warning)); assert(!ctx.ops.some((o) => o.op === "stroke" && /rgba\(245,244,239/.test(o.stroke)), "no shadow on schematics");
+  // hover look-up: inside the flag, outside it, and within a tolerance of its box
+  assert.strictEqual(K.markerAt(markers, 1.5, 1.2, 0), markers[0]); assert.strictEqual(K.markerAt(markers, 1.0, 2.0, 0), null, "inside the box but outside the flag");
+  assert.strictEqual(K.markerAt(markers, 1.0, 2.0, 0.1), markers[0], "tolerance falls back to the box"); assert.strictEqual(K.markerAt(markers, 5.1, 5.1, 0, 0.15), markers[1]); assert.strictEqual(K.markerAt(markers, 50, 50, 1), null); assert.strictEqual(K.markerAt(null, 0, 0, 1), null);
+});
+test("netNames: track labels sized to the track, skipped when short or too thin on screen; via names and layer pairs; pad labels unaffected", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 12 0) (width 1) (layer "F.Cu") (net 1) (uuid "s1")) (segment (start 0 3) (end 12 3) (width 0.25) (layer "F.Cu") (net 2) (uuid "s2")) (segment (start 0 6) (end 2 6) (width 1) (layer "F.Cu") (net 2) (uuid "s3")) (segment (start 14 0) (end 14 10) (width 1) (layer "B.Cu") (net 1) (uuid "s4")) (segment (start 0 8) (end 4 12) (width 1) (layer "F.Cu") (net 0) (uuid "s5")) ' +
+    '(via (at 8 8) (size 2) (drill 1) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (via blind (at 12 8) (size 2) (drill 1) (layers "F.Cu" "In1.Cu") (net 2) (uuid "v2")) (via (at 16 8) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v3")) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 18 2) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2 "VCC") (uuid "p1"))))');
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {});
+  assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "VCC"], "without the option only the pad number and pad net name");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true });
+  const labels = textOps(ctx).filter((o) => !o.args[0].match(/^(1|VCC)$/) || o.fill !== "rgba(255,255,255,0.9)");
+  const gnd = labels.filter((o) => o.args[0] === "GND"); assert.strictEqual(gnd.length, 3, "s1 (1 mm wide), s4 (vertical), and the 2 mm via; not the 0.6 mm via: " + JSON.stringify(labels.map((o) => o.args[0])));
+  assert(gnd.some((o) => o.fill === "rgba(255,255,255,0.7)"), "NETNAMES_LAYER_ID_START white @ 0.7 on the dark copper"); assert(gnd.some((o) => o.fill === K.VIA_NETNAME_COLOR), "LAYER_VIA_NETNAMES on the via"); assert.strictEqual(K.VIA_NETNAME_COLOR, "rgba(50,50,50,0.9)");
+  assert(!labels.some((o) => o.args[0] === "VCC" && o.fill === "rgba(255,255,255,0.7)"), "0.25 mm track is 10 px wide: under the 4 mm-at-zoom-1 LOD; 2 mm-long s3 is shorter than width × 3 chars");
+  assert(labels.some((o) => o.args[0] === "1-2"), "blind via shows its layer pair"); assert(labels.some((o) => o.args[0] === "VCC" && o.fill === K.VIA_NETNAME_COLOR), "blind via net name");
+  const s1 = gnd.find((o) => o.fill === "rgba(255,255,255,0.7)" && Math.abs(o.tf[1]) < 1e-9); assert(s1, "horizontal label"); near(s1.tf[0], 40, 1e-9); near(s1.tf[4], (6 + 5) * 40, 1e-6, "centred on the segment (x = 6 mm, view origin −5)");
+  const vert = gnd.find((o) => o.fill === "rgba(255,255,255,0.7)" && Math.abs(o.tf[1]) > 1); assert(vert, "vertical label rotated 90°"); near(vert.tf[0], 0, 1e-9); near(vert.tf[1], -40, 1e-9);
+  assert.strictEqual(K.trackNameColor("#C83434"), "rgba(255,255,255,0.7)"); assert.strictEqual(K.trackNameColor("#F2EDA1"), "rgba(0,0,0,0.7)", "dark labels on bright copper");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 }, { netNames: true });
+  assert(!textOps(ctx).some((o) => o.args[0] === "GND"), "zoomed out (1 mm = 10 px < 4 mm at zoom 1): no track or via names");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true, hidden: new Set(["F.Cu"]) }); assert(!textOps(ctx).some((o) => o.args[0] === "GND" && Math.abs(o.tf[1]) < 1e-9), "hidden layer hides its labels");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true, highContrast: true, activeLayer: "B.Cu" }); assert.strictEqual(textOps(ctx, "GND").filter((o) => o.fill === "rgba(255,255,255,0.7)").length, 1, "no names on dimmed tracks");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true, outlineTracks: true }); assert(!textOps(ctx).some((o) => o.args[0] === "GND" && o.fill === "rgba(255,255,255,0.7)"), "sketch tracks carry no names");
+});
+test("netColors: NET_COLOR_MODE::ALL colours copper of the net — tracks, vias, pads, zone fills; nothing else", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (segment (start 0 2) (end 10 2) (width 0.5) (layer "F.Cu") (net 2) (uuid "s2")) (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (zone (net 1) (net_name "GND") (layer "B.Cu") (uuid "z1") (hatch edge 0.5) (polygon (pts (xy 0 6) (xy 10 6) (xy 10 10) (xy 0 10))) (filled_polygon (layer "B.Cu") (pts (xy 1 7) (xy 9 7) (xy 9 9) (xy 1 9)))) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 12 2) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask") (net 1 "GND") (uuid "p1"))))');
+  const ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netColors: new Map([[1, "#00ff00"]]), hidden: new Set() });
+  const green = ctx.ops.filter((o) => (o.op === "stroke" && o.stroke === "#00ff00") || (o.op === "fill" && o.fill === "#00ff00"));
+  assert.strictEqual(green.length, 1 + 3 + 1 + 1, "track stroke, three via rings, zone fill, pad fill: " + green.length);
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#C83434"), "net 2 keeps the layer colour"); assert(ctx.ops.some((o) => o.op === "fill" && o.fill === "#E3B72E"), "via hole keeps its colour");
+  assert(!ctx.ops.some((o) => o.op === "fill" && o.fill === "#00ff00" && o.alpha < 1)); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#4D7FC4"), "zone outline / hatch on B.Cu keep the layer colour");
+});
+test("zoneFill: unfilled zones get a preview at the zone opacity minus the clearance rings, on an offscreen canvas", () => {
+  const doc = K.parseDoc(NET_HEAD + '(zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.3)) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))) (zone (net 1) (net_name "GND") (layer "B.Cu") (uuid "z2") (hatch edge 0.5) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))) (filled_polygon (layer "B.Cu") (pts (xy 1 1) (xy 9 1) (xy 9 9) (xy 1 9)))) ' +
+    '(segment (start 1 5) (end 9 5) (width 0.5) (layer "F.Cu") (net 2) (uuid "s1")) (segment (start 1 6) (end 9 6) (width 0.5) (layer "B.Cu") (net 2) (uuid "s2")) (segment (start 1 7) (end 9 7) (width 0.5) (layer "F.Cu") (net 1) (uuid "s3")) (via (at 5 2) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 2) (uuid "v1")) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 3 3) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "VCC") (uuid "p1")) (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 1 "GND") (uuid "p2")) (pad "" np_thru_hole circle (at 4 0) (size 1 1) (drill 1) (layers "*.Cu") (uuid "p3"))))');
+  const made = []; const prev = K.createCanvas;
+  K.createCanvas = (w, h) => { const c = { width: w, height: h, ctx: fullCtx(w, h) }; c.getContext = () => c.ctx; made.push(c); return c; };
+  try {
+    let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { zoneFill: true });
+    assert.strictEqual(made.length, 1); const off = made[0]; assert.strictEqual(off.width, 1000);
+    const fills = off.ctx.ops.filter((o) => o.op === "fill" && o.comp === "source-over"); assert.strictEqual(fills.length, 1, "the F.Cu outline filled once"); assert.strictEqual(fills[0].fill, "#C83434"); assert.strictEqual(fills[0].alpha, 1);
+    const cut = off.ctx.ops.filter((o) => o.comp === "destination-out");
+    // other-net track: stroke at width + 2·clearance; other-net via: filled disc of r + clearance; other-net pad: fill + ring; NPTH hole: fill + ring
+    const trackCut = cut.find((o) => o.op === "stroke" && Math.abs(o.lw - (0.5 + 0.6)) < 1e-9); assert(trackCut, "net 2 track knocked out with the clearance: " + JSON.stringify(cut.map((o) => [o.op, o.lw])));
+    assert.strictEqual(cut.filter((o) => o.op === "stroke" && Math.abs(o.lw - 0.6) < 1e-9).length, 2, "pad ring + NPTH ring at 2·clearance");
+    assert.strictEqual(cut.filter((o) => o.op === "fill").length, 3, "via disc, pad, NPTH");
+    assert.strictEqual(cut.length, 6, "same-net track / pad and the B.Cu track are not cut: " + cut.length);
+    const comp = ctx.ops.find((o) => o.op === "drawImage"); assert(comp, "composited onto the board"); assert.strictEqual(comp.args[0], off); assert.strictEqual(comp.alpha, K.ZONE_OPACITY); assert.strictEqual(K.ZONE_OPACITY, 0.6); assert.deepStrictEqual(comp.tf, [1, 0, 0, 1, 0, 0]);
+    const zoneFillOps = ctx.ops.filter((o) => o.op === "fill" && o.fill === "#4D7FC4"); assert.strictEqual(zoneFillOps.length, 2, "the filled B.Cu zone keeps its normal fill (+ the via's B.Cu ring)");
+    assert.strictEqual(ctx.ops.filter((o) => o.op === "drawImage").length, 1, "no preview for the filled zone");
+    const outline = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === "#C83434"), di = ctx.ops.indexOf(comp); assert(di < outline, "preview drawn below the zone outline and tracks");
+    assert(!doc.items.get("z1").geom.some((g) => g.fill), "nothing written into the geometry"); assert(!K.kid(doc.items.get("z1").node, "filled_polygon"), "nothing written into the document");
+    ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {}); assert(!ctx.ops.some((o) => o.op === "drawImage"), "off by default");
+    ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { zoneFill: true, zoneOutline: true }); assert.strictEqual(ctx.ops.filter((o) => o.op === "drawImage").length, 1, "previews still shown in outline mode (they are not fills of the document)");
+    ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { zoneFill: true, hidden: new Set(["F.Cu"]) }); assert(!ctx.ops.some((o) => o.op === "drawImage"), "hidden layer: no preview");
+    assert.strictEqual(made.length, 1, "the offscreen canvas is reused");
+  } finally { K.createCanvas = prev; }
+});
+test("flip: X mirrored about the board centre; side-specific text mirrors with the board, other text and pad labels stay readable", () => {
+  const doc = K.parseDoc(NET_HEAD + '(gr_line (start 0 0) (end 20 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e1")) (gr_line (start 0 10) (end 20 10) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e2")) ' +
+    '(gr_text "FRONT" (at 5 2 0) (layer "F.SilkS") (uuid "t1") (effects (font (size 1 1)) (justify left))) (gr_text "BACK" (at 5 4 0) (layer "B.SilkS") (uuid "t2") (effects (font (size 1 1)) (justify left mirror))) (gr_text "USER" (at 5 6 0) (layer "Dwgs.User") (uuid "t3") (effects (font (size 1 1)) (justify left))) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 15 5) (pad "7" smd rect (at 0 0) (size 3 3) (layers "F.Cu") (net 1 "GND") (uuid "p1"))))');
+  near(K.flipCentre(doc), 10, 1e-9); near(K.flipX(doc, 3), 17, 1e-9); near(K.unflipX(doc, K.flipX(doc, 3)), 3, 1e-9); near(K.unflipX(doc, 17), 3, 1e-9);
+  const view = { ppm: 40, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };
+  const ctx = fullCtx(1000, 800); K.render(doc, ctx, view, { flip: true });
+  assert.deepStrictEqual(ctx.transforms[1], [-40, 0, 0, 40, 5 * 40 + 2 * 10 * 40, 5 * 40], "base transform mirrors X about x = 10");
+  const t = (s) => textOps(ctx, s)[0];
+  assert(t("FRONT").tf[0] < 0 && t("FRONT").align === "left", "front silk text mirrors with the view"); assert(t("BACK").tf[0] > 0 && t("BACK").align === "left", "mirrored back text reads normally from the back");
+  assert(t("USER").tf[0] > 0 && t("USER").align === "right", "Dwgs.User text is re-mirrored with its justification swapped (same box)");
+  assert(t("7").tf[0] > 0 && t("GND").tf[0] > 0, "pad labels stay readable");
+  near(t("USER").tf[4], (2 * 10 - 5 + 5) * 40, 1e-6, "anchor at the mirrored position");
+  const plain = fullCtx(1000, 800); K.render(doc, plain, view, {}); assert(textOps(plain, "FRONT")[0].tf[0] > 0 && textOps(plain, "BACK")[0].tf[0] < 0 && textOps(plain, "USER")[0].align === "left");
+  assert.strictEqual(plain.calls.stroke, ctx.calls.stroke, "same geometry drawn");
+  const o = fullCtx(10, 10); K.setViewTransform(o, view, doc); assert.deepStrictEqual(o.transforms[0], [-40, 0, 0, 40, 1000, 200]); K.setViewTransform(o, view); assert.deepStrictEqual(o.transforms[1], [40, 0, 0, 40, 200, 200]);
+  // culling works in the mirrored space: an item only visible after the flip is drawn
+  const doc2 = K.parseDoc(NET_HEAD + '(gr_line (start 0 0) (end 100 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e1")) (gr_text "FAR" (at 95 2 0) (layer "Dwgs.User") (uuid "t1") (effects (font (size 1 1)))))');
+  const c1 = fullCtx(1000, 800); K.render(doc2, c1, view, {}); assert(!textOps(c1, "FAR").length); const c2 = fullCtx(1000, 800); K.render(doc2, c2, view, { flip: true }); assert(textOps(c2, "FAR").length === 1);
+  const sch = K.parseDoc(SCH_HEAD + '(text "S" (at 5 5 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "t1")))'); const c3 = fullCtx(800, 600); K.render(sch, c3, view, { flip: true }); assert(c3.transforms[1][0] > 0, "schematics never flip");
+});
+test("padNumbers, showHiddenText and knockout text", () => {
+  const doc = K.parseDoc(NET_HEAD + '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 5 5) (property "Reference" "R1" (at 0 -2 0) (layer "F.SilkS") (hide yes) (effects (font (size 1 1)))) (property "Value" "10k" (at 0 2 0) (layer "F.Fab") (effects (font (size 1 1)))) (fp_text user "note" (at 0 3 0) (layer "F.Fab") (hide yes) (effects (font (size 1 1)))) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "GND") (uuid "p1"))) ' +
+    '(gr_text "KO" (at 12 2 0) (layer "F.SilkS" knockout) (uuid "k1") (effects (font (size 1 1) (thickness 0.15)))) (gr_text_box "box" (start 12 4) (end 18 6) (layer "F.SilkS") (knockout yes) (uuid "k2") (effects (font (size 1 1)))))');
+  const fp = doc.items.get("fp1");
+  assert(!texts(fp, (g) => g.text === "R1")[0] && !texts(fp, (g) => g.text === "note")[0], "hidden text is not in item.geom");
+  assert.deepStrictEqual(fp.hiddenGeom.map((g) => [g.text, g.hiddenText, g.layer]), [["R1", true, "F.SilkS"], ["note", true, "F.Fab"]]);
+  const bare = K.parseDoc(NET_HEAD + '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 5 5) (property "Value" "10k" (at 0 2 0) (layer "F.Fab") (effects (font (size 1 1)))) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "GND") (uuid "p1"))))');
+  assert.deepStrictEqual(fp.bbox, bare.items.get("fp1").bbox, "hidden text does not grow the bbox");
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {}); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "10k", "GND", "KO", "box"]);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { padNumbers: false }); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["10k", "GND", "KO", "box"], "pad numbers off, net names kept");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { showHiddenText: true, hidden: new Set(["F.Fab"]) });
+  const r1 = textOps(ctx, "R1"); assert.strictEqual(r1.length, 1); assert.strictEqual(r1[0].alpha, K.HIDDEN_TEXT_ALPHA); assert.strictEqual(r1[0].fill, "#F2EDA1"); assert(!textOps(ctx, "note").length, "hidden text on a hidden layer stays hidden");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { showHiddenText: true, showHiddenPins: true }); assert.strictEqual(textOps(ctx, "note").length, 1);
+  const sch = K.parseDoc(SCH_HEAD + '(lib_symbols (symbol "L:P" (symbol "P_1_1" (pin power_in line (at 0 0 0) (length 2.54) hide (name "VCC" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))) (symbol (lib_id "L:P") (at 10 10 0) (unit 1) (uuid "u1")))');
+  ctx = fullCtx(800, 600); K.render(sch, ctx, V40, { showHiddenText: true }); assert(!textOps(ctx, "VCC").length, "showHiddenText is a board option: hidden pins stay hidden"); ctx = fullCtx(800, 600); K.render(sch, ctx, V40, { showHiddenPins: true }); assert.strictEqual(textOps(ctx, "VCC").length, 1);
+  // knockout: (layer … knockout) on text, (knockout yes) on text boxes → the box in the layer colour, the glyphs in the background colour
+  const ko = texts(doc.items.get("k1"))[0]; assert.strictEqual(ko.knockout, true); assert.strictEqual(ko.color, "#F2EDA1"); assert.strictEqual(texts(doc.items.get("k2"))[0].knockout, true);
+  assert.strictEqual(texts(fp, (g) => g.text === "10k")[0].knockout, undefined);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {});
+  const koText = textOps(ctx, "KO")[0]; assert.strictEqual(koText.fill, "#001023"); const koIdx = ctx.ops.indexOf(koText); const box = ctx.ops[koIdx - 1]; assert.strictEqual(box.op, "fillRect"); assert.strictEqual(box.fill, "#F2EDA1");
+  const w = K.textWidth("KO", 1, 0.15), m = Math.max(0.15 / 2, 1 / 9); near(box.args[2], w + 2 * m, 1e-9, "box = text width + 2 × GetKnockoutTextMargin"); near(box.args[3], 1 + 2 * m, 1e-9);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { background: "#ffffff" }); assert.strictEqual(textOps(ctx, "KO")[0].fill, "#ffffff", "glyphs cut in the actual background colour");
+});
+test("render: ids subset, background off, grid as one path", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (segment (start 0 2) (end 10 2) (width 0.5) (layer "B.Cu") (net 2) (uuid "s2")))');
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ids: ["s2"] }); assert(ctx.ops.some((o) => o.stroke === "#4D7FC4") && !ctx.ops.some((o) => o.stroke === "#C83434"));
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { ids: new Set(["s1"]) }); assert(!ctx.ops.some((o) => o.stroke === "#4D7FC4"));
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { background: false }); assert(!ctx.ops.some((o) => o.op === "fillRect"), "no background fill"); assert.strictEqual(ctx.calls.clearRect, 1);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { background: "#123456" }); assert.strictEqual(ctx.ops[0].op, "fillRect"); assert.strictEqual(ctx.ops[0].fill, "#123456");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { grid: 1 }); assert(ctx.calls.rect > 100, "grid dots as path rects"); assert.strictEqual(ctx.ops.filter((o) => o.op === "fillRect").length, 1, "only the background uses fillRect"); assert.strictEqual(ctx.ops.filter((o) => o.op === "fill" && o.fill === "#848484").length, 1, "one fill for the whole grid");
+});
+test("bboxOf and padAt", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (via (at 20 20) (size 1) (drill 0.5) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 30 0 0) (pad "1" smd roundrect (at 0 0 45) (size 4 2) (layers "F.Cu") (roundrect_rratio 0.25) (net 1 "GND") (uuid "p1")) (pad "2" thru_hole circle (at 6 0) (size 2 2) (drill 1) (layers "*.Cu") (net 2 "VCC") (uuid "p2")) (pad "3" smd trapezoid (at 12 0 0) (size 2 2) (rect_delta 0 1) (layers "F.Cu") (uuid "p3")) (pad "4" smd oval (at 18 0 90) (size 4 1) (layers "F.Cu") (uuid "p4")) (pad "5" smd rect (at 6 0) (size 6 6) (layers "F.Cu") (uuid "p5"))))');
+  assert.deepStrictEqual(K.bboxOf(doc, ["s1", "v1"]).map((v) => +v.toFixed(6)), [-0.25, -0.25, 20.5, 20.5]); assert.deepStrictEqual(K.bboxOf(doc, new Set(["v1", "nope"])).map((v) => +v.toFixed(6)), [19.5, 19.5, 20.5, 20.5]); assert.strictEqual(K.bboxOf(doc, []), null); assert.strictEqual(K.bboxOf(doc, ["nope"]), null);
+  const at = (x, y) => { const p = K.padAt(doc, x, y); return p && p.number; };
+  // rotated roundrect: 4×2 at 45° — along its own long axis it reaches 2 mm, across it 1 mm
+  assert.strictEqual(at(30 + 1.9 * Math.SQRT1_2, 0 - 1.9 * Math.SQRT1_2), "1"); assert.strictEqual(at(30 + 1.9 * Math.SQRT1_2, 0 + 1.9 * Math.SQRT1_2), null, "outside across the short axis");
+  assert.strictEqual(at(30 + 1.95 * Math.SQRT1_2 + 0.95 * Math.SQRT1_2, -1.95 * Math.SQRT1_2 + 0.95 * Math.SQRT1_2), null, "the rounded corner is cut off (r = 0.5)");
+  assert.strictEqual(at(36.9, 0), "2", "circle THT wins over the 6 mm square pad that also covers it (smallest area)"); assert.strictEqual(at(38.5, 0), "5"); assert.strictEqual(at(36, 0), "2", "the hole belongs to its pad");
+  assert.strictEqual(at(42, -0.9), "3"); assert.strictEqual(at(42.9, -0.9), null, "trapezoid: the narrow side"); assert.strictEqual(at(42.9, 0.9), "3", "trapezoid: the wide side");
+  assert.strictEqual(at(48, 1.9), "4", "oval rotated 90°: 4 mm tall"); assert.strictEqual(at(48.45, 1.9), null, "oval cap");
+  const p = K.padAt(doc, 30, 0); assert.strictEqual(p.index, 0); assert.strictEqual(p.item.id, "fp1"); assert.strictEqual(p.pad[0], "pad"); assert.strictEqual(K.str(p.pad[1]), "1"); assert.strictEqual(p.net, 1); assert.strictEqual(p.netName, "GND"); near(p.x, 30, 1e-9); near(p.y, 0, 1e-9);
+  assert.strictEqual(K.padAt(doc, 5, 0), null, "tracks are not pads"); assert.strictEqual(K.padAt(doc, 100, 100), null);
+});
+test("renderSvg: whole document, subsets, layer visibility, text anchoring, arcs, images, knockout, dashes", () => {
+  const b64 = pngB64(4, 2, 0); const prevImage = globalThis.Image; delete globalThis.Image;
+  try {
+    const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 10 10) (xy 20 10)) (stroke (width 0) (type default)) (uuid "w1")) (label "~{RST}" (at 12 10 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1")) (arc (start 30 10) (mid 32 12) (end 30 14) (stroke (width 0.2) (type dash)) (fill (type none)) (uuid "a1")) (circle (center 40 40) (radius 3) (stroke (width 0) (type default)) (fill (type background)) (uuid "c1")) (text "rot" (at 50 50 90) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "t1")) ' + `(image (at 60 60) (uuid "im1") ${dataAtoms(b64)})` + ")");
+    const svg = K.renderSvg(sch, {});
+    assert(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg"') && svg.endsWith("</svg>"));
+    assert(svg.includes('width="297mm" height="210mm" viewBox="0 0 297 210"'), "whole sheet"); assert(svg.includes(`fill="${K.SCH.bg}"`), "sheet background"); assert(svg.includes(`stroke="${K.SCH.frame}"`), "page frame");
+    assert(svg.includes('<path d="M10 10L20 10" fill="none" stroke="#009600" stroke-width="0.1524" stroke-linecap="round"/>'), "wire");
+    assert(/<text y="0" font-family='[^']*' font-size="1.778" text-anchor="start" fill="#0F0F0F">RST<\/text>/.test(svg), "label text with the same anchoring as the canvas"); assert(/<path d="M0 -1\.5621L[\d.]+ -1\.5621" fill="none" stroke="#0F0F0F"/.test(svg), "overbar");
+    assert(/<path d="M30 10A2 2 0 0 [01] 30 14" fill="none" stroke="#0000C2" stroke-width="0.2" stroke-linecap="butt" stroke-dasharray="2.2 0.8"\/>/.test(svg), "dashed arc as an A command");
+    assert(svg.includes('<circle cx="40" cy="40" r="3" fill="#FFFFC2"/>') && svg.includes('<circle cx="40" cy="40" r="3" fill="none" stroke="#0000C2" stroke-width="0.1524" stroke-linecap="butt"/>'), "filled circle body + outline");
+    assert(svg.includes('<g transform="translate(50 49.75) rotate(-90)">'), "rotated text");
+    assert(svg.includes('<image x="') && svg.includes(`href="data:image/png;base64,${b64}"`), "image as a data URI");
+    const noImg = K.renderSvg(sch, { hidden: new Set(["Images", "Wires"]) }); assert(!noImg.includes("<image") && !noImg.includes('stroke="#009600"'), "hidden layers");
+    const sub = K.renderSvg(sch, { ids: ["w1"], background: false }); const wb = K.bboxOf(sch, ["w1"]); const f4 = (v) => String(+(+v).toFixed(4));
+    assert(sub.includes(`viewBox="${f4(wb[0] - 1)} ${f4(wb[1] - 1)} ${f4(wb[2] - wb[0] + 2)} ${f4(wb[3] - wb[1] + 2)}"`) && sub.includes(`width="${f4(wb[2] - wb[0] + 2)}mm"`), "subset: union bbox + 1 mm margin: " + sub.slice(0, 160)); assert(!sub.includes(`fill="${K.SCH.bg}"`) && !sub.includes("RST") && !sub.includes(`stroke="${K.SCH.frame}"`));
+    const box = K.renderSvg(sch, { bbox: [0, 0, 100, 50], margin: 0 }); assert(box.includes('viewBox="0 0 100 50"') && box.includes("RST") && !box.includes('cx="40"') === false);
+    const box2 = K.renderSvg(sch, { bbox: [200, 100, 250, 150] }); assert(!box2.includes("RST"), "items outside the area are dropped");
+    const pcb = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (gr_text "KO" (at 2 2 0) (layer "F.SilkS" knockout) (uuid "k1") (effects (font (size 1 1) (thickness 0.15)))) (gr_text "M" (at 2 4 0) (layer "B.SilkS") (uuid "m1") (effects (font (size 1 1) (thickness 0.3)) (justify mirror))) (gr_arc (start 8 0) (mid 10 2) (end 8 4) (stroke (width 0.2) (type default)) (layer "Dwgs.User") (uuid "ga")) ' +
+      '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 15 5) (property "Reference" "R1" (at 0 -2 0) (layer "F.SilkS") (hide yes) (effects (font (size 1 1)))) (pad "1" smd roundrect (at 0 0 30) (size 2 1) (layers "F.Cu") (roundrect_rratio 0.25) (net 1 "GND") (uuid "p1"))))');
+    const s = K.renderSvg(pcb, {});
+    assert(s.includes('viewBox="-1.25 -1.25') && s.includes(`fill="${K.PCB_COLORS["F.Cu"]}"`) && s.includes('fill="#001023"'), "board bbox + 1 mm margin, board background");
+    assert(s.includes('<path d="M0 0L10 0" fill="none" stroke="#C83434" stroke-width="0.5" stroke-linecap="round"/>'), "track");
+    assert(s.includes('<circle cx="5" cy="5" r="0.4" fill="#C83434"/>') && s.includes('r="0.2" fill="#E3B72E"'), "via rings and hole");
+    const kw = K.textWidth("KO", 1, 0.15), km = Math.max(0.15 / 2, 1 / 9);
+    assert(s.includes(`<rect x="${f4(-kw / 2 - km)}" y="${f4(0.5 - 1 - km)}" width="${f4(kw + 2 * km)}" height="${f4(1 + 2 * km)}" fill="#F2EDA1"/><text y="0.5"`) && s.includes('fill="#001023">KO</text>'), "knockout: box in the layer colour, glyphs in the background");
+    assert(s.includes('<g transform="translate(2 4) scale(-1 1)"><text') && /stroke="#E8B2A7" stroke-width="0\.17" stroke-linejoin="round" paint-order="stroke">M<\/text>/.test(s), "mirrored back text, bold stroke");
+    assert(/<path d="M8 0A2 2 0 0 1 8 4" fill="none" stroke="#C2C2C2"/.test(s), "board arc (inside the export area: gr_arcs do not feed the board bbox)");
+    const pad = /<path d="M[^"]*A0\.25 0\.25[^"]*Z" fill="#C83434"\/>/.exec(s); assert(pad, "roundrect pad as a path with corner arcs"); assert((pad[0].match(/A0\.25/g) || []).length === 4);
+    assert(!s.includes(">R1<"), "hidden text absent"); assert(K.renderSvg(pcb, { showHiddenText: true }).includes('<g opacity="0.5">'), "showHiddenText draws it dimmed");
+    assert(s.includes(">1<") && s.includes(">GND<")); assert(!K.renderSvg(pcb, { padNumbers: false }).includes(">1<"));
+    assert(K.renderSvg(pcb, { hidden: new Set(["F.Cu"]) }).indexOf('stroke="#C83434"') < 0);
+    // SVG path builder: canvas arc semantics (line to the arc start, sweep direction, full circles)
+    const p = new K.SvgPath(); p.moveTo(0, 0); p.arc(5, 0, 2, Math.PI, 0, false); assert.strictEqual(p.d, "M0 0L3 0A2 2 0 0 1 7 0");
+    const q = new K.SvgPath(); q.arc(0, 0, 1, 0, Math.PI * 2, false); assert.strictEqual(q.d, "M1 0A1 1 0 1 1 -1 0A1 1 0 1 1 1 0");
+    const r = new K.SvgPath(); r.arc(0, 0, 1, 0, -Math.PI / 2, true); assert.strictEqual(r.d, "M1 0A1 1 0 0 0 0 -1");
+  } finally { if (prevImage) globalThis.Image = prevImage; }
+});
+testAsync("renderPng: offscreen raster at the dpi, area and options of renderSvg", async () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 20 0) (width 0.5) (layer "F.Cu") (net 1) (uuid "s1")) (gr_line (start 0 -5) (end 30 -5) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e1")) (gr_line (start 0 5) (end 30 5) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "e2")))');
+  const made = []; const prev = K.createCanvas;
+  K.createCanvas = (w, h) => { const c = { width: w, height: h, ctx: fullCtx(w, h) }; c.getContext = () => c.ctx; c.convertToBlob = (o) => Promise.resolve({ type: o.type, size: w * h }); made.push(c); return c; };
+  try {
+    const blob = await K.renderPng(doc, {});
+    assert.strictEqual(blob.type, "image/png"); const c = made[0];
+    // the board bbox (edge lines + the track, stroke widths included) + 1 mm margin at 300 dpi
+    const bb = doc.bbox, s = 300 / 25.4; near(bb[0], -0.25, 1e-9); near(bb[2], 30.05, 1e-9);
+    assert.strictEqual(c.width, Math.ceil((bb[2] - bb[0] + 2) * s)); assert.strictEqual(c.height, Math.ceil((bb[3] - bb[1] + 2) * s));
+    assert(c.ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#C83434")); assert.strictEqual(c.ctx.ops[0].fill, "#001023"); assert(!c.ctx.calls.rect, "no grid");
+    const tf = c.ctx.transforms[1]; near(tf[0], s, 1e-9); near(tf[3], s, 1e-9); near(tf[4], -(bb[0] - 1) * s, 1e-6, "1 mm = dpi/25.4 px, origin at the area corner"); near(tf[5], -(bb[1] - 1) * s, 1e-6);
+    const b2 = await K.renderPng(doc, { dpi: 100, ids: ["s1"], background: false, margin: 0 }); const c2 = made[1];
+    assert.strictEqual(c2.width, Math.ceil(20.5 * 100 / 25.4)); assert.strictEqual(c2.height, Math.ceil(0.5 * 100 / 25.4)); assert(!c2.ctx.ops.some((o) => o.op === "fillRect")); assert.strictEqual(b2.size, c2.width * c2.height);
+    await K.renderPng(doc, { bbox: [0, 0, 10, 10], dpi: 50, flip: true, markers: [{ x: 1, y: 1, severity: "error" }] }); const c3 = made[2]; assert.strictEqual(c3.width, Math.ceil(10 * 50 / 25.4)); assert(c3.ctx.transforms[1][0] < 0, "display options pass through"); assert(c3.ctx.ops.some((o) => o.fill === K.MARKER_COLORS.pcb.error));
+    await K.renderPng(doc, { dpi: 100000 }).then(() => assert.fail("should reject"), (e) => assert(/exceeds/.test(e.message)));
+    K.createCanvas = () => null; await K.renderPng(doc, {}).then(() => assert.fail("should reject"), (e) => assert(/no canvas/.test(e.message)));
+  } finally { K.createCanvas = prev; }
+});
+
 // ---------------------------------------------------------------- the sample project
 if (!haveSamples) {
   console.log("sample documents not found under " + SAMPLES + " — set KICAD_SAMPLES to run the project checks");
@@ -492,6 +773,15 @@ if (!haveSamples) {
       const ctx3 = stubCtx(200, 150); K.render(doc, ctx3, fitView(doc, 200, 150), {}); assert((ctx3.calls.fillText || 0) < (ctx.calls.fillText || 0));
     }
   });
+  test("render loop stays inside a frame budget on the board sample (stub context, all options that cost anything)", () => {
+    const ctx = stubCtx(1600, 1200); const view = fitView(pcb, 1600, 1200);
+    const opts = { grid: 1.27, netNames: true, zoneFill: true, markers: [{ x: 150, y: 100, severity: "error" }], ratsnest: [{ net: 1, a: [150, 100], b: [160, 110] }] };
+    K.render(pcb, ctx, view, opts);
+    const N = 10; const t0 = process.hrtime.bigint(); for (let i = 0; i < N; i++) K.render(pcb, ctx, view, opts); const ms = Number(process.hrtime.bigint() - t0) / 1e6 / N;
+    assert(ms < 16, "render loop " + ms.toFixed(2) + " ms/frame");
+    const svg = K.renderSvg(pcb, {}); assert(svg.length > 100000 && svg.includes("<svg") && svg.endsWith("</svg>"), "board SVG export");
+    assert(K.padAt(pcb, 150, 100) === null || K.padAt(pcb, 150, 100).item.kind === "footprint");
+  });
   test("edits rebuild geometry: moveItem and applyChange", () => {
     const it = sch.items.get("090d21fc-658e-4e52-ac1d-2a96842b3b13"); const before = it.geom[0];
     const ch = K.moveItem(sch, it, 300, 70, 10000); assert.strictEqual(ch.kind, "MODIFIED"); assert.notStrictEqual(it.geom[0], before); near(it.geom.find((g) => g.t === "poly").pts[0][0], 300, 1e-6);
@@ -500,5 +790,7 @@ if (!haveSamples) {
   });
 }
 
-console.log(`${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+Promise.all(PENDING).then(() => {
+  console.log(`${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+});

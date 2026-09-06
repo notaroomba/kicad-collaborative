@@ -9,6 +9,11 @@
 // Placement rules follow eeschema/sch_painter.cpp, eeschema/pin_layout_cache.cpp,
 // eeschema/sch_label.cpp and pcbnew/pcb_painter.cpp; colours are KiCad's default
 // theme (common/settings/builtin_color_themes.h).
+//
+// Beyond drawing, the module answers the tools layer's geometry questions (hitTest, padAt, bboxOf,
+// fieldAt, markerAt, flipX/unflipX) and exports the document as SVG (renderSvg) or PNG (renderPng);
+// render()'s comment lists every display option (ratsnest, markers, netNames, netColors, zoneFill,
+// flip, padNumbers, showHiddenText, …).
 (function (root) {
 "use strict";
 
@@ -91,12 +96,18 @@ function colorOf(node) {
   return rgba(num(c[1]), num(c[2]), num(c[3]), a);
 }
 function strokeColorOf(node) { const s = kid(node, "stroke"); return s ? colorOf(s) : null; }
-/** (stroke (width w) (type t) (color …)) → {w, color, dash}; w = def when unspecified */
+/** (stroke (width w) (type t) (color …)) → {w, color, dash, type}; w = def when unspecified; type = dash|dot|dash_dot|dash_dot_dot or null */
 function strokeOf(node, def) {
-  const s = node && kid(node, "stroke"); if (!s) return { w: def, color: null, dash: false };
+  const s = node && kid(node, "stroke"); if (!s) return { w: def, color: null, dash: false, type: null };
   const wN = kid(s, "width"), tN = kid(s, "type"); const type = tN ? str(tN[1]) : "default";
-  return { w: wN ? num(wN[1], def) : def, color: colorOf(s), dash: type !== "default" && type !== "solid" };
+  const dash = type !== "default" && type !== "solid";
+  return { w: wN ? num(wN[1], def) : def, color: colorOf(s), dash, type: dash ? type : null };
 }
+/** {dash: true, dashType} for a node whose (stroke (type …)) is not solid, else {} — spread into a stroked geometry record. */
+const NO_DASH = {};
+function dashOf(node) { const t = strokeOf(node, 0).type; return t ? { dash: true, dashType: t } : NO_DASH; }
+/** (net N) of a board item, -1 when absent (0 = no net). */
+function netOf(node) { const nn = node && kid(node, "net"); return nn ? num(nn[1], -1) : -1; }
 /** (key yes|no) child, or a bare `key` token; def when absent */
 function boolOf(node, key, def) { const k = node && kid(node, key); if (k) return str(k[1]) !== "no"; return (node && has(node, key)) ? true : def; }
 /** Axis-aligned box of a text box / table cell: (at x y r) + (size w h), or (start) + (end) [+ (angle a)]. */
@@ -293,7 +304,7 @@ function padLayers(doc, names) {
 }
 
 // ---------------------------------------------------------------- documents
-function newDoc(type) { return { type, items: new Map(), lib: new Map(), page: [297, 210], layers: new Map(), copper: [], bbox: null }; }
+function newDoc(type) { return { type, items: new Map(), lib: new Map(), page: [297, 210], layers: new Map(), copper: [], bbox: null, nets: new Map() }; }
 function paperSize(node) {
   const name = str(node[1]);
   const sizes = { A5: [210, 148], A4: [297, 210], A3: [420, 297], A2: [594, 420], A1: [841, 594], A0: [1189, 841],
@@ -318,7 +329,8 @@ function parseDoc(text, docType) {
       // (0 "F.Cu" signal ["user name"])
       for (const l of node.slice(1)) if (isList(l)) { const name = str(l[1]), ltype = str(l[2]); doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== undefined ? str(l[3]) : "" }); if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name); }
     }
-    else if (k === "lib_symbols" || k === "version" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "net" || k === "title_block" || k === "sheet_instances" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
+    else if (k === "net") { if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2])); continue; }   // (net 3 "GND"): the board's net table
+    else if (k === "lib_symbols" || k === "version" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "title_block" || k === "sheet_instances" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
     else addItem(doc, node);
   }
   computeBBox(doc);
@@ -493,11 +505,11 @@ function buildSchGeom(doc, item) {
       const fill = f.type === "background" ? SCH.body : f.type === "outline" || f.type === "solid" ? color : f.type === "color" ? f.color : null;
       if (fill) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer: "Notes", z: f.type === "outline" || f.type === "solid" ? SCH_Z.notes : SCH_Z.notesBg, noStroke: true });
     }
-    G(item, { t: "poly", pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" });
+    G(item, Object.assign({ t: "poly", pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "bus_entry") {
     // wire-to-bus entries take the wire colour and width
     const [x, y] = atOf(n); const s = kid(n, "size"); const dx = s ? num(s[1]) : 2.54, dy = s ? num(s[2]) : 2.54;
-    G(item, { t: "line", x1: x, y1: y, x2: x + dx, y2: y + dy, w: widthOf(n, 0) || 0.1524, color: strokeColorOf(n) || SCH.busEntry, layer: "Wires", z: SCH_Z.wire, cap: "round" });
+    G(item, Object.assign({ t: "line", x1: x, y1: y, x2: x + dx, y2: y + dy, w: widthOf(n, 0) || 0.1524, color: strokeColorOf(n) || SCH.busEntry, layer: "Wires", z: SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "junction") {
     const [x, y] = atOf(n); const d = kid(n, "diameter"); const r = (d && num(d[1]) > 0 ? num(d[1]) : 0.9144) / 2;
     G(item, { t: "circle", x, y, r, w: 0, color: colorOf(n) || SCH.junction, fill: colorOf(n) || SCH.junction, layer: "Junctions", z: SCH_Z.junction });
@@ -517,7 +529,7 @@ function buildSchGeom(doc, item) {
     const bw = widthOf(n, 0); const border = bw < 0 ? 0 : (bw || SCH_PEN); const f = fillOf(n);
     const fill = f.type === "color" ? f.color : f.type === "background" ? SCH.body : f.type === "solid" ? SCH.notes : null;
     if (fill) G(item, { t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: 0, color: fill, fill, layer: "Notes", z: SCH_Z.notesBg, noStroke: true });
-    if (border > 0) G(item, { t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: border, color: strokeColorOf(n) || SCH.notes, fill: null, layer: "Notes", z: SCH_Z.notes });
+    if (border > 0) G(item, Object.assign({ t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: border, color: strokeColorOf(n) || SCH.notes, fill: null, layer: "Notes", z: SCH_Z.notes }, dashOf(n)));
     const mg = kid(n, "margins"); const lm = mg ? num(mg[1]) : border / 2 + ef.size * 0.75, tm = mg ? num(mg[2]) : lm, rm = mg ? num(mg[3]) : lm, bm = mg ? num(mg[4]) : lm;
     const j = justOf(ef.just, "left", "top"); const vert = ((rot % 180) + 180) % 180 === 90;
     // SCH_TEXTBOX::GetDrawPos: anchor on the box edge matching the justification
@@ -530,7 +542,7 @@ function buildSchGeom(doc, item) {
   } else if (k === "rule_area") {
     for (const pl of kids(n, "polyline")) {
       const p = ptsOf(pl); if (p.length < 2) continue;
-      G(item, { t: "poly", pts: p, close: true, w: widthOf(pl, 0) || SCH_PEN, color: strokeColorOf(pl) || SCH.ruleArea, layer: "Rule areas", z: SCH_Z.ruleArea });
+      G(item, Object.assign({ t: "poly", pts: p, close: true, w: widthOf(pl, 0) || SCH_PEN, color: strokeColorOf(pl) || SCH.ruleArea, layer: "Rule areas", z: SCH_Z.ruleArea }, dashOf(pl)));
     }
   } else if (k === "table") {
     buildTableGeom(doc, item, n);
@@ -547,28 +559,28 @@ function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill) {
   const f = fillOf(g); const sc = strokeColorOf(g) || color;
   const fill = f.type === "background" ? SCH.body : f.type === "outline" ? sc : f.type === "color" ? f.color : f.type === "solid" ? sc : null;
   const fz = f.type === "outline" || f.type === "solid" ? z : zBg;   // KiCad fills device-coloured shapes in the foreground
-  const closed = f.type !== "none";
+  const closed = f.type !== "none"; const ds = dashOf(g);
   if (gk === "rectangle") {
     const s0 = kid(g, "start"), e0 = kid(g, "end"); if (!s0 || !e0) return;
     const x0 = num(s0[1]), y0 = num(s0[2]), x1 = num(e0[1]), y1 = num(e0[2]);
     const pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)];
     if (fill) G(item, { t: "poly", pts, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, { t: "poly", pts, close: true, w, color: sc, layer, z });
+    G(item, Object.assign({ t: "poly", pts, close: true, w, color: sc, layer, z }, ds));
   } else if (gk === "polyline" || gk === "bezier") {
     let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (gk === "bezier") p = bezierPts(p);
     if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, { t: "poly", pts: p, close: false, w, color: sc, layer, z });
+    G(item, Object.assign({ t: "poly", pts: p, close: false, w, color: sc, layer, z }, ds));
   } else if (gk === "circle") {
     const c = kid(g, "center"), r = kid(g, "radius"); if (!c) return; const [cx, cy] = tf(num(c[1]), num(c[2]));
     const rad = r ? num(r[1]) : 1;
     if (fill) G(item, { t: "circle", x: cx, y: cy, r: rad, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, { t: "circle", x: cx, y: cy, r: rad, w, color: sc, layer, z });
+    G(item, Object.assign({ t: "circle", x: cx, y: cy, r: rad, w, color: sc, layer, z }, ds));
   } else if (gk === "arc") {
     const s0 = kid(g, "start"), m0 = kid(g, "mid"), e0 = kid(g, "end"); if (!s0 || !m0 || !e0) return;
     const a = arcFrom3(tf(num(s0[1]), num(s0[2])), tf(num(m0[1]), num(m0[2])), tf(num(e0[1]), num(e0[2])));
-    if (a) G(item, Object.assign({ t: "arc", w, color: sc, layer, z, fill: closed ? fill : null }, a));
-    else { const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2])); G(item, { t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }); }
+    if (a) G(item, Object.assign({ t: "arc", w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
+    else { const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2])); G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }, ds)); }
   }
 }
 function buildLabelGeom(item, n, k) {
@@ -624,7 +636,7 @@ function buildSheetGeom(item, n) {
   const [x, y] = atOf(n); const s = kid(n, "size"); const w = s ? num(s[1]) : 20, h = s ? num(s[2]) : 20;
   const f = fillOf(n); const bw = widthOf(n, 0) || SCH_PEN;
   if (f.color) G(item, { t: "rect", x, y, w, h, wd: 0, color: f.color, fill: f.color, layer: "Sheets", z: SCH_Z.sheetBg, noStroke: true });
-  G(item, { t: "rect", x, y, w, h, wd: bw, color: strokeColorOf(n) || SCH.sheet, fill: null, layer: "Sheets", z: SCH_Z.sheet });
+  G(item, Object.assign({ t: "rect", x, y, w, h, wd: bw, color: strokeColorOf(n) || SCH.sheet, fill: null, layer: "Sheets", z: SCH_Z.sheet }, dashOf(n)));
   item.movable = true; item.x = x; item.y = y; item.w = w; item.h = h; item.rot = 0;
   for (const p of kids(n, "property")) {
     const name = str(p[1]), val = str(p[2]); const ef = effectsOf(p);
@@ -823,22 +835,36 @@ function padCopperLayer(pad) {
   if (names.some((x) => x === "B.Cu")) return "B.Cu";
   const inner = names.find((x) => /\.Cu$/.test(x)); return inner || null;
 }
+/**
+ * Board text.  Hidden text (fp_text / property with hide yes) is not part of item.geom or the bbox: it is kept
+ * in item.hiddenGeom tagged hiddenText, drawn only under the showHiddenText render option.  Knockout text
+ * ((layer "F.Cu" knockout) or (knockout yes)) is tagged knockout: the painter fills the text box, inflated by
+ * GetKnockoutTextMargin = max(pen/2, size/9), in the layer colour and cuts the glyphs out of it.
+ */
 function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
-  const ef = effectsOf(n); if (ef.hide || !text) return null;
+  const ef = effectsOf(n); if (!text) return null;
   const color = pcbColor(layer); const z = pcbZ(layer) + Z_TEXT;
   const thick = ef.thick > 0 ? ef.thick : (ef.bold ? ef.size / 5 : ef.size / 8);
-  return textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true }, extra || {}));
+  const ln = kid(n, "layer"); const knockout = (ln && has(ln, "knockout")) || yesNo(n, "knockout");
+  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true }, knockout ? { knockout: true } : null, extra || {});
+  if (ef.hide) {
+    const shadow = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
+    for (const g of shadow.geom) g.hiddenText = true;
+    if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
+    return null;
+  }
+  return textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, ex);
 }
 function buildPcbGeom(doc, item) {
   const n = item.node, k = item.kind;
   if (k === "segment") {
-    const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu");
-    G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true });
+    const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu"); const net = netOf(n); item.net = net;
+    G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net });
   } else if (k === "arc") {
-    const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu");
+    const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu"); const net = netOf(n); item.net = net;
     const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
-    if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true }, a));
-    else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true });
+    if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net }, a));
+    else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net });
   } else if (k === "via") {
     buildViaGeom(doc, item, n);
   } else if (k === "zone") {
@@ -874,13 +900,14 @@ function buildViaGeom(doc, item, n) {
   const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   let layers = copper;
   if (vtype !== "through") { const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]); if (i0 >= 0 && i1 >= 0) layers = copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1); else layers = pair; }
-  for (const layer of layers) G(item, { t: "circle", x, y, r: size / 2, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_VIA, via: true });
+  const net = netOf(n); item.net = net;
+  for (const layer of layers) G(item, { t: "circle", x, y, r: size / 2, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_VIA, via: true, net, viaSize: size, viaType: vtype, viaLayers: pair, viaLabel: layer === layers[0] || undefined });
   const zh = pcbZ("holes");
-  if (vtype === "through") G(item, { t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true });
+  if (vtype === "through") G(item, { t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true, hole: true, net });
   else {
     // blind/buried and micro vias show their layer pair in the hole: top-colour upper half, bottom-colour lower half
-    G(item, { t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true });
-    G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true, via: true });
+    G(item, { t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true, hole: true, net });
+    G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true, via: true, hole: true, net });
   }
   item.viaType = vtype;
 }
@@ -890,11 +917,15 @@ function buildZoneGeom(doc, item, n) {
   layersZ = padLayers(doc, layersZ);
   const keepout = !!kid(n, "keepout");
   const hatchN = kid(n, "hatch"); const hatchStyle = hatchN ? str(hatchN[1]) : "edge"; const pitch = hatchN ? num(hatchN[2], 0.5) : 0.5;
+  const net = netOf(n); if (item.kind === "zone") item.net = net;
+  // (connect_pads [yes|no|thru_hole_only] (clearance c)): the copper clearance the fill keeps from other nets (0.5 mm default)
+  const cp = kid(n, "connect_pads"); const clN = cp && kid(cp, "clearance"); const clearance = clN ? num(clN[1], 0.5) : 0.5;
+  const unfilled = !keepout && !kids(n, "filled_polygon").length;
   for (const poly of kids(n, "polygon")) {
     const p = ptsOf(poly); if (p.length < 2) continue;
     for (const layer of layersZ) {
       const color = pcbColor(layer); const z = pcbZ(layer) + (keepout ? Z_TEXT : 0.5);
-      G(item, { t: "poly", pts: p, close: true, w: 0, color, layer, z });
+      G(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
       if (hatchStyle !== "none" && pitch > 0) {
         // ZONE::HatchBorder: short diagonal ticks along the border (edge) or full diagonals (full); slope by layer parity
         const info = doc.layers.get(layer); const slope = info && (info.id & 1) ? 1 : -1;
@@ -906,7 +937,7 @@ function buildZoneGeom(doc, item, n) {
   if (keepout) return;   // rule areas have no fill
   for (const fp of kids(n, "filled_polygon")) {
     const layer = layerOf(fp, layersZ[0]); const p = ptsOf(fp); if (p.length < 3) continue;
-    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true });
+    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net });
   }
 }
 /** SHAPE_POLY_SET::GenerateHatchLines for one outline: lines y = slope·x + a every `spacing`, clipped to the polygon. */
@@ -946,27 +977,27 @@ function hatchLines(pts, slope, spacing, lineLen) {
 function graphicGeom(item, g, shape, tf, layer, z) {
   const w = widthOf(g, 0); const color = pcbColor(layer); z = z === undefined ? pcbZ(layer) : z;
   if (layer === "Edge.Cuts") item.edge = true;   // board outline: what "fit" and the board box mean
-  const f = fillOf(g); const fillColor = f.type === "solid" ? color : null;
+  const f = fillOf(g); const fillColor = f.type === "solid" ? color : null; const ds = dashOf(g);
   if (shape === "line") {
     const s = kid(g, "start"), e = kid(g, "end"); if (!s || !e) return; const a = tf(num(s[1]), num(s[2])), b = tf(num(e[1]), num(e[2]));
-    G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
+    G(item, Object.assign({ t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" }, ds));
   } else if (shape === "rect") {
     const s = kid(g, "start"), e = kid(g, "end"); if (!s || !e) return;
     const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]);
-    G(item, { t: "poly", pts: [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 });
+    G(item, Object.assign({ t: "poly", pts: [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "circle") {
     const c = kid(g, "center"), e = kid(g, "end"); if (!c) return; const [cx, cy] = tf(num(c[1]), num(c[2]));
     const r = e ? Math.hypot(num(e[1]) - num(c[1]), num(e[2]) - num(c[2])) : num((kid(g, "radius") || [])[1], 1);
-    G(item, { t: "circle", x: cx, y: cy, r, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 });
+    G(item, Object.assign({ t: "circle", x: cx, y: cy, r, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "arc") {
     const s = kid(g, "start"), m = kid(g, "mid"), e = kid(g, "end"); if (!s || !m || !e) return;
     const a = arcFrom3(tf(num(s[1]), num(s[2])), tf(num(m[1]), num(m[2])), tf(num(e[1]), num(e[2])));
-    if (a) G(item, Object.assign({ t: "arc", w, color, layer, z, cap: "round" }, a));
-    else { const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2])); G(item, { t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }); }
+    if (a) G(item, Object.assign({ t: "arc", w, color, layer, z, cap: "round" }, a, ds));
+    else { const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2])); G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }, ds)); }
   } else if (shape === "poly" || shape === "curve") {
     let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (shape === "curve") p = bezierPts(p);
-    G(item, { t: "poly", pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 });
+    G(item, Object.assign({ t: "poly", pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   }
 }
 function buildTextBoxGeom(item, n, tf, layer, rotBase) {
@@ -974,7 +1005,7 @@ function buildTextBoxGeom(item, n, tf, layer, rotBase) {
   let pts = ptsOf(n).map(([x, y]) => tf(x, y));
   if (pts.length < 4) { const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]); pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)]; }
   const w = widthOf(n, 0); const color = pcbColor(layer); const z = pcbZ(layer);
-  if (yesNo(n, "border") || w > 0) G(item, { t: "poly", pts, close: true, w, color, layer, z });
+  if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly", pts, close: true, w, color, layer, z }, dashOf(n)));
   const angN = kid(n, "angle"); const ang = angN ? num(angN[1]) : rotBase;
   const mg = kid(n, "margins"); const m = mg ? num(mg[1]) : w / 2 + ef.size * 0.75;
   const R = rotator(ang); const [dx, dy] = R(m, m);
@@ -1062,6 +1093,7 @@ function buildFootprintGeom(doc, item) {
     pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field } : { upright: !unlocked });
   };
   for (const p of kids(n, "property")) textAt(p, str(p[2]));
+  let padIndex = 0;   // index among the footprint's (pad …) children: padAt() reports it and pcb-tools can map it back
   for (let j = 2; j < n.length; j++) {
     const g = n[j]; if (!isList(g)) continue; const gk = g[0];
     if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve") {
@@ -1071,7 +1103,7 @@ function buildFootprintGeom(doc, item) {
     } else if (gk === "fp_text_box") {
       buildTextBoxGeom(item, g, tf, layerOf(g, "F.SilkS"), frot);
     } else if (gk === "pad") {
-      buildPadGeom(item, g, tf, side, doc);
+      buildPadGeom(item, g, tf, side, doc, padIndex++);
     } else if (gk === "zone") {
       const before = item.geom.length; buildZoneGeom(doc, item, g);
       for (let i = before; i < item.geom.length; i++) { const z = item.geom[i]; if (z.pts) z.pts = z.pts.map(([x, y]) => tf(x, y)); else if (z.t === "line") { const a = tf(z.x1, z.y1), b = tf(z.x2, z.y2); z.x1 = a[0]; z.y1 = a[1]; z.x2 = b[0]; z.y2 = b[1]; } }
@@ -1098,8 +1130,9 @@ function padPolygon(pad, shape, w, h) {
   if (has_("bottom_left") && c > 0) pts.push([-hw + c, hh], [-hw, hh - c]); else pts.push([-hw, hh]);
   return pts;
 }
-function buildPadGeom(item, pad, tf, side, doc) {
+function buildPadGeom(item, pad, tf, side, doc, padIndex) {
   const number = str(pad[1]), type = str(pad[2]); let shape = str(pad[3]);
+  const netN = kid(pad, "net"); const net = netN ? num(netN[1], -1) : -1, netname = netN ? str(netN[2]) : "";
   const [px, py, prot] = atOf(pad); const sz = kid(pad, "size"); const w = sz ? num(sz[1]) : 1, h = sz ? num(sz[2], num(sz[1])) : 1;
   const [cx, cy] = tf(px, py);
   const ls = kid(pad, "layers"); const layers = padLayers(doc || { copper: [] }, ls ? ls.slice(1).map(str) : [side]);
@@ -1115,7 +1148,7 @@ function buildPadGeom(item, pad, tf, side, doc) {
   const pushShape = (layer, z, color, fill) => {
     const from = item.geom.length;
     pushPadShape(layer, z, color, fill);
-    for (let i = from; i < item.geom.length; i++) item.geom[i].pad = true;   // tagged for the outlinePads render option
+    for (let i = from; i < item.geom.length; i++) { const pg = item.geom[i]; pg.pad = true; pg.padIndex = padIndex; pg.padNumber = number; pg.padType = type; pg.net = net; pg.netName = netname; }   // tagged for outlinePads / padAt / net colours
   };
   const pushPadShape = (layer, z, color, fill) => {
     if (shape === "custom") {
@@ -1138,23 +1171,22 @@ function buildPadGeom(item, pad, tf, side, doc) {
   bboxAdd(item, cx, cy, Math.hypot(w, h) / 2);
   if (dr && dw > 0) {
     const zh = pcbZ("holes");
-    if (npth) G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: NPTH, fill: NPTH, layer: "holes", z: zh });
+    if (npth) G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: NPTH, fill: NPTH, layer: "holes", z: zh, hole: true, npth: true, padIndex, net });
     else {
       // plated: hole in the background colour with a thin plating wall (LAYER_PAD_HOLEWALLS uses the via hole colour)
-      G(item, { t: "pad", x: hx, y: hy, w: dw + 0.04, h: dh + 0.04, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh });
-      G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: PCB_BG, fill: PCB_BG, layer: "holes", z: zh });
+      G(item, { t: "pad", x: hx, y: hy, w: dw + 0.04, h: dh + 0.04, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, hole: true, padIndex, net });
+      G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: PCB_BG, fill: PCB_BG, layer: "holes", z: zh, hole: true, padIndex, net });
     }
   }
   // pad number + net name (PCB_PAINTER netname layer): sized to fit, drawn only when legible
-  const netN = kid(pad, "net"); const netname = netN ? str(netN[2]) : "";
   if (number || netname) {
     let pw = w, ph = h; const rotated = pw < ph * 0.95; if (rotated) { const t = pw; pw = ph; ph = t; }
     let size = Math.min(ph, 2.5);   // MAX_FONT_SIZE
     const textLayer = copper || layers[0] || side; const z = pcbZ("holes") + 1; const rot = rotated ? 90 : 0;
     let yNet = 0, yNum = 0;
     if (number && netname) { size = size / 2.5; yNet = size / 1.4; yNum = size / 1.7; }
-    if (netname) { let ts = Math.min(1.5 * pw / Math.max(netname.length + 1, 5), size) * 0.85; const [dx, dy] = rotPt(0, Math.min(ts * 1.4, yNet), rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: netname, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, minPx: 7, noBox: true }); }
-    if (number) { const ts = Math.min(1.5 * pw / Math.max(number.length, 3), size) * 0.85; const [dx, dy] = rotPt(0, -yNum, rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: number, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, minPx: 7, noBox: true }); }
+    if (netname) { let ts = Math.min(1.5 * pw / Math.max(netname.length + 1, 5), size) * 0.85; const [dx, dy] = rotPt(0, Math.min(ts * 1.4, yNet), rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: netname, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padNet: true, minPx: 7, noBox: true }); }
+    if (number) { const ts = Math.min(1.5 * pw / Math.max(number.length, 3), size) * 0.85; const [dx, dy] = rotPt(0, -yNum, rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: number, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padNum: true, minPx: 7, noBox: true }); }
   }
 }
 
@@ -1224,7 +1256,7 @@ function buildTableGeom(doc, item, n) {
   }
   // borders: SCH_TABLE::DrawBorders / PCB_TABLE::DrawBorders
   const cellAt = (r, c) => cells[r * cols + c] || null;
-  const line = (p, q, st) => G(item, { t: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: lineWidth(st), color: lineColor(st), layer, z, cap: "butt", dash: st.dash || undefined });
+  const line = (p, q, st) => G(item, { t: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: lineWidth(st), color: lineColor(st), layer, z, cap: "butt", dash: st.dash || undefined, dashType: st.type || undefined });
   for (let col = 0; col < cols - 1; col++) for (let row = 0; row < rows; row++) {
     const st = row === 0 && header ? bs : colsOn ? ss : null; if (!st) continue;
     const c = cellAt(row, col); if (!c || c.cs <= 0 || col + c.cs === cols) continue;
@@ -1520,17 +1552,64 @@ function movableItems(doc) {
   }
   return out;
 }
-function hitTest(doc, x, y, slopMm) {
-  let best = null, bestArea = Infinity; slopMm = slopMm || 0;
+/** Extent of one geometry record (mm), or null for records without a footprint on the page. */
+function geomBox(g) {
+  const w = (g.w || 0) / 2;
+  switch (g.t) {
+  case "line": return [Math.min(g.x1, g.x2) - w, Math.min(g.y1, g.y2) - w, Math.max(g.x1, g.x2) + w, Math.max(g.y1, g.y2) + w];
+  case "poly": { if (!g.pts || !g.pts.length) return null; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of g.pts) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; } return [x0 - w, y0 - w, x1 + w, y1 + w]; }
+  case "circle": case "arc": return [g.x - g.r - w, g.y - g.r - w, g.x + g.r + w, g.y + g.r + w];
+  case "rect": return [g.x - w, g.y - w, g.x + g.w + w, g.y + g.h + w];
+  case "image": return [g.x - g.w / 2, g.y - g.h / 2, g.x + g.w / 2, g.y + g.h / 2];
+  case "text": { const tw = textWidth(g.text || "", g.size || 1, g.w || 0), th = g.size || 1; const r = Math.max(tw, th); return [g.x - r, g.y - r, g.x + r, g.y + r]; }
+  default: return null;
+  }
+}
+function segDistance(x, y, x1, y1, x2, y2) { const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy; let t = l2 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy)); }
+/** Does (x, y) touch this geometry record within tol mm?  Text counts by its box, like KiCad's text hit tests. */
+function geomHit(g, x, y, tol) {
+  const w = (g.w || 0) / 2 + tol;
+  switch (g.t) {
+  case "line": return segDistance(x, y, g.x1, g.y1, g.x2, g.y2) <= w;
+  case "poly": { const n = g.pts.length; if (n < 2) return false; if (g.fill && pointInPoly(g.pts, x, y)) return true; for (let i = 0; i < (g.close ? n : n - 1); i++) { const a = g.pts[i], b = g.pts[(i + 1) % n]; if (segDistance(x, y, a[0], a[1], b[0], b[1]) <= w) return true; } return false; }
+  case "circle": { const d = Math.hypot(x - g.x, y - g.y); return g.fill ? d <= g.r + tol : Math.abs(d - g.r) <= w; }
+  case "arc": { const d = Math.hypot(x - g.x, y - g.y); return Math.abs(d - g.r) <= w; }
+  case "rect": return x >= g.x - w && x <= g.x + g.w + w && y >= g.y - w && y <= g.y + g.h + w;
+  case "image": case "text": { const b = geomBox(g); return !!b && x >= b[0] - tol && x <= b[2] + tol && y >= b[1] - tol && y <= b[3] + tol; }
+  default: return false;
+  }
+}
+/**
+ * The movable item under (x, y) with KiCad's candidate ranking (PCB_SELECTION_TOOL::GuessSelectionCandidates):
+ * only geometry on visible layers counts (opts.hidden = Set of layer keys), a hit on the item's own
+ * geometry beats a hit inside its empty bounding box, the preferred side (opts.side "F" | "B", the
+ * active layer's side) beats the other, and the smaller visible extent wins ties.
+ * Returns {id, onGeom, layer, box} or null; hitTest() is the id-only form.
+ */
+function hitTestDetail(doc, x, y, slopMm, opts) {
+  slopMm = slopMm || 0; opts = opts || {}; const hidden = opts.hidden || null, side = opts.side || null;
+  let best = null;
   for (const it of doc.items.values()) {
     if (!it.movable || !it.bbox) continue;
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-    const area = (b[2] - b[0]) * (b[3] - b[1]);
-    if (area < bestArea) { best = it; bestArea = area; }
+    let onGeom = false, hitLayer = null, vis = null;
+    for (const g of it.geom) {
+      if (hidden && g.layer && hidden.has(g.layer)) continue;
+      const gb = geomBox(g); if (!gb) continue;
+      if (!vis) vis = gb.slice(); else { if (gb[0] < vis[0]) vis[0] = gb[0]; if (gb[1] < vis[1]) vis[1] = gb[1]; if (gb[2] > vis[2]) vis[2] = gb[2]; if (gb[3] > vis[3]) vis[3] = gb[3]; }
+      if (!onGeom && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) { onGeom = true; hitLayer = g.layer || null; }
+    }
+    if (!vis) continue;                                                   // nothing of it is visible: not selectable
+    if (x < vis[0] - slopMm || x > vis[2] + slopMm || y < vis[1] - slopMm || y > vis[3] + slopMm) continue;
+    const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
+    const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
+    const score = (onGeom ? 0 : 1e12) + (side && itemSide !== side ? 1e9 : 0) + area;
+    if (!best || score < best.score) best = { id: it.id, onGeom, layer: hitLayer, box: vis, score };
   }
-  return best ? best.id : null;
+  return best;
 }
+function hitTest(doc, x, y, slopMm, opts) { const h = hitTestDetail(doc, x, y, slopMm, opts); return h ? h.id : null; }
 function layerList(doc) {
   const counts = new Map();
   for (const it of doc.items.values()) for (const g of it.geom) counts.set(g.layer, (counts.get(g.layer) || 0) + 1);
@@ -1594,10 +1673,75 @@ function tracePad(ctx, g) {
  *   highlight      (both)      — Set of item ids (or null): everything else is dimmed to HL_DIM alpha
  *                                and the set is drawn in KiCad's brightened look — LAYER_BRIGHTENED
  *                                (magenta) on schematics, the item's own colour Brightened(0.5) on
- *                                boards — with a translucent halo of that colour around it.
+ *                                boards — with a translucent halo of that colour around it;
+ *   ids            (both)      — Set (or array) of item ids: only those items are drawn (export subsets);
+ *   background     (both)      — css colour under the drawing, or false for none (transparent export);
+ *                                default: the theme's sheet / board background;
+ *   frame          (schematic) — false skips the page frame (subset exports);
+ *   ratsnest       (board)     — [{net, name, a: [x, y], b: [x, y]}] (mm): unrouted connections drawn like
+ *                                RATSNEST_VIEW_ITEM — LAYER_RATSNEST rgba(0,248,255,0.35), 0.5 device px
+ *                                hairlines, above copper and holes, below the user layers, markers and the
+ *                                selection; a line whose ends coincide becomes the 0.2 mm cross.  With
+ *                                netColors the line takes the net's colour;
+ *   ratsnestNets   (board)     — Set of net numbers: only those nets' lines are drawn (local ratsnest);
+ *   markers        (both)      — [{x, y, severity: "error"|"warning"|"exclusion", text}]: DRC / ERC markers as
+ *                                MARKER_BASE::ShapeToPolygon's arrow flag — the MarkerShapeCorners scaled by
+ *                                0.1625 mm / √(KiCad zoom factor) on boards (PCB_MARKER::SetZoom) and by a
+ *                                constant 0.15 mm on schematics — filled in LAYER_DRC_ERROR/WARNING/EXCLUSION
+ *                                or LAYER_ERC_ERR/WARN/EXCLUSION, on top of everything but the selection;
+ *                                board markers get the LAYER_MARKER_SHADOWS outline (background @ 0.5, one
+ *                                scale unit wide).  markerAt() / markerScale() serve hover look-ups;
+ *   netNames       (board)     — net names on tracks per PCB_PAINTER::renderNetNameForSegment: glyph size
+ *                                0.55 × track width, pen width/12, centred and rotated along the segment
+ *                                (angle normalised to (−90°, 90°]), one label per viewport-width of track,
+ *                                skipped when the segment is shorter than width × characters or when the
+ *                                track is thinner than 4 mm at KiCad zoom 1 (≈ 14 px) on screen
+ *                                (PCB_TRACK::ViewGetLOD); the label is NETNAMES_LAYER_ID_START white @ 0.7,
+ *                                inverted on bright copper.  Via names per PCB_PAINTER::draw(PCB_VIA):
+ *                                size = min(via, 10 mm), text = min(1.5·size / max(chars, 3 | 6), size) × 0.75
+ *                                in LAYER_VIA_NETNAMES rgba(50,50,50,0.9), once the via is ≥ 10 mm at zoom 1
+ *                                on screen; blind / micro vias add their "top-bottom" layer pair above the
+ *                                name.  Pad numbers and pad net names are unaffected (always drawn);
+ *   netColors      (board)     — Map net number → css colour (NET_COLOR_MODE::ALL): tracks, vias, pads and
+ *                                zone fills on copper take the net's colour; netclass colours are resolved
+ *                                to nets by the caller;
+ *   zoneFill       (board)     — fill preview for zones that have no (filled_polygon …) yet: the outline
+ *                                filled in the layer colour at KiCad's zone opacity (0.6, "board.opacity.zones")
+ *                                minus a clearance ring — (connect_pads (clearance c)), 0.5 mm default —
+ *                                around other-net pads, tracks, vias and NPTH holes on the zone's layer,
+ *                                cut with destination-out on an offscreen canvas (KiCadCanvas.createCanvas);
+ *                                visual only, nothing is written to the document.  Zones that carry
+ *                                filled_polygon keep their rendering.  Not modelled: thermal reliefs,
+ *                                min_thickness insets, board-edge clearance and zone priorities;
+ *   flip           (board)     — KiCad's Flip Board View: X mirrored about the board bbox centre; flipX() /
+ *                                unflipX() map pointer coordinates and setViewTransform(ctx, view, doc)
+ *                                puts overlays into the same space.  Following PCB_PAINTER, text on
+ *                                side-specific layers (F.* / B.*) mirrors with the board (back text becomes
+ *                                readable), text on the other layers keeps its box but is re-mirrored to stay
+ *                                readable; pad labels and net names are always kept readable;
+ *   padNumbers     (board)     — default true; false hides the pad numbers (pad net names stay);
+ *   showHiddenText (board)     — draw the hidden fp_text / properties (kept in item.hiddenGeom, tagged
+ *                                hiddenText, outside the hit boxes) at HIDDEN_TEXT_ALPHA; KiCad has no
+ *                                painter rule for this (this version dropped LAYER_HIDDEN_TEXT).
+ * Stroke styles: geometry with dashType (dash | dot | dash_dot | dash_dot_dot, from (stroke (type …))) is
+ * dashed per STROKE_PARAMS::Stroke with KiCad's ISO 128-2 ratios — dash 11 w, gap 4 w, dot 0.2 w of the drawn
+ * line width.  Knockout text (knockout on the geometry) fills its inflated box in the layer colour and
+ * cuts the glyphs out in the background colour.
  */
-const HC_DIM = 0.2, HL_DIM = 0.25;
-const HL_CACHE = new Map();
+const HC_DIM = 0.2, HL_DIM = 0.25, HIDDEN_TEXT_ALPHA = 0.5;
+const ZONE_OPACITY = 0.6;                                        // PCB_DISPLAY_OPTIONS::m_ZoneOpacity ("board.opacity.zones")
+const RATSNEST_COLOR = "rgba(0,248,255,0.35)", RATSNEST_PX = 0.5, RATSNEST_CROSS = 0.2;   // LAYER_RATSNEST, m_RatsnestThickness, CROSS_SIZE
+const MARKER_CORNERS = [[0, 0], [8, 1], [4, 3], [13, 8], [9, 9], [8, 13], [3, 4], [1, 8]];   // MARKER_BASE::MarkerShapeCorners
+const MARKER_SCALE = { pcb: 0.1625, sch: 0.15 };                 // PCB_MARKER / SCH_MARKER SCALING_FACTOR (mm)
+const MARKER_COLORS = {
+  pcb: { error: "rgba(215,91,107,0.8)", warning: "rgba(255,208,66,0.8)", exclusion: "rgba(255,255,255,0.8)" },   // LAYER_DRC_*
+  sch: { error: "rgba(230,9,13,0.8)", warning: "rgba(209,146,0,0.8)", exclusion: "rgba(194,194,194,0.8)" },      // LAYER_ERC_*
+};
+const PX_PER_MM_ZOOM1 = 91 * 1e6 * 1e-9 / 0.0254;                // GAL world scale at zoom factor 1: screen DPI (ADVANCED_CFG 91) × 1 nm in inches, per mm
+const TRACK_NETNAME_MM = 4, VIA_NETNAME_MM = 10;                 // PCB_TRACK / PCB_VIA::ViewGetLOD netname thresholds
+const VIA_NETNAME_COLOR = "rgba(50,50,50,0.9)", TRACK_NETNAME_LIGHT = "rgba(255,255,255,0.7)", TRACK_NETNAME_DARK = "rgba(0,0,0,0.7)";
+const SIDE_SPECIFIC = /^(F|B)\./;                                // LSET::SideSpecificMask: the front / back layers
+const HL_CACHE = new Map(), NETNAME_COLOR_CACHE = new Map();
 /** COLOR4D::Brightened(f): every channel c → c·(1−f) + f */
 function brightened(c, f) { const [r, g, b, a] = parseColor(c); const k = (v) => Math.round(v * (1 - f) + 255 * f); return rgba(k(r), k(g), k(b), a); }
 /** The colour of a highlighted item: the board brightens its own colour by the highlight factor (0.5); eeschema paints LAYER_BRIGHTENED. */
@@ -1607,23 +1751,74 @@ function highlightColor(c, isPcb) {
 }
 /** Fills of a highlighted schematic item: background-layer fills go translucent (SCH_PAINTER: alpha 0.2), the rest take the highlight colour. */
 function highlightFill(g) { return g.z !== undefined && g.z < 0 ? "rgba(255,0,255,0.2)" : SCH.brightened; }
+/** Track net-name colour for a copper colour: NETNAMES_LAYER_ID_START, inverted when the copper's brightness is above 0.5 (PCB_RENDER_SETTINGS::LoadColors). */
+function trackNameColor(copper) {
+  let v = NETNAME_COLOR_CACHE.get(copper);
+  if (!v) { const [r, g, b] = parseColor(copper); v = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? TRACK_NETNAME_DARK : TRACK_NETNAME_LIGHT; NETNAME_COLOR_CACHE.set(copper, v); }
+  return v;
+}
+/** STROKE_PARAMS::Stroke dash pattern (mm) for a drawn line width: dash 11 w, gap 4 w, dot 0.2 w (ISO 128-2 ratios 12 / 3, correction 1). */
+function dashPattern(type, w) {
+  const dash = 11 * w, gap = 4 * w, dot = 0.2 * w;
+  if (type === "dot") return [dot, gap];
+  if (type === "dash_dot") return [dash, gap, dot, gap];
+  if (type === "dash_dot_dot") return [dash, gap, dot, gap, dot, gap];
+  return [dash, gap];
+}
+/** KiCad's zoom factor for a view: css px per mm over the GAL's px per mm at zoom 1. */
+function zoomFactor(view) { return (view.ppm * view.zoom) / PX_PER_MM_ZOOM1; }
+/** Marker shape scale (mm per corner unit): boards shrink with √zoom (PCB_MARKER::SetZoom), schematics are fixed. */
+function markerScale(docType, view) { return docType === "sch" || !view ? MARKER_SCALE[docType === "sch" ? "sch" : "pcb"] : MARKER_SCALE.pcb / Math.sqrt(Math.max(zoomFactor(view), 1e-9)); }
+/** The mirror axis of the flipped board view: the board bbox centre. */
+function flipCentre(doc) { const b = doc && doc.bbox; return b ? (b[0] + b[2]) / 2 : 0; }
+/** Document x → x as drawn in the flipped view (an involution: unflipX is the same map, exported for clarity). */
+function flipX(doc, x) { return 2 * flipCentre(doc) - x; }
+function unflipX(doc, x) { return 2 * flipCentre(doc) - x; }
+/** Canvas factory for offscreen work (zone previews, renderPng); replace KiCadCanvas.createCanvas to inject one (tests). */
+function defaultCreateCanvas(w, h) {
+  if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(w, h);
+  if (typeof document !== "undefined" && document.createElement) { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; }
+  return null;
+}
+const makeCanvas = (w, h) => ((root.KiCadCanvas && root.KiCadCanvas.createCanvas) || defaultCreateCanvas)(w, h);
+let SCRATCH = null;   // offscreen canvas reused by the zone previews
+function scratchCanvas(w, h) {
+  if (!SCRATCH) { SCRATCH = makeCanvas(w, h); if (!SCRATCH) return null; }
+  if (SCRATCH.width !== w || SCRATCH.height !== h) { SCRATCH.width = w; SCRATCH.height = h; }
+  return SCRATCH;
+}
+const BUCKETS = new Map(), NAME_BUCKETS = new Map();   // z → geometry, reused frame to frame (cleared, never reallocated)
+const ZS = [];
+function bucket(map, z) { let arr = map.get(z); if (!arr) { arr = []; map.set(z, arr); } return arr; }
 function render(doc, ctx, view, opts) {
   opts = opts || {}; const hidden = opts.hidden || new Set();
   const isPcb = doc.type === "pcb";
   const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;
+  const showHiddenText = isPcb && !!opts.showHiddenText, padNumbers = opts.padNumbers !== false;
   const sketchPads = isPcb && !!opts.outlinePads, sketchTracks = isPcb && !!opts.outlineTracks, sketchVias = isPcb && !!opts.outlineVias;
   const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
   const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
   const hlGeoms = hl ? new Set() : null;   // geometry of the highlighted items
   const hlColor = (c) => highlightColor(c, isPcb);
+  const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
+  const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
+  const netNames = isPcb && !!opts.netNames, zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
+  const rats = isPcb && opts.ratsnest && opts.ratsnest.length ? opts.ratsnest : null, ratsNets = opts.ratsnestNets || null;
+  const markers = opts.markers && opts.markers.length ? opts.markers : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
+  const sCss = view.ppm * view.zoom;                    // css px per mm (KiCad's LOD rules work in logical pixels)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = doc.type === "sch" ? SCH.bg : PCB_BG; ctx.fillRect(0, 0, W, H);
+  const bg = opts.background === undefined ? (doc.type === "sch" ? SCH.bg : PCB_BG) : opts.background;
+  if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); } else if (typeof ctx.clearRect === "function") ctx.clearRect(0, 0, W, H);
   const tx = view.panX * dpr - view.x0 * s, ty = view.panY * dpr - view.y0 * s;
-  ctx.setTransform(s, 0, 0, s, tx, ty);
-  const vx0 = -tx / s, vy0 = -ty / s, vx1 = vx0 + W / s, vy1 = vy0 + H / s;   // visible mm rect
-  // grid (dots), thinned so dots stay >= 9 device px apart
+  // base transform (document mm → device px); the flipped view mirrors X about the board centre
+  const cx = flip ? flipCentre(doc) : 0;
+  const A = flip ? -s : s, E = flip ? tx + 2 * cx * s : tx;
+  ctx.setTransform(A, 0, 0, s, E, ty);
+  const dx0 = -E / A, dx1 = (W - E) / A;
+  const vx0 = Math.min(dx0, dx1), vx1 = Math.max(dx0, dx1), vy0 = -ty / s, vy1 = vy0 + H / s;   // visible mm rect
+  // grid (dots), thinned so dots stay >= 9 device px apart; one path, one fill
   if (opts.grid > 0) {
     let pitch = opts.grid; const mult = [1, 2, 5, 10, 20, 50, 100];
     let m = 0; while (pitch * mult[m] * s < 9 && m < mult.length - 1) m++;
@@ -1632,30 +1827,51 @@ function render(doc, ctx, view, opts) {
     const nx = Math.ceil((vx1 - gx0) / pitch), ny = Math.ceil((vy1 - gy0) / pitch);
     if (nx * ny < 80000) {
       ctx.fillStyle = doc.type === "sch" ? SCH.grid : PCB_GRID; const d = Math.max(1, dpr) / s;
-      for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) ctx.fillRect(gx0 + i * pitch - d / 2, gy0 + j * pitch - d / 2, d, d);
+      ctx.beginPath();
+      for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) ctx.rect(gx0 + i * pitch - d / 2, gy0 + j * pitch - d / 2, d, d);
+      ctx.fill();
     }
   }
   // page frame for schematics
-  if (doc.type === "sch") { ctx.strokeStyle = SCH.frame; ctx.lineWidth = Math.max(0.15, 1 / s); ctx.strokeRect(0, 0, doc.page[0], doc.page[1]); }
-  // collect visible geometry
-  const buckets = new Map();
+  if (doc.type === "sch" && opts.frame !== false) { ctx.strokeStyle = SCH.frame; ctx.lineWidth = Math.max(0.15, 1 / s); ctx.strokeRect(0, 0, doc.page[0], doc.page[1]); }
+  // collect visible geometry into the z buckets (arrays reused across frames)
+  for (const arr of BUCKETS.values()) arr.length = 0;
+  for (const arr of NAME_BUCKETS.values()) arr.length = 0;
+  const obstacles = zoneFill ? [] : null, previews = zoneFill ? [] : null;
+  const copperZ = isPcb ? (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]) : null;
+  const zHoles = isPcb ? pcbZ("holes") : 0, zRats = zHoles + 2, zViaName = zHoles + 1.5;
   for (const it of doc.items.values()) {
+    if (ids && !ids.has(it.id)) continue;
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
     for (const g of it.geom) {
       if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
+      if (!padNumbers && g.padNum) continue;
       const z = g.z === undefined ? 0 : g.z;
-      let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
+      bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
+      if (netNames && g.net > 0) {
+        if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5).push(g);
+        else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
+      }
+      if (zoneFill) {
+        if (g.zoneUnfilled) previews.push(g);
+        else if (g.track || (g.via && !g.hole && (g.viaType !== "through" || g.viaLabel)) || g.npth || (g.pad && !g.hole && g.t !== "text")) obstacles.push(g);   // a through via cuts every layer once (its label ring stands for it)
+      }
     }
-    if (showHiddenPins && it.hiddenGeom) for (const g of it.hiddenGeom) {
-      if (hidden.has(g.layer)) continue;
+    if (it.hiddenGeom && (showHiddenPins || showHiddenText)) for (const g of it.hiddenGeom) {
+      if (hidden.has(g.layer) || (g.hiddenText ? !showHiddenText : !showHiddenPins)) continue;
       const z = g.z === undefined ? 0 : g.z;
-      let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g);
+      bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
     }
   }
-  const zs = Array.from(buckets.keys()).sort((a, b) => a - b);
+  ZS.length = 0;
+  for (const [z, arr] of BUCKETS) if (arr.length) ZS.push(z);
+  for (const [z, arr] of NAME_BUCKETS) if (arr.length && !BUCKETS.has(z)) ZS.push(z);
+  if (rats) ZS.push(zRats);
+  if (previews && previews.length) { previews.sort((a, b) => a.z - b.z); for (const g of previews) { const z = g.z - 1.5 - 0.01; if (ZS.indexOf(z) < 0) ZS.push(z); } }
+  ZS.sort((a, b) => a - b);
   const minW = Math.max(1, dpr) / s;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
   let curStroke = null, curFill = null, curWidth = -1, curAlpha = -1, curCap = "round";
@@ -1666,15 +1882,24 @@ function render(doc, ctx, view, opts) {
   const setCap = (c) => { if (c !== curCap) { ctx.lineCap = c; curCap = c; } };
   const strokeG = (g) => { const p = pathOf(g); if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); } };
   const fillG = (g) => { const p = pathOf(g); if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } };
-  for (const z of zs) {
-    for (const g of buckets.get(z)) {
+  const base = [A, 0, 0, s, E, ty]; const viewRect = [vx0, vy0, vx1, vy1];
+  const dirty = () => { curStroke = curFill = null; curWidth = -1; curCap = "round"; curAlpha = -1; };
+  let ratsDone = !rats, previewIdx = 0;
+  for (const z of ZS) {
+    // overlay passes that sit at this depth
+    if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
+    if (previews) while (previewIdx < previews.length && previews[previewIdx].z - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1)); dirty(); }
+    const arr = BUCKETS.get(z);
+    if (arr) for (const g of arr) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
       if (hcLayer && g.layer !== hcLayer && g.layer !== "holes") alpha *= HC_DIM;
+      if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
+      if (netColors && g.net > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net); if (nc) { color = nc; if (fill) fill = nc; } }
       if (hl) { if (hlGeoms.has(g)) { color = hlColor(color); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); } else alpha *= HL_DIM; }
       setAlpha(alpha);
       const t = g.t;
-      if (t === "text") { drawText(ctx, g, s, doc.type, minW, color); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
+      if (t === "text") { drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
       if (t === "image") {
         const e = g.entry;
         if (e && e.loaded && !e.failed && e.img && typeof ctx.drawImage === "function") {
@@ -1697,26 +1922,167 @@ function render(doc, ctx, view, opts) {
       if (sketchTracks && g.track) { setStroke(color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); continue; }
       if (t === "rect") {
         if (fill) { setFill(fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
-        if (!g.noStroke) { setStroke(color); setWidth(Math.max(g.wd || 0, minW)); ctx.strokeRect(g.x, g.y, g.w, g.h); }
+        if (!g.noStroke) {
+          setStroke(color); const lw = Math.max(g.wd || 0, minW); setWidth(lw);
+          if (g.dash) ctx.setLineDash(dashPattern(g.dashType, lw));
+          ctx.strokeRect(g.x, g.y, g.w, g.h);
+          if (g.dash) ctx.setLineDash([]);
+        }
         continue;
       }
       if (t === "poly" && g.pts.length < 2) continue;
       if (fill) { setFill(fill); fillG(g); }
       if (g.noStroke) continue;
       if (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !fill)) || (t === "circle" && (g.w > 0 || !fill)) || (t === "pad" && !fill)) {
-        setStroke(color); setWidth(Math.max(g.w, minW)); setCap(g.cap || (t === "poly" || t === "line" ? "round" : "butt"));
-        if (g.dash) ctx.setLineDash([0.4, 0.3]);
+        setStroke(color); const lw = Math.max(g.w, minW); setWidth(lw); setCap(g.cap || (t === "poly" || t === "line" ? "round" : "butt"));
+        if (g.dash) ctx.setLineDash(dashPattern(g.dashType, lw));
         strokeG(g);
         if (g.dash) ctx.setLineDash([]);
       }
     }
+    const names = NAME_BUCKETS.get(z);
+    if (names && names.length) {
+      for (const g of names) {
+        let alpha = 1; if (hcLayer && g.layer !== hcLayer) continue;   // PCB_TRACK::ViewGetLOD: no names on dimmed tracks
+        if (hl && !hlGeoms.has(g)) alpha *= HL_DIM;
+        setAlpha(alpha);
+        if (g.track) drawTrackName(ctx, g, doc, s, sCss, viewRect, base, flip); else drawViaName(ctx, g, doc, s, sCss, base, flip);
+      }
+      dirty();
+    }
   }
+  if (!ratsDone) { drawRatsnest(ctx, rats, ratsNets, netColors, s, dpr, viewRect); }
+  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1)); }
   ctx.globalAlpha = 1;
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
   if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
+  // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
+  if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
   // selection: KiCad's selection shadow — a translucent halo around the item's own geometry
   if (opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+/** RATSNEST_VIEW_ITEM::ViewDraw: hairlines in LAYER_RATSNEST (or the net colour), a cross where both ends coincide. */
+function drawRatsnest(ctx, lines, nets, netColors, s, dpr, vr) {
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.lineWidth = RATSNEST_PX * Math.max(1, dpr) / s;
+  let cur = null; const c = RATSNEST_CROSS;
+  const flush = () => { if (cur !== null) ctx.stroke(); };
+  for (const l of lines) {
+    if (nets && !nets.has(l.net)) continue;
+    const a = l.a, b = l.b; if (!a || !b) continue;
+    if (Math.max(a[0], b[0]) < vr[0] - c || Math.min(a[0], b[0]) > vr[2] + c || Math.max(a[1], b[1]) < vr[1] - c || Math.min(a[1], b[1]) > vr[3] + c) continue;
+    const color = (netColors && netColors.get(l.net)) || RATSNEST_COLOR;
+    if (color !== cur) { flush(); ctx.strokeStyle = color; ctx.beginPath(); cur = color; }
+    if (a[0] === b[0] && a[1] === b[1]) { ctx.moveTo(a[0] - c, a[1] - c); ctx.lineTo(a[0] + c, a[1] + c); ctx.moveTo(a[0] - c, a[1] + c); ctx.lineTo(a[0] + c, a[1] - c); }
+    else { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  }
+  flush(); ctx.restore();
+}
+/** MARKER_BASE::ShapeToPolygon at a position: the corners × scale (mm), closed. */
+function markerPolygon(m, scale) { return MARKER_CORNERS.map(([px, py]) => [m.x + px * scale, m.y + py * scale]); }
+function drawMarkers(ctx, markers, docType, scale, bg) {
+  const colors = MARKER_COLORS[docType === "sch" ? "sch" : "pcb"];
+  const [br, bgc, bb] = parseColor(bg); const shadow = rgba(br, bgc, bb, 0.5);   // LAYER_MARKER_SHADOWS = background @ 0.5
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineJoin = "round";
+  for (const m of markers) {
+    if (!m || !isFinite(m.x) || !isFinite(m.y)) continue;
+    ctx.beginPath();
+    for (let i = 0; i < MARKER_CORNERS.length; i++) { const px = m.x + MARKER_CORNERS[i][0] * scale, py = m.y + MARKER_CORNERS[i][1] * scale; if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
+    ctx.closePath();
+    if (docType !== "sch") { ctx.strokeStyle = shadow; ctx.lineWidth = scale; ctx.stroke(); }
+    ctx.fillStyle = colors[m.severity] || colors.error; ctx.fill();
+  }
+  ctx.restore();
+}
+/** The first marker whose flag (at `scale` mm per unit, default the board's base scale) covers (x, y) within tolMm, or null. */
+function markerAt(markers, x, y, tolMm, scale) {
+  if (!markers) return null; tolMm = tolMm || 0; scale = scale || MARKER_SCALE.pcb;
+  for (const m of markers) {
+    if (!m || !isFinite(m.x) || !isFinite(m.y)) continue;
+    const x0 = m.x - tolMm, y0 = m.y - tolMm, x1 = m.x + 13 * scale + tolMm, y1 = m.y + 13 * scale + tolMm;
+    if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    if (tolMm > 0 || pointInPoly(markerPolygon(m, scale), x, y)) return m;
+  }
+  return null;
+}
+/** One net-name label: KiCad's glyph size is the cap height here too; the label is always kept readable (re-mirrored under flip). */
+function drawLabel(ctx, x, y, text, size, rot, color, pen, base, flip) {
+  const a = -(rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a); const mx = flip ? -1 : 1;
+  ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * x + base[4], base[3] * y + base[5]);
+  let font = FONT_CACHE.get(size); if (!font) { font = `${size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(size, font); }
+  ctx.font = font; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = color;
+  ctx.fillText(text, 0, size / 2);
+  ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
+}
+/** PCB_PAINTER::renderNetNameForSegment for a track segment / arc geometry. */
+function drawTrackName(ctx, g, doc, s, sCss, vr, base, flip) {
+  const name = doc.nets.get(g.net); if (!name) return;
+  const width = g.w || 0; if (width * sCss < TRACK_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 4 mm at zoom 1
+  const chars = name.length; const size = width * 0.55, pen = width / 12; const color = trackNameColor(g.color);
+  const vw = vr[2] - vr[0], vh = vr[3] - vr[1];
+  if (g.t === "line") {
+    const dx = g.x2 - g.x1, dy = g.y2 - g.y1; const len = Math.hypot(dx, dy); if (len < width * chars || len < 1e-9) return;
+    let rot, n;
+    if (dy === 0) { rot = 0; n = Math.max(1, Math.round(len / vw)); }
+    else if (dx === 0) { rot = 90; n = Math.max(1, Math.round(len / vh)); }
+    else { rot = -Math.atan2(dy, dx) * 180 / Math.PI; while (rot > 90) rot -= 180; while (rot <= -90) rot += 180; n = Math.max(1, Math.round(len / (Math.SQRT2 * Math.min(vw, vh)))); }
+    for (let i = 1; i <= n; i++) {
+      const x = g.x1 + dx * i / (n + 1), y = g.y1 + dy * i / (n + 1);
+      if (x < vr[0] || x > vr[2] || y < vr[1] || y > vr[3]) continue;
+      drawLabel(ctx, x, y, name, size, rot, color, pen, base, flip);
+    }
+  } else if (g.t === "arc") {
+    let sweep = g.a1 - g.a0; if (!g.anticlockwise && sweep < 0) sweep += 2 * Math.PI; if (g.anticlockwise && sweep > 0) sweep -= 2 * Math.PI;
+    if (Math.abs(sweep) * g.r < width * chars) return;
+    const am = g.a0 + sweep / 2; const x = g.x + g.r * Math.cos(am), y = g.y + g.r * Math.sin(am);
+    if (x < vr[0] || x > vr[2] || y < vr[1] || y > vr[3]) return;
+    let rot = -(am * 180 / Math.PI + 90); while (rot > 90) rot -= 180; while (rot <= -90) rot += 180;   // tangent at the mid point
+    drawLabel(ctx, x, y, name, size, rot, color, pen, base, flip);
+  }
+}
+/** PCB_PAINTER::draw(PCB_VIA) netname layer: the net name (and the layer pair of blind / micro vias) centred on the via. */
+function drawViaName(ctx, g, doc, s, sCss, base, flip) {
+  const name = doc.nets.get(g.net) || ""; const showLayers = g.viaType && g.viaType !== "through";
+  if (!name && !showLayers) return;
+  if (g.viaSize * sCss < VIA_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 10 mm at zoom 1
+  const size = Math.min(g.viaSize, 10);
+  let tsize = Math.min(1.5 * size / Math.max(name.length, showLayers ? 6 : 3), size) * 0.75;
+  const both = showLayers && !!name; const dy = both ? tsize * 1.3 / 2 : 0;
+  if (name) drawLabel(ctx, g.x, g.y + dy, name, tsize, 0, VIA_NETNAME_COLOR, tsize / 10, base, flip);
+  if (showLayers) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const idx = (l) => { const i = copper.indexOf(l); return i < 0 ? 1 : i + 1; };
+    drawLabel(ctx, g.x, g.y - (both ? dy + tsize * 0.15 : 0), idx(g.viaLayers[0]) + "-" + idx(g.viaLayers[1]), tsize, 0, VIA_NETNAME_COLOR, tsize / 10, base, flip);
+  }
+}
+/**
+ * Fill preview of one unfilled zone outline: the polygon at the zone opacity minus a clearance ring around
+ * every other-net obstacle on its layer (pads: the shape inflated by the clearance; tracks: width + 2·clearance;
+ * vias / NPTH holes: radius + clearance), cut with destination-out on the scratch canvas, then composited.
+ */
+function drawZonePreview(ctx, g, obstacles, base, W, H, minW, netColors, alphaMul) {
+  if (!g.pts || g.pts.length < 3) return;
+  const layer = g.layer, net = g.net, c = g.zoneClearance || 0; const alpha = ZONE_OPACITY * (alphaMul === undefined ? 1 : alphaMul);
+  const color = (netColors && net > 0 && netColors.get(net)) || g.color;
+  const off = scratchCanvas(W, H); const octx = off ? off.getContext("2d") : null;
+  const target = octx || ctx;
+  if (octx) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, W, H); octx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); octx.globalAlpha = 1; }
+  else { ctx.save(); ctx.globalAlpha = alpha; }   // no offscreen canvas (headless): the rings cut through to the page — a degraded fallback
+  target.setLineDash([]); target.lineJoin = "round"; target.lineCap = "round";
+  target.fillStyle = color; target.beginPath(); tracePath(target, g); target.fill();
+  target.globalCompositeOperation = "destination-out"; target.fillStyle = "#000"; target.strokeStyle = "#000";
+  for (const o of obstacles) {
+    if (o.net === net && !(o.npth)) continue;
+    const onLayer = o.layer === layer || (o.via && o.viaType === "through") || o.npth;
+    if (!onLayer) continue;
+    if (o.track) { target.lineWidth = (o.w || 0) + 2 * c; target.beginPath(); tracePath(target, o); target.stroke(); continue; }
+    if (o.via && o.t === "circle") { target.beginPath(); target.arc(o.x, o.y, o.r + c, 0, Math.PI * 2); target.fill(); continue; }
+    if (o.t === "poly" && o.pts.length < 2) continue;
+    target.beginPath(); tracePath(target, o); target.fill(); if (c > 0) { target.lineWidth = 2 * c; target.stroke(); }
+  }
+  target.globalCompositeOperation = "source-over";
+  if (octx) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = alpha; ctx.drawImage(off, 0, 0); ctx.restore(); }
+  else ctx.restore();
 }
 /** Outline of a track segment (stadium) or track arc (band with round caps) for the sketch display mode. */
 function traceTrackOutline(ctx, g) {
@@ -1774,40 +2140,243 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
   }
   ctx.restore();
 }
-/** One text run: KiCad's size is the cap height; the baseline sits size/2 below a "middle" anchor. */
-function drawText(ctx, g, s, docType, minW, colorOverride) {
+/**
+ * One text run: KiCad's size is the cap height; the baseline sits size/2 below a "middle" anchor.  The text's
+ * local frame (anchor, rotation, mirror) is composed with `base` (the document → device matrix) into a single
+ * setTransform.  Under the flipped board view, text that is not side-specific — and every pad label — is
+ * re-mirrored with its justification swapped so it stays readable inside the same (mirrored) box.
+ */
+function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bgColor) {
   const px = g.size * s; if (px < (g.minPx || 3)) return;
   const color = colorOverride || g.color;
-  ctx.save(); ctx.translate(g.x, g.y); if (g.rot) ctx.rotate(-g.rot * Math.PI / 180); if (g.mirror) ctx.scale(-1, 1);
-  let font = FONT_CACHE.get(g.size); if (!font) { font = `${g.size * FONT_EM}px ${FONT_FAMILY}`; FONT_CACHE.set(g.size, font); }
+  const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+  let mx = g.mirror ? -1 : 1, h = g.h;
+  if (flip && (g.padText || !SIDE_SPECIFIC.test(g.layer || ""))) { mx = -mx; h = flipH(h); }
+  if (base) ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
+  else { ctx.save(); ctx.translate(g.x, g.y); if (a) ctx.rotate(a); if (mx < 0) ctx.scale(-1, 1); }
+  let font = FONT_CACHE.get(g.size); if (!font) { font = `${g.size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(g.size, font); }
   ctx.font = font;
-  ctx.textAlign = g.h; ctx.textBaseline = "alphabetic";
-  const base = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
+  ctx.textAlign = h; ctx.textBaseline = "alphabetic";
+  const base0 = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
+  if (g.knockout) {
+    // PCB_TEXT knockout: the text box, inflated by GetKnockoutTextMargin, in the layer colour; the glyphs cut out in the background colour
+    const w = textWidth(g.text || "", g.size, g.w || 0), m = Math.max((g.w || 0) / 2, g.size / 9);
+    const x0 = h === "left" ? 0 : h === "right" ? -w : -w / 2;
+    ctx.fillStyle = color; ctx.fillRect(x0 - m, base0 - g.size - m, w + 2 * m, g.size + 2 * m);
+    ctx.fillStyle = bgColor || PCB_BG; ctx.fillText(g.text, 0, base0);
+    if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore();
+    return;
+  }
   ctx.fillStyle = color;
-  if (g.padText) { ctx.fillText(g.text, 0, base); ctx.restore(); return; }
+  if (g.padText) { ctx.fillText(g.text, 0, base0); if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore(); return; }
   // stroke-font thickness beyond a filled face's own stem (~0.13·size) reads as bold
   const extra = g.w - 0.13 * g.size;
-  if (extra > 0.01 && docType === "pcb") { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; ctx.strokeText(g.text, 0, base); }
-  ctx.fillText(g.text, 0, base);
+  if (extra > 0.01 && docType === "pcb") { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; ctx.strokeText(g.text, 0, base0); }
+  ctx.fillText(g.text, 0, base0);
   if (g.bars && ctx.measureText) {
     // overbar: KiCad draws it 1.23·size above the baseline with the text pen
-    const total = ctx.measureText(g.text).width; const shift = g.h === "center" ? -total / 2 : g.h === "right" ? -total : 0;
-    const y = base - g.size * 1.23; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = color; ctx.beginPath();
+    const total = ctx.measureText(g.text).width; const shift = h === "center" ? -total / 2 : h === "right" ? -total : 0;
+    const y = base0 - g.size * 1.23; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = color; ctx.beginPath();
     for (const [i0, i1] of g.bars) { const x0 = shift + ctx.measureText(g.text.slice(0, i0)).width, x1 = shift + ctx.measureText(g.text.slice(0, i1)).width; ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.stroke();
   }
-  ctx.restore();
+  if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore();
 }
-/** Put the canvas into document space (mm) for a given view — for tool overlays. */
-function setViewTransform(ctx, view) {
+/** Put the canvas into document space (mm) for a given view — for tool overlays; pass the document as `flipDoc` to match the flipped board view. */
+function setViewTransform(ctx, view, flipDoc) {
   const dpr = view.dpr || 1, s = view.ppm * view.zoom * dpr;
-  ctx.setTransform(s, 0, 0, s, view.panX * dpr - view.x0 * s, view.panY * dpr - view.y0 * s);
+  const tx = view.panX * dpr - view.x0 * s, ty = view.panY * dpr - view.y0 * s;
+  if (flipDoc) ctx.setTransform(-s, 0, 0, s, tx + 2 * flipCentre(flipDoc) * s, ty); else ctx.setTransform(s, 0, 0, s, tx, ty);
   return s;
 }
 function drawPad(ctx, g, minW) {
   ctx.beginPath(); tracePad(ctx, g);
   if (g.fill) { ctx.fillStyle = g.fill; ctx.fill(); }
   if (!g.fill || g.w === 0.1) { ctx.strokeStyle = g.color; ctx.lineWidth = Math.max(0.05, minW); ctx.stroke(); }
+}
+
+// ---------------------------------------------------------------- queries for the tools layer
+/** Union bbox [x0, y0, x1, y1] of the given item ids (Set or array), or null when none has a box — "zoom to selection". */
+function bboxOf(doc, ids) {
+  let b = null;
+  for (const id of ids || []) { const it = doc.items.get(id); if (it && it.bbox) b = boxUnion(b, it.bbox[0], it.bbox[1], it.bbox[2], it.bbox[3]); }
+  return b;
+}
+/** Does a pad geometry (world space) cover (x, y)?  Pad records use their rotated frame; polygon pads and custom primitives their outline. */
+function padGeomHit(g, x, y) {
+  if (g.t === "pad") {
+    const a = -g.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a); const dx = x - g.x, dy = y - g.y;
+    const lx = dx * c + dy * sn, ly = -dx * sn + dy * c; const w = g.w, h = g.h;
+    if (g.shape === "circle") return Math.hypot(lx, ly) <= Math.max(w, h) / 2;
+    if (Math.abs(lx) > w / 2 || Math.abs(ly) > h / 2) return false;
+    const r = g.shape === "oval" ? Math.min(w, h) / 2 : Math.min(g.rr || 0, w / 2, h / 2);
+    if (r <= 0) return true;
+    const qx = Math.max(Math.abs(lx) - (w / 2 - r), 0), qy = Math.max(Math.abs(ly) - (h / 2 - r), 0);
+    return Math.hypot(qx, qy) <= r;
+  }
+  if (g.t === "poly") return g.pts.length > 2 && pointInPoly(g.pts, x, y);
+  if (g.t === "circle") return Math.hypot(x - g.x, y - g.y) <= g.r;
+  return false;
+}
+/**
+ * The pad under (x, y) mm — the renderer's own world-space pad shapes (footprint transform applied):
+ * { item, index (among the footprint's pad nodes), pad (the node), number, net, netName, x, y } or null; the
+ * smallest covering pad wins.
+ */
+function padAt(doc, x, y) {
+  let best = null, bestArea = Infinity;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "footprint") continue;
+    const b = it.bbox; if (b && (x < b[0] || x > b[2] || y < b[1] || y > b[3])) continue;
+    for (const g of it.geom) {
+      if (!g.pad || g.hole || g.padIndex === undefined || g.t === "text" || !padGeomHit(g, x, y)) continue;
+      const area = g.t === "pad" ? g.w * g.h : g.t === "circle" ? Math.PI * g.r * g.r : polyArea(g.pts);
+      if (area >= bestArea) continue;
+      bestArea = area;
+      const cx = g.t === "poly" ? g.pts.reduce((a, p) => a + p[0], 0) / g.pts.length : g.x, cy = g.t === "poly" ? g.pts.reduce((a, p) => a + p[1], 0) / g.pts.length : g.y;
+      best = { item: it, index: g.padIndex, pad: kids(it.node, "pad")[g.padIndex] || null, number: g.padNumber, net: g.net, netName: g.netName, x: cx, y: cy };
+    }
+  }
+  return best;
+}
+function polyArea(pts) { let a = 0; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]; return Math.abs(a) / 2; }
+
+// ---------------------------------------------------------------- export (File → Plot / Export)
+const fmt = (v) => { const s = (+v).toFixed(4); return s.replace(/\.?0+$/, "") === "-0" ? "0" : s.replace(/\.?0+$/, "") || "0"; };
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** A canvas-path-shaped sink that builds an SVG path `d` string, so tracePath / tracePad serve both targets. */
+function SvgPath() { this.d = ""; this.cx = null; this.cy = null; this.sx = 0; this.sy = 0; }
+SvgPath.prototype.moveTo = function (x, y) { this.d += "M" + fmt(x) + " " + fmt(y); this.cx = this.sx = x; this.cy = this.sy = y; };
+SvgPath.prototype.lineTo = function (x, y) { if (this.cx === null) return this.moveTo(x, y); this.d += "L" + fmt(x) + " " + fmt(y); this.cx = x; this.cy = y; };
+SvgPath.prototype.closePath = function () { if (this.cx !== null) { this.d += "Z"; this.cx = this.sx; this.cy = this.sy; } };
+SvgPath.prototype.rect = function (x, y, w, h) { this.moveTo(x, y); this.lineTo(x + w, y); this.lineTo(x + w, y + h); this.lineTo(x, y + h); this.closePath(); };
+SvgPath.prototype.arc = function (x, y, r, a0, a1, acw) {
+  // canvas semantics: a line from the current point to the arc start, then the arc (clamped to one full turn)
+  const p0x = x + r * Math.cos(a0), p0y = y + r * Math.sin(a0);
+  if (this.cx === null) this.moveTo(p0x, p0y); else if (Math.hypot(this.cx - p0x, this.cy - p0y) > 1e-9) this.lineTo(p0x, p0y);
+  const TAU = 2 * Math.PI; let sweep;
+  if (!acw) { sweep = a1 - a0; sweep = sweep >= TAU ? TAU : ((sweep % TAU) + TAU) % TAU; }
+  else { sweep = a0 - a1; sweep = -(sweep >= TAU ? TAU : ((sweep % TAU) + TAU) % TAU); }
+  const sf = acw ? 0 : 1, rs = fmt(r);
+  if (Math.abs(sweep) >= TAU - 1e-9) {
+    const am = a0 + (acw ? -Math.PI : Math.PI);
+    this.d += "A" + rs + " " + rs + " 0 1 " + sf + " " + fmt(x + r * Math.cos(am)) + " " + fmt(y + r * Math.sin(am)) + "A" + rs + " " + rs + " 0 1 " + sf + " " + fmt(p0x) + " " + fmt(p0y);
+    this.cx = p0x; this.cy = p0y; return;
+  }
+  const p1x = x + r * Math.cos(a0 + sweep), p1y = y + r * Math.sin(a0 + sweep);
+  this.d += "A" + rs + " " + rs + " 0 " + (Math.abs(sweep) > Math.PI ? 1 : 0) + " " + sf + " " + fmt(p1x) + " " + fmt(p1y);
+  this.cx = p1x; this.cy = p1y;
+};
+/** One geometry record as SVG markup (same fill / stroke rules as the canvas painter), or "" when it draws nothing. */
+function svgGeom(g, hairline, isPcb, bg) {
+  const t = g.t; const sw = (w) => Math.max(w || 0, hairline);
+  const op = g.alpha !== undefined && g.alpha < 1 ? ` opacity="${fmt(g.alpha)}"` : "";
+  const dash = (w) => g.dash ? ` stroke-dasharray="${dashPattern(g.dashType, w).map(fmt).join(" ")}"` : "";
+  const cap = g.cap || (t === "poly" || t === "line" ? "round" : "butt");
+  const stroke = (w, color) => { const lw = sw(w); return ` stroke="${color || g.color}" stroke-width="${fmt(lw)}" stroke-linecap="${cap}"${dash(lw)}`; };
+  if (t === "text") {
+    if (!g.text) return "";
+    const size = g.size, base0 = g.v === "top" ? size : g.v === "bottom" ? 0 : size / 2;
+    const tr = `translate(${fmt(g.x)} ${fmt(g.y)})` + (g.rot ? ` rotate(${fmt(-g.rot)})` : "") + (g.mirror ? " scale(-1 1)" : "");
+    const anchor = g.h === "left" ? "start" : g.h === "right" ? "end" : "middle";
+    const pen = g.w || 0, extra = pen - 0.13 * size;
+    let color = g.color, pre = "";
+    if (g.knockout) {
+      const w = textWidth(g.text, size, pen), m = Math.max(pen / 2, size / 9); const x0 = g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2;
+      pre = `<rect x="${fmt(x0 - m)}" y="${fmt(base0 - size - m)}" width="${fmt(w + 2 * m)}" height="${fmt(size + 2 * m)}" fill="${g.color}"/>`; color = bg;
+    }
+    const bold = !g.knockout && !g.padText && extra > 0.01 && isPcb ? ` stroke="${color}" stroke-width="${fmt(extra)}" stroke-linejoin="round" paint-order="stroke"` : "";
+    let bars = "";
+    if (g.bars && g.bars.length) {
+      const total = textWidth(g.text, size, pen); const shift = g.h === "center" ? -total / 2 : g.h === "right" ? -total : 0; const y = base0 - size * 1.23;
+      let d = ""; for (const [i0, i1] of g.bars) d += `M${fmt(shift + textWidth(g.text.slice(0, i0), size, pen))} ${fmt(y)}L${fmt(shift + textWidth(g.text.slice(0, i1), size, pen))} ${fmt(y)}`;
+      bars = `<path d="${d}" fill="none" stroke="${color}" stroke-width="${fmt(Math.max(pen || size / 8, hairline))}"/>`;
+    }
+    return `<g transform="${tr}"${op}>${pre}<text y="${fmt(base0)}" font-family='${FONT_FAMILY}' font-size="${fmt(size * FONT_EM)}" text-anchor="${anchor}" fill="${color}"${bold}>${esc(g.text)}</text>${bars}</g>`;
+  }
+  if (t === "image") {
+    const e = g.entry; if (!e || !e.url) return "";
+    return `<image x="${fmt(g.x)}" y="${fmt(g.y)}" width="${fmt(g.w)}" height="${fmt(g.h)}" preserveAspectRatio="none" href="${e.url}"${op}/>`;
+  }
+  if (t === "rect") {
+    const fill = g.fill ? ` fill="${g.fill}"` : ' fill="none"';
+    return `<rect x="${fmt(g.x)}" y="${fmt(g.y)}" width="${fmt(g.w)}" height="${fmt(g.h)}"${fill}${g.noStroke ? "" : stroke(g.wd)}${op}/>`;
+  }
+  if (t === "line") return `<path d="M${fmt(g.x1)} ${fmt(g.y1)}L${fmt(g.x2)} ${fmt(g.y2)}" fill="none"${stroke(g.w)}${op}/>`;
+  if (t === "poly" && (!g.pts || g.pts.length < 2)) return "";
+  const p = new SvgPath(); tracePath(p, g);
+  const fill = g.fill ? ` fill="${g.fill}"` : ' fill="none"';
+  const stroked = !g.noStroke && (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !g.fill)) || (t === "circle" && (g.w > 0 || !g.fill)) || (t === "pad" && !g.fill));
+  if (t === "circle" && !g.pie) return `<circle cx="${fmt(g.x)}" cy="${fmt(g.y)}" r="${fmt(g.r)}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
+  return `<path d="${p.d}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
+}
+/** The export area: opts.bbox, else the union of opts.ids, else the board bbox / the sheet page; margin in mm. */
+function exportBox(doc, opts) {
+  const isPcb = doc.type === "pcb"; const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
+  let box = opts.bbox || (ids ? bboxOf(doc, ids) : null) || (isPcb ? doc.bbox : [0, 0, doc.page[0], doc.page[1]]) || [0, 0, 10, 10];
+  const margin = opts.margin !== undefined ? opts.margin : (opts.bbox ? 0 : (ids || isPcb ? 1 : 0));
+  return { ids, x0: box[0] - margin, y0: box[1] - margin, w: Math.max(box[2] - box[0] + 2 * margin, 1e-3), h: Math.max(box[3] - box[1] + 2 * margin, 1e-3) };
+}
+/**
+ * The document as an SVG string (mm user units, 1 mm = 1 unit, width/height in mm) built from the geometry records
+ * in draw order with KiCad's colours.  opts: ids (Set/array: only those items), bbox ([x0, y0, x1, y1] mm: the
+ * export area), margin (mm around the area; 1 mm for boards / subsets, 0 for a whole sheet), hidden (Set of
+ * layer keys, honoured like render), background (css or false; default the theme background), frame (schematic
+ * page frame; default only for whole sheets), zoneOutline, showHiddenPins, showHiddenText, padNumbers,
+ * hairline (mm, the width zero-width strokes get; 0.1).  Text is <text> with the same anchoring, rotation and
+ * mirroring as the canvas (board text keeps its mirror), images become data-URI <image>s.
+ */
+function renderSvg(doc, opts) {
+  opts = opts || {}; const isPcb = doc.type === "pcb"; const hidden = opts.hidden || new Set();
+  const { ids, x0, y0, w, h } = exportBox(doc, opts); const x1 = x0 + w, y1 = y0 + h;
+  const hairline = opts.hairline !== undefined ? opts.hairline : 0.1;
+  const bg = opts.background === undefined ? (isPcb ? PCB_BG : SCH.bg) : opts.background;
+  const out = [`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fmt(w)}mm" height="${fmt(h)}mm" viewBox="${fmt(x0)} ${fmt(y0)} ${fmt(w)} ${fmt(h)}" stroke-linejoin="round">`];
+  if (bg) out.push(`<rect x="${fmt(x0)}" y="${fmt(y0)}" width="${fmt(w)}" height="${fmt(h)}" fill="${bg}"/>`);
+  const frame = opts.frame !== undefined ? opts.frame : (!isPcb && !ids && !opts.bbox);
+  if (frame && !isPcb) out.push(`<rect x="0" y="0" width="${fmt(doc.page[0])}" height="${fmt(doc.page[1])}" fill="none" stroke="${SCH.frame}" stroke-width="0.15"/>`);
+  const buckets = new Map();
+  const take = (g) => { const z = g.z === undefined ? 0 : g.z; let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g); };
+  for (const it of doc.items.values()) {
+    if (ids && !ids.has(it.id)) continue;
+    const b = it.bbox; if (b && (b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1)) continue;
+    for (const g of it.geom) {
+      if (hidden.has(g.layer) || (opts.zoneOutline && g.zoneFill) || (opts.padNumbers === false && g.padNum)) continue;
+      take(g);
+    }
+    if (it.hiddenGeom) for (const g of it.hiddenGeom) { if (hidden.has(g.layer) || (g.hiddenText ? !opts.showHiddenText : !opts.showHiddenPins)) continue; take(g); }
+  }
+  const zs = Array.from(buckets.keys()).sort((a, b) => a - b);
+  for (const z of zs) for (const g of buckets.get(z)) {
+    if (g.hiddenText) { const s = svgGeom(g, hairline, isPcb, bg || PCB_BG); if (s) out.push(`<g opacity="${HIDDEN_TEXT_ALPHA}">` + s + "</g>"); continue; }
+    const s = svgGeom(g, hairline, isPcb, bg || PCB_BG); if (s) out.push(s);
+  }
+  out.push("</svg>");
+  return out.join("\n");
+}
+/**
+ * The document rasterised at opts.dpi (300) → Promise<Blob> (image/png) on an offscreen canvas (KiCadCanvas.createCanvas:
+ * OffscreenCanvas, else a DOM canvas).  Same area / subset / layer options as renderSvg plus every render() display
+ * option (flip, netNames, zoneFill, markers, …); the grid, selection and highlight are off.  opts.maxPixels (default
+ * 64 M) caps the raster.
+ */
+function renderPng(doc, opts) {
+  opts = opts || {}; const dpi = opts.dpi > 0 ? opts.dpi : 300; const ppm = dpi / 25.4;
+  const { x0, y0, w, h } = exportBox(doc, opts);
+  let W = Math.max(1, Math.ceil(w * ppm)), H = Math.max(1, Math.ceil(h * ppm));
+  const maxPixels = opts.maxPixels || 64e6;
+  if (W * H > maxPixels) return Promise.reject(new Error(`renderPng: ${W}×${H} exceeds ${maxPixels} pixels — lower the dpi`));
+  const canvas = makeCanvas(W, H);
+  if (!canvas) return Promise.reject(new Error("renderPng: no canvas available (OffscreenCanvas / document)"));
+  const ctx = canvas.getContext("2d"); if (!ctx) return Promise.reject(new Error("renderPng: no 2D context"));
+  const view = { ppm, zoom: 1, panX: 0, panY: 0, x0, y0, dpr: 1 };
+  const isPcb = doc.type === "pcb";
+  const ropts = Object.assign({}, opts, { grid: 0, selected: null, highlight: null, frame: opts.frame !== undefined ? opts.frame : (!isPcb && !opts.ids && !opts.bbox) });
+  render(doc, ctx, view, ropts);
+  const type = opts.type || "image/png";
+  if (typeof canvas.convertToBlob === "function") return canvas.convertToBlob({ type, quality: opts.quality });
+  if (typeof canvas.toBlob === "function") return new Promise((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error("renderPng: toBlob failed")), type, opts.quality));
+  return Promise.reject(new Error("renderPng: canvas cannot produce a blob"));
 }
 
 function serialize(node) {
@@ -1832,7 +2401,12 @@ root.KiCadCanvas = { parse, parseAll, serialize, serializeItem, parseDoc, setVie
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
   drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable,
-  fieldBoxes, fieldAt, pointInQuad,
+  fieldBoxes, fieldAt, pointInQuad, hitTestDetail, geomHit, geomBox,
   // exposed for tests and tools
-  symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf };
+  symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf,
+  // display-option helpers (see render()): ratsnest / marker / net-name / zone-preview / flip constants and look-ups
+  bboxOf, padAt, padGeomHit, markerAt, markerPolygon, markerScale, zoomFactor, flipX, unflipX, flipCentre, dashPattern, trackNameColor,
+  MARKER_CORNERS, MARKER_SCALE, MARKER_COLORS, RATSNEST_COLOR, ZONE_OPACITY, HIDDEN_TEXT_ALPHA, PX_PER_MM_ZOOM1, VIA_NETNAME_COLOR,
+  // export: SVG / PNG of the whole document or a subset; createCanvas is the offscreen-canvas factory (replaceable for tests / workers)
+  renderSvg, renderPng, SvgPath, createCanvas: defaultCreateCanvas, pointInPoly };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -1,0 +1,25 @@
+{
+  "name": "kicad-collab-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "React + TypeScript chrome for the KiCad Collaborative web editor (bundled into static/dist/ui.js)",
+  "scripts": {
+    "build": "esbuild web/main.tsx --bundle --minify --sourcemap --target=es2020 --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --outfile=static/dist/ui.js --legal-comments=none && tailwindcss -i web/styles/tailwind.css -o static/dist/ui.css --minify",
+    "dev": "esbuild web/main.tsx --bundle --sourcemap --target=es2020 --jsx=automatic --define:process.env.NODE_ENV=\\\"development\\\" --outfile=static/dist/ui.js --watch & tailwindcss -i web/styles/tailwind.css -o static/dist/ui.css --watch & wait",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "gen": "python3 scripts/gen_kicad_ui.py",
+    "test": "cd static && for t in render sch-tools pcb-tools props dialogs; do node tests/$t.test.js || exit 1; done"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.0"
+  }
+}

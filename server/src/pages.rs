@@ -118,7 +118,7 @@ fn asset_version() -> &'static str {
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
         let all = [include_str!("../static/app.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
-                   include_str!("../static/kicad-ui.js"), include_str!("../static/kicad-ui-spec.js"), include_str!("../static/kicad-dialogs.js"), include_str!("../static/app.html")];
+                   include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
@@ -136,9 +136,9 @@ pub async fn app_page() -> Html<String> {
             .replace("/static/sch-tools.js\"", &format!("/static/sch-tools.js?v={v}\""))
             .replace("/static/pcb-tools.js\"", &format!("/static/pcb-tools.js?v={v}\""))
             .replace("/static/props.js\"", &format!("/static/props.js?v={v}\""))
-            .replace("/static/kicad-ui.js\"", &format!("/static/kicad-ui.js?v={v}\""))
             .replace("/static/kicad-dialogs.js\"", &format!("/static/kicad-dialogs.js?v={v}\""))
-            .replace("/static/kicad-ui-spec.js\"", &format!("/static/kicad-ui-spec.js?v={v}\"")),
+            .replace("/static/dist/ui.js\"", &format!("/static/dist/ui.js?v={v}\""))
+            .replace("/static/dist/ui.css\"", &format!("/static/dist/ui.css?v={v}\"")),
     )
 }
 
@@ -157,9 +157,16 @@ fn js_response(body: &'static str) -> Response {
 pub async fn sch_tools_js() -> Response { js_response(include_str!("../static/sch-tools.js")) }
 pub async fn pcb_tools_js() -> Response { js_response(include_str!("../static/pcb-tools.js")) }
 pub async fn props_js() -> Response { js_response(include_str!("../static/props.js")) }
-pub async fn kicad_ui_js() -> Response { js_response(include_str!("../static/kicad-ui.js")) }
 pub async fn kicad_dialogs_js() -> Response { js_response(include_str!("../static/kicad-dialogs.js")) }
-pub async fn kicad_ui_spec_js() -> Response { js_response(include_str!("../static/kicad-ui-spec.js")) }
+// The React chrome (server/web, built by esbuild into static/dist — `npm run build`, also run by the
+// Dockerfile's node stage).  The bundle is committed so `cargo run` works without node.
+pub async fn ui_js() -> Response { js_response(include_str!("../static/dist/ui.js")) }
+pub async fn ui_css() -> Response {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/ui.css")).into_response()
+}
+pub async fn ui_js_map() -> Response {
+    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/ui.js.map")).into_response()
+}
 
 pub async fn app_js() -> Response {
     (
