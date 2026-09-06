@@ -285,7 +285,7 @@ function drawCanvas() {
     cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
     const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
     cctx.fillStyle = "rgba(102,178,255,0.35)"; cctx.strokeStyle = "#4D7FC4"; cctx.lineWidth = 1.5 * px;
-    for (const f of KiCadCanvas.fieldBoxes(it)) { if (f.name !== selField.name) continue; cctx.beginPath(); f.pts.forEach((q, i) => i ? cctx.lineTo(q[0], q[1]) : cctx.moveTo(q[0], q[1])); cctx.closePath(); cctx.fill(); cctx.stroke(); }
+    for (const f of KiCadCanvas.fieldBoxes(it, hiddenLayers)) { if (f.name !== selField.name) continue; cctx.beginPath(); f.pts.forEach((q, i) => i ? cctx.lineTo(q[0], q[1]) : cctx.moveTo(q[0], q[1])); cctx.closePath(); cctx.fill(); cctx.stroke(); }
     cctx.restore();
   }
 }
@@ -740,12 +740,13 @@ stage.addEventListener("dblclick", (ev) => {
   if (!kdoc || !window.KDialogs || (tool !== "select" && tool !== "highlight")) return;
   if (ev.target.closest("#cmtPanel") || ev.target.closest("[data-schtools]")) return;
   const [x, y] = worldMm(ev); const ctx = toolCtx();
-  const f = KiCadCanvas.fieldAt(kdoc, x, y);
-  if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
-  if (!isSch() && CollabTools.pcb && CollabTools.pcb.padAt && CollabTools.pcb.padProperties) {
-    let pad = null; try { pad = CollabTools.pcb.padAt(kdoc, x, y); } catch (e) { pad = null; }
-    if (pad && pad.item) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
+  if (!isSch() && CollabTools.pcb && CollabTools.pcb.padProperties) {       // a pad first: KiCad opens Pad Properties on a pad
+    let pad = null;
+    try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(kdoc, x, y) : null; if (!pad && CollabTools.pcb.padAt) pad = CollabTools.pcb.padAt(kdoc, x, y); } catch (e) { pad = null; }
+    if (pad && pad.item && pad.index !== undefined) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
   }
+  const f = KiCadCanvas.fieldAt(kdoc, x, y, hiddenLayers);
+  if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
   const best = nearestFootprint(x, y, 5 / Math.max(1, zoom * 0.6));
   if (best) { const it = kdoc.items.get(best.id); if (it) KDialogs.openItem(ctx, it); return; }
   if (isSch()) { const sh = sheets.find((r) => x >= r.x / IU && x <= (r.x + r.w) / IU && y >= r.y / IU && y <= (r.y + r.h) / IU); if (sh) { const it = kdoc.items.get(sh.id); if (it) { KDialogs.openItem(ctx, it); return; } } }
@@ -783,7 +784,7 @@ stage.addEventListener("pointerdown", (ev) => {
   const mod = activeModule();
   if (mod && moduleTool(tool) && mod.onPointerDown) { if (viewOnly && tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (tool === "select" && kdoc && !ev.shiftKey && window.KDialogs) {   // KiCad: a click on a field selects (and drags) the field, not its symbol
-    const f = KiCadCanvas.fieldAt(kdoc, x, y);
+    const f = KiCadCanvas.fieldAt(kdoc, x, y, hiddenLayers);
     if (f) {
       clearSelection(); selField = { id: f.item.id, name: f.name }; drawSelection(); renderProps(); renderObjects(); requestRender();
       const pn = fieldOf(f.item, f.name), at = pn && KiCadCanvas.kid(pn, "at");
@@ -979,7 +980,7 @@ function moveOp(fp, nx, ny) {
 function hitOpts() { return { hidden: hiddenLayers, side: !isSch() && activeLayer && /^B\./.test(activeLayer) ? "B" : "F" }; }
 let lastFpHit = null;   // {id, onGeom} of the latest nearestFootprint() call
 function nearestFootprint(x, y, radiusMm) {
-  if (kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; lastFpHit = KiCadCanvas.hitTestDetail(kdoc, x, y, Math.min(radiusMm, 0.5), hitOpts()); const id = lastFpHit ? lastFpHit.id : null; return id ? items.find((f2) => f2.id === id) || null : null; }
+  if (kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; lastFpHit = KiCadCanvas.hitTestDetail(kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = lastFpHit ? lastFpHit.id : null; return id ? items.find((f2) => f2.id === id) || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of items) { const d = Math.hypot(fp.x / IU - x, fp.y / IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
