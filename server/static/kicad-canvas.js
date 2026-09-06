@@ -717,7 +717,7 @@ function buildSymbolGeom(doc, item) {
     const [px, py, pr] = atOf(p);
     const isRef = name === "Reference", isVal = name === "Value";
     const color = col(isRef || isVal ? SCH.ref : SCH.field);
-    transformedText(item, Ti, px, py, val, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), alpha });
+    transformedText(item, Ti, px, py, val, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), alpha, field: name });
   }
   if (dnp) {
     // SCH_PAINTER: body box grown toward the pins, crossed at 3× the default line width
@@ -1058,7 +1058,8 @@ function buildFootprintGeom(doc, item) {
     if (!isList(kid(p, "at"))) return;
     const at = kid(p, "at"); const [px, py, pr] = atOf(p); const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS"); const [x, y] = tf(px, py);
     const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
-    pcbTextGeom(item, p, x, y, expand(text), pr, layer, { upright: !unlocked });
+    const field = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? (str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null) : null;
+    pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field } : { upright: !unlocked });
   };
   for (const p of kids(n, "property")) textAt(p, str(p[2]));
   for (let j = 2; j < n.length; j++) {
@@ -1473,6 +1474,38 @@ function wireEndsAt(doc, x, y, tol) {
   }
   return out;
 }
+/** Screen-space quads of an item's field texts (symbol / footprint properties): [{name, pts:[[x,y]×4], geom}] */
+function fieldBoxes(item) {
+  const out = [];
+  for (const g of item.geom || []) {
+    if (g.t !== "text" || !g.field) continue;
+    const w = textWidth(g.text || "", g.size, g.w), h = g.size, pad = 0.18 * g.size;
+    const lx0 = (g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2) - pad, lx1 = lx0 + w + 2 * pad;
+    const ly0 = (g.v === "top" ? 0 : g.v === "bottom" ? -h : -h / 2) - pad, ly1 = ly0 + h + 2 * pad;
+    const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
+    const P = (lx, ly) => [g.x + (lx * mx) * c - ly * sn, g.y + (lx * mx) * sn + ly * c];
+    out.push({ name: g.field, pts: [P(lx0, ly0), P(lx1, ly0), P(lx1, ly1), P(lx0, ly1)], geom: g });
+  }
+  return out;
+}
+function pointInQuad(pts, x, y) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+/** The field of any symbol / footprint under (x, y) mm, or null: {item, name, pts} */
+function fieldAt(doc, x, y) {
+  let best = null;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" && it.kind !== "footprint") continue;
+    const b = it.bbox; if (b && (x < b[0] - 5 || x > b[2] + 5 || y < b[1] - 5 || y > b[3] + 5)) continue;
+    for (const f of fieldBoxes(it)) if (pointInQuad(f.pts, x, y)) { const area = Math.abs((f.pts[1][0] - f.pts[0][0]) * (f.pts[3][1] - f.pts[0][1]) - (f.pts[3][0] - f.pts[0][0]) * (f.pts[1][1] - f.pts[0][1])); if (!best || area < best.area) best = { item: it, name: f.name, pts: f.pts, area }; }
+  }
+  return best;
+}
 function newUuid() { return (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); }); }
 /** Build a fresh item node of a kind and add it to the document. */
 function createItem(doc, node) { if (!uuidOf(node)) node.push(["uuid", newUuid()]); return addItem(doc, node); }
@@ -1799,6 +1832,7 @@ root.KiCadCanvas = { parse, parseAll, serialize, serializeItem, parseDoc, setVie
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
   drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable,
+  fieldBoxes, fieldAt, pointInQuad,
   // exposed for tests and tools
   symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf };
 })(typeof window !== "undefined" ? window : globalThis);
