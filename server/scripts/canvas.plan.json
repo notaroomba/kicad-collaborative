@@ -1,0 +1,24 @@
+{
+  "header": "kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).",
+  "nocheck": true,
+  "env": "env",
+  "default": "misc",
+  "modules": {
+    "geom-sch": ["^(buildSchGeom|buildLabelGeom|buildSheetGeom|buildSymbolGeom|buildPinGeom|labelFields|hierShape|spinText|SPIN|SPIN_ROT|SPIN_IDX|HIER_TPL|PIN_TEXT_OFFSET|pinHidden|symbolTransform|internalT|ORIENT|resolveLib|shapeGeom)$"],
+    "geom-pcb": ["^(buildPcbGeom|buildViaGeom|buildZoneGeom|hatchLines|graphicGeom|buildTextBoxGeom|buildDimensionGeom|buildFootprintGeom|padPolygon|buildPadGeom|pcbTextGeom|padCopperLayer|layerOf)$"]
+  },
+  "sections": [
+    { "from": 1, "to": 202, "module": "sexpr" },
+    { "from": 203, "to": 232, "module": "text" },
+    { "from": 233, "to": 305, "module": "colors" },
+    { "from": 306, "to": 366, "module": "doc" },
+    { "from": 367, "to": 1192, "module": "geom" },
+    { "from": 1193, "to": 1370, "module": "tables-images" },
+    { "from": 1371, "to": 1453, "module": "ops" },
+    { "from": 1454, "to": 1546, "module": "edit" },
+    { "from": 1547, "to": 1636, "module": "hit" },
+    { "from": 1637, "to": 2210, "module": "render" },
+    { "from": 2211, "to": 2256, "module": "hit" },
+    { "from": 2257, "to": 2411, "module": "export" }
+  ]
+}

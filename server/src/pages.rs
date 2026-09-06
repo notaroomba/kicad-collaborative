@@ -117,7 +117,7 @@ fn asset_version() -> &'static str {
     static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
-        let all = [include_str!("../static/app.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
+        let all = [include_str!("../static/dist/editor.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
                    include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
@@ -131,7 +131,7 @@ pub async fn app_page() -> Html<String> {
     let v = asset_version();
     Html(
         include_str!("../static/app.html")
-            .replace("/static/app.js\"", &format!("/static/app.js?v={v}\""))
+            .replace("/static/dist/editor.js\"", &format!("/static/dist/editor.js?v={v}\""))
             .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\""))
             .replace("/static/sch-tools.js\"", &format!("/static/sch-tools.js?v={v}\""))
             .replace("/static/pcb-tools.js\"", &format!("/static/pcb-tools.js?v={v}\""))
@@ -168,13 +168,9 @@ pub async fn ui_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/ui.js.map")).into_response()
 }
 
-pub async fn app_js() -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
-         (header::CACHE_CONTROL, "no-cache")],
-        include_str!("../static/app.js"),
-    )
-        .into_response()
+pub async fn editor_js() -> Response { js_response(include_str!("../static/dist/editor.js")) }
+pub async fn editor_js_map() -> Response {
+    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/editor.js.map")).into_response()
 }
 
 pub async fn index() -> Html<String> {
