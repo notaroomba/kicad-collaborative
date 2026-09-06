@@ -181,7 +181,7 @@
 <div id="app">
   <div id="ui-menubar"></div>
 
-  <!-- ===== Home: a project-manager window (rendered by app.js) ===== -->
+  <!-- ===== Home: a project-manager window (rendered by the editor bundle, web/editor) ===== -->
   <section id="home" class="view">
     <nav>
       <button data-nav="recent" class="active"><svg class="glyph" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Recent projects</button>
@@ -194,7 +194,7 @@
   </section>
 
   <!-- ===== Editor: KiCad's frame.  Toolbars, docks, menus, status bar and overlays are React
-       components in server/web (bundled into /static/dist/ui.js); only the stage is app.js's. ===== -->
+       components in server/web (bundled into /static/dist/ui.js); only the stage is the editor bundle's (web/editor). ===== -->
   <section id="editor" class="view">
     <div id="ui-tbTop"></div>
     <div id="ui-tbAux"></div>
@@ -223,7 +223,7 @@
 <script src="/static/sch-tools.js"></script>
 <script src="/static/pcb-tools.js"></script>
 <script src="/static/props.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/dist/editor.js"></script>
 <script src="/static/dist/ui.js"></script>
 </body>
 </html>

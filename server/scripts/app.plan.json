@@ -1,0 +1,86 @@
+{
+  "header": "editor \u2014 GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts \u2014 edit these modules, not the bundle).",
+  "nocheck": true,
+  "state": "E",
+  "stateModule": "state",
+  "expose": "CollabEditor",
+  "env": "env",
+  "default": "misc",
+  "index": {
+    "from": 1687,
+    "to": 99999
+  },
+  "bare": [],
+  "modules": {
+    "dom": [
+      "^(\\$|\\$\\$|NS)$"
+    ],
+    "util": [
+      "^(setRadio|esc|toast|ago|api|anchorRect|showPopover|closePopover|fmtLen|UNITS)$"
+    ],
+    "appstore": [
+      "^(KICAD_LAYERS|SCH_LAYERS|state|APP_TOOLS|store|setStatusBar|setToggles|setToggle|setGroupCurrent|RADIO)$"
+    ],
+    "home": [
+      "^(navigate|route|loadMe|showView|showHome|projectCard|renderHome|bindCards|openLink)$"
+    ],
+    "view": [
+      "^(stage|peersG|cmtPanel|mmW|isSch|canvas|requestRender|sizeCanvas|drawCanvas|applyView|contentBoxMm|fitView|fitBox|zoomBy|worldMm|pxPerMm|visibleRectNm|svgText|drawPeers|scheduleRenderRefresh)$"
+    ],
+    "doc": [
+      "^(docNav|GRID_CHOICES|layerRow|syncItemsFromDoc|setDocFromText|renderLayersFromDoc|setActiveLayer|setLayerVisible|bumpDoc|applyChanges|setupGridControls|updateGridStatus|setGridPitch|snapMm|tagLayers|renderLayers|fpName|renderObjects|selectItemAction|loadBase|rootSchematic|enterSheet|publishDocs|setDocNotice|leaveDoc|openDoc|openDocId|navigateDocs|switchEditor|leaveEditor|openEditor)$"
+    ],
+    "tools": [
+      "^(activeModule|toolCtx|commitChanges|publishUndo|undoLast|redoLast|undoStack|renderModuleTools|runModuleAction|hotkeyMatches|runModuleHotkey|moduleTool|KEY_NAMES|setTool|schKey|orientSelected|rotateSelected|deleteSelected|moveOp|deleteAction|selectAll|deleteSelection|appClipboard)$"
+    ],
+    "selection": [
+      "^(groupExpand|selectedSet|clearSelection|fieldLocalDelta|fieldOf|filterKey|filterAllows|hitOpts|nearestFootprint|drawSelection|hitAny|itemBoxCentre|pointInPoly|drawBoxSel|finishBoxSel|selFilter|setFilter|FILTER_KEYS|filters|renderProps|renderPropsInto)$"
+    ],
+    "pointer": [
+      "^(openSelectionProperties|drawDrag|startGroupDrag|moveGroupDrag|finishGroupDrag|measureClick|drawMeasure|drawZoomRect|finishZoomRect)$"
+    ],
+    "peers": [
+      "^(cycleFollow|peerName|applyFollowWeb|breakFollow|renderPeers|followAction|sendPresence)$"
+    ],
+    "comments": [
+      "^(loadComments|noteCommentMsg|drawComments|panelAt|showThread|placeComment|renderThreads|openThreadAction|centerOn)$"
+    ],
+    "history": [
+      "^(loadHistory|restoreCheckpoint)$"
+    ],
+    "net": [
+      "^(setConn|setViewOnly|connect|bumpEdits|noteRemoteOp|sendOp)$"
+    ],
+    "panes": [
+      "^(PANE_NAMES|PANE_EDITOR_ONLY|PANE_DEFAULT_HIDDEN|editorId|paneKey|savedPanes|loadPanes|showPane|applyTheme|toggleTheme|setupEditorChrome|syncSchModes|setUnitsAction|setCrosshair)$"
+    ],
+    "actions": [
+      "^(runAction|plotDialog|printDocument|toggleRenderOpt|findPopover|findAction|gridMenu|HANDLERS|dispatchAction)$"
+    ]
+  },
+  "bareDefault": "index",
+  "api": [
+    "worldMm",
+    "applyView",
+    "fitView",
+    "toolCtx",
+    "undoLast",
+    "redoLast",
+    "clearSelection",
+    "drawSelection",
+    "renderProps",
+    "dispatchAction",
+    "HANDLERS",
+    "requestRender",
+    "commitChanges",
+    "applyChanges",
+    "setTool",
+    "openDoc",
+    "enterSheet",
+    "hitOpts",
+    "nearestFootprint",
+    "snapMm",
+    "store",
+    "state"
+  ]
+}

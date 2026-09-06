@@ -547,12 +547,13 @@ function dragNodes(plan, off) {
 // app.js keeps the editor state in script-scope lets (tool, kdoc, DOC_TYPE, zoom, selected, state) that
 // the module hooks don't carry live; they are read under try/catch, falling back to the last ctx seen.
 function appGlobal(fn, fallback) { try { const v = fn(); return v === undefined ? fallback : v; } catch (e) { return fallback; } }
-/* global tool, kdoc, DOC_TYPE, zoom, selected, state */
-const appTool = () => appGlobal(() => tool, S.modTool || "select");
-const isPcbDoc = () => appGlobal(() => DOC_TYPE === "kicad_pcb" && !!kdoc && state.view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
-const liveDoc = () => appGlobal(() => kdoc, lastCtx && lastCtx.doc);
-const liveZoom = () => appGlobal(() => zoom, lastCtx ? lastCtx.zoom : 1);
-const liveSelected = () => appGlobal(() => selected, lastCtx && lastCtx.selected);
+/* the editor's live state is read through window.CollabEditor (see web/editor/state.ts) */
+const editorState = () => root.CollabEditor || null;   // the editor bundle's state object (the former app.js script-scope lets)
+const appTool = () => appGlobal(() => editorState().tool, S.modTool || "select");
+const isPcbDoc = () => appGlobal(() => editorState().DOC_TYPE === "kicad_pcb" && !!editorState().kdoc && root.CollabApp.getState().view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
+const liveDoc = () => appGlobal(() => editorState().kdoc, lastCtx && lastCtx.doc);
+const liveZoom = () => appGlobal(() => editorState().zoom, lastCtx ? lastCtx.zoom : 1);
+const liveSelected = () => appGlobal(() => editorState().selected, lastCtx && lastCtx.selected);
 
 function bind(ctx) { lastCtx = ctx; if (ctx && ctx.K) K = ctx.K; if (ctx) ensureDom(ctx); }
 const widthFor = (layer) => S.widths[layer] || 0.25;
@@ -2179,7 +2180,7 @@ const CTRL_SHIFT_KEYS = { a: "Arc", p: "Polygon", b: "Bezier", h: "Ortho", k: "R
 // KiCad's Ctrl+C / X / V / D (app.js would take C for the comment tool) and Alt+S (swap)
 const CTRL_KEYS = { c: "Copy", x: "Cut", v: "Paste", d: "Duplicate" };
 function repost(ev, key) { ev.stopImmediatePropagation(); ev.preventDefault(); document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); }
-const liveSelection = () => appGlobal(() => selection, null);
+const liveSelection = () => appGlobal(() => editorState().selection, null);
 function onCaptureKey(ev) {
   if (!isPcbDoc()) return;
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
