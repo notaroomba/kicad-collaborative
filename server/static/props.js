@@ -17,7 +17,7 @@ function num(v, d = 0) { if (typeof v === "number") return v; if (v === undefine
 function str(v) { return v === undefined || v === null ? "" : String(v); }
 function has(node, tok) { for (let j = 1; j < node.length; j++) if (node[j] === tok) return true; return false; }
 function r6(v) { return +(+v).toFixed(6); }          // the file's precision; also turns -0 into 0
-function clone(node) { return JSON.parse(JSON.stringify(node)); }
+function clone(node) { return root.KiCadCanvas.cloneNode(node); }   // not JSON: that drops the reader's record of which atoms were quoted
 function deg360(a) { return ((Math.round(a) % 360) + 360) % 360; }
 function normDeg(a) { a = ((a % 360) + 360) % 360; return a > 180 ? a - 360 : a; }   // KiCad keeps board angles in (-180, 180]
 function atOf(node) { return root.KiCadCanvas.atOf(node); }

@@ -41,6 +41,8 @@
 #include <pcb_group.h>
 #include <ki_exception.h>
 #include <netinfo.h>
+#include <map>
+
 #include <pad.h>
 #include <libraries/library_manager.h>
 #include <libraries/library_table.h>
@@ -225,6 +227,60 @@ void resolveNetByName( BOARD* aBoard, BOARD_ITEM* aItem, const nlohmann::json& a
 }
 
 
+/// The live footprint's pad nets, by pad number, taken before a swap replaces it.
+std::map<wxString, wxString> capturePadNets( const BOARD_ITEM* aItem )
+{
+    std::map<wxString, wxString> out;
+    const FOOTPRINT* footprint = dynamic_cast<const FOOTPRINT*>( aItem );
+
+    if( !footprint )
+        return out;
+
+    for( const PAD* pad : footprint->Pads() )
+    {
+        if( pad->GetNetCode() > 0 )
+            out[ pad->GetNumber() ] = pad->GetNetname();
+    }
+
+    return out;
+}
+
+
+/// Put back the nets of pads the incoming change said nothing about.
+///
+/// A fragment's pad nets are numbers from the sender's board and are dropped by the parse (it
+/// runs with no board attached), so a change that carries no "padNets" is silent about nets —
+/// not an instruction to clear them.  Reading it as one wipes the ratsnest of every pad of the
+/// footprint and makes DRC report them unconnected, permanently once the board is saved.
+void restorePadNets( BOARD* aBoard, FOOTPRINT* aFootprint, const nlohmann::json& aChange,
+                     const std::map<wxString, wxString>& aPrevious )
+{
+    const nlohmann::json* sent = nullptr;
+
+    if( aChange.contains( "padNets" ) && aChange[ "padNets" ].is_object() )
+        sent = &aChange[ "padNets" ];
+
+    for( PAD* pad : aFootprint->Pads() )
+    {
+        if( pad->GetNetCode() > 0 )
+            continue;   // the author named this one
+
+        std::string number = pad->GetNumber().ToStdString( wxConvUTF8 );
+
+        if( sent && sent->contains( number ) )
+            continue;   // deliberately cleared by the author
+
+        auto it = aPrevious.find( pad->GetNumber() );
+
+        if( it == aPrevious.end() )
+            continue;
+
+        if( NETINFO_ITEM* net = aBoard->FindNet( it->second ) )
+            pad->SetNet( net );
+    }
+}
+
+
 /// Re-point a footprint's pad nets at the receiving board using the pad-number ->
 /// net-name map the author sent (a parsed footprint's pads arrive orphaned).
 void applyPadNets( BOARD* aBoard, FOOTPRINT* aFootprint, const nlohmann::json& aChange )
@@ -400,6 +456,10 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                 if( FOOTPRINT* footprint = dynamic_cast<FOOTPRINT*>( item ) )
                     prevClass = footprint->GetStaticComponentClass();
 
+                // A fragment cannot carry usable pad nets, so what the live footprint had is
+                // the only truth for any pad the author did not name.
+                const std::map<wxString, wxString> prevPadNets = capturePadNets( item );
+
                 item->SwapItemData( fresh );
 
                 // The swap moved the parsed (orphaned) net pointers onto the live
@@ -409,6 +469,7 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                 if( FOOTPRINT* footprint = dynamic_cast<FOOTPRINT*>( item ) )
                 {
                     applyPadNets( aBoard, footprint, aChange );
+                    restorePadNets( aBoard, footprint, aChange, prevPadNets );
                     footprint->SetStaticComponentClass( prevClass );
                 }
 

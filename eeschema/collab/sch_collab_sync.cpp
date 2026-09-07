@@ -42,6 +42,7 @@
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
+#include <sch_io/kicad_sexpr/sch_io_kicad_sexpr_parser.h>
 #include <sch_item.h>
 #include <sch_painter.h>
 #include <sch_plotter.h>
@@ -90,6 +91,69 @@ struct APPLYING_REMOTE_SCOPE
 };
 
 
+/// True when the text's first token is `kicad_sch`, i.e. a whole schematic document rather
+/// than the bare item roots the clipboard (copyable-only) grammar is made of.
+bool looksLikeDocument( const std::string& aText )
+{
+    size_t i = aText.find_first_not_of( " \t\r\n" );
+
+    if( i == std::string::npos || aText[i] != '(' )
+        return false;
+
+    i = aText.find_first_not_of( " \t\r\n", i + 1 );
+
+    return i != std::string::npos && aText.compare( i, 10, "kicad_sch " ) == 0;
+}
+
+} // namespace
+
+
+bool SCH_COLLAB::ParseIntoScreen( const std::string& aText, SCH_SHEET& aSheet, wxString* aError )
+{
+    STRING_LINE_READER reader( aText, wxS( "collab" ) );
+
+    try
+    {
+        if( looksLikeDocument( aText ) )
+        {
+            // A whole (kicad_sch …) file: SCH_IO_KICAD_SEXPR::LoadContent is
+            // ParseSchematic( aIsCopyableOnly = true ), whose item loop has no case for the
+            // kicad_sch token and throws on the very first one — which silently turned every
+            // snapshot merge and every rollback into a no-op.  The full-file mode is the one
+            // that reads a document.
+            SCH_IO_KICAD_SEXPR_PARSER parser( &reader, nullptr, 0, &aSheet );
+            parser.ParseSchematic( &aSheet, false );
+        }
+        else
+        {
+            // Bare item roots (optionally preceded by lib_symbols): the clipboard grammar,
+            // which is exactly what FormatItemSexpr writes.
+            SCH_IO_KICAD_SEXPR plugin;
+            plugin.LoadContent( reader, &aSheet );
+        }
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        if( aError )
+            *aError = ioe.What();
+
+        return false;
+    }
+    catch( ... )
+    {
+        if( aError )
+            *aError = wxS( "unknown parse failure" );
+
+        return false;
+    }
+
+    return true;
+}
+
+
+namespace
+{
+
 /**
  * Parse a single-item s-expression fragment (the clipboard format) and hand back the
  * item matching aExpectedId, detached from the temporary parse screen and re-parented
@@ -104,16 +168,17 @@ SCH_ITEM* parseItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aDestScreen,
     SCH_SCREEN* tempScreen = new SCH_SCREEN( &aSchematic );
     tempSheet.SetScreen( tempScreen );
 
-    STRING_LINE_READER reader( aSexpr, wxS( "collab" ) );
-    SCH_IO_KICAD_SEXPR plugin;
+    wxString error;
 
-    try
+    // Fragments are bare item roots; a document wrapper is tolerated so that a client
+    // still sending the old wrapped shape is understood rather than silently ignored.
+    if( !SCH_COLLAB::ParseIntoScreen( aSexpr, tempSheet, &error ) )
     {
-        plugin.LoadContent( reader, &tempSheet );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        wxLogTrace( traceCollab, wxS( "parseItemSexpr: parse failed: %s" ), ioe.What() );
+        wxLogTrace( traceCollab, wxS( "parseItemSexpr: parse failed: %s" ), error );
+
+        if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+            fprintf( stderr, "COLLAB parseItemSexpr failed: %s\n", error.ToStdString( wxConvUTF8 ).c_str() );
+
         return nullptr;
     }
 
@@ -461,6 +526,31 @@ wxString SCH_COLLAB_SYNC::relPathForScreen( const SCH_SCREEN* aScreen ) const
         return wxEmptyString;
 
     wxFileName fn( aScreen->GetFileName() );
+    fn.MakeRelativeTo( m_frame->Prj().GetProjectPath() );
+
+    return fn.GetFullPath( wxPATH_UNIX );
+}
+
+
+wxString SCH_COLLAB_SYNC::relPathForSheet( const SCH_SCREEN* aParentScreen,
+                                           const SCH_SHEET* aSheet ) const
+{
+    if( !aSheet )
+        return wxEmptyString;
+
+    // Once the sheet has its own screen that screen's file name is already resolved.
+    if( aSheet->GetScreen() && !aSheet->GetScreen()->GetFileName().IsEmpty() )
+        return relPathForScreen( aSheet->GetScreen() );
+
+    // Otherwise resolve it the way KiCad does: a sheet's file name is relative to the sheet
+    // that holds it, not to the project root.  Registering the raw name instead means a sheet
+    // one directory down registers as "power.kicad_sch" while its screen reports
+    // "sub/power.kicad_sch", and screenForDocId() never matches it again.
+    wxFileName fn( aSheet->GetFileName() );
+
+    if( fn.IsRelative() && aParentScreen )
+        fn.MakeAbsolute( wxFileName( aParentScreen->GetFileName() ).GetPath() );
+
     fn.MakeRelativeTo( m_frame->Prj().GetProjectPath() );
 
     return fn.GetFullPath( wxPATH_UNIX );
@@ -984,16 +1074,18 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
         SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
         aSheet.SetScreen( tempScreen );
 
-        STRING_LINE_READER reader( aText, wxS( "collab-merge" ) );
-        SCH_IO_KICAD_SEXPR plugin;
+        wxString error;
 
-        try
+        // The snapshot is a whole kicad_sch document, so it needs the full-file parse; the
+        // copyable-only loader this used to call rejects the leading (kicad_sch, which made
+        // the merge — the thing that heals a stale copy on join — a silent no-op.
+        if( !SCH_COLLAB::ParseIntoScreen( aText, aSheet, &error ) )
         {
-            plugin.LoadContent( reader, &aSheet );
-        }
-        catch( const IO_ERROR& ioe )
-        {
-            wxLogTrace( traceCollab, wxS( "reconcile: parse failed: %s" ), ioe.What() );
+            wxLogTrace( traceCollab, wxS( "reconcile: parse failed: %s" ), error );
+
+            if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                fprintf( stderr, "COLLAB reconcile parse failed: %s\n", error.ToStdString( wxConvUTF8 ).c_str() );
+
             return nullptr;
         }
 
@@ -1283,24 +1375,18 @@ void SCH_COLLAB_SYNC::rollbackFromSnapshot( const wxString& aDocId,
     if( !screen || aFileText.empty() )
         return;
 
-    // Parse the server's file the way the item applier parses fragments: the
-    // snapshot is a complete kicad_sch document, which LoadContent accepts.
+    // The snapshot is a complete kicad_sch document, which needs the full-file parse mode.
     SCH_SHEET tempSheet;
 
     // Screen object on heap is owned by the sheet (the paste-path pattern).
     SCH_SCREEN* tempScreen = new SCH_SCREEN( &m_frame->Schematic() );
     tempSheet.SetScreen( tempScreen );
 
-    STRING_LINE_READER reader( aFileText, wxS( "collab-snapshot" ) );
-    SCH_IO_KICAD_SEXPR plugin;
+    wxString error;
 
-    try
+    if( !SCH_COLLAB::ParseIntoScreen( aFileText, tempSheet, &error ) )
     {
-        plugin.LoadContent( reader, &tempSheet );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        wxLogTrace( traceCollab, wxS( "rollback: snapshot parse failed: %s" ), ioe.What() );
+        wxLogTrace( traceCollab, wxS( "rollback: snapshot parse failed: %s" ), error );
         return;
     }
 
@@ -1462,16 +1548,21 @@ void SCH_COLLAB_SYNC::uploadSheetPreviews()
 }
 
 
-void SCH_COLLAB_SYNC::OnSnapshotRequest()
+void SCH_COLLAB_SYNC::OnSnapshotRequest( const wxString& aDocId )
 {
     uploadSheetPreviews();
 
-    // The adapter interface does not forward the requested doc id, so serve the
-    // request for the currently displayed document only.
-    SCH_SCREEN* screen = m_frame->GetScreen();
-    wxString    docId = docIdForScreen( screen );
+    // Serve the sheet that was actually asked for.  Serving whatever happens to be on screen
+    // instead means a sheet nobody is displaying never gets a snapshot at all — the actor
+    // stamps its cooldown on every request and its join catch-up, /content, gallery preview
+    // and clones stay at the pre-session version for as long as the session runs.
+    wxString    docId = aDocId;
+    SCH_SCREEN* screen = docId.IsEmpty() ? m_frame->GetScreen() : screenForDocId( docId );
 
     if( docId.IsEmpty() )
+        docId = docIdForScreen( screen );
+
+    if( docId.IsEmpty() || !screen )
         return;
 
     for( const auto& [opId, unacked] : m_unacked )
@@ -1628,17 +1719,22 @@ void SCH_COLLAB_SYNC::drainQueue()
             continue;
         }
 
-        applyOp( op );
+        const bool applied = applyOp( op );
+
         lastApplied = op.seq;
 
         // Tell the session how far we have actually applied, so a reconnect
         // asks for the tail from here rather than from what merely arrived.
-        session.SetAppliedSeq( op.docId, lastApplied );
+        // An op we could not apply (no local screen for its doc) must NOT move that mark:
+        // reporting it would tell the server we are caught up and the edits would never be
+        // sent again — permanently lost, with nothing said to anyone.
+        if( applied )
+            session.SetAppliedSeq( op.docId, lastApplied );
     }
 }
 
 
-void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
+bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
 {
     SCH_SCREEN* screen = screenForDocId( aOp.docId );
 
@@ -1646,11 +1742,18 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     {
         wxLogTrace( traceCollab, wxS( "no local screen for doc %s; op %lld skipped" ),
                     aOp.docId, aOp.seq );
-        return;
+
+        if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+        {
+            fprintf( stderr, "COLLAB no local screen for doc %s; op %lld not applied\n",
+                     aOp.docId.ToStdString( wxConvUTF8 ).c_str(), aOp.seq );
+        }
+
+        return false;
     }
 
     if( !aOp.changes.is_array() || aOp.changes.empty() )
-        return;
+        return true;
 
     APPLYING_REMOTE_SCOPE applying( m_applyingRemote );
 
@@ -1761,6 +1864,8 @@ void SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
 
     saveMissingLibraries( aOp.changes );
     ensureSheetDocs( aOp.docId, aOp.changes, false );
+
+    return true;
 }
 
 
@@ -1809,7 +1914,7 @@ void SCH_COLLAB_SYNC::ensureSheetDocs( const wxString& aOpDocId, const nlohmann:
         if( !sheet )
             continue;
 
-        wxString file = sheet->GetFileName();
+        wxString file = relPathForSheet( screen, sheet );
         file.Replace( wxS( "\\" ), wxS( "/" ) );
 
         if( file.IsEmpty() || m_docIdByPath.count( file )

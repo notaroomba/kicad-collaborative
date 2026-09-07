@@ -45,6 +45,8 @@ pub enum DocMsg {
         peer: PeerInfo,
         role: String,
         since_seq: Option<i64>,
+        /// Whether this client can answer a `snapshot_request` — see `maybe_request_snapshot`.
+        can_snapshot: bool,
         tx: mpsc::Sender<String>,
     },
     Leave {
@@ -86,6 +88,8 @@ struct ClientState {
     last_seen: Instant,
     /// Latest presence state; None until the client sends one.
     presence: Option<Value>,
+    /// Whether this client can answer a `snapshot_request`.
+    can_snapshot: bool,
 }
 
 pub fn spawn(pool: PgPool, doc: Document) -> mpsc::Sender<DocMsg> {
@@ -120,13 +124,13 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
             msg = rx.recv() => {
                 let Some(msg) = msg else { break };
                 match msg {
-                    DocMsg::Join { peer, role, since_seq, tx } => {
+                    DocMsg::Join { peer, role, since_seq, can_snapshot, tx } => {
                         // A half-delivered join (doc_info or catch-up dropped)
                         // would leave the client receiving ops with no base
                         // state, so it is all-or-nothing: on failure the client
                         // is not registered and its join simply times out.
                         if handle_join(&pool, &doc, head_seq, &mut clients, &peer, &role,
-                                       since_seq, tx).await
+                                       since_seq, can_snapshot, tx).await
                         {
                             // Announce to everyone else and share existing presence with the joiner.
                             let joined = json!({ "type": "peer_joined", "docId": doc_id, "peer": peer }).to_string();
@@ -303,6 +307,7 @@ async fn handle_join(
     peer: &PeerInfo,
     role: &str,
     since_seq: Option<i64>,
+    can_snapshot: bool,
     tx: mpsc::Sender<String>,
 ) -> bool {
     let doc_id = doc.id;
@@ -319,6 +324,39 @@ async fn handle_join(
         }
     }
 
+    // Load the catch-up *before* announcing the join.  doc_info is what tells a client it is
+    // live, so sending it and then failing to deliver the base state leaves that client
+    // convinced it is in the session while the actor never registered it: its ops are still
+    // accepted and broadcast to everyone else, but it never receives anything again, and on
+    // the desktop the first seq gap latches a resync that can never be answered.
+    let catchup = match since_seq {
+        Some(since) if since <= head_seq => {
+            let retained_from = persist::min_op_seq(pool, doc_id).await.ok().flatten();
+            let covered = since >= head_seq || matches!(retained_from, Some(min) if since + 1 >= min);
+            if covered {
+                load_ops_tail(pool, doc_id, since).await
+            } else {
+                load_snapshot_catchup(pool, doc).await
+            }
+        }
+        Some(_) | None => load_snapshot_catchup(pool, doc).await,
+    };
+
+    let Some(catchup) = catchup else {
+        tracing::warn!("doc {doc_id}: no catch-up for {}; not registering", peer.client_id);
+        let _ = tx.try_send(
+            json!({ "type": "error", "code": "not_found", "docId": doc_id }).to_string(),
+        );
+        return false;
+    };
+
+    // Room for both frames, checked before either goes out: nothing else writes to this
+    // client while we are here, so this is what makes the join all-or-nothing.
+    if tx.capacity() < 2 {
+        tracing::warn!("doc {doc_id}: join for {} dropped (queue full)", peer.client_id);
+        return false;
+    }
+
     let peers: Vec<&PeerInfo> = clients.values().map(|c| &c.peer).collect();
     let info = json!({
         "type": "doc_info", "docId": doc_id, "path": doc.path, "docType": doc.doc_type,
@@ -326,27 +364,8 @@ async fn handle_join(
     })
     .to_string();
 
-    if tx.try_send(info).is_err() {
-        tracing::warn!("doc {doc_id}: join for {} dropped (queue full)", peer.client_id);
-        return false;
-    }
-
-    // Catch-up: op tail if fully retained, else snapshot + tail.
-    let delivered = match since_seq {
-        Some(since) if since <= head_seq => {
-            let retained_from = persist::min_op_seq(pool, doc_id).await.ok().flatten();
-            let covered = since >= head_seq || matches!(retained_from, Some(min) if since + 1 >= min);
-            if covered {
-                send_ops_tail(pool, doc_id, since, &tx).await
-            } else {
-                send_snapshot_catchup(pool, doc, head_seq, &tx).await
-            }
-        }
-        Some(_) | None => send_snapshot_catchup(pool, doc, head_seq, &tx).await,
-    };
-
-    if !delivered {
-        tracing::warn!("doc {doc_id}: catch-up for {} failed; not registering", peer.client_id);
+    if tx.try_send(info).is_err() || tx.try_send(catchup).is_err() {
+        tracing::warn!("doc {doc_id}: join for {} dropped mid-send", peer.client_id);
         return false;
     }
 
@@ -358,6 +377,7 @@ async fn handle_join(
             role: role.to_string(),
             last_seen: Instant::now(),
             presence: None,
+            can_snapshot,
         },
     );
 
@@ -376,18 +396,42 @@ fn ops_to_json(rows: Vec<persist::OpRow>) -> Vec<Value> {
         .collect()
 }
 
-async fn send_ops_tail(pool: &PgPool, doc_id: Uuid, since: i64, tx: &mpsc::Sender<String>) -> bool {
+/// The `ops` tail frame, or None when it could not be loaded.
+async fn load_ops_tail(pool: &PgPool, doc_id: Uuid, since: i64) -> Option<String> {
     match persist::ops_since(pool, doc_id, since).await {
-        Ok(rows) => {
-            let ops = ops_to_json(rows);
-            tx.try_send(
-                json!({ "type": "ops", "docId": doc_id, "from": since + 1, "ops": ops }).to_string(),
-            )
-            .is_ok()
-        }
+        Ok(rows) => Some(
+            json!({ "type": "ops", "docId": doc_id, "from": since + 1, "ops": ops_to_json(rows) })
+                .to_string(),
+        ),
         Err(e) => {
             tracing::error!("doc {doc_id}: ops tail load failed: {e}");
-            false
+            None
+        }
+    }
+}
+
+/// The `snapshot` frame (snapshot + the ops since it), or None when there is nothing to send.
+async fn load_snapshot_catchup(pool: &PgPool, doc: &Document) -> Option<String> {
+    let doc_id = doc.id;
+    match persist::latest_snapshot(pool, doc_id).await {
+        Ok(Some((snap_seq, content))) => {
+            let file = String::from_utf8_lossy(&content).into_owned();
+            let then_ops = match persist::ops_since(pool, doc_id, snap_seq).await {
+                Ok(rows) => ops_to_json(rows),
+                Err(_) => vec![],
+            };
+            Some(
+                json!({
+                    "type": "snapshot", "docId": doc_id, "seq": snap_seq,
+                    "file": file, "thenOps": then_ops,
+                })
+                .to_string(),
+            )
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::error!("doc {doc_id}: snapshot load failed: {e}");
+            None
         }
     }
 }
@@ -398,31 +442,12 @@ async fn send_snapshot_catchup(
     _head: i64,
     tx: &mpsc::Sender<String>,
 ) -> bool {
-    let doc_id = doc.id;
-    match persist::latest_snapshot(pool, doc_id).await {
-        Ok(Some((snap_seq, content))) => {
-            let file = String::from_utf8_lossy(&content).into_owned();
-            let then_ops = match persist::ops_since(pool, doc_id, snap_seq).await {
-                Ok(rows) => ops_to_json(rows),
-                Err(_) => vec![],
-            };
-            tx.try_send(
-                json!({
-                    "type": "snapshot", "docId": doc_id, "seq": snap_seq,
-                    "file": file, "thenOps": then_ops,
-                })
-                .to_string(),
-            )
-            .is_ok()
-        }
-        Ok(None) => {
+    match load_snapshot_catchup(pool, doc).await {
+        Some(frame) => tx.try_send(frame).is_ok(),
+        None => {
             let _ = tx.try_send(
-                json!({ "type": "error", "code": "not_found", "docId": doc_id }).to_string(),
+                json!({ "type": "error", "code": "not_found", "docId": doc.id }).to_string(),
             );
-            false
-        }
-        Err(e) => {
-            tracing::error!("doc {doc_id}: snapshot load failed: {e}");
             false
         }
     }
@@ -543,10 +568,15 @@ async fn maybe_request_snapshot(
     if lag <= SNAPSHOT_LAG_OPS && last_request.elapsed() < snapshot_fresh_interval() {
         return;
     }
-    // Pick one editor deterministically (lowest clientId).
+    // Pick one editor deterministically (lowest clientId) among the clients that can actually
+    // produce a snapshot.  The browser editor cannot: its reader keeps only the items it knows
+    // how to draw and drops the header, title block, sheet/symbol instances and embedded files,
+    // so a file written from it would be a lossy replacement for the real document.  Asking it
+    // anyway is worse than not asking — the request is dropped, the cooldown is stamped, and
+    // the doc simply stops producing snapshots for as long as that client sorts lowest.
     let editor = clients
         .iter()
-        .filter(|(_, c)| c.role == "editor")
+        .filter(|(_, c)| c.role == "editor" && c.can_snapshot)
         .min_by(|a, b| a.0.cmp(b.0));
     if let Some((_, c)) = editor {
         *last_request = Instant::now();

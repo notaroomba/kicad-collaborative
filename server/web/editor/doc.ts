@@ -5,9 +5,9 @@ import { centerOn, drawComments, loadComments, renderThreads } from "./comments"
 import { $ } from "./dom";
 import { loadHistory } from "./history";
 import { navigate, showView } from "./home";
-import { connect, setConn } from "./net";
+import { connect, requestResync, setConn } from "./net";
 import { setupEditorChrome } from "./panes";
-import { renderPeers } from "./peers";
+import { renderPeers, stopPresenceKeepalive } from "./peers";
 import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, renderModuleTools, toolCtx } from "./tools";
@@ -70,9 +70,30 @@ export function bumpDoc() { store.slice("document", { version: store.get().docum
 
 export function applyChanges(changes) {
   if (!E.kdoc) return;
-  let any = false;
-  for (const c of changes || []) { try { if (KiCadCanvas.applyChange(E.kdoc, c, E.IU)) any = true; } catch (e) { console.warn("change not applied", e); } }
+  let any = false, dropped = null;
+  for (const c of changes || []) {
+    let ok = false;
+    try { ok = KiCadCanvas.applyChange(E.kdoc, c, E.IU); } catch (e) { console.warn("change not applied", e); }
+    if (ok) { any = true; continue; }
+    // A REMOVED (or a property edit) for an item we never had is a legitimate no-op — delete
+    // beats concurrent modify.  A fragment we could not take is not: the two views have just
+    // diverged, and the old code discarded that fact entirely.
+    if (c.sexpr || c.itemSexpr || String(c.kind).toUpperCase() === "ADDED") dropped = c;
+  }
+  if (dropped) noteDroppedChange(dropped);
   if (any) { if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); syncItemsFromDoc(); drawSelection(); renderProps(); bumpDoc(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
+}
+
+/**
+ * One remote change we could not apply means this document no longer matches the server's.
+ * Ask for a fresh base once per document (a resync per dropped op would be a storm, and if
+ * the item type is simply unknown to us the snapshot will not carry it either).
+ */
+export function noteDroppedChange(change) {
+  console.warn("collab: a remote change was not applied", change.typeName || "", change.kind || "", change.id || "");
+  if (E.applyFailed) return;
+  E.applyFailed = true;
+  requestResync(null, true);
 }
 
 export function setupGridControls() {
@@ -162,6 +183,8 @@ export function setDocNotice(text) { store.slice("document", { notice: text || n
 export function leaveDoc() {
   E.connectGen++;   // any connect() still waiting for its ticket must give up
   if (E.ws) { E.ws.onclose = null; E.ws.close(); E.ws = null; }
+  stopPresenceKeepalive();
+  E.joinedDocId = null; E.lastSeq = 0; E.resyncAt = 0; E.lastPresenceMm = null; E.applyFailed = false;
   clearInterval(E.renderTimer); E.renderTimer = 0;
   E.items = []; E.sheets = []; E.selected = null; E.drag = null; E.boxSel = null; E.selection = new Set(); E.highlightIds = null; E.peerState = {}; E.comments = []; E.followPeer = null; E.layers = {};
   E.kdoc = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }

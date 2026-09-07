@@ -136,8 +136,9 @@ private:
     std::unique_ptr<CONNECTIVITY_DATA> m_ghostDynamicData;
     std::vector<BOARD_ITEM*>           m_ghostRatsItems;
     VECTOR2I                           m_ghostLastOffset;
-    void OnSnapshotRequest() override;
+    void OnSnapshotRequest( const wxString& aDocId ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
+    void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
 
 public:
     ///< The live-editing sync engine, or nullptr when the board doc is not joined.

@@ -131,7 +131,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
             anyhow::bail!("bad hello");
         }
     };
-    let ClientMsg::hello { proto, token, client_id, link_token, .. } = hello else {
+    let ClientMsg::hello { proto, token, client_id, link_token, client: client_kind } = hello else {
         reject(&out_tx, &writer, json!({ "type": "error", "code": "bad_message" })).await;
         anyhow::bail!("first message must be hello");
     };
@@ -195,6 +195,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
         })
         .to_string(),
     );
+
+    // Only a client that can write the real file back may be asked for a snapshot: the browser
+    // editor parses a document down to the items it draws, so a file written from it would be
+    // missing the header, title block, instance data and embedded files.  See
+    // doc_actor::maybe_request_snapshot.
+    let can_snapshot = client_kind.as_deref() != Some("web");
 
     // --- Main loop ---
     let mut joined: HashMap<Uuid, JoinedDoc> = HashMap::new();
@@ -267,6 +273,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                     peer: peer.clone(),
                     role: role.clone(),
                     since_seq,
+                    can_snapshot,
                     tx: out_tx.clone(),
                 };
 

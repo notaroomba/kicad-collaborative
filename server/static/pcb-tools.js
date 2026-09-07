@@ -49,7 +49,7 @@ const isList = Array.isArray;
 const r6 = (v) => { const x = +(+v).toFixed(6); return x === 0 ? 0 : x; };   // no -0 in files
 const norm360 = (a) => ((a % 360) + 360) % 360;
 const norm180 = (a) => { const v = norm360(a); return v > 180 ? v - 360 : v; };   // KiCad's footprint range
-const clone = (n) => JSON.parse(JSON.stringify(n));
+const clone = (n) => K.cloneNode(n);   // not JSON: that drops the reader's record of which atoms were quoted
 const samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
 function rotator(deg) { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return (x, y) => [x * c + y * s, -x * s + y * c]; }
 const flipLayerName = (l) => /^F\./.test(l) ? "B." + l.slice(2) : /^B\./.test(l) ? "F." + l.slice(2) : l;
@@ -321,6 +321,10 @@ const typeNameOf = (item) => item.kind === "arc" ? "PCB_ARC" : item.kind === "gr
 function upsertChange(item, kind, net) {
   const c = { id: item.id, kind, typeName: typeNameOf(item), sexpr: wrapBoard(item.node) };
   const n = net || netOf(item.node); if (n.name) c.netName = n.name;   // the desktop re-resolves nets by name
+  // parseItemSexpr strips a parsed group's members (they point into its temporary parse
+  // board) and rebuilds membership from this uuid list; without it the group lands empty
+  // on the desktop, and a MODIFIED empties one that had members.
+  if (item.kind === "group" || item.kind === "generated") c.groupMembers = K.groupMemberIds(item.node);
   if (item.kind === "footprint") {
     const pads = {};
     for (const p of K.kids(item.node, "pad")) { const pn = netOf(p); if (pn.name) pads[K.str(p[1])] = pn.name; }
@@ -2404,8 +2408,21 @@ const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V v
   leader: "Leader — click the arrow point and the elbow, then type the text",
   delete: "Delete — click an item to remove it; Esc to leave the tool" };
 
+/**
+ * The in-flight route leg, in mm, as [x1, y1, x2, y2, widthMm] segments — what a peer should see
+ * while a track is being drawn.  Committed legs are already real items and travel as ops.
+ */
+function ghostSegs() {
+  const rt = S.route;
+
+  if (!rt)
+    return [];
+
+  return routeLeg(rt.last, rt.target, rt.diagFirst).map(([a, b]) => [a[0], a[1], b[0], b[1], rt.width]);
+}
+
 const pcb = {
-  id: "pcb", tools: TOOLS, state: S,
+  id: "pcb", tools: TOOLS, state: S, ghostSegs,
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);

@@ -37,10 +37,13 @@ function remap(pts, a, A, B) {
 /** Serialize the edited node the way the panel does, push it through applyChange and hand back the fresh item; the doc is restored afterwards. */
 function roundtrip(doc, item, node) {
   const sexpr = K.serializeItem(doc, Object.assign({}, item, { node, geom: [], bbox: null }));
+  // Board fragments travel wrapped in a (kicad_pcb …) document (PCB_IO_KICAD_SEXPR::Parse takes
+  // nothing else at top level); schematic ones are bare item roots, optionally preceded by
+  // (lib_symbols …), which is the only shape ParseSchematic's copyable-only mode accepts.
   const trees = K.parseAll(sexpr);
-  assert.equal(trees.length, 1, "one top-level form");
-  const tree = trees[0];
-  const body = tree[0] === "kicad_sch" ? tree.find((c, i) => i > 0 && Array.isArray(c) && c[0] === item.kind) : tree;
+  const body = trees.length === 1 && trees[0][0] === "kicad_pcb"
+    ? trees[0].find((c, i) => i > 0 && Array.isArray(c) && c[0] === item.kind)
+    : trees.filter((t) => t[0] !== "lib_symbols")[0];
   assert.ok(body && body[0] === item.kind, "re-parsed node has the item's kind");
   assert.ok(K.applyChange(doc, { id: item.id, kind: "MODIFIED", typeName: K.typeNameOf(item), sexpr }, doc.type === "sch" ? 1e4 : 1e6), "change applies");
   const fresh = doc.items.get(item.id);

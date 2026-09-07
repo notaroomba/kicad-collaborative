@@ -3,7 +3,7 @@
 import { PCB_BG, SCH } from "./colors";
 import { bboxOf } from "./hit";
 import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, dashPattern, makeCanvas, render, tracePath } from "./render";
-import { isList, kid, str } from "./sexpr";
+import { isList, kid, quotedMask, str } from "./sexpr";
 import { textWidth } from "./text";
 // ---------------------------------------------------------------- export (File → Plot / Export)
 export const fmt = (v) => { const s = (+v).toFixed(4); return s.replace(/\.?0+$/, "") === "-0" ? "0" : s.replace(/\.?0+$/, "") || "0"; };
@@ -155,21 +155,48 @@ export function renderPng(doc, opts) {
 }
 
 
-export function serialize(node) {
-  if (!isList(node)) {
-    if (typeof node === "number") return Number.isInteger(node) ? String(node) : String(+node.toFixed(6));
-    const s = String(node);
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return '"' + s + '"';   // KiCad always quotes uuids
-    return /^[A-Za-z_][\w.:*-]*$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
-  }
-  return "(" + node.map(serialize).join(" ") + ")";
+export function atomText(v, quoted) {
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
+  const s = String(v);
+  if (quoted || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)   // KiCad always quotes uuids
+      || !/^[A-Za-z_][\w.:*-]*$/.test(s))
+    return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+  return s;
 }
 
+export function serialize(node) {
+  if (!isList(node)) return atomText(node, false);
+  // The reader records which slots were quoted (sexpr.ts QUOTED): reproduce them
+  // verbatim, because "identifier-shaped" is not the same question as "was a string
+  // in the file" — KiCad's parsers demand T_STRING where the format says string.
+  // Hand-built nodes carry no mask and fall back to the shape heuristic.
+  const q = quotedMask(node); let out = "(";
+  for (let j = 0; j < node.length; j++) {
+    if (j) out += " ";
+    const c = node[j];
+    out += isList(c) ? serialize(c) : atomText(c, j < 30 && ((q >> j) & 1) === 1);
+  }
+  return out + ")";
+}
+
+/** A fragment in the shape the desktop's applier parses: see the comment in serializeItem. */
+export function wrapFragment(doc, body) {
+  // Schematic: SCH_COLLAB::parseItemSexpr goes through SCH_IO_KICAD_SEXPR::LoadContent,
+  // i.e. ParseSchematic(aIsCopyableOnly = true) — the clipboard grammar, which is a bare
+  // sequence of top-level items (optionally preceded by lib_symbols) and has no case for
+  // a (kicad_sch …) wrapper at all.  Board: PCB_IO_KICAD_SEXPR::Parse accepts only
+  // kicad_pcb or footprint at top level, so a bare (segment …) is rejected outright.
+  if (doc.type === "sch") return body;
+  return "(kicad_pcb (version " + (doc.version || BOARD_FILE_VERSION) + ") (generator \"kicad-collab-web\") " + body + ")";
+}
+
+/** The board file version the desktop writes; only a fallback — a parsed document's own version wins. */
+export const BOARD_FILE_VERSION = 20260728;
+
 export function serializeItem(doc, item) {
-  // the desktop applier loads schematic fragments as a document, so wrap them
   if (doc.type === "sch") {
     const lib = item.kind === "symbol" ? doc.lib.get(str((kid(item.node, "lib_id") || [])[1])) : null;
-    return "(kicad_sch (version 20250114) (generator \"kicad-collab-web\")" + (lib ? " (lib_symbols " + serialize(lib) + ")" : "") + " " + serialize(item.node) + ")";
+    return (lib ? "(lib_symbols " + serialize(lib) + ") " : "") + serialize(item.node);
   }
-  return serialize(item.node);
+  return wrapFragment(doc, serialize(item.node));
 }

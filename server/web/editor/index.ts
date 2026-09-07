@@ -58,6 +58,18 @@ KiCadCanvas.onAssetLoaded = () => requestRender();
 //   onDocChanged(ctx) }.  Everything a module needs travels in ctx (see toolCtx()).
 window.CollabTools = window.CollabTools || {};
 
+/**
+ * The active tool's in-flight geometry, in internal units, for the peer overlay: [x1, y1, x2, y2,
+ * width] per segment.  The desktop ghosts its own in-flight wires and router legs to us; without
+ * this the web direction showed peers a bare cursor until the item was committed.
+ */
+function moduleGhost(mod) {
+  if (!mod || typeof mod.ghostSegs !== "function") return null;
+  let segs = [];
+  try { segs = mod.ghostSegs(toolCtx()) || []; } catch (e) { console.warn(e); return null; }
+  return segs.map((g) => [Math.round(g[0] * E.IU), Math.round(g[1] * E.IU), Math.round(g[2] * E.IU), Math.round(g[3] * E.IU), Math.round((g[4] || 0.1) * E.IU)]);
+}
+
 stage.addEventListener("wheel", (ev) => {
   ev.preventDefault();
   const r = stage.getBoundingClientRect();
@@ -166,9 +178,9 @@ stage.addEventListener("pointermove", (ev) => {
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); drawBoxSel(); return; }
   if (E.measure && !E.measure.b) { drawMeasure(snapMm(mm)); }
-  if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); return; }
+  if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   const modM = activeModule();
-  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm); return; }
+  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, moduleGhost(modM)); return; }
   if (E.fdrag) {
     if (!E.fdrag.moved && Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4) E.fdrag.moved = true;
     if (E.fdrag.moved) {
@@ -190,7 +202,7 @@ stage.addEventListener("pointermove", (ev) => {
     if (!d.moved) { sendPresence(mm); return; }
     E.drag.moved = true; E.drag.curMm = [E.drag.fp.x / E.IU + d.last[0], E.drag.fp.y / E.IU + d.last[1]];
     const nowE = Date.now();
-    if (nowE - E.lastLiveMove > 150 && d.kind === "symbol") { E.lastLiveMove = nowE; sendOp([moveOp(E.drag.fp, Math.round(E.drag.curMm[0] * E.IU), Math.round(E.drag.curMm[1] * E.IU))]); }
+    if (nowE - E.lastLiveMove > 150 && d.kind === "symbol") { E.lastLiveMove = nowE; sendOp([moveOp(E.drag.fp, Math.round(E.drag.curMm[0] * E.IU), Math.round(E.drag.curMm[1] * E.IU))], true); }
     sendPresence(mm); return;
   }
   if (!E.drag.moved && Math.hypot(mm[0] - E.drag.startMm[0], mm[1] - E.drag.startMm[1]) > 0.4) E.drag.moved = true;
@@ -207,11 +219,13 @@ stage.addEventListener("pointermove", (ev) => {
     requestRender();
   }
   const now = Date.now();
-  if (now - E.lastLiveMove > 150) { E.lastLiveMove = now; sendOp([moveOp(E.drag.fp, Math.round(target[0] * E.IU), Math.round(target[1] * E.IU))]); }
+  if (now - E.lastLiveMove > 150) { E.lastLiveMove = now; sendOp([moveOp(E.drag.fp, Math.round(target[0] * E.IU), Math.round(target[1] * E.IU))], true); }
   const s = 4;
   const g = [[mm[0]-s, mm[1]-s, mm[0]+s, mm[1]-s], [mm[0]+s, mm[1]-s, mm[0]+s, mm[1]+s],
              [mm[0]+s, mm[1]+s, mm[0]-s, mm[1]+s], [mm[0]-s, mm[1]+s, mm[0]-s, mm[1]-s]]
-    .map((sg) => [...sg.map((v) => Math.round(v * E.IU)), 100000]);
+    // the 5th element is a GAL line width in the *receiver's* internal units, so it has to be
+    // scaled like every other number here: a bare 100000 is 0.1 mm on a board but 10 mm on a sheet
+    .map((sg) => [...sg.map((v) => Math.round(v * E.IU)), Math.round(0.1 * E.IU)]);
   sendPresence(mm, g);
 });
 
@@ -234,7 +248,7 @@ stage.addEventListener("pointerup", (ev) => {
   if (E.zoomRect) { finishZoomRect(ev); return; }
   if (E.boxSel) { finishBoxSel(ev); return; }
   const modU = activeModule();
-  if (modU && moduleTool(E.tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } return; }
+  if (modU && moduleTool(E.tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } sendPresence(worldMm(ev), moduleGhost(modU)); return; }
   if (ev.button !== 0 || !E.drag) return;
   if (E.drag.group) { finishGroupDrag(); return; }
   if (E.drag.engine) {
@@ -253,10 +267,13 @@ stage.addEventListener("pointerup", (ev) => {
   if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
   for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, w.item) });
   if (changes.length) {
-    if (E.ws && E.ws.readyState === 1) sendOp(changes);
+    sendOp(changes);
     // inverse: put the symbol and the wire ends back
     const inverse = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];
-    for (const w of wires) { const p = KiCadCanvas.ptsOf(w.item.node).map((q) => q.slice()); p[w.index] = w.orig; inverse.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: "(kicad_sch (version 20250114) (generator \"kicad-collab-web\") " + KiCadCanvas.serialize(Object.assign([], w.item.node, { })).replace(/\(pts[^]*?\)\)/, "(pts " + p.map((q) => `(xy ${q[0]} ${q[1]})`).join(" ") + ")") + ")" }); }
+    for (const w of wires) {   // the undo step: the same wire with this end back where it was
+      const node = KiCadCanvas.cloneNode(w.item.node); const p = KiCadCanvas.ptsOf(node).map((q) => q.slice()); p[w.index] = w.orig; KiCadCanvas.setPts(node, p);
+      inverse.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, Object.assign({}, w.item, { node })) });
+    }
     undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   }
   fp.x = nx; fp.y = ny; if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();

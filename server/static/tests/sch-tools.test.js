@@ -66,12 +66,21 @@ function makeCtx(doc) {
   return ctx;
 }
 const ev = (x, y) => ({ button: 0, clientX: x || 0, clientY: y || 0 });
+// every top-level token ParseSchematic accepts in copyable-only mode (sch_io_kicad_sexpr_parser.cpp)
+const SCH_ITEM_TOKENS = new Set(["arc", "bezier", "bitmap", "bus", "bus_entry", "circle", "directive_label", "label", "ellipse", "ellipse_arc",
+  "global_label", "hierarchical_label", "image", "junction", "netclass_flag", "no_connect", "polyline", "rectangle", "rule_area",
+  "sheet", "symbol", "table", "text", "text_box", "wire"]);
 const lastCommit = (ctx) => ctx.log[ctx.log.length - 1];
 const byKind = (changes, kind) => changes.filter((c) => c.kind === kind);
 function fragRoot(sexpr) { const trees = K.parseAll(sexpr); assert.strictEqual(trees.length, 1, "one root"); return trees[0]; }
 // a rule area's uuid lives inside its polyline (formatPoly writes it there)
 const idOf = (n) => K.uuidOf(n) || (n[0] === "rule_area" && kid(n, "polyline") ? K.uuidOf(kid(n, "polyline")) : "");
-function fragItem(change) { const root = fragRoot(change.sexpr); assert.strictEqual(root[0], "kicad_sch"); const it = root.slice(1).find((c) => Array.isArray(c) && idOf(c) === change.id); assert.ok(it, "fragment carries item " + change.id); return it; }
+// The desktop applies a schematic fragment with SCH_IO_KICAD_SEXPR::LoadContent, i.e.
+// ParseSchematic(aIsCopyableOnly = true) — the clipboard grammar: bare top-level item roots,
+// optionally preceded by (lib_symbols …).  That switch has no case for kicad_sch, so a wrapped
+// fragment is rejected and the op is silently dropped.
+function fragItems(sexpr) { return K.parseAll(sexpr).filter((t) => t[0] !== "lib_symbols"); }
+function fragItem(change) { const items = fragItems(change.sexpr); assert.strictEqual(items.length, 1, "one item root"); assert.strictEqual(idOf(items[0]), change.id, "fragment carries item " + change.id); return items[0]; }
 
 console.log("sch-tools under node");
 const doc = K.parseDoc(SHEET);
@@ -155,7 +164,7 @@ test("labels: prompt text lands as KiCad's (label …) shape; global/hierarchica
   const n = fragItem(c.changes[0]);
   assert.deepStrictEqual(n.slice(0, 4), ["label", "NET_X", ["at", 88.9, 76.2, 0], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]]]);
   assert.strictEqual(n[4][0], "uuid");
-  assert.ok(/^\(kicad_sch \(version 20250114\) \(generator "kicad-collab-web"\) \(label NET_X \(at 88\.9 76\.2 0\) \(effects \(font \(size 1\.27 1\.27\)\) \(justify left bottom\)\) \(uuid "[^"]+"\)\)\)$/.test(c.changes[0].sexpr), c.changes[0].sexpr);
+  assert.ok(/^\(label NET_X \(at 88\.9 76\.2 0\) \(effects \(font \(size 1\.27 1\.27\)\) \(justify left bottom\)\) \(uuid "[^"]+"\)\)$/.test(c.changes[0].sexpr), c.changes[0].sexpr);
   assert.strictEqual(sch.state.sel, c.changes[0].id, "new label becomes the module selection");
   const g = _.labelNode("global_label", "GL", [1.27, 2.54], 0);
   assert.strictEqual(g[0], "global_label"); assert.deepStrictEqual(kid(g, "shape"), ["shape", "input"]); assert.deepStrictEqual(kid(g, "fields_autoplaced"), ["fields_autoplaced", "yes"]);
@@ -222,7 +231,7 @@ test("mirror: KiCad's Y (Mirror Vertically) writes (mirror x), X (Mirror Horizon
   sch.onKey("y", {}, ctx); sch.onKey("r", {}, ctx); sch.onKey("r", {}, ctx); sch.onKey("r", {}, ctx);   // (90,x) -Y-> 90 -> 180 -> 270 -> 0
   n = fragItem(lastCommit(ctx).changes[0]); assert.deepStrictEqual([atOf(n)[2], kid(n, "mirror")], [0, null]);
   assert.deepStrictEqual(atOf(kids(n, "property")[0]).slice(0, 2), [27.432, 99.06], "the field offsets follow the same group action home");
-  const parsedBack = K.parseDoc(lastCommit(ctx).changes[0].sexpr); assert.ok(parsedBack.items.get("s1"), "fragment parses as a sheet holding the symbol");
+  assert.strictEqual(K.uuidOf(fragItem(lastCommit(ctx).changes[0])), "s1", "the fragment is the bare item root, keyed by its uuid");
 });
 
 test("labels rotate through 0/90/180/270 with matching justify", () => {
@@ -250,7 +259,7 @@ test("place symbol (A): node from the library with R?/Value/pins, junctions at p
   assert.deepStrictEqual(atOf(sch.state.carry.node).slice(0, 2), [63.5, 25.4]);
   sch.onPointerDown(ev(), [63.4, 25.5], ctx);
   const c = lastCommit(ctx); assert.strictEqual(c.changes[0].kind, "ADDED"); assert.strictEqual(c.changes[0].typeName, "SCH_SYMBOL");
-  assert.ok(c.changes[0].sexpr.includes("(lib_symbols (symbol Device:R"), "fragment embeds the library symbol");
+  assert.ok(c.changes[0].sexpr.includes("(lib_symbols (symbol \"Device:R"), "fragment embeds the library symbol");
   const it = doc.items.get(c.changes[0].id); assert.ok(it); assert.strictEqual(it.ref, "R?"); assert.strictEqual(it.value, "R");
   const pp = K.pinPoints(doc, it); assert.strictEqual(pp.length, 2);
   assert.ok(near(pp[0].x, 63.5) && near(pp[0].y, 21.59) && near(pp[1].x, 63.5) && near(pp[1].y, 29.21), JSON.stringify(pp));
@@ -334,7 +343,7 @@ test("power (P): the picker offers power symbols only; with none in the sheet th
   const c = lastCommit(ctx); assert.strictEqual(c.label, "place #PWR?"); assert.strictEqual(c.changes[0].typeName, "SCH_SYMBOL");
   const n = fragItem(c.changes[0]); assert.deepStrictEqual(atOf(n), [88.9, 114.3, 0]);
   assert.deepStrictEqual(kids(n, "property").slice(0, 2).map((p) => [p[1], p[2]]), [["Reference", "#PWR?"], ["Value", "GND"]]);
-  assert.ok(c.changes[0].sexpr.includes("(lib_symbols (symbol power:GND"), "fragment embeds the power symbol");
+  assert.ok(c.changes[0].sexpr.includes("(lib_symbols (symbol \"power:GND"), "fragment embeds the power symbol");
   assert.strictEqual(sch.state.carry, null); assert.strictEqual(sch.state.tool, "power", "ready for the next one");
   ctx.tPower = c.changes[0].id;
 });
@@ -843,11 +852,11 @@ test("copy: the desktop's clipboard format — (lib_symbols …) then the items,
   const { d, c } = fresh();
   c.selection = new Set(["s1", "w1", "l1"]);
   assert.ok(sch.runAction("copy", c));
-  const text = c.clip; assert.ok(text.startsWith("(lib_symbols (symbol Device:R"), text.slice(0, 60));
+  const text = c.clip; assert.ok(text.startsWith("(lib_symbols (symbol \"Device:R"), text.slice(0, 60));
   const trees = K.parseAll(text); assert.deepStrictEqual(trees.map((t) => t[0]), ["lib_symbols", "symbol", "wire", "label"]);
   assert.strictEqual(K.uuidOf(trees[1]), "s1", "copied items keep their identity on the clipboard (paste renews it)");
   const wrapped = sch.clipboardText(d, [d.items.get("l1")], { wrap: true });
-  assert.ok(/^\(kicad_sch \(version 20250114\) \(generator "kicad-collab-web"\) \(generator_version "9\.0"\)\n\(label NETA/.test(wrapped), wrapped);
+  assert.ok(/^\(kicad_sch \(version 20250114\) \(generator "kicad-collab-web"\) \(generator_version "9\.0"\)\n\(label "NETA"/.test(wrapped), wrapped);
   assert.deepStrictEqual(K.parseDoc(wrapped).items.get("l1").kind, "label");
   const parsed = sch.parseClipboard(text); assert.strictEqual(parsed.nodes.length, 3); assert.strictEqual(parsed.libs.length, 1);
   assert.strictEqual(sch.parseClipboard("hello world"), null); assert.strictEqual(sch.parseClipboard(""), null);
@@ -866,7 +875,7 @@ test("paste: fresh uuids, no instances, offset to the snapped cursor, junction c
   assert.notStrictEqual(sym.id, "s1"); assert.ok(kids(sn, "pin").every((p) => !["p1", "p2"].includes(K.uuidOf(p))), "pins renewed"); assert.strictEqual(kid(sn, "instances"), null);
   assert.deepStrictEqual(atOf(sn).slice(0, 2), [101.6, 127], "the symbol's anchor lands on the snapped cursor");
   assert.strictEqual(kids(sn, "property")[0][2], "R?", "R1 already lives on the sheet");
-  assert.ok(sym.sexpr.includes("(lib_symbols (symbol Device:R"), "fragment embeds the library symbol");
+  assert.ok(sym.sexpr.includes("(lib_symbols (symbol \"Device:R"), "fragment embeds the library symbol");
   const wire = fragItem(added.find((x) => x.typeName === "SCH_LINE")); assert.deepStrictEqual(ptsOf(wire), [[127, 90.17], [139.7, 90.17]], "everything else keeps its offset from the symbol (76.2, 26.67)");
   const lab = fragItem(added.find((x) => x.typeName === "SCH_LABEL")); assert.deepStrictEqual(atOf(lab).slice(0, 2), [132.08, 90.17]);
   assert.deepStrictEqual(c.lastSelection.slice().sort(), added.map((x) => x.id).sort(), "ctx.setSelection got the pasted ids");
@@ -988,7 +997,7 @@ test("autoplace fields (O): AUTOPLACER's side choice, 50 mil rounding and justif
   assert.deepStrictEqual(kid(kid(props[0], "effects"), "justify"), ["justify", "left"]); assert.deepStrictEqual(kid(kid(props[1], "effects"), "justify"), ["justify", "left"]);
   assert.deepStrictEqual(atOf(props[2]).slice(0, 2), [23.622, 100.33], "hidden fields stay put");
   const ui = n.findIndex((x) => Array.isArray(x) && x[0] === "uuid"); assert.deepStrictEqual(n[ui - 1], ["fields_autoplaced", "yes"]);
-  assert.strictEqual(K.parseDoc(cm.changes[0].sexpr).items.get("s1").kind, "symbol");
+  assert.strictEqual(fragItem(cm.changes[0])[0], "symbol");
   // a symbol turned 90° stores vertical field angles (they display horizontally); a Y-mirrored one stores the flipped justify
   const r90 = K.createItem(d, _.symbolNode(d, "Device:R", [76.2, 25.4], 90, "")), m = _.autoplaceNode(d, r90);
   assert.strictEqual(atOf(kids(m, "property")[0])[2], 90); assert.ok(atOf(kids(m, "property")[0])[1] < 25.4 - 1.5, "fields above a horizontal resistor (top side has no pins)");
@@ -1341,12 +1350,27 @@ await testAsync("sheet: an existing file is referenced (no request) relative to 
   sch.setPrompt((t, i, cl, done) => done(null));
 });
 
-test("every fragment is a kicad_sch document the desktop parser can load", () => {
+
+test("ghostSegs: the in-flight wire is offered to peers as mm segments", () => {
+  const { d, c } = fresh();
+  assert.deepStrictEqual(sch.ghostSegs(c), [], "nothing in flight");
+  sch.onActivate("wire", c); sch.onPointerDown(ev(), [25.4, 25.4], c); sch.onPointerMove(ev(), [50.8, 38.1], c);
+  // the committed anchor plus the live 90-degree leg, in mm with the wire's own width
+  assert.deepStrictEqual(sch.ghostSegs(c), [[25.4, 25.4, 50.8, 25.4, 0.1524], [50.8, 25.4, 50.8, 38.1, 0.1524]]);
+  sch.onPointerDown(ev(), [50.8, 38.1], c); sch.onPointerDown(ev(), [50.8, 38.1], c);   // second click on the last point ends it
+  assert.strictEqual(sch.state.wire, null);
+  assert.deepStrictEqual(sch.ghostSegs(c), [], "finishing clears it, so peers stop drawing the stale leg");
+});
+
+test("every fragment is in the copyable-only grammar the desktop parser accepts", () => {
   assert.ok(allSexprs.length > 15);
   for (const c of allSexprs) {
-    const root = fragRoot(c.sexpr);
-    assert.strictEqual(root[0], "kicad_sch"); assert.deepStrictEqual(kid(root, "version"), ["version", 20250114]); assert.deepStrictEqual(kid(root, "generator"), ["generator", "kicad-collab-web"]);
-    const items = root.slice(1).filter((x) => Array.isArray(x) && !["version", "generator", "lib_symbols"].includes(x[0]));
+    const roots = K.parseAll(c.sexpr);
+    // no (kicad_sch …) wrapper: SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic has no case for it
+    // in copyable-only mode and throws, which drops the op with no error anywhere.
+    assert.ok(!roots.some((r) => r[0] === "kicad_sch"), "no document wrapper: " + c.sexpr.slice(0, 40));
+    assert.ok(roots.every((r) => r[0] === "lib_symbols" || SCH_ITEM_TOKENS.has(r[0])), "item roots only: " + roots.map((r) => r[0]));
+    const items = roots.filter((r) => r[0] !== "lib_symbols");
     assert.strictEqual(items.length, 1); assert.strictEqual(idOf(items[0]), c.id);
     const once = K.serialize(K.parse(c.sexpr)); assert.strictEqual(K.serialize(K.parse(once)), once, "parse/serialise is stable");
   }
@@ -1377,7 +1401,7 @@ if (fs.existsSync(SAMPLE)) {
     sch.onActivate("select", cb); cb.selected = { id: gnd.id }; assert.ok(sch.onKey("r", {}, cb));
     const n = fragItem(lastCommit(cb).changes[0]); const m = kid(n, "mirror");
     assert.deepStrictEqual(_.tFrom(atOf(n)[2], m ? str(m[1]) : ""), _.mul(_.RCCW, before));
-    assert.strictEqual(K.parseDoc(lastCommit(cb).changes[0].sexpr).items.get(gnd.id).kind, "symbol");
+    assert.strictEqual(fragItem(lastCommit(cb).changes[0])[0], "symbol");
     const c17 = big.items.get("13f55e82-3c7c-40b8-a54b-9ac60e170cc1");
     const dup = _.symbolNode(big, c17.lib, [100, 100], 0, ""); assert.strictEqual(kids(dup, "property")[0][2], "C?"); assert.strictEqual(kids(dup, "property")[1][2], "Csmall");
     assert.ok(kids(dup, "property").some((q) => q[1] === "Voltage"), "custom library fields are copied like KiCad does");

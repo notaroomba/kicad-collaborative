@@ -4,7 +4,7 @@ import { state, store } from "./appstore";
 import { drawComments } from "./comments";
 import { loadBase } from "./doc";
 import { $, NS } from "./dom";
-import { breakFollow, peerName, renderPeers } from "./peers";
+import { breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
 import { activeModule, toolCtx } from "./tools";
@@ -116,6 +116,9 @@ export function zoomBy(factor, cx, cy) {
   E.panX = cx - (cx - E.panX) * (next / E.zoom);
   E.panY = cy - (cy - E.panY) * (next / E.zoom);
   E.zoom = next; breakFollow(); applyView();
+  // A peer following us reads `viewport` out of presence; without a send here a wheel zoom
+  // (or a pan, below) never reaches them and "follow" sits a screen behind.
+  sendPresence(null);
 }
 
 

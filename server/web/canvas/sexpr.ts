@@ -2,20 +2,42 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { rgba } from "./colors";
 // ---------------------------------------------------------------- s-expressions
+/**
+ * node -> bitmask of the slots that were quoted in the source text.  Kept beside the nodes
+ * rather than on them so a node still deep-equals a plain array; serialize() reads it back.
+ */
+export const QUOTED = new WeakMap();
+
+export function quotedMask(node) { return QUOTED.get(node) | 0; }
+
+/** Deep copy of a node that keeps the quoting marks (JSON round-trips lose them). */
+export function cloneNode(node) {
+  if (!isList(node)) return node;
+  const out = node.map(cloneNode);
+  const q = QUOTED.get(node); if (q) QUOTED.set(out, q);
+  return out;
+}
+
 export function parse(text) {
   let i = 0; const n = text.length;
   const ws = (c) => c === 32 || c === 9 || c === 10 || c === 13;
   function list() {
-    i++; const out = [];
+    i++; const out = []; let q = 0;
     for (;;) {
       while (i < n && ws(text.charCodeAt(i))) i++;
       if (i >= n) break;
       const c = text[i];
       if (c === ")") { i++; break; }
       if (c === "(") out.push(list());
-      else if (c === '"') out.push(quoted());
+      // Which atoms were quoted is not decoration: KiCad's parsers demand a
+      // quoted string where the format says string (a group's name, for one —
+      // parseGROUP wants T_STRING and throws on a bare symbol) and a bare token
+      // where the format says token.  Record the quoted slots so serialize()
+      // can reproduce them instead of guessing from the text.
+      else if (c === '"') { const at = out.length; if (at < 30) q |= 1 << at; out.push(quoted()); }
       else out.push(atom());
     }
+    if (q) QUOTED.set(out, q);
     return out;
   }
   function quoted() {
@@ -72,7 +94,14 @@ export function has(node, tok) { for (let j = 1; j < node.length; j++) if (node[
 
 export function yesNo(node, key) { const k = kid(node, key); if (k) return str(k[1]) !== "no"; return has(node, key); }
 
-export function uuidOf(node) { const u = kid(node, "uuid") || kid(node, "tstamp"); return u ? str(u[1]) : ""; }
+export function uuidOf(node) {
+  const u = kid(node, "uuid") || kid(node, "tstamp"); if (u) return str(u[1]);
+  // A schematic rule area has no uuid of its own: saveRuleArea prints "(rule_area "
+  // and hands the item to saveShape, which writes the SCH_RULE_AREA's uuid inside the
+  // nested (polyline …).  Keying it by a synthetic id would make every op for it miss.
+  if (node[0] === "rule_area") { for (let j = 1; j < node.length; j++) { const c = node[j]; if (isList(c)) { const nested = kid(c, "uuid"); if (nested) return str(nested[1]); } } }
+  return "";
+}
 
 export function atOf(node) {
   const t = kid(node, "transform");

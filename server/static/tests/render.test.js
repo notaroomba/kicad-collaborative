@@ -213,7 +213,7 @@ test("schematic table: external border + header separator, cell text per justifi
   const mv = K.movableItems(doc).find((m) => m.id === "tb1"); assert(mv); assert.strictEqual(mv.x, 10); assert.strictEqual(mv.y, 10); assert.strictEqual(mv.kind, "table");
   assert.strictEqual(K.hitTest(doc, 20, 12, 0), "tb1"); assert.strictEqual(K.hitTest(doc, 45, 12, 0), null);
   near(it.bbox[0], 10, 0.11); near(it.bbox[1], 10, 0.11); near(it.bbox[2], 40, 0.11); near(it.bbox[3], 20, 0.11);   // ± half the border width
-  const ch = K.moveItem(doc, it, 20, 20, 10000); assert.strictEqual(ch.kind, "MODIFIED"); assert.strictEqual(ch.typeName, "SCH_TABLE"); assert(ch.sexpr.includes("(table") && ch.sexpr.includes("(kicad_sch"));
+  const ch = K.moveItem(doc, it, 20, 20, 10000); assert.strictEqual(ch.kind, "MODIFIED"); assert.strictEqual(ch.typeName, "SCH_TABLE"); assert(ch.sexpr.startsWith("(table"), ch.sexpr.slice(0, 40));   // bare item root: the copyable-only grammar the desktop parses fragments with
   assert.strictEqual(it.x, 20); assert.strictEqual(it.y, 20); assert(!K.kid(it.node, "at"), "no (at) is invented on the table node");
   assert.deepStrictEqual(K.atOf(K.kids(K.kid(it.node, "cells"), "table_cell")[3]).slice(0, 2), [40, 25]);
   assert.deepStrictEqual(lines(it).map(seg).sort()[0], [20, 20, 50, 20]);
@@ -258,7 +258,7 @@ test("board table: layer colour and z, dashed border stroke, PCB_TEXTBOX::GetDra
   const y = texts(it, (g) => g.text === "y")[0]; assert.strictEqual(y.h, "center"); assert.strictEqual(y.v, "middle"); near(y.x, 15, 1e-9); near(y.y, 2, 1e-9);
   const z = texts(it, (g) => g.text === "z")[0]; assert.strictEqual(z.h, "left"); assert.strictEqual(z.v, "top"); near(z.x, 0.5, 1e-9); near(z.y, 4.5, 1e-9);
   assert.strictEqual(K.hitTest(doc, 5, 2, 0), "pt1"); assert.strictEqual(K.movableItems(doc).find((m) => m.id === "pt1").layer, "Cmts.User"); assert.strictEqual(K.typeNameOf(it), "PCB_TABLE");
-  const ch = K.moveItem(doc, it, 100, 100, 1e6); assert.strictEqual(ch.typeName, "PCB_TABLE"); assert(ch.sexpr.startsWith("(table")); assert.deepStrictEqual(seg(lines(it).find((g) => g.dash && g.y1 === 100 && g.y2 === 100)), [100, 100, 120, 100]);
+  const ch = K.moveItem(doc, it, 100, 100, 1e6); assert.strictEqual(ch.typeName, "PCB_TABLE"); assert(ch.sexpr.startsWith("(kicad_pcb ") && ch.sexpr.includes("(table"), ch.sexpr.slice(0, 40));   // PCB_IO_KICAD_SEXPR::Parse takes only kicad_pcb / footprint at top level assert.deepStrictEqual(seg(lines(it).find((g) => g.dash && g.y1 === 100 && g.y2 === 100)), [100, 100, 120, 100]);
   const hid = new Set(["Cmts.User"]); const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), { hidden: hid }); assert(!ctx.calls.fillText, "hidden layer hides the table");
   assert(K.layerList(doc).some((l) => l.key === "Cmts.User"));
 });
@@ -789,6 +789,39 @@ if (!haveSamples) {
     assert(K.applyChange(sch, { id: it.id, kind: "MODIFIED", properties: [{ name: "Position X", after: { v: 3479800 } }] }, 10000));
   });
 }
+
+
+// An item kind the reader does not know is not merely unrendered: addItem() returns null,
+// so a peer's op for it is dropped with no error and the two views diverge for good.
+test("every item token either editor writes is carried, even without geometry", () => {
+  const schDoc = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (paper "A4")
+    (ellipse (center 10 10) (radius 5 3) (stroke (width 0) (type default)) (fill (type none)) (uuid "e-1"))
+    (ellipse_arc (center 20 20) (radius 5 3) (start 25 20) (end 20 23) (stroke (width 0) (type default)) (fill (type none)) (uuid "e-2"))
+    (net_chain "PWR" (members "a") (uuid "n-1")))`, "kicad_sch");
+  assert.deepStrictEqual([...schDoc.items.keys()].sort(), ["e-1", "e-2", "n-1"]);
+  const pcbDoc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal))
+    (gr_ellipse (center 1 1) (radius 2 1) (stroke (width 0.1) (type default)) (fill no) (layer "F.Cu") (uuid "ge-1"))
+    (gr_ellipse_arc (center 3 3) (radius 2 1) (start 5 3) (end 3 4) (stroke (width 0.1) (type default)) (layer "F.Cu") (uuid "ge-2"))
+    (barcode (at 5 5) (kind qrcode) (text "hi") (layer "F.SilkS") (uuid "bc-1"))
+    (point (at 7 7) (layer "F.Cu") (uuid "pt-1"))
+    (grid_item (at 9 9) (layer "F.Cu") (uuid "gi-1")))`, "kicad_pcb");
+  assert.deepStrictEqual([...pcbDoc.items.keys()].sort(), ["bc-1", "ge-1", "ge-2", "gi-1", "pt-1"]);
+  // and an op for one of them lands
+  assert(K.applyChange(pcbDoc, { id: "bc-1", kind: "REMOVED" }, 1e6));
+  assert(!pcbDoc.items.has("bc-1"));
+});
+
+// SCH_IO_KICAD_SEXPR::saveRuleArea prints "(rule_area " and hands the item to saveShape, which
+// writes the uuid inside the nested (polyline …).  Keyed by a synthetic id, every op for it misses.
+test("a rule area is keyed by the uuid inside its polyline, not a synthetic id", () => {
+  const doc = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (paper "A4")
+    (rule_area (polyline (pts (xy 10 10) (xy 30 10) (xy 30 20) (xy 10 20) (xy 10 10))
+      (stroke (width 0) (type default)) (fill (type none)) (uuid "ra-uuid")))
+    )`, "kicad_sch");
+  assert.deepStrictEqual([...doc.items.keys()], ["ra-uuid"]);
+  assert(K.applyChange(doc, { id: "ra-uuid", kind: "REMOVED" }, 10000), "a desktop delete matches");
+  assert.strictEqual(doc.items.size, 0);
+});
 
 Promise.all(PENDING).then(() => {
   console.log(`${passed} passed, ${failed} failed`);

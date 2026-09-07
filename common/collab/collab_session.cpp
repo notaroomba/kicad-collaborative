@@ -408,6 +408,8 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         // automatic reconnect.
         for( auto& [docId, doc] : m_docs )
         {
+            doc.joined = false;   // set again by the doc_info the server answers with
+
             nlohmann::json join = {
                 { "type", "join_doc" },
                 { "docId", docId.ToStdString( wxConvUTF8 ) },
@@ -450,11 +452,28 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
             return;
         }
 
-        if( docIt->second.adapter && aMsg.contains( "clientOpId" ) )
+        if( aMsg.contains( "clientOpId" ) )
         {
-            docIt->second.adapter->OnOpRejected(
-                    wxString::FromUTF8( aMsg.value( "clientOpId", "" ) ),
-                    wxString::FromUTF8( code ) );
+            if( docIt->second.adapter )
+            {
+                docIt->second.adapter->OnOpRejected(
+                        wxString::FromUTF8( aMsg.value( "clientOpId", "" ) ),
+                        wxString::FromUTF8( code ) );
+            }
+
+            return;
+        }
+
+        // No clientOpId: this is about the *join*, not about one op.  The server sends it
+        // when a collaborator's access has been revoked or the doc is gone.  Dropping it (as
+        // this used to) leaves KiCad showing a live session while nothing it draws ever
+        // reaches anyone, and every op it makes is journalled and re-sent forever.
+        if( code == "permission_denied" || code == "not_found" )
+        {
+            docIt->second.joined = false;
+
+            if( docIt->second.adapter )
+                docIt->second.adapter->OnJoinRefused( docId, wxString::FromUTF8( code ) );
         }
 
         return;
@@ -468,6 +487,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
 
     if( type == "doc_info" )
     {
+        doc.joined = true;
         doc.peers.clear();
 
         if( aMsg.contains( "peers" ) && aMsg[ "peers" ].is_array() )
@@ -586,7 +606,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
     else if( type == "snapshot_request" )
     {
         if( adapter )
-            adapter->OnSnapshotRequest();
+            adapter->OnSnapshotRequest( docId );
     }
     else if( type == "reset" )
     {
@@ -637,15 +657,72 @@ void COLLAB_SESSION::LeaveDoc( const wxString& aDocId )
 }
 
 
+/**
+ * Shrink a presence payload until the server will take it.
+ *
+ * ws.rs rejects any presence state over MAX_PRESENCE_BYTES (8 KB) with error/bad_message
+ * *instead of* relaying it, and that error carries no clientOpId, so the client discards it:
+ * the sender's cursor simply freezes for every peer and is evicted 30 s later, for as long as
+ * the oversized state persists.  Selecting ~100 items on a board is enough — the uuid list is
+ * not capped at all and its 37 bytes apiece dwarf everything else.
+ *
+ * Trimming order is by usefulness: in-flight ghost segments first (they are re-sent
+ * continuously anyway), then the selection.  `selection` and `boxes` are paired by index by
+ * the receiver's rebuildOverlay, so they are always trimmed together.
+ */
+void COLLAB_SESSION::ClampPresence( nlohmann::json& aState )
+{
+    static const size_t BUDGET = 8 * 1024 - 512;   // the server's cap, less the envelope
+
+    if( !aState.is_object() || aState.dump().size() <= BUDGET )
+        return;
+
+    auto trim = [&aState]( const char* aKey, size_t aKeep )
+    {
+        auto it = aState.find( aKey );
+
+        if( it != aState.end() && it->is_array() && it->size() > aKeep )
+            it->erase( it->begin() + aKeep, it->end() );
+    };
+
+    for( size_t keep : { 50u, 20u, 0u } )
+    {
+        trim( "ghost", keep );
+
+        if( aState.dump().size() <= BUDGET )
+            return;
+    }
+
+    size_t keep = 64;
+
+    while( keep > 0 )
+    {
+        trim( "selection", keep );
+        trim( "boxes", keep );
+
+        if( aState.dump().size() <= BUDGET )
+            return;
+
+        keep /= 2;
+    }
+
+    trim( "selection", 0 );
+    trim( "boxes", 0 );
+}
+
+
 void COLLAB_SESSION::SendPresence( const wxString& aDocId, const nlohmann::json& aState )
 {
     if( m_state != STATE::LIVE )
         return;
 
+    nlohmann::json state = aState;
+    ClampPresence( state );
+
     sendJson( {
         { "type", "presence" },
         { "docId", aDocId.ToStdString( wxConvUTF8 ) },
-        { "state", aState },
+        { "state", state },
     } );
 }
 
@@ -655,6 +732,11 @@ void COLLAB_SESSION::SendOp( const wxString& aDocId, const wxString& aClientOpId
 {
     if( m_state != STATE::LIVE )
         return;
+
+    auto docIt = m_docs.find( aDocId );
+
+    if( docIt != m_docs.end() && !docIt->second.joined )
+        return;   // the server refused (or has not yet accepted) this doc
 
     nlohmann::json op = {
         { "type", "op" },

@@ -593,4 +593,115 @@ BOOST_AUTO_TEST_CASE( ClosingOneEditorReleasesOnlyItsOwnDocs )
 }
 
 
+
+// The web sends item fragments in the copyable-only (clipboard) grammar, and snapshots arrive
+// as whole kicad_sch documents.  Those need different parser modes, and feeding a document to
+// the copyable-only loader — which is what the merge and rollback paths used to do — throws on
+// the very first token and silently discards the server's state.
+BOOST_AUTO_TEST_CASE( DocumentAndFragmentBothParse )
+{
+    const std::string wire =
+            "(wire (pts (xy 25.4 25.4) (xy 50.8 25.4)) (stroke (width 0) (type default))"
+            " (uuid \"11111111-2222-3333-4444-555555555555\"))";
+
+    auto loadInto = []( SCHEMATIC& aSchematic, const std::string& aText, wxString* aError )
+    {
+        SCH_SHEET   sheet;
+        SCH_SCREEN* screen = new SCH_SCREEN( &aSchematic );
+        sheet.SetScreen( screen );
+
+        if( !SCH_COLLAB::ParseIntoScreen( aText, sheet, aError ) )
+            return size_t( 0 );
+
+        size_t n = 0;
+
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            (void) item;
+            n++;
+        }
+
+        return n;
+    };
+
+    wxString error;
+
+    // A bare item root: the clipboard grammar.
+    BOOST_CHECK_EQUAL( loadInto( *m_receiving, wire, &error ), 1u );
+
+    // A complete document: this is the snapshot shape, and the one that used to be rejected.
+    const std::string document =
+            "(kicad_sch (version 20250114) (generator \"eeschema\") (generator_version \"9.0\")"
+            " (uuid \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\") (paper \"A4\") (lib_symbols) "
+            + wire + " (sheet_instances (path \"/\" (page \"1\"))))";
+
+    error.clear();
+    BOOST_CHECK_EQUAL( loadInto( *m_receiving, document, &error ), 1u );
+    BOOST_CHECK( error.IsEmpty() );
+
+    // And a fragment wrapped in a document, which is what an older web client sends.
+    error.clear();
+    const std::string wrapped =
+            "(kicad_sch (version 20250114) (generator \"kicad-collab-web\") " + wire + ")";
+    BOOST_CHECK_EQUAL( loadInto( *m_receiving, wrapped, &error ), 1u );
+    BOOST_CHECK( error.IsEmpty() );
+}
+
+
+// Everything the desktop's own formatter writes must keep going through the fragment path.
+BOOST_AUTO_TEST_CASE( FormattedFragmentIsBareItemRoots )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+
+    std::string sexpr = SCH_COLLAB::FormatItemSexpr( *m_authoring, pathA.LastScreen(), subject );
+
+    BOOST_REQUIRE( !sexpr.empty() );
+    BOOST_CHECK( sexpr.rfind( "(kicad_sch", 0 ) != 0 );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   twin = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( twin );
+
+    nlohmann::json change = MakeChange( subject, "MODIFIED" );
+    change[ "sexpr" ] = sexpr;
+
+    BOOST_CHECK( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, change, nullptr ) );
+}
+
+
+// An oversized presence state is not relayed at all (ws.rs answers bad_message and the client
+// drops that), so the sender's cursor freezes and is then evicted.  Clamp before sending.
+BOOST_AUTO_TEST_CASE( PresenceIsClampedToTheServerCap )
+{
+    nlohmann::json state;
+    state[ "cursor" ] = { 1000, 2000 };
+    state[ "viewport" ] = { 0, 0, 100000, 100000 };
+    state[ "sheetFile" ] = "sub/power.kicad_sch";
+    state[ "selection" ] = nlohmann::json::array();
+    state[ "boxes" ] = nlohmann::json::array();
+    state[ "ghost" ] = nlohmann::json::array();
+
+    for( int ii = 0; ii < 400; ++ii )
+    {
+        state[ "selection" ].push_back( KIID().AsStdString() );
+        state[ "boxes" ].push_back( { ii * 1000, ii * 1000, 500000, 500000 } );
+        state[ "ghost" ].push_back( { ii, ii, ii + 10, ii + 10, 100000 } );
+    }
+
+    BOOST_REQUIRE( state.dump().size() > 8 * 1024 );
+
+    COLLAB_SESSION::ClampPresence( state );
+
+    BOOST_CHECK( state.dump().size() <= 8 * 1024 );
+    BOOST_CHECK( state.contains( "cursor" ) );
+    BOOST_CHECK( state[ "viewport" ].size() == 4 );
+
+    // The receiver pairs a peer's selection ids with its boxes by index for live-drag ghosts,
+    // so whatever survives has to stay aligned.
+    BOOST_CHECK_EQUAL( state[ "selection" ].size(), state[ "boxes" ].size() );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
