@@ -41,6 +41,7 @@
 #include <pcb_group.h>
 #include <pcb_track.h>
 #include <richio.h>
+#include <reporter.h>
 #include <wx/ffile.h>
 #include <wx/filename.h>
 #include <wx/utils.h>
@@ -463,12 +464,18 @@ BOOST_AUTO_TEST_CASE( ZoneSexprShipsUnfilled )
 // project shared with a stock KiCad keeps the version it was opened with.
 BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
 {
+    WX_STRING_REPORTER reporter;
+
     auto savedVersion = [&]( int aAtLoad ) -> std::string
     {
         m_authoring->SetFileFormatVersionAtLoad( aAtLoad );
+        reporter.Clear();
 
-        wxString tmp = wxFileName::CreateTempFileName( wxS( "collab_ver" ) );
-        PCB_IO_KICAD_SEXPR().SaveBoard( tmp, m_authoring.get() );
+        wxString           tmp = wxFileName::CreateTempFileName( wxS( "collab_ver" ) );
+        PCB_IO_KICAD_SEXPR io;
+
+        io.SetReporter( &reporter );
+        io.SaveBoard( tmp, m_authoring.get() );
 
         wxFFile   file( tmp, wxS( "r" ) );
         wxString  content;
@@ -480,15 +487,16 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
         return content.Mid( start + 9, content.Mid( start + 9 ).Find( ')' ) ).ToStdString();
     };
 
-    // A file opened at an older (stock KiCad) version keeps that version.
-    BOOST_CHECK_EQUAL( savedVersion( 20241229 ), "20241229" );
+    // A file opened at the version stock KiCad 10.0 writes keeps that version, silently.
+    BOOST_CHECK_EQUAL( savedVersion( 20260206 ), "20260206" );
+    BOOST_CHECK( !reporter.HasMessage() );
 
     // A legacy-format import (small integer version) gets the current stamp.
     BOOST_CHECK( savedVersion( 2 ) != "2" );
 
     // Stock stamping on request.
     wxSetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), wxS( "1" ) );
-    BOOST_CHECK( savedVersion( 20241229 ) != "20241229" );
+    BOOST_CHECK( savedVersion( 20260206 ) != "20260206" );
     wxUnsetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ) );
 }
 

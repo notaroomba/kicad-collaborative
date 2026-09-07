@@ -21,6 +21,9 @@
 #include <paths.h>
 
 #include <collab/collab_rest.h>
+#include <io/kicad/kicad_io_utils.h>
+
+#include <wx/log.h>
 
 #include <wx/dir.h>
 #include <wx/filename.h>
@@ -28,6 +31,9 @@
 #include <wx/translation.h>
 #include <wx/wfstream.h>
 #include <wx/zipstrm.h>
+
+
+static const wxChar* const traceCollab = wxT( "COLLAB" );
 
 
 std::string COLLAB_PROJECT::ZipProjectFiles( const wxString& aProjectPath )
@@ -590,12 +596,31 @@ bool COLLAB_PROJECT::DownloadAndExtract( const wxString& aServer, const wxString
             && !wxFileName::Mkdir( target.GetPath(), wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
             continue;
 
-        wxFFileOutputStream out( target.GetFullPath() );
+        // A join writes archive entries verbatim, so it is the one design-file write that cannot
+        // honour the format version the local file was kept at.  Say so rather than letting a
+        // preserved-version project silently acquire the uploader's newer stamp.
+        const int previousVersion = KICAD_FORMAT::FileFormatVersionStamp( target.GetFullPath() );
 
-        if( !out.IsOk() )
-            continue;
+        {
+            wxFFileOutputStream out( target.GetFullPath() );
 
-        zipStream.Read( out );
+            if( !out.IsOk() )
+                continue;
+
+            zipStream.Read( out );
+        }
+
+        if( previousVersion > 0 )
+        {
+            const int newVersion = KICAD_FORMAT::FileFormatVersionStamp( target.GetFullPath() );
+
+            if( newVersion > previousVersion )
+            {
+                wxLogTrace( traceCollab,
+                            wxS( "join raised '%s' file format version %d -> %d" ),
+                            target.GetFullName(), previousVersion, newVersion );
+            }
+        }
 
         if( target.GetExt() == wxS( "kicad_pro" ) && aProFile.IsEmpty() )
             aProFile = target.GetFullPath();

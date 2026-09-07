@@ -492,6 +492,16 @@ protected:
      */
     bool isStrokeFont() const;
 
+    /**
+     * The stroke width to write when the target file format is older than 20260826, where a
+     * bold stroke-font width had the bold multiplier baked into the stored value.
+     *
+     * Returns the width this text was loaded with when that is still the value in effect, so a
+     * file that is only being restamped keeps its exact bytes; otherwise the general inverse of
+     * MigrateLegacyBoldStrokeWidth().
+     */
+    int legacyBoldStrokeWidth() const;
+
 protected:
     /**
      * A hyperlink URL.  If empty, this text object is not a hyperlink.
@@ -528,6 +538,19 @@ private:
     wxString         m_unresolvedFontName;
     VECTOR2I         m_pos;
     bool             m_visible;                 // For SCH_FIELDs and PCB_FIELDs
+
+    /**
+     * The stroke width this text was loaded with, before MigrateLegacyBoldStrokeWidth()
+     * divided the bold multiplier back out of it; 0 when no migration happened.
+     *
+     * The migration is lossy (it rounds, and floors at 2 IU), so multiplying by the
+     * multiplier again does not always land back on the original value.  Keeping the
+     * original lets a save that is writing a pre-20260826 file reproduce the bytes it read
+     * instead of drifting by an IU on the first save.  Only used while the migrated value is
+     * still in place; any edit to the thickness makes the check below fail and the general
+     * inverse is used instead.
+     */
+    int              m_legacyBoldStrokeWidth = 0;
 };
 
 

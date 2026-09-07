@@ -457,25 +457,196 @@ void SCH_IO_KICAD_SEXPR::Format( SCH_SHEET* aSheet )
     else
         m_schematic->GetEmbeddedFiles()->ClearEmbeddedFonts();
 
-    // KiCad Collaborative round-trips project files with stock KiCad
-    // installs: keep the format version the file was opened with instead of
-    // restamping it, so a save here doesn't flag the file as "newer format"
-    // for everyone else.  KICAD_COLLAB_STAMP_VERSIONS=1 restores stock
-    // stamping.  New files (no version at load) always get the current one.
-    int version = SEXPR_SCHEMATIC_FILE_VERSION;
+    // KiCad Collaborative round-trips project files with stock KiCad installs: keep the format
+    // version the file was opened with instead of restamping it, so a save here doesn't flag the
+    // file as "newer format" for everyone else.  New files (nothing loaded) get the current one.
+    //
+    // The stamp is only kept when the bytes actually fit in it.  KiCad's writer always emits the
+    // current grammar, so the body has to be serialized first and measured; if it needs something
+    // newer, the version is raised and the reason reported rather than writing a file that claims
+    // to be older than it is.
+    const int loaded = preservableVersion( screen );
 
-    // (The 20130000 floor excludes legacy-format loads, whose versions are
-    // small integers; a legacy import is a new s-expression file.)
-    if( screen->GetFileFormatVersionAtLoad() >= 20130000
-            && screen->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION
-            && !wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+    if( loaded == 0 )
     {
-        version = screen->GetFileFormatVersionAtLoad();
+        m_out->Print( "(kicad_sch (version %d) (generator \"eeschema\") (generator_version %s)",
+                      SEXPR_SCHEMATIC_FILE_VERSION,
+                      m_out->Quotew( GetMajorMinorVersion() ).c_str() );
+
+        formatSheetContents( aSheet, sheets );
+        return;
+    }
+
+    STRING_FORMATTER bodyFormatter;
+
+    auto formatBodyAt =
+            [&]( int aVersion )
+            {
+                bodyFormatter.Clear();
+                bodyFormatter.SetFileFormatVersion( aVersion );
+
+                OUTPUTFORMATTER* saveOut = m_out;
+                m_out = &bodyFormatter;
+
+                try
+                {
+                    formatSheetContents( aSheet, sheets );
+                }
+                catch( ... )
+                {
+                    m_out = saveOut;
+                    throw;
+                }
+
+                m_out = saveOut;
+            };
+
+    formatBodyAt( loaded );
+
+    const char*         feature = nullptr;
+    std::pair<int, int> chosen = chooseFileFormatVersion( aSheet, bodyFormatter.GetString(),
+                                                          &feature );
+
+    if( chosen.first > chosen.second )
+    {
+        // The body needs a newer format than the file was loaded at.  Serialize it again at the
+        // version actually being written, so emitters with a legacy representation agree with
+        // the stamp, and tell the caller what forced the upgrade.  Nothing can differ between
+        // the two versions unless an emitter actually consulted the version, so skip the second
+        // pass when none did.
+        if( bodyFormatter.UsedLegacyRepresentation() )
+            formatBodyAt( chosen.first );
+
+        if( m_reporter )
+        {
+            m_reporter->Report(
+                    wxString::Format( _( "'%s' uses %s, which file format version %d cannot "
+                                         "store.  Saved using file format version %d instead; "
+                                         "older versions of KiCad will not be able to open it." ),
+                                      screen->GetFileName(),
+                                      feature ? wxString::FromUTF8( feature )
+                                              : _( "a newer file format feature" ),
+                                      chosen.second,
+                                      chosen.first ),
+                    RPT_SEVERITY_WARNING );
+        }
     }
 
     m_out->Print( "(kicad_sch (version %d) (generator \"eeschema\") (generator_version %s)",
-                  version,
+                  chosen.first,
                   m_out->Quotew( GetMajorMinorVersion() ).c_str() );
+
+    m_out->WriteRaw( bodyFormatter.GetString() );
+}
+
+
+int SCH_IO_KICAD_SEXPR::preservableVersion( SCH_SCREEN* aScreen ) const
+{
+    if( wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+        return 0;
+
+    int loaded = aScreen->GetFileFormatVersionAtLoad();
+
+    // A screen that was never parsed (a sheet just added to the hierarchy, whether by the user
+    // or by an incoming collaboration op) has no version of its own.  Writing the current
+    // version there would leave one 10.99 file inside an otherwise older project, which stock
+    // KiCad opens at the root and then refuses at the sub-sheet, so inherit the root's.
+    if( loaded == 0 && m_schematic && m_schematic->RootScreen()
+            && m_schematic->RootScreen() != aScreen )
+    {
+        loaded = m_schematic->RootScreen()->GetFileFormatVersionAtLoad();
+    }
+
+    // The 20130000 floor excludes legacy-format loads, whose versions are small integers; a
+    // legacy import is a new s-expression file.
+    if( loaded < 20130000 || loaded >= SEXPR_SCHEMATIC_FILE_VERSION )
+        return 0;
+
+    return loaded;
+}
+
+
+std::pair<int, int> SCH_IO_KICAD_SEXPR::chooseFileFormatVersion( SCH_SHEET* aSheet,
+                                                                 const std::string& aBody,
+                                                                 const char** aFeature ) const
+{
+    SCH_SCREEN* screen = aSheet->GetScreen();
+    int         loaded = preservableVersion( screen );
+
+    if( loaded == 0 )
+        return { SEXPR_SCHEMATIC_FILE_VERSION, SEXPR_SCHEMATIC_FILE_VERSION };
+
+    KICAD_FORMAT::FORMAT_VERSION_REQUIREMENT required =
+            KICAD_FORMAT::MinimumFileFormatVersion( aBody,
+                                                    KICAD_FORMAT::FILE_FORMAT_DOMAIN::SCHEMATIC );
+
+    // Escaped stacked pin notation (20260622) lives inside the quoted number field, which the
+    // scan skips, and changed no token.  A pre-20260622 KiCad reads the escapes as literal text
+    // and the separators as syntax, so it opens the file happily and gets a different pin set --
+    // the one failure mode worth paying two model walks to avoid.
+    if( required.m_version < 20260622 )
+    {
+        auto stackedPinNeedsEscaping =
+                [&]( const LIB_SYMBOL* aSymbol ) -> bool
+                {
+                    if( !aSymbol )
+                        return false;
+
+                    std::vector<const SCH_PIN*> pins = aSymbol->GetGraphicalPins();
+
+                    return std::any_of( pins.begin(), pins.end(),
+                                        []( const SCH_PIN* aPin )
+                                        {
+                                            return KICAD_FORMAT::UsesEscapedStackedPinNotation(
+                                                    aPin->GetNumber() );
+                                        } );
+                };
+
+        for( const auto& [ libItemName, libSymbol ] : screen->GetLibSymbols() )
+        {
+            if( stackedPinNeedsEscaping( libSymbol ) )
+            {
+                required.m_version = 20260622;
+                required.m_feature = "escaped special characters in stacked pin notation";
+                break;
+            }
+        }
+    }
+
+    // A reference image's stored scale is not visible in the serialized text: it is only
+    // meaningful next to the image's own pixel density.  Mirror the load-time migration's
+    // condition, because writing an already-corrected scale under a pre-20260623 stamp makes
+    // the next load correct it a second time and the image grows every round trip.
+    if( required.m_version < 20260623 )
+    {
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_BITMAP_T ) )
+        {
+            const REFERENCE_IMAGE& refImage =
+                    static_cast<const SCH_BITMAP*>( item )->GetReferenceImage();
+            const BITMAP_BASE&     image = refImage.GetImage();
+            const int              legacyPPI = image.GetLegacyPPI();
+
+            if( legacyPPI > 0 && image.GetPPI() != legacyPPI )
+            {
+                required.m_version = 20260623;
+                required.m_feature = "a reference image with a corrected pixel density";
+                break;
+            }
+        }
+    }
+
+    if( required.m_version <= loaded )
+        return { loaded, loaded };
+
+    *aFeature = required.m_feature;
+
+    return { std::min( required.m_version, SEXPR_SCHEMATIC_FILE_VERSION ), loaded };
+}
+
+
+void SCH_IO_KICAD_SEXPR::formatSheetContents( SCH_SHEET* aSheet, const SCH_SHEET_LIST& sheets )
+{
+    SCH_SCREEN* screen = aSheet->GetScreen();
 
     KICAD_FORMAT::FormatUuid( m_out, screen->m_uuid );
 
@@ -1898,6 +2069,10 @@ void SCH_IO_KICAD_SEXPR::cacheLib( const wxString& aLibraryFileName,
             m_cache->m_modHash = oldModifyHash + 1;
         }
     }
+
+    // The reporter can change between calls (each save hands the IO its own), and a reused cache
+    // never goes through the branch above, so refresh it here rather than only on construction.
+    m_cache->SetReporter( m_reporter );
 }
 
 
@@ -2028,6 +2203,7 @@ void SCH_IO_KICAD_SEXPR::CreateLibrary( const wxString& aLibraryPath,
 
     delete m_cache;
     m_cache = new SCH_IO_KICAD_SEXPR_LIB_CACHE( aLibraryPath );
+    m_cache->SetReporter( m_reporter );
     m_cache->SetModified();
     m_cache->Save();
     m_cache->Load();    // update m_writable and m_timestamp
@@ -2076,6 +2252,8 @@ void SCH_IO_KICAD_SEXPR::SaveLibrary( const wxString& aLibraryPath, const std::m
 {
     if( !m_cache )
         m_cache = new SCH_IO_KICAD_SEXPR_LIB_CACHE( aLibraryPath );
+
+    m_cache->SetReporter( m_reporter );
 
     wxString oldFileName = m_cache->GetFileName();
 

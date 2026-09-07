@@ -232,8 +232,6 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
     {
         auto formatter = std::make_unique<PRETTIFIED_FILE_OUTPUTFORMATTER>( fn.GetFullPath() );
 
-        formatLibraryHeader( *formatter.get() );
-
         std::vector<LIB_SYMBOL*> orderedSymbols;
 
         for( const auto& [ name, symbol ] : m_symbols )
@@ -255,10 +253,8 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
                        return lhDepth < rhDepth;
                    } );
 
-        for( LIB_SYMBOL* symbol : orderedSymbols )
-            SaveSymbol( symbol, *formatter.get() );
+        formatLibrary( *formatter.get(), orderedSymbols );
 
-        formatter->Print( ")" );
         formatter->Finish();
         formatter.reset();
     }
@@ -332,12 +328,8 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
 
             auto formatter = std::make_unique<PRETTIFIED_FILE_OUTPUTFORMATTER>( oldFn.GetFullPath() );
 
-            formatLibraryHeader( *formatter.get() );
+            formatLibrary( *formatter.get(), symbols );
 
-            for( LIB_SYMBOL* symbol : symbols )
-                SaveSymbol( symbol, *formatter.get() );
-
-            formatter->Print( ")" );
             formatter->Finish();
             formatter.reset();
 
@@ -940,12 +932,119 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::updateParentSymbolLinks()
 }
 
 
-void SCH_IO_KICAD_SEXPR_LIB_CACHE::formatLibraryHeader( OUTPUTFORMATTER& aFormatter )
+void SCH_IO_KICAD_SEXPR_LIB_CACHE::formatLibraryHeader( OUTPUTFORMATTER& aFormatter, int aVersion )
 {
     aFormatter.Print( "(kicad_symbol_lib (version %d) (generator \"kicad_symbol_editor\") "
                       "(generator_version \"%s\")",
-                      SEXPR_SYMBOL_LIB_FILE_VERSION,
+                      aVersion,
                       GetMajorMinorVersion().c_str().AsChar() );
+}
+
+
+int SCH_IO_KICAD_SEXPR_LIB_CACHE::preservableVersion() const
+{
+    if( wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+        return 0;
+
+    const int loaded = GetFileFormatVersionAtLoad();
+
+    // The 20130000 floor excludes legacy-format loads, whose versions are small integers, and a
+    // library that was never parsed (a new library starts at 0); both are new files.
+    if( loaded < 20130000 || loaded >= SEXPR_SYMBOL_LIB_FILE_VERSION )
+        return 0;
+
+    return loaded;
+}
+
+
+void SCH_IO_KICAD_SEXPR_LIB_CACHE::formatLibrary( OUTPUTFORMATTER& aFormatter,
+                                                  const std::vector<LIB_SYMBOL*>& aSymbols )
+{
+    const int loaded = preservableVersion();
+
+    if( loaded == 0 )
+    {
+        formatLibraryHeader( aFormatter, SEXPR_SYMBOL_LIB_FILE_VERSION );
+
+        for( LIB_SYMBOL* symbol : aSymbols )
+            SaveSymbol( symbol, aFormatter );
+
+        aFormatter.Print( ")" );
+        return;
+    }
+
+    STRING_FORMATTER body;
+
+    auto formatBodyAt =
+            [&]( int aVersion )
+            {
+                body.Clear();
+                body.SetFileFormatVersion( aVersion );
+
+                for( LIB_SYMBOL* symbol : aSymbols )
+                    SaveSymbol( symbol, body );
+            };
+
+    formatBodyAt( loaded );
+
+    KICAD_FORMAT::FORMAT_VERSION_REQUIREMENT required =
+            KICAD_FORMAT::MinimumFileFormatVersion( body.GetString(),
+                                                    KICAD_FORMAT::FILE_FORMAT_DOMAIN::SYMBOL_LIB );
+
+    // Escaped stacked pin notation is invisible in the serialized text (it lives inside the
+    // quoted number field) and an older KiCad misreads it silently rather than refusing it, so
+    // it has to be detected on the model.  See KICAD_FORMAT::UsesEscapedStackedPinNotation().
+    if( required.m_version < 20260622 )
+    {
+        for( const LIB_SYMBOL* symbol : aSymbols )
+        {
+            if( !symbol )
+                continue;
+
+            std::vector<const SCH_PIN*> pins = symbol->GetGraphicalPins();
+
+            if( std::any_of( pins.begin(), pins.end(),
+                             []( const SCH_PIN* aPin )
+                             {
+                                 return KICAD_FORMAT::UsesEscapedStackedPinNotation(
+                                         aPin->GetNumber() );
+                             } ) )
+            {
+                required.m_version = 20260622;
+                required.m_feature = "escaped special characters in stacked pin notation";
+                break;
+            }
+        }
+    }
+
+    int version = loaded;
+
+    if( required.m_version > loaded )
+    {
+        version = std::min( required.m_version, SEXPR_SYMBOL_LIB_FILE_VERSION );
+
+        if( body.UsedLegacyRepresentation() )
+            formatBodyAt( version );
+
+        if( m_reporter )
+        {
+            m_reporter->Report(
+                    wxString::Format( _( "'%s' uses %s, which file format version %d cannot "
+                                         "store.  Saved using file format version %d instead; "
+                                         "older versions of KiCad will not be able to open it." ),
+                                      m_libFileName.GetFullPath(),
+                                      required.m_feature
+                                              ? wxString::FromUTF8( required.m_feature )
+                                              : _( "a newer file format feature" ),
+                                      loaded,
+                                      version ),
+                    RPT_SEVERITY_WARNING );
+        }
+    }
+
+    formatLibraryHeader( aFormatter, version );
+    aFormatter.WriteRaw( body.GetString() );
+    aFormatter.Print( ")" );
 }
 
 

@@ -291,7 +291,9 @@ class KICOMMON_API OUTPUTFORMATTER
 {
 protected:
     OUTPUTFORMATTER( int aReserve = OUTPUTFMTBUFZ, char aQuoteChar = '"' ) :
-            m_buffer( aReserve, '\0' )
+            m_buffer( aReserve, '\0' ),
+            m_fileFormatVersion( 0 ),
+            m_usedLegacyRepresentation( false )
     {
         quoteChar[0] = aQuoteChar;
         quoteChar[1] = '\0';
@@ -332,6 +334,56 @@ protected:
 #endif
 
 public:
+    /**
+     * Tell emitters which file format version is being written.
+     *
+     * KiCad's writers normally emit the current grammar unconditionally.  When a file is being
+     * written back at the version it was loaded with, a construct whose *representation* changed
+     * since then has to be written the old way or the file will not round-trip.  Emitters that
+     * have such a legacy representation consult this.
+     *
+     * @param aVersion is the target file format version, or 0 (the default) for the current one.
+     */
+    void SetFileFormatVersion( int aVersion )
+    {
+        m_fileFormatVersion = aVersion;
+        m_usedLegacyRepresentation = false;
+    }
+
+    /**
+     * @return the target file format version, or 0 when the current format is being written.
+     */
+    int GetFileFormatVersion() const { return m_fileFormatVersion; }
+
+    /**
+     * Record that an emitter took its legacy branch because of GetFileFormatVersion().
+     *
+     * A caller that serializes once to measure the result and may then have to serialize again
+     * at a different version uses this to skip the second pass: if nothing consulted the version,
+     * the bytes cannot differ between versions.  Reset by SetFileFormatVersion().
+     */
+    void SetUsedLegacyRepresentation() { m_usedLegacyRepresentation = true; }
+
+    /**
+     * @return true if an emitter wrote a construct the old way for GetFileFormatVersion().
+     */
+    bool UsedLegacyRepresentation() const { return m_usedLegacyRepresentation; }
+
+    /**
+     * Append already-formatted bytes verbatim.
+     *
+     * Print() runs the whole string through vsnprintf (twice, when it overflows the scratch
+     * buffer, which a whole serialized board always does).  Use this instead of Print( "%s", ... )
+     * for a body that is already formatted.
+     */
+    void WriteRaw( const char* aBuf, size_t aCount )
+    {
+        if( aCount )
+            write( aBuf, static_cast<int>( aCount ) );
+    }
+
+    void WriteRaw( const std::string& aStr ) { WriteRaw( aStr.data(), aStr.size() ); }
+
     /**
      * This is a polymorphic class that can validly be handled by a pointer to the base class.
      */
@@ -410,6 +462,8 @@ public:
 
 private:
     std::vector<char>   m_buffer;
+    int                 m_fileFormatVersion;  ///< target format version; 0 = current
+    bool                m_usedLegacyRepresentation;  ///< an emitter honoured m_fileFormatVersion
     char                quoteChar[2];
 
     int sprint( const char* fmt, ... );

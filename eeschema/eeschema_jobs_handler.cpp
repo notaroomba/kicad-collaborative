@@ -1459,6 +1459,17 @@ int EESCHEMA_JOBS_HANDLER::JobUpgrade( JOB* aJob )
     {
         IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
         SCH_SHEET*          loadedSheet = pi->LoadSchematicFile( schFullPath, sch );
+
+        // Saving normally keeps the version the file was loaded with.  This job is an explicit
+        // request to restamp, so drop the loaded version: with nothing to preserve the writer
+        // falls back to the current format.  (The version is only read by the writer, and the
+        // schematic is discarded when this job returns.)
+        if( loadedSheet && loadedSheet->GetScreen() )
+            loadedSheet->GetScreen()->SetFileFormatVersionAtLoad( 0 );
+
+        if( sch->RootScreen() )
+            sch->RootScreen()->SetFileFormatVersionAtLoad( 0 );
+
         pi->SaveSchematicFile( schFullPath, loadedSheet, sch );
     }
     catch( const IO_ERROR& ioe )

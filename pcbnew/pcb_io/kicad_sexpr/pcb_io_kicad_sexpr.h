@@ -27,6 +27,7 @@
 
 #include <richio.h>
 #include <string>
+#include <utility>
 #include <optional>
 #include <layer_ids.h>
 #include <zone_settings.h>
@@ -376,6 +377,23 @@ public:
      *  Skips GroupsSanityCheck (no UI interaction allowed from timer callbacks). */
     void FormatBoardToFormatter( OUTPUTFORMATTER* aOut, BOARD* aBoard,
                                  const std::map<std::string, UTF8>* aProperties = nullptr );
+
+    /**
+     * Choose the file format version to stamp on @a aBoard's file.
+     *
+     * @param aBoard is the board about to be written.
+     * @param aBody is its already-serialized body (everything after the header).
+     * @param aFeature receives the untranslated name of the feature that forced an upgrade,
+     *                 or is left untouched when the loaded version is kept.
+     * @return the version to write, and the version the board was loaded at.
+     */
+    std::pair<int, int> chooseFileFormatVersion( BOARD* aBoard, const std::string& aBody,
+                                                 const char** aFeature ) const;
+
+    /// The version the file should be preserved at, or 0 if there is nothing to preserve.
+    static int preservableVersion( int aLoadedVersion );
+    static int preservableVersion( const BOARD* aBoard );
+
 
     BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
                       const std::map<std::string, UTF8>* aProperties = nullptr,

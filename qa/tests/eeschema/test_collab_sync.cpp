@@ -45,6 +45,7 @@
 #include <wx/filename.h>
 #include <wx/utils.h>
 #include <sch_sheet_path.h>
+#include <reporter.h>
 #include <sch_symbol.h>
 #include <settings/settings_manager.h>
 
@@ -332,19 +333,27 @@ BOOST_AUTO_TEST_CASE( AddedWithExistingUuidUpserts )
 
 
 // KiCad Collaborative must not restamp the file format version on save: a
-// project shared with a stock KiCad keeps the version it was opened with.
+// project shared with a stock KiCad keeps the version it was opened with.  The version is
+// only kept when the bytes actually fit in it; when they do not it is raised and the reason
+// reported, so an older KiCad never gets a file that lies about its format.
 BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
 {
     SCH_SHEET*  root = &m_authoring->Root();
     SCH_SCREEN* screen = root->GetScreen();
     BOOST_REQUIRE( screen );
 
+    WX_STRING_REPORTER reporter;
+
     auto savedVersion = [&]( int aAtLoad ) -> std::string
     {
         screen->SetFileFormatVersionAtLoad( aAtLoad );
+        reporter.Clear();
 
-        wxString tmp = wxFileName::CreateTempFileName( wxS( "collab_ver" ) );
-        SCH_IO_KICAD_SEXPR().SaveSchematicFile( tmp, root, m_authoring.get() );
+        wxString         tmp = wxFileName::CreateTempFileName( wxS( "collab_ver" ) );
+        SCH_IO_KICAD_SEXPR io;
+
+        io.SetReporter( &reporter );
+        io.SaveSchematicFile( tmp, root, m_authoring.get() );
 
         wxFFile   file( tmp, wxS( "r" ) );
         wxString  content;
@@ -356,16 +365,59 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
         return content.Mid( start + 9, content.Mid( start + 9 ).Find( ')' ) ).ToStdString();
     };
 
-    // A file opened at an older (stock KiCad) version keeps that version.
-    BOOST_CHECK_EQUAL( savedVersion( 20241209 ), "20241209" );
+    // A file opened at the version stock KiCad 10.0 writes keeps that version, silently.
+    BOOST_CHECK_EQUAL( savedVersion( 20260306 ), "20260306" );
+    BOOST_CHECK( !reporter.HasMessage() );
+
+    // A file too old to express what the writer emits is raised instead of being stamped with a
+    // version it does not match -- and the user is told.  Every sheet carries (embedded_fonts),
+    // which landed at 20240620, so a file claiming to predate that cannot hold what we write.
+    // (Note this fixture's root sheet has no symbols of its own -- they live on the sub-sheet --
+    // so symbol-only tokens such as body_style are not what forces the upgrade here.)
+    const std::string raised = savedVersion( 20230121 );
+    BOOST_CHECK_MESSAGE( std::stoi( raised ) > 20230121,
+                         "expected the stamp to be raised above 20230121, got " + raised );
+    BOOST_CHECK( reporter.HasMessage() );
 
     // A legacy-format import (small integer version) gets the current stamp.
     BOOST_CHECK( savedVersion( 2 ) != "2" );
 
     // Stock stamping on request.
     wxSetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), wxS( "1" ) );
-    BOOST_CHECK( savedVersion( 20241209 ) != "20241209" );
+    BOOST_CHECK( savedVersion( 20260306 ) != "20260306" );
     wxUnsetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ) );
+}
+
+
+// A sheet added after the project was opened has no version of its own.  It must inherit the
+// root sheet's, or the project ends up with one 10.99 file inside an otherwise older project
+// that stock KiCad opens at the root and then refuses at the sub-sheet.
+BOOST_AUTO_TEST_CASE( NewSheetInheritsRootFileFormatVersion )
+{
+    SCH_SHEET*  root = &m_authoring->Root();
+
+    // SCHEMATIC::RootScreen() resolves to the first top-level sheet's screen, not the virtual
+    // root's container screen; that is the one a new sheet inherits from.
+    SCH_SCREEN* rootScreen = m_authoring->RootScreen();
+    BOOST_REQUIRE( rootScreen );
+
+    rootScreen->SetFileFormatVersionAtLoad( 20260306 );
+
+    SCH_SHEET   added( root, VECTOR2I( 0, 0 ) );
+    SCH_SCREEN* addedScreen = new SCH_SCREEN( m_authoring.get() );
+
+    added.SetScreen( addedScreen );
+    BOOST_REQUIRE_EQUAL( addedScreen->GetFileFormatVersionAtLoad(), 0 );
+
+    wxString tmp = wxFileName::CreateTempFileName( wxS( "collab_ver_sheet" ) );
+    SCH_IO_KICAD_SEXPR().SaveSchematicFile( tmp, &added, m_authoring.get() );
+
+    wxFFile  file( tmp, wxS( "r" ) );
+    wxString content;
+    file.ReadAll( &content );
+    wxRemoveFile( tmp );
+
+    BOOST_CHECK( content.Contains( wxS( "(version 20260306)" ) ) );
 }
 
 

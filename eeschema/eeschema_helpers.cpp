@@ -250,11 +250,13 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
     // A schematic written by an older version can lose the junctions that Eeschema implies from
     // merged colinear wires, which shows up as connectivity errors.  The GUI editor repairs this on
     // load; the headless/CLI loader must do the same before connectivity is calculated.  It is
-    // limited to pre-current files (the current version writes those junctions on save, so running
-    // it on a current file could silently connect an intentional crossing) and to callers that
-    // actually want connectivity.
+    // limited to files older than SEXPR_SCHEMATIC_IMPLIED_JUNCTIONS_VERSION (from that version on
+    // the junctions are written on save, so running it could silently connect an intentional
+    // crossing) and to callers that actually want connectivity.  The bound is a fixed version
+    // rather than the current one because saving now preserves the loaded version.
     if( aCalculateConnectivity
-        && schematic->RootScreen()->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION )
+        && schematic->RootScreen()->GetFileFormatVersionAtLoad()
+                   < SEXPR_SCHEMATIC_IMPLIED_JUNCTIONS_VERSION )
         schematic->FixupJunctionsAfterImport();
 
     schematic->ConnectionGraph()->Reset();

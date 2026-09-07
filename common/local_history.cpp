@@ -2262,10 +2262,28 @@ bool overlaySnapshotFiles( const wxString& aTempRestorePath, const wxString& aPr
             }
         }
 
+        // A restore copies bytes, so it cannot honour the format version the working copy was
+        // being kept at: a snapshot taken before the project was downgraded restores the older
+        // snapshot's stamp along with its content.  That is what a restore is for, but say so,
+        // because it silently undoes a format-version downgrade.
+        const int previousVersion = KICAD_FORMAT::FileFormatVersionStamp( dst.GetFullPath() );
+
         if( !wxFileName::Mkdir( dst.GetPath(), 0777, wxPATH_MKDIR_FULL )
             || !wxCopyFile( src.GetFullPath(), dst.GetFullPath(), true ) )
         {
             return false;
+        }
+
+        if( previousVersion > 0 )
+        {
+            const int newVersion = KICAD_FORMAT::FileFormatVersionStamp( dst.GetFullPath() );
+
+            if( newVersion > previousVersion )
+            {
+                wxLogTrace( traceAutoSave,
+                            wxS( "[history] restore raised '%s' file format version %d -> %d" ),
+                            rel, previousVersion, newVersion );
+            }
         }
     }
 

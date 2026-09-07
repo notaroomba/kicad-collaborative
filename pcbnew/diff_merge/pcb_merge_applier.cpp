@@ -124,6 +124,28 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
 
     auto result = std::make_unique<BOARD>();
 
+    // A fresh BOARD reports LEGACY_BOARD_FILE_VERSION as its at-load version, which the writer
+    // reads as "never parsed" and stamps with the current format.  Merging three 20260206 boards
+    // would then hand the user a 10.99 file.  Inherit the oldest s-expression version among the
+    // inputs instead; PCB_IO_KICAD_SEXPR raises it again if the merged bytes need more.
+    {
+        int inherited = 0;
+
+        for( const BOARD* input : { m_ancestor, m_ours, m_theirs } )
+        {
+            if( !input )
+                continue;
+
+            const int version = input->GetFileFormatVersionAtLoad();
+
+            if( version >= 20130000 && ( inherited == 0 || version < inherited ) )
+                inherited = version;
+        }
+
+        if( inherited > 0 )
+            result->SetFileFormatVersionAtLoad( inherited );
+    }
+
     // Index plan actions by item id so we can decide per item what to do.
     std::map<KIID_PATH, const ITEM_RESOLUTION*> actionsById;
 

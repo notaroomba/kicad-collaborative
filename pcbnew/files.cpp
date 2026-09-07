@@ -865,16 +865,29 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         else
             GetScreen()->SetContentModified( false );
 
-        if( ( pluginType == PCB_IO_MGR::LEGACY )
-         || ( pluginType == PCB_IO_MGR::KICAD_SEXP
-                && loadedBoard->GetFileFormatVersionAtLoad() < SEXPR_BOARD_FILE_VERSION
-                && loadedBoard->GetGenerator().Lower() != wxT( "gerbview" ) ) )
+        if( pluginType == PCB_IO_MGR::LEGACY )
         {
             m_infoBar->RemoveAllButtons();
             m_infoBar->AddCloseButton();
             m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
                                        "It will be converted to the new format when saved." ),
                                     wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+        }
+        else if( pluginType == PCB_IO_MGR::KICAD_SEXP
+                    && loadedBoard->GetFileFormatVersionAtLoad() < SEXPR_BOARD_FILE_VERSION
+                    && loadedBoard->GetGenerator().Lower() != wxT( "gerbview" ) )
+        {
+            // An s-expression board is written back at the version it was loaded with, so it
+            // is not converted on save.  Say so rather than promising a conversion that will
+            // not happen; a save that does have to raise the version says so at that point.
+            m_infoBar->RemoveAllButtons();
+            m_infoBar->AddCloseButton();
+            m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
+                                       "It will be saved in that same format, so it stays "
+                                       "readable by that version, unless an edit needs "
+                                       "something only a newer format can store." ),
+                                    wxICON_INFORMATION,
+                                    WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
         }
 
         // extract a project fp library and re-link board FPIDs so update-from-schematic works
@@ -1050,10 +1063,16 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
     if( pcbFileName.FileExists() )
         KIPLATFORM::IO::MakeWriteable( pcbFileName.GetFullPath() );
 
+    // The writer keeps the board's original file format version, and raises it only when the
+    // design has grown something that version cannot store.  Collect that so the user is told
+    // rather than finding out when a collaborator's older KiCad refuses the file.
+    WX_STRING_REPORTER formatReporter;
+
     try
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
 
+        pi->SetReporter( &formatReporter );
         pi->SaveBoard( pcbFileName.GetFullPath(), GetBoard(), nullptr );
     }
     catch( const IO_ERROR& ioe )
@@ -1062,6 +1081,14 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
                                               pcbFileName.GetFullPath(),
                                               ioe.What() ) );
         return false;
+    }
+
+    if( formatReporter.HasMessage() )
+    {
+        m_infoBar->RemoveAllButtons();
+        m_infoBar->AddCloseButton();
+        m_infoBar->ShowMessage( formatReporter.GetMessages(), wxICON_WARNING,
+                                WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
     }
 
     WX_STRING_REPORTER backupReporter;
@@ -1147,12 +1174,15 @@ bool PCB_EDIT_FRAME::SavePcbCopy( const wxString& aFileName, bool aCreateProject
     if( pcbFileName.FileExists() )
         KIPLATFORM::IO::MakeWriteable( pcbFileName.GetFullPath() );
 
+    WX_STRING_REPORTER formatReporter;
+
     try
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
 
         wxASSERT( pcbFileName.IsAbsolute() );
 
+        pi->SetReporter( &formatReporter );
         pi->SaveBoard( pcbFileName.GetFullPath(), GetBoard(), nullptr );
     }
     catch( const IO_ERROR& ioe )
@@ -1165,6 +1195,14 @@ bool PCB_EDIT_FRAME::SavePcbCopy( const wxString& aFileName, bool aCreateProject
         }
 
         return false;
+    }
+
+    if( formatReporter.HasMessage() && !aHeadless )
+    {
+        m_infoBar->RemoveAllButtons();
+        m_infoBar->AddCloseButton();
+        m_infoBar->ShowMessage( formatReporter.GetMessages(), wxICON_WARNING,
+                                WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
     }
 
     wxFileName projectFile( pcbFileName );
