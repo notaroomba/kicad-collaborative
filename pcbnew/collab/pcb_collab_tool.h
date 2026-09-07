@@ -72,7 +72,14 @@ public:
     bool IsHost() const;
 
     ///< True while this frame is connected to a collaboration session.
-    bool sessionActive() const { return m_ownsSession || !m_docId.IsEmpty(); }
+    ///<
+    ///< The joined document, and nothing else.  m_ownsSession answers a different
+    ///< question -- "did this tool open the process-wide connection" -- and reading it
+    ///< here made the menu lie: leaveDoc() clears m_docId and m_projectId but not
+    ///< ownership, so after saving the board under a new name (its path no longer
+    ///< matches any published doc) File greyed out Start/Join and offered Stop Session
+    ///< while Copy Share Link answered "No collaboration session".
+    bool sessionActive() const { return !m_docId.IsEmpty(); }
 
     // COLLAB_DOC_ADAPTER; all calls arrive on the UI thread.
     void OnPresenceChanged() override;

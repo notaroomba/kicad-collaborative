@@ -820,7 +820,19 @@ void SCH_EDIT_FRAME::setupUIConditions()
             [this]( const SELECTION& )
             {
                 SCH_COLLAB_TOOL* tool = m_toolManager->GetTool<SCH_COLLAB_TOOL>();
-                return !tool || !tool->sessionActive();
+
+                if( tool && tool->sessionActive() )
+                    return false;
+
+                // There is one WebSocket per process, one link.json per project and one
+                // project id on the session, all shared with the board editor.  Starting
+                // or joining from here while the board editor holds a session published a
+                // second online project over the first, repointed link.json at it and
+                // knocked the board editor onto a session it is not part of.  Exists()
+                // rather than Get(): painting a menu must not spin up the session.
+                return !COLLAB_SESSION::Exists()
+                       || COLLAB_SESSION::Get().GetState()
+                                  == COLLAB_SESSION::STATE::DISCONNECTED;
             };
 
     mgr->SetConditions( ACTIONS::save,                ENABLE( SELECTION_CONDITIONS::ShowAlways ) );
@@ -839,6 +851,15 @@ void SCH_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::collabStartSession, ENABLE( collabIdle ) );
     mgr->SetConditions( SCH_ACTIONS::collabJoinSession,  ENABLE( collabIdle ) );
     mgr->SetConditions( SCH_ACTIONS::collabLeaveSession, ENABLE( collabLive ) );
+
+    // Every one of these needs a session.  Without a condition they stayed permanently
+    // enabled and answered with an infobar instead -- which is how one File menu came to
+    // grey out Start/Join, offer Leave Session, and still say "No collaboration session"
+    // when Copy Share Link was clicked.
+    mgr->SetConditions( SCH_ACTIONS::collabCopyLink,     ENABLE( collabLive ) );
+    mgr->SetConditions( SCH_ACTIONS::collabComments,     ENABLE( collabLive ) );
+    mgr->SetConditions( SCH_ACTIONS::collabFollow,       ENABLE( collabLive ) );
+    mgr->SetConditions( SCH_ACTIONS::collabHistory,      ENABLE( collabLive ) );
 
     mgr->SetConditions( ACTIONS::cut,                 ENABLE( hasElements ) );
     mgr->SetConditions( ACTIONS::copy,                ENABLE( hasElements ) );

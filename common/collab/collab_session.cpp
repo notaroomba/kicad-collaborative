@@ -241,6 +241,23 @@ void COLLAB_SESSION::Disconnect()
 }
 
 
+bool COLLAB_SESSION::ReleaseIfIdle()
+{
+    // Another editor in this process is still joined: the connection is theirs too.
+    if( !m_docs.empty() )
+        return false;
+
+    // The identity outlived the connection until now, so File > Copy Share Link and
+    // File > History went on acting on the project the user had just left.
+    m_projectId.clear();
+    m_projectDocs = nlohmann::json::array();
+
+    Disconnect();
+
+    return true;
+}
+
+
 void COLLAB_SESSION::ForgetAdapter( COLLAB_DOC_ADAPTER* aAdapter )
 {
     for( auto it = m_docs.begin(); it != m_docs.end(); )

@@ -76,6 +76,28 @@ std::string FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, SCH_ITE
 bool ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, const nlohmann::json& aChange,
                       SCH_COMMIT* aCommit, SCH_ITEM** aRemovedItem = nullptr );
 
+/**
+ * The server project id a session must be left with once @p aProject has been folded in.
+ *
+ * A payload that carries no "projectId" key says nothing about the identity of the project
+ * and must leave @p aCurrentId standing: joining alongside an editor of the same process
+ * that already connected synthesizes a project out of the published doc list alone, and
+ * treating that as "the project has no id" left the session live but anonymous -- the doc
+ * map was populated, so the File menu greyed out Start/Join and offered Leave Session,
+ * while File > Copy Share Link (which reads COLLAB_SESSION::ProjectId()) reported "No
+ * collaboration session; start or join one first".
+ *
+ * A payload that does carry the key wins, empty string included: that is a real project
+ * description saying who the session belongs to.
+ */
+wxString ResolveProjectId( const nlohmann::json& aProject, const wxString& aCurrentId );
+
+/**
+ * The same rule for the project's owner (which drives "Stop Session" vs "Leave Session"):
+ * a payload without an "ownerId" key means "unchanged", not "nobody".
+ */
+long long ResolveOwnerId( const nlohmann::json& aProject, long long aCurrentOwnerId );
+
 } // namespace SCH_COLLAB
 
 

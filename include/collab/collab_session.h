@@ -138,6 +138,21 @@ public:
     void Disconnect();
 
     /**
+     * One editor is done with the session: drop the connection, and with it the
+     * session's identity, but only once no document is joined any more.
+     *
+     * The WebSocket is process-wide and shared — eeschema and pcbnew join their own
+     * documents over the one connection — so an unconditional Disconnect() from
+     * whichever editor the user happened to leave (or close) first killed the other
+     * editor's live session under it, with nothing to tell that editor its docs had
+     * gone: its File menu went on greying out Start/Join and offering Leave Session
+     * while nothing synced.  Every caller must LeaveDoc() its own documents first.
+     *
+     * @return true when the session really was torn down (we were the last one out).
+     */
+    bool ReleaseIfIdle();
+
+    /**
      * Join a server document and register its adapter. aSinceSeq is the last
      * seq the caller has applied (empty = cold join, server sends a snapshot).
      */

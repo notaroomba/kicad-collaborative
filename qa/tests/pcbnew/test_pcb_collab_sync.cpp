@@ -27,6 +27,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <collab/pcb_collab_sync.h>
+#include <collab/collab_session.h>
 
 #include <diff_merge/kicad_diff_types.h>
 #include <diff_merge/property_diff.h>
@@ -498,6 +499,47 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
     wxSetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), wxS( "1" ) );
     BOOST_CHECK( savedVersion( 20260206 ) != "20260206" );
     wxUnsetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ) );
+}
+
+
+// The board editor's half of the shared-connection bug.
+//
+// A board opened beside a live schematic session joins the project's kicad_pcb document
+// over the connection eeschema already made (PCB_COLLAB_TOOL::onTimer scans
+// COLLAB_SESSION::ProjectDocs() for it).  eeschema's endSession() then called
+// COLLAB_SESSION::Disconnect() unconditionally -- on File > Leave Session, on "Make local
+// only", and on simply closing the schematic window -- which destroyed the socket under
+// the board editor.  pcbnew was never told: its own recovery in onTimer is gated on
+// !m_ownsSession, so a board that had begun the session sat at "Collaboration: offline"
+// with Leave Session enabled and no way back.
+//
+// The connection is now released only when the last document leaves it.
+BOOST_AUTO_TEST_CASE( SchematicLeavingDoesNotStrandTheBoard )
+{
+    struct STUB_ADAPTER : public COLLAB_DOC_ADAPTER {};
+
+    STUB_ADAPTER    schematicEditor;
+    STUB_ADAPTER    boardEditor;
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    const wxString projectId = wxS( "5eaf00d0-9999-8888-7777-666655554444" );
+
+    session.SetProjectId( projectId );
+    session.JoinDoc( wxS( "doc-sch" ), std::nullopt, &schematicEditor );
+    session.JoinDoc( wxS( "doc-pcb" ), std::nullopt, &boardEditor );
+
+    session.LeaveDoc( wxS( "doc-sch" ) );
+
+    BOOST_CHECK( !session.ReleaseIfIdle() );
+    BOOST_CHECK_EQUAL( session.ProjectId(), projectId );
+
+    // And when the board leaves as well, the session's identity goes with it: nothing is
+    // left for File > Copy Share Link or File > History to act on.
+    session.LeaveDoc( wxS( "doc-pcb" ) );
+
+    BOOST_CHECK( session.ReleaseIfIdle() );
+    BOOST_CHECK( session.ProjectId().IsEmpty() );
+    BOOST_CHECK( session.GetState() == COLLAB_SESSION::STATE::DISCONNECTED );
 }
 
 
