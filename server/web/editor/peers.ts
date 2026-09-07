@@ -50,5 +50,11 @@ export function sendPresence(mmPos, ghostSegs) {
   const st = { cursor: [Math.round(mmPos[0] * E.IU), Math.round(mmPos[1] * E.IU)] };
   const vp = visibleRectNm(); if (vp) st.viewport = vp;
   if (ghostSegs) st.ghost = ghostSegs;
+  // The desktop only draws a peer that says which sheet it is on: SCH_COLLAB_TOOL::rebuildOverlay
+  // skips any peer whose state.sheetFile differs from the sheet it is showing, and an absent field
+  // reads as "" and never matches.  It is the document's project-relative path, which is exactly
+  // what the server's doc list carries.
+  const doc = (state.docs || []).find((d) => d.docId === state.docId);
+  if (doc && doc.path) st.sheetFile = doc.path;
   E.ws.send(JSON.stringify({ type: "presence", docId: state.docId, state: st }));
 }
