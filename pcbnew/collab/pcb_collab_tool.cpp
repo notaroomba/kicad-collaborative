@@ -54,6 +54,30 @@
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 
+/// Put a share link on the clipboard, telling the truth about whether it landed.
+///
+/// wxClipboard::Open() fails while another process holds the clipboard (a clipboard
+/// manager, a remote-desktop agent, another app mid-copy), and every collab copy site
+/// used to report success outside the guard -- so the user was told the invite was on
+/// the clipboard and pasted whatever had been there before.  The Flush() is what every
+/// other clipboard writer in the tree does: without it the data dies with the process
+/// on MSW and GTK, so a link copied just before quitting KiCad is gone.
+static bool copyLinkToClipboard( const wxString& aUrl )
+{
+    if( !wxTheClipboard->Open() )
+        return false;
+
+    bool ok = wxTheClipboard->SetData( new wxTextDataObject( aUrl ) );
+
+    if( ok )
+        wxTheClipboard->Flush();
+
+    wxTheClipboard->Close();
+
+    return ok;
+}
+
+
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
 static constexpr size_t MAX_PRESENCE_BOXES = 150;
@@ -155,7 +179,12 @@ PCB_COLLAB_TOOL::~PCB_COLLAB_TOOL()
     // The session is process-wide and outlives every frame, so a registration
     // left behind here is a dangling COLLAB_DOC_ADAPTER*.
     if( COLLAB_SESSION::Exists() )
+    {
         COLLAB_SESSION::Get().ForgetAdapter( this );
+
+        // ...and a connection left behind with nobody on it is nobody's to close.
+        COLLAB_SESSION::Get().ReleaseIfIdle();
+    }
 }
 
 
@@ -176,15 +205,11 @@ void PCB_COLLAB_TOOL::Reset( RESET_REASON aReason )
     if( aReason == SHUTDOWN )
     {
         // Leave the session while the frame and view are still alive; the tool
-        // destructor runs too late to touch either.  Closing the board editor
-        // must not disconnect a session eeschema owns, so only a session we
-        // started ourselves is torn down wholesale.
+        // destructor runs too late to touch either.  Closing the board editor must
+        // not disconnect a session eeschema is in, which endSession() now honours
+        // on its own -- the connection goes with the last document to leave it.
         m_timer.Stop();
-
-        if( m_ownsSession )
-            endSession();
-        else
-            leaveDoc();
+        endSession();
 
         return;
     }
@@ -315,11 +340,7 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
         return;
     }
 
-    if( wxTheClipboard->Open() )
-    {
-        wxTheClipboard->SetData( new wxTextDataObject( url ) );
-        wxTheClipboard->Close();
-    }
+    bool copied = copyLinkToClipboard( url );
 
     // Remember the pairing so this copy rejoins automatically next time.
     COLLAB_PROJECT::WriteLocalLink( editFrame->Prj().GetProjectPath(),
@@ -335,8 +356,10 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
     // An infobar, not a modal: a message box here wedges scripted flows, and
     // File > Copy Share Link can re-mint the link at any time.
     editFrame->ShowInfoBarMsg(
-            wxString::Format( _( "Session started — share link copied to the clipboard: %s" ),
-                              url ) );
+            copied ? wxString::Format( _( "Session started — share link copied to the "
+                                          "clipboard: %s" ), url )
+                   : wxString::Format( _( "Session started.  The clipboard was busy, so copy "
+                                          "the share link from here: %s" ), url ) );
 }
 
 
@@ -571,14 +594,18 @@ int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
     // can sit behind snapshot uploads for a few seconds.
     if( !m_cachedShareLink.IsEmpty() )
     {
-        if( wxTheClipboard->Open() )
+        if( copyLinkToClipboard( m_cachedShareLink ) )
         {
-            wxTheClipboard->SetData( new wxTextDataObject( m_cachedShareLink ) );
-            wxTheClipboard->Close();
+            frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                    _( "Share link copied to the clipboard." ) );
+        }
+        else
+        {
+            frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                    wxString::Format( _( "The clipboard was busy; the share link is %s" ),
+                                      m_cachedShareLink ) );
         }
 
-        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
-                _( "Share link copied to the clipboard." ) );
         return 0;
     }
 
@@ -614,17 +641,21 @@ int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
                                 return;
                             }
 
-                            if( wxTheClipboard->Open() )
+                            wxString link = wxString::FromUTF8( url );
+
+                            if( copyLinkToClipboard( link ) )
                             {
-                                wxTheClipboard->SetData(
-                                        new wxTextDataObject( wxString::FromUTF8( url ) ) );
-                                wxTheClipboard->Close();
+                                frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                                        _( "Share link copied to the clipboard." ) );
+                            }
+                            else
+                            {
+                                frame<PCB_EDIT_FRAME>()->ShowInfoBarError( wxString::Format(
+                                        _( "The clipboard was busy; the share link is %s" ),
+                                        link ) );
                             }
 
-                            frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
-                                    _( "Share link copied to the clipboard." ) );
-
-                            m_cachedShareLink = wxString::FromUTF8( url );
+                            m_cachedShareLink = link;
                         } );
             } );
 
@@ -921,7 +952,10 @@ void PCB_COLLAB_TOOL::endSession()
     m_startedHere = false;
     m_projectOwnerId = 0;
 
-    COLLAB_SESSION::Get().Disconnect();
+    // Not Disconnect(): the WebSocket is process-wide, and pulling it down here killed
+    // the schematic editor's live session whenever the board was the first to leave.
+    // It goes when the last editor is out.
+    COLLAB_SESSION::Get().ReleaseIfIdle();
 }
 
 
@@ -1152,7 +1186,14 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         // would invalidate its iterator.  A session we started ourselves is
         // still CONNECTING at this point, so leave that join alone.
         if( !m_ownsSession && !m_docId.IsEmpty() )
+        {
             leaveDoc();
+
+            // If that was the last document on the connection, nobody is waiting for it
+            // to come back -- hand it in rather than leave the session's identity on a
+            // socket no editor is using.
+            session.ReleaseIfIdle();
+        }
 
         // A cloud project copy records its server project beside the files; rejoin
         // the live session automatically (once per project) when nothing else in
@@ -1174,30 +1215,41 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         // board's doc in the shared project doc list and join it ourselves.
         const nlohmann::json& docs = session.ProjectDocs();
 
-        if( file.IsEmpty() || !docs.is_array() )
-            return;
-
-        for( const nlohmann::json& doc : docs )
+        if( !file.IsEmpty() && docs.is_array() )
         {
-            if( doc.value( "docType", "" ) != "kicad_pcb" )
-                continue;
+            for( const nlohmann::json& doc : docs )
+            {
+                if( doc.value( "docType", "" ) != "kicad_pcb" )
+                    continue;
 
-            if( wxString::FromUTF8( doc.value( "path", "" ) ) != file )
-                continue;
+                if( wxString::FromUTF8( doc.value( "path", "" ) ) != file )
+                    continue;
 
-            wxString docId = wxString::FromUTF8( doc.value( "docId", "" ) );
+                wxString docId = wxString::FromUTF8( doc.value( "docId", "" ) );
 
-            // A malformed entry would otherwise register an adapter under an
-            // empty id that leaveDoc() can never match, and retry every tick.
-            if( docId.IsEmpty() )
-                continue;
+                // A malformed entry would otherwise register an adapter under an
+                // empty id that leaveDoc() can never match, and retry every tick.
+                if( docId.IsEmpty() )
+                    continue;
 
-            joinDoc( docId, file );
-            break;
+                joinDoc( docId, file );
+                break;
+            }
         }
 
         if( m_docId.IsEmpty() )
+        {
+            // The board we joined with is no longer part of the session and the project
+            // publishes no document for the one now open (Save As renames it, and the
+            // server's doc list still carries the old path).  Let the session go rather
+            // than keep hosting one with nothing in it: leaveDoc() above already emptied
+            // m_docId and m_projectId, so holding ownership only kept the File menu
+            // claiming a session that could no longer sync or mint a link.
+            if( m_ownsSession )
+                endSession();
+
             return;
+        }
     }
 
     VECTOR2D cursor = getViewControls()->GetCursorPosition();

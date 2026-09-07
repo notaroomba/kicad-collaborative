@@ -1129,7 +1129,19 @@ void PCB_EDIT_FRAME::setupUIConditions()
             [this]( const SELECTION& )
             {
                 PCB_COLLAB_TOOL* tool = m_toolManager->GetTool<PCB_COLLAB_TOOL>();
-                return !tool || !tool->sessionActive();
+
+                if( tool && tool->sessionActive() )
+                    return false;
+
+                // There is one WebSocket per process, one link.json per project and one
+                // project id on the session, all shared with the schematic editor.
+                // Starting or joining from here while the schematic editor holds a session
+                // published a second online project over the first and left the schematic
+                // syncing one project's documents under another's id.  Exists() rather
+                // than Get(): painting a menu must not spin up the session.
+                return !COLLAB_SESSION::Exists()
+                       || COLLAB_SESSION::Get().GetState()
+                                  == COLLAB_SESSION::STATE::DISCONNECTED;
             };
 
     wxASSERT( mgr );
@@ -1141,6 +1153,13 @@ void PCB_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( PCB_ACTIONS::collabStartSession, ENABLE( collabIdle ) );
     mgr->SetConditions( PCB_ACTIONS::collabJoinSession,  ENABLE( collabIdle ) );
     mgr->SetConditions( PCB_ACTIONS::collabLeaveSession, ENABLE( collabLive ) );
+
+    // Every one of these needs a session.  Without a condition they stayed permanently
+    // enabled and answered with an infobar instead.
+    mgr->SetConditions( PCB_ACTIONS::collabCopyLink,     ENABLE( collabLive ) );
+    mgr->SetConditions( PCB_ACTIONS::collabComments,     ENABLE( collabLive ) );
+    mgr->SetConditions( PCB_ACTIONS::collabFollow,       ENABLE( collabLive ) );
+    mgr->SetConditions( PCB_ACTIONS::collabHistory,      ENABLE( collabLive ) );
 
     mgr->SetConditions( ACTIONS::save,         ENABLE( SELECTION_CONDITIONS::ShowAlways ) );
     mgr->SetConditions( ACTIONS::undo,         ENABLE( undoCond ) );

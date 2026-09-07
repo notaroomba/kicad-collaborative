@@ -63,6 +63,30 @@ long long jsonNumber( const nlohmann::json& aObj, const char* aKey, long long aD
 
 
 
+/// Put a share link on the clipboard, telling the truth about whether it landed.
+///
+/// wxClipboard::Open() fails while another process holds the clipboard (a clipboard
+/// manager, a remote-desktop agent, another app mid-copy), and every collab copy site
+/// used to report success outside the guard -- so the user was told the invite was on
+/// the clipboard and pasted whatever had been there before.  The Flush() is what every
+/// other clipboard writer in the tree does: without it the data dies with the process
+/// on MSW and GTK, so a link copied just before quitting KiCad is gone.
+static bool copyLinkToClipboard( const wxString& aUrl )
+{
+    if( !wxTheClipboard->Open() )
+        return false;
+
+    bool ok = wxTheClipboard->SetData( new wxTextDataObject( aUrl ) );
+
+    if( ok )
+        wxTheClipboard->Flush();
+
+    wxTheClipboard->Close();
+
+    return ok;
+}
+
+
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
 static constexpr size_t MAX_PRESENCE_BOXES = 150;
@@ -85,12 +109,22 @@ SCH_COLLAB_TOOL::SCH_COLLAB_TOOL() :
 
 SCH_COLLAB_TOOL::~SCH_COLLAB_TOOL()
 {
+    // Worker completions (share-link mints, comment fetches) capture this and check the
+    // flag before touching m_frame.  Nothing cleared it, so the check always passed and
+    // a completion landing after the frame closed dereferenced freed memory.
+    *m_alive = false;
+
     m_timer.Stop();
 
     // The session is process-wide and outlives every frame, so a registration
     // left behind here is a dangling COLLAB_DOC_ADAPTER*.
     if( COLLAB_SESSION::Exists() )
+    {
         COLLAB_SESSION::Get().ForgetAdapter( this );
+
+        // ...and a connection left behind with nobody on it is nobody's to close.
+        COLLAB_SESSION::Get().ReleaseIfIdle();
+    }
 }
 
 
@@ -354,11 +388,7 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
         return;
     }
 
-    if( wxTheClipboard->Open() )
-    {
-        wxTheClipboard->SetData( new wxTextDataObject( url ) );
-        wxTheClipboard->Close();
-    }
+    bool copied = copyLinkToClipboard( url );
 
     // Remember the pairing so this copy rejoins automatically next time.
     COLLAB_PROJECT::WriteLocalLink( m_frame->Prj().GetProjectPath(),
@@ -374,32 +404,21 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
     // An infobar, not a modal: a message box here wedges scripted flows, and
     // File > Copy Share Link can re-mint the link at any time.
     m_frame->ShowInfoBarMsg(
-            wxString::Format( _( "Session started — share link copied to the clipboard: %s" ),
-                              url ) );
+            copied ? wxString::Format( _( "Session started — share link copied to the "
+                                          "clipboard: %s" ), url )
+                   : wxString::Format( _( "Session started.  The clipboard was busy, so copy "
+                                          "the share link from here: %s" ), url ) );
 }
 
 
 void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxString& aToken,
                                     const wxString& aLinkToken, bool aConnect )
 {
-    if( aProject.contains( "ownerId" ) )
-        m_projectOwnerId = aProject.value( "ownerId", 0LL );
-
-    if( aConnect )
-        endSession();
-
-    // Publish the full doc list so the board editor can find and join its own doc.
-    COLLAB_SESSION::Get().SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
-
-    // Only when the caller actually carries one: joining alongside an editor that already
-    // connected passes a synthesized project holding just the doc list, and overwriting the
-    // id with "" there left the session live but anonymous -- the menu showed Leave Session
-    // while Copy Share Link reported no session at all.
-    if( aProject.contains( "projectId" ) )
-    {
-        COLLAB_SESSION::Get().SetProjectId(
-                wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
-    }
+    // Work out our documents before touching any existing session, the way pcbnew does:
+    // a failed join must not tear down a session this process is already in, nor leave
+    // the failed project's identity behind for Copy Share Link and History to act on.
+    std::map<wxString, wxString> docIdByPath;
+    std::map<wxString, wxString> pathByDocId;
 
     if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
     {
@@ -414,18 +433,42 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
             if( docId.IsEmpty() || path.IsEmpty() )
                 continue;
 
-            m_docIdByPath[ path ] = docId;
-            m_pathByDocId[ docId ] = path;
+            docIdByPath[ path ] = docId;
+            pathByDocId[ docId ] = path;
         }
     }
 
-    if( m_pathByDocId.empty() )
+    if( pathByDocId.empty() )
     {
         m_frame->ShowInfoBarError( _( "The shared project contains no schematic documents." ) );
         return;
     }
 
+    if( aConnect )
+        endSession();
+
+    // Absent means "unchanged", not "nobody" -- see SCH_COLLAB::ResolveOwnerId.  Read after
+    // endSession(), which zeroes it: reading it first meant IsHost() could never see the
+    // project's owner, so a host rejoining their own project got "Leave Session".
+    m_projectOwnerId = SCH_COLLAB::ResolveOwnerId( aProject, m_projectOwnerId );
+
+    m_docIdByPath = std::move( docIdByPath );
+    m_pathByDocId = std::move( pathByDocId );
+
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // Publish the full doc list so the board editor can find and join its own doc.
+    session.SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
+
+    // Only when the caller actually carries one: joining alongside an editor that already
+    // connected passes a synthesized project holding just the doc list, and overwriting the
+    // id with "" there left the session live but anonymous -- the menu showed Leave Session
+    // while Copy Share Link reported no session at all.  (SCH_COLLAB::ResolveProjectId owns
+    // that rule; QA covers it in CollabSync/AutoJoinBesideConnectedEditorKeepsProjectId.)
+    session.SetProjectId( SCH_COLLAB::ResolveProjectId( aProject, session.ProjectId() ) );
+
+    // Ours, and only for as long as the session lasts.
+    m_projectId = session.ProjectId();
 
     if( aConnect )
         session.Connect( aToken, aLinkToken );
@@ -492,15 +535,23 @@ void SCH_COLLAB_TOOL::endSession()
     m_projectOwnerId = 0;
 
     m_cachedShareLink.clear();
+    m_projectId.clear();
     m_timer.Stop();
     m_sync.reset();
+
+    // The checkpoint list and its Restore button belong to the project we are leaving.
+    if( m_historyPanel )
+        m_historyPanel->SetProject( wxEmptyString );
 
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
     for( const auto& [docId, path] : m_pathByDocId )
         session.LeaveDoc( docId );
 
-    session.Disconnect();
+    // Not Disconnect(): the WebSocket is process-wide, and pulling it down here killed
+    // the board editor's live session whenever the schematic was the first to leave --
+    // or simply the first window closed.  It goes when the last editor is out.
+    session.ReleaseIfIdle();
 
     m_docIdByPath.clear();
     m_pathByDocId.clear();
@@ -680,8 +731,28 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
     updateCommentCard();
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
-    if( !sessionActive() || !session.IsLive() || !m_frame )
+    if( !sessionActive() || !m_frame )
         return;
+
+    if( !session.IsLive() )
+    {
+        // An ordinary drop is CONNECTING and comes back on its own.  DISCONNECTED here
+        // means the session is over for good -- the sign-in expired or was revoked, or
+        // the other editor in this process left -- so let go of it.  Holding on left the
+        // File menu insisting a session was live: Start and Join Session greyed out,
+        // Leave Session the only way back to the rejoin the infobar had just advised.
+        //
+        // From the tick rather than OnSessionStateChanged(), like pcbnew: the session
+        // notifies its adapters while iterating its doc map, and leaving those docs
+        // mid-callback would invalidate its iterator.
+        if( session.GetState() == COLLAB_SESSION::STATE::DISCONNECTED )
+        {
+            endSession();
+            m_frame->SetStatusText( wxEmptyString, 0 );
+        }
+
+        return;
+    }
 
     wxString sheetFile = currentSheetFile();
 
@@ -1029,7 +1100,7 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
     {
         m_frame->ShowInfoBarError(
                 _( "Collaboration sign-in expired or was revoked, so the live session ended. "
-                   "Rejoin from File > Online Projects to continue." ) );
+                   "Rejoin from File > Join Shared Project to continue." ) );
     }
 
     // Back online: push anything edited while disconnected. The server dedups
@@ -1061,7 +1132,7 @@ COLLAB_HISTORY_PANEL* SCH_COLLAB_TOOL::historyPanel()
                                         .Hide() );
     }
 
-    m_historyPanel->SetProject( COLLAB_SESSION::Get().ProjectId() );
+    m_historyPanel->SetProject( m_projectId );
 
     return m_historyPanel;
 }
@@ -1174,7 +1245,9 @@ void SCH_COLLAB_TOOL::resolveComment( long long aRootId, bool aResolved )
 
 int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 {
-    wxString projectId = COLLAB_SESSION::Get().ProjectId();
+    // Ours, not COLLAB_SESSION's: the process-wide id survives Leave Session and
+    // "Make local only", so reading it minted invites for projects we had left.
+    wxString projectId = m_projectId;
 
     if( projectId.IsEmpty() )
     {
@@ -1186,14 +1259,17 @@ int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
     // can sit behind snapshot uploads for a few seconds.
     if( !m_cachedShareLink.IsEmpty() )
     {
-        if( wxTheClipboard->Open() )
+        if( copyLinkToClipboard( m_cachedShareLink ) )
         {
-            wxTheClipboard->SetData( new wxTextDataObject( m_cachedShareLink ) );
-            wxTheClipboard->Close();
+            m_frame->ShowInfoBarMsg( _( "Share link copied to the clipboard." ) );
+        }
+        else
+        {
+            m_frame->ShowInfoBarError(
+                    wxString::Format( _( "The clipboard was busy; the share link is %s" ),
+                                      m_cachedShareLink ) );
         }
 
-        m_frame->ShowInfoBarMsg(
-                _( "Share link copied to the clipboard." ) );
         return 0;
     }
 
@@ -1229,17 +1305,21 @@ int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
                                 return;
                             }
 
-                            if( wxTheClipboard->Open() )
+                            wxString link = wxString::FromUTF8( url );
+
+                            if( copyLinkToClipboard( link ) )
                             {
-                                wxTheClipboard->SetData(
-                                        new wxTextDataObject( wxString::FromUTF8( url ) ) );
-                                wxTheClipboard->Close();
+                                m_frame->ShowInfoBarMsg(
+                                        _( "Share link copied to the clipboard." ) );
+                            }
+                            else
+                            {
+                                m_frame->ShowInfoBarError( wxString::Format(
+                                        _( "The clipboard was busy; the share link is %s" ),
+                                        link ) );
                             }
 
-                            m_frame->ShowInfoBarMsg(
-                                    _( "Share link copied to the clipboard." ) );
-
-                            m_cachedShareLink = wxString::FromUTF8( url );
+                            m_cachedShareLink = link;
                         } );
             } );
 

@@ -194,6 +194,24 @@ const char* changeKindWireString( CHANGE_KIND aKind )
 } // anonymous namespace
 
 
+wxString SCH_COLLAB::ResolveProjectId( const nlohmann::json& aProject, const wxString& aCurrentId )
+{
+    if( !aProject.is_object() || !aProject.contains( "projectId" ) )
+        return aCurrentId;
+
+    return wxString::FromUTF8( aProject.value( "projectId", "" ) );
+}
+
+
+long long SCH_COLLAB::ResolveOwnerId( const nlohmann::json& aProject, long long aCurrentOwnerId )
+{
+    if( !aProject.is_object() || !aProject.contains( "ownerId" ) )
+        return aCurrentOwnerId;
+
+    return aProject.value( "ownerId", 0LL );
+}
+
+
 std::string SCH_COLLAB::FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                                          SCH_ITEM* aItem )
 {

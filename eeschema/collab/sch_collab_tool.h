@@ -228,6 +228,12 @@ private:
     wxDateTime     m_lastRejectNotice;  ///< throttles the rejected-edit infobar
     bool           m_presenceDirty;
     wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
+
+    ///< The online project this frame joined, cleared by endSession().  Deliberately
+    ///< ours rather than COLLAB_SESSION::ProjectId(): the process-wide value belongs to
+    ///< whichever editor last connected and used to outlive our session entirely, so
+    ///< File > Copy Share Link went on minting invites for a project we had left.
+    wxString       m_projectId;
     long long      m_projectOwnerId = 0; ///< owner of the joined online project (0 = unknown)
     bool           m_startedHere = false; ///< this frame published the project / started the session
 };

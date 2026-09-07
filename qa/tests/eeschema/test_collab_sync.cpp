@@ -32,6 +32,7 @@
 #include <schematic_utils/schematic_file_util.h>
 
 #include <collab/sch_collab_sync.h>
+#include <collab/collab_session.h>
 
 #include <diff_merge/kicad_diff_types.h>
 #include <diff_merge/property_diff.h>
@@ -418,6 +419,177 @@ BOOST_AUTO_TEST_CASE( NewSheetInheritsRootFileFormatVersion )
     wxRemoveFile( tmp );
 
     BOOST_CHECK( content.Contains( wxS( "(version 20260306)" ) ) );
+}
+
+
+// The reported bug: opening a schematic in a linked project auto-rejoins, and File > Copy
+// Share Link then says "No collaboration session; start or join one first" while the same
+// File menu greys out Start/Join and offers Leave Session.
+//
+// The two halves of the menu read different state.  SCH_COLLAB_TOOL::sessionActive() is
+// "the doc map is populated" (sch_collab_tool.h:69); CopyShareLink instead requires
+// COLLAB_SESSION::Get().ProjectId() to be non-empty (sch_collab_tool.cpp:1177).  When
+// another editor of the same process had already connected, tryAutoJoin took the reuse
+// path and handed beginSession a project synthesized out of the published doc list --
+// {"docs": [...]} and nothing else -- and beginSession folded that in with an
+// unconditional SetProjectId( aProject.value( "projectId", "" ) ), wiping the id the first
+// editor had established.  Docs still there, id gone: live by one measure, absent by the
+// other.
+//
+// beginSession itself needs a live SCH_EDIT_FRAME (it builds an SCH_COLLAB_SYNC and shows
+// infobars), so it is not reachable headless; the rule it applies now lives in
+// SCH_COLLAB::ResolveProjectId / ResolveOwnerId, and that is what is driven here, against
+// the real process-wide COLLAB_SESSION that CopyShareLink reads.
+BOOST_AUTO_TEST_CASE( AutoJoinBesideConnectedEditorKeepsProjectId )
+{
+    const wxString linkedId = wxS( "c0ffee42-1111-2222-3333-444455556666" );  // from link.json
+
+    nlohmann::json docs = nlohmann::json::array();
+    docs.push_back( { { "docId", "doc-sch-1" },
+                      { "docType", "kicad_sch" },
+                      { "path", "issue18606.kicad_sch" } } );
+
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // First editor: a real project payload from the server starts the session.
+    nlohmann::json served = { { "projectId", linkedId.ToStdString() },
+                              { "ownerId", 41 },
+                              { "docs", docs } };
+
+    long long ownerId = SCH_COLLAB::ResolveOwnerId( served, 0 );
+    session.SetProjectDocs( served.value( "docs", nlohmann::json::array() ) );
+    session.SetProjectId( SCH_COLLAB::ResolveProjectId( served, session.ProjectId() ) );
+
+    BOOST_REQUIRE_EQUAL( session.ProjectId(), linkedId );
+    BOOST_REQUIRE_EQUAL( ownerId, 41 );
+
+    // Second editor, auto-joining beside it: exactly the payload tryAutoJoin's reuse path
+    // built before the fix -- the doc list alone, no identity at all.
+    nlohmann::json synthesized = { { "docs", session.ProjectDocs() } };
+
+    ownerId = SCH_COLLAB::ResolveOwnerId( synthesized, ownerId );
+    session.SetProjectDocs( synthesized.value( "docs", nlohmann::json::array() ) );
+    session.SetProjectId( SCH_COLLAB::ResolveProjectId( synthesized, session.ProjectId() ) );
+
+    // What the File menu reads: the doc list is populated, so the session is "active".
+    BOOST_CHECK( session.ProjectDocs().is_array() );
+    BOOST_CHECK( !session.ProjectDocs().empty() );
+
+    // What File > Copy Share Link reads.  These two must not disagree.
+    BOOST_CHECK_EQUAL( session.ProjectId(), linkedId );
+    BOOST_CHECK( !session.ProjectId().IsEmpty() );
+
+    // And the host/guest wording keeps its answer too.
+    BOOST_CHECK_EQUAL( ownerId, 41 );
+
+    // The other half of the fix: tryAutoJoin now puts link.json's id in the synthesized
+    // payload, so the reuse path describes the session fully even from a cold id.
+    nlohmann::json carried = { { "docs", session.ProjectDocs() },
+                               { "projectId", linkedId.ToStdString() } };
+    BOOST_CHECK_EQUAL( SCH_COLLAB::ResolveProjectId( carried, wxEmptyString ), linkedId );
+
+    // A payload that really does carry an identity still wins, empty string included:
+    // "carries the key" is the rule, not "carries a non-empty value".
+    nlohmann::json other = { { "projectId", "99999999-0000-0000-0000-000000000000" } };
+    BOOST_CHECK_EQUAL( SCH_COLLAB::ResolveProjectId( other, linkedId ),
+                       wxS( "99999999-0000-0000-0000-000000000000" ) );
+    BOOST_CHECK( SCH_COLLAB::ResolveProjectId( { { "projectId", "" } }, linkedId ).IsEmpty() );
+    BOOST_CHECK_EQUAL( SCH_COLLAB::ResolveOwnerId( { { "ownerId", 7 } }, 41 ), 7 );
+
+    // The session singleton is process-wide; leave it as we found it.
+    session.SetProjectId( wxEmptyString );
+    session.SetProjectDocs( nlohmann::json::array() );
+}
+
+
+// The two "one editor kills the other" bugs, from the schematic side.
+//
+// COLLAB_SESSION is process-wide and owns a single WebSocket: eeschema joins its
+// kicad_sch documents over it and pcbnew joins the board's.  Both editors' endSession()
+// used to call COLLAB_SESSION::Disconnect() unconditionally, so File > Leave Session in
+// one -- or just closing that window, which reaches endSession() through
+// Reset( SHUTDOWN ) -- destroyed the socket under the other, which was never told: its
+// File menu went on greying out Start/Join and offering Leave Session while nothing
+// synced and no reconnect was possible.
+//
+// The connection now goes when the last document does.  The tools' endSession()s are
+// frame-bound, so what is driven here is the session rule they both call.
+BOOST_AUTO_TEST_CASE( LeavingOneEditorKeepsTheOtherOnesConnection )
+{
+    struct STUB_ADAPTER : public COLLAB_DOC_ADAPTER {};
+
+    STUB_ADAPTER    schematicEditor;
+    STUB_ADAPTER    boardEditor;
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    const wxString projectId = wxS( "c0ffee42-1111-2222-3333-444455556666" );
+
+    nlohmann::json docs = nlohmann::json::array();
+    docs.push_back( { { "docId", "doc-sch-1" }, { "docType", "kicad_sch" },
+                      { "path", "board.kicad_sch" } } );
+    docs.push_back( { { "docId", "doc-sch-2" }, { "docType", "kicad_sch" },
+                      { "path", "power.kicad_sch" } } );
+    docs.push_back( { { "docId", "doc-pcb" }, { "docType", "kicad_pcb" },
+                      { "path", "board.kicad_pcb" } } );
+
+    session.SetProjectId( projectId );
+    session.SetProjectDocs( docs );
+
+    session.JoinDoc( wxS( "doc-sch-1" ), std::nullopt, &schematicEditor );
+    session.JoinDoc( wxS( "doc-sch-2" ), std::nullopt, &schematicEditor );
+    session.JoinDoc( wxS( "doc-pcb" ), std::nullopt, &boardEditor );
+
+    // eeschema leaves: its own docs go, the board editor's stays, so the connection and
+    // the project's identity must both survive.
+    session.LeaveDoc( wxS( "doc-sch-1" ) );
+    session.LeaveDoc( wxS( "doc-sch-2" ) );
+
+    BOOST_CHECK( !session.ReleaseIfIdle() );
+    BOOST_CHECK_EQUAL( session.ProjectId(), projectId );
+    BOOST_CHECK( !session.ProjectDocs().empty() );
+
+    // Now the board editor leaves too.  Nobody is left, so the session really ends --
+    // and takes its identity with it, which is what stops File > Copy Share Link minting
+    // an editor invite for a project this process has walked away from.
+    session.LeaveDoc( wxS( "doc-pcb" ) );
+
+    BOOST_CHECK( session.ReleaseIfIdle() );
+    BOOST_CHECK( session.ProjectId().IsEmpty() );
+    BOOST_CHECK( session.ProjectDocs().empty() );
+    BOOST_CHECK( session.GetState() == COLLAB_SESSION::STATE::DISCONNECTED );
+
+    // Releasing again is harmless (Leave Session on an already-dead session).
+    BOOST_CHECK( session.ReleaseIfIdle() );
+}
+
+
+// The same rule reached the other way: closing an editor window destroys its tool, whose
+// destructor calls ForgetAdapter() rather than LeaveDoc() per document.  That path must
+// release the connection too -- and must not release one the surviving editor still needs.
+BOOST_AUTO_TEST_CASE( ClosingOneEditorReleasesOnlyItsOwnDocs )
+{
+    struct STUB_ADAPTER : public COLLAB_DOC_ADAPTER {};
+
+    STUB_ADAPTER    schematicEditor;
+    STUB_ADAPTER    boardEditor;
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    session.SetProjectId( wxS( "c0ffee42-1111-2222-3333-444455556666" ) );
+
+    session.JoinDoc( wxS( "doc-sch-1" ), std::nullopt, &schematicEditor );
+    session.JoinDoc( wxS( "doc-pcb" ), std::nullopt, &boardEditor );
+
+    session.ForgetAdapter( &schematicEditor );
+
+    BOOST_CHECK( !session.ReleaseIfIdle() );
+    BOOST_CHECK( !session.ProjectId().IsEmpty() );
+
+    session.ForgetAdapter( &boardEditor );
+
+    BOOST_CHECK( session.ReleaseIfIdle() );
+    BOOST_CHECK( session.ProjectId().IsEmpty() );
+
+    session.SetProjectDocs( nlohmann::json::array() );
 }
 
 
