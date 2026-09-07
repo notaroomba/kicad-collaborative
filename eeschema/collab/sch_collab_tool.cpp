@@ -163,7 +163,8 @@ void SCH_COLLAB_TOOL::tryAutoJoin()
         // docs from the published doc list without reconnecting.
         if( session.ProjectDocs().is_array() && !session.ProjectDocs().empty() )
         {
-            nlohmann::json project = { { "docs", session.ProjectDocs() } };
+            nlohmann::json project = { { "docs", session.ProjectDocs() },
+                                       { "projectId", projectId.ToStdString() } };
             beginSession( project, token, wxEmptyString, false );
         }
 
@@ -389,8 +390,16 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
 
     // Publish the full doc list so the board editor can find and join its own doc.
     COLLAB_SESSION::Get().SetProjectDocs( aProject.value( "docs", nlohmann::json::array() ) );
-    COLLAB_SESSION::Get().SetProjectId(
-            wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
+
+    // Only when the caller actually carries one: joining alongside an editor that already
+    // connected passes a synthesized project holding just the doc list, and overwriting the
+    // id with "" there left the session live but anonymous -- the menu showed Leave Session
+    // while Copy Share Link reported no session at all.
+    if( aProject.contains( "projectId" ) )
+    {
+        COLLAB_SESSION::Get().SetProjectId(
+                wxString::FromUTF8( aProject.value( "projectId", "" ) ) );
+    }
 
     if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
     {
