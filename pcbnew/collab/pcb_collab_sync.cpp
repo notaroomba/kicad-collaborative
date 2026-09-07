@@ -1235,7 +1235,17 @@ void PCB_COLLAB_SYNC::writeSyncBase()
         STRING_FORMATTER   formatter;
         PCB_IO_KICAD_SEXPR io;
 
+        // The writer keeps the board's loaded format version and raises it only when the design
+        // needs it.  There is no user in this path, so route that to the collab log: a base that
+        // silently jumped to the current format is the first sign the project stopped being
+        // openable by a collaborator on a stable KiCad.
+        WX_STRING_REPORTER formatReporter;
+        io.SetReporter( &formatReporter );
+
         io.FormatBoardToFormatter( &formatter, m_frame->GetBoard(), nullptr );
+
+        if( formatReporter.HasMessage() )
+            wxLogTrace( traceCollab, wxS( "sync base: %s" ), formatReporter.GetMessages() );
 
         COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
                                        m_frame->Prj().GetProjectName(), docRelPath(),

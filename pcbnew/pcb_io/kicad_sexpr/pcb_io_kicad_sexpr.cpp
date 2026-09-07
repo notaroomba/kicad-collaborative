@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <cmath>
+
 #include <wx/dir.h>
 #include <wx/ffile.h>
 #include <wx/log.h>
@@ -126,8 +128,51 @@ void FP_CACHE::Save( FOOTPRINT* aFootprintFilter )
 
             PRETTIFIED_FILE_OUTPUTFORMATTER formatter( fileName );
 
-            m_owner->SetOutputFormatter( &formatter );
-            m_owner->Format( footprint.get() );
+            // Keep the footprint file at the format version it was read at, for the same reason
+            // the board writer does: a restamped .kicad_mod is refused wholesale by an older
+            // KiCad, which is worse than the board being unopenable because it takes every
+            // other project that uses the library with it.  Same shape as
+            // PCB_IO_KICAD_SEXPR::FormatBoardToFormatter(): serialize, measure, and only keep
+            // the old stamp when the bytes fit in it.
+            const int loaded =
+                    PCB_IO_KICAD_SEXPR::preservableVersion( footprint->GetFileFormatVersionAtLoad() );
+
+            if( loaded == 0 )
+            {
+                m_owner->SetOutputFormatter( &formatter );
+                m_owner->Format( footprint.get() );
+            }
+            else
+            {
+                STRING_FORMATTER body;
+
+                auto formatBodyAt =
+                        [&]( int aVersion )
+                        {
+                            body.Clear();
+                            body.SetFileFormatVersion( aVersion );
+                            m_owner->SetOutputFormatter( &body );
+                            m_owner->Format( footprint.get() );
+                        };
+
+                formatBodyAt( loaded );
+
+                KICAD_FORMAT::FORMAT_VERSION_REQUIREMENT required =
+                        KICAD_FORMAT::MinimumFileFormatVersion(
+                                body.GetString(), KICAD_FORMAT::FILE_FORMAT_DOMAIN::BOARD );
+
+                // No non-unit-scale check here, unlike the board: CTL_FOR_LIBRARY sets
+                // CTL_OMIT_AT, so a library footprint stores no placement and therefore no
+                // scale, at any version.
+
+                // Unlike the board, a footprint file carries its stamp inside the body that was
+                // just serialized, so an upgrade always needs the second pass.
+                if( required.m_version > loaded )
+                    formatBodyAt( std::min( required.m_version, SEXPR_BOARD_FILE_VERSION ) );
+
+                formatter.WriteRaw( body.GetString() );
+            }
+
             formatter.Finish();
         }
 
@@ -323,31 +368,181 @@ void PCB_IO_KICAD_SEXPR::FormatBoardToFormatter( OUTPUTFORMATTER* aOut, BOARD* a
 
     m_out = aOut;
 
-    // KiCad Collaborative round-trips project files with stock KiCad
-    // installs: keep the format version the file was opened with instead of
-    // restamping it, so a save here doesn't flag the file as "newer format"
-    // for everyone else.  KICAD_COLLAB_STAMP_VERSIONS=1 restores stock
-    // stamping.  New files (no version at load) always get the current one.
-    int version = SEXPR_BOARD_FILE_VERSION;
+    // KiCad Collaborative round-trips project files with stock KiCad installs: keep the format
+    // version the file was opened with instead of restamping it, so a save here doesn't flag the
+    // file as "newer format" for everyone else.  New boards (nothing loaded) get the current one.
+    //
+    // The stamp is only kept when the bytes actually fit in it.  KiCad's writer always emits the
+    // current grammar, so the body has to be serialized first and measured; if it needs something
+    // newer, the version is raised and the reason reported rather than writing a file that claims
+    // to be older than it is.
+    const int loaded = preservableVersion( aBoard );
 
-    // (The 20130000 floor excludes legacy-format loads, whose versions are
-    // small integers; a legacy import is a new s-expression file.)
-    if( aBoard->GetFileFormatVersionAtLoad() >= 20130000
-            && aBoard->GetFileFormatVersionAtLoad() < SEXPR_BOARD_FILE_VERSION
-            && !wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+    if( loaded == 0 )
     {
-        version = aBoard->GetFileFormatVersionAtLoad();
+        m_out->Print( "(kicad_pcb (version %d) (generator \"pcbnew\") (generator_version %s)",
+                      SEXPR_BOARD_FILE_VERSION,
+                      m_out->Quotew( GetMajorMinorVersion() ).c_str() );
+
+        Format( aBoard );
+
+        m_out->Print( ")" );
+
+        m_out = nullptr;
+        return;
+    }
+
+    STRING_FORMATTER bodyFormatter;
+
+    auto formatBodyAt =
+            [&]( int aVersion )
+            {
+                bodyFormatter.Clear();
+                bodyFormatter.SetFileFormatVersion( aVersion );
+
+                OUTPUTFORMATTER* saveOut = m_out;
+                m_out = &bodyFormatter;
+
+                try
+                {
+                    Format( aBoard );
+                }
+                catch( ... )
+                {
+                    m_out = saveOut;
+                    throw;
+                }
+
+                m_out = saveOut;
+            };
+
+    formatBodyAt( loaded );
+
+    const char*         feature = nullptr;
+    std::pair<int, int> chosen = chooseFileFormatVersion( aBoard, bodyFormatter.GetString(),
+                                                          &feature );
+
+    if( chosen.first > chosen.second )
+    {
+        // The body needs a newer format than the board was loaded at.  Serialize it again at the
+        // version actually being written, so emitters with a legacy representation agree with
+        // the stamp, and tell the caller what forced the upgrade.  Nothing can differ between
+        // the two versions unless an emitter actually consulted the version, so skip the second
+        // pass when none did: on a board with embedded 3D models that pass is expensive.
+        if( bodyFormatter.UsedLegacyRepresentation() )
+            formatBodyAt( chosen.first );
+
+        if( m_reporter )
+        {
+            m_reporter->Report(
+                    wxString::Format( _( "'%s' uses %s, which file format version %d cannot "
+                                         "store.  Saved using file format version %d instead; "
+                                         "older versions of KiCad will not be able to open it." ),
+                                      aBoard->GetFileName(),
+                                      feature ? wxString::FromUTF8( feature )
+                                              : _( "a newer file format feature" ),
+                                      chosen.second,
+                                      chosen.first ),
+                    RPT_SEVERITY_WARNING );
+        }
     }
 
     m_out->Print( "(kicad_pcb (version %d) (generator \"pcbnew\") (generator_version %s)",
-                  version,
+                  chosen.first,
                   m_out->Quotew( GetMajorMinorVersion() ).c_str() );
 
-    Format( aBoard );
+    m_out->WriteRaw( bodyFormatter.GetString() );
 
     m_out->Print( ")" );
 
     m_out = nullptr;
+}
+
+
+int PCB_IO_KICAD_SEXPR::preservableVersion( int aLoadedVersion )
+{
+    if( wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
+        return 0;
+
+    // The 20130000 floor excludes legacy-format loads, whose versions are small integers, and
+    // documents that were never parsed (a fresh BOARD starts at LEGACY_BOARD_FILE_VERSION); both
+    // are new s-expression files and get the current version.
+    if( aLoadedVersion < 20130000 || aLoadedVersion >= SEXPR_BOARD_FILE_VERSION )
+        return 0;
+
+    return aLoadedVersion;
+}
+
+
+int PCB_IO_KICAD_SEXPR::preservableVersion( const BOARD* aBoard )
+{
+    return preservableVersion( aBoard->GetFileFormatVersionAtLoad() );
+}
+
+
+std::pair<int, int> PCB_IO_KICAD_SEXPR::chooseFileFormatVersion( BOARD* aBoard,
+                                                                 const std::string& aBody,
+                                                                 const char** aFeature ) const
+{
+    const int loaded = preservableVersion( aBoard );
+
+    if( loaded == 0 )
+        return { SEXPR_BOARD_FILE_VERSION, SEXPR_BOARD_FILE_VERSION };
+
+    KICAD_FORMAT::FORMAT_VERSION_REQUIREMENT required =
+            KICAD_FORMAT::MinimumFileFormatVersion( aBody,
+                                                    KICAD_FORMAT::FILE_FORMAT_DOMAIN::BOARD );
+
+    // Below 20260616 a footprint's placement is written as (at x y rot), which has nowhere to put
+    // a scale.  The scan cannot see this: at those versions the writer emits the legacy form and
+    // no (transform) token appears, so the loss has to be detected on the model instead.
+    if( required.m_version < 20260616 )
+    {
+        for( const FOOTPRINT* footprint : aBoard->Footprints() )
+        {
+            const TRANSFORM_TRS& xform = footprint->GetTransform();
+
+            if( std::abs( xform.GetScaleX() - 1.0 ) > 1e-9
+                    || std::abs( xform.GetScaleY() - 1.0 ) > 1e-9 )
+            {
+                required.m_version = 20260616;
+                required.m_feature = "a footprint with a non-unit scale";
+                break;
+            }
+        }
+    }
+
+    // A reference image's stored scale is not visible in the serialized text: it is only
+    // meaningful next to the image's own pixel density.  Mirror the load-time migration's
+    // condition, because writing an already-corrected scale under a pre-20260623 stamp makes
+    // the next load correct it a second time and the image grows every round trip.
+    if( required.m_version < 20260623 )
+    {
+        for( const BOARD_ITEM* item : aBoard->Drawings() )
+        {
+            if( item->Type() != PCB_REFERENCE_IMAGE_T )
+                continue;
+
+            const REFERENCE_IMAGE& refImage =
+                    static_cast<const PCB_REFERENCE_IMAGE*>( item )->GetReferenceImage();
+            const BITMAP_BASE&     image = refImage.GetImage();
+            const int              legacyPPI = image.GetLegacyPPI();
+
+            if( legacyPPI > 0 && image.GetPPI() != legacyPPI )
+            {
+                required.m_version = 20260623;
+                required.m_feature = "a reference image with a corrected pixel density";
+                break;
+            }
+        }
+    }
+
+    if( required.m_version <= loaded )
+        return { loaded, loaded };
+
+    *aFeature = required.m_feature;
+
+    return { std::min( required.m_version, SEXPR_BOARD_FILE_VERSION ), loaded };
 }
 
 
@@ -1400,8 +1595,14 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
     if( !( m_ctl & CTL_OMIT_FOOTPRINT_VERSION ) )
     {
+        // A .kicad_mod carries its own stamp.  When the caller has set a target version on the
+        // formatter (FP_CACHE::Save does, to keep a library file at the version it was read at)
+        // write that instead of restamping the file to the current format.
+        const int fpVersion = m_out->GetFileFormatVersion() > 0 ? m_out->GetFileFormatVersion()
+                                                                : SEXPR_BOARD_FILE_VERSION;
+
         m_out->Print( "(version %d) (generator \"pcbnew\") (generator_version %s)",
-                      SEXPR_BOARD_FILE_VERSION,
+                      fpVersion,
                       m_out->Quotew( GetMajorMinorVersion() ).c_str() );
     }
 
@@ -1418,11 +1619,32 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
     if( !( m_ctl & CTL_OMIT_AT ) )
     {
-        m_out->Print( "(transform (translate %s) (rotate %s) (scale %s %s))",
-                      formatInternalUnits( aFootprint->GetPosition() ).c_str(),
-                      EDA_UNIT_UTILS::FormatAngle( aFootprint->GetOrientation() ).c_str(),
-                      FormatDouble2Str( aFootprint->GetTransform().GetScaleX() ).c_str(),
-                      FormatDouble2Str( aFootprint->GetTransform().GetScaleY() ).c_str() );
+        // The (transform) block replaced (at) in 20260616.  Children were already stored in the
+        // footprint's lib frame before that, so for an unscaled footprint the two forms carry
+        // exactly the same geometry and the older one can still be written.  A non-unit scale has
+        // no legacy spelling, so chooseFileFormatVersion() raises the version for those before
+        // this ever runs at a version that cannot hold it.
+        const int fileVersion = m_out->GetFileFormatVersion();
+
+        if( fileVersion > 0 && fileVersion < 20260616 )
+        {
+            m_out->Print( "(at %s %s)",
+                          formatInternalUnits( aFootprint->GetPosition() ).c_str(),
+                          aFootprint->GetOrientation().IsZero()
+                                ? ""
+                                : EDA_UNIT_UTILS::FormatAngle(
+                                          aFootprint->GetOrientation() ).c_str() );
+
+            m_out->SetUsedLegacyRepresentation();
+        }
+        else
+        {
+            m_out->Print( "(transform (translate %s) (rotate %s) (scale %s %s))",
+                          formatInternalUnits( aFootprint->GetPosition() ).c_str(),
+                          EDA_UNIT_UTILS::FormatAngle( aFootprint->GetOrientation() ).c_str(),
+                          FormatDouble2Str( aFootprint->GetTransform().GetScaleX() ).c_str(),
+                          FormatDouble2Str( aFootprint->GetTransform().GetScaleY() ).c_str() );
+        }
     }
 
     if( !aFootprint->GetLibDescription().IsEmpty() )

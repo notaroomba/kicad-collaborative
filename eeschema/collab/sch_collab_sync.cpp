@@ -1200,7 +1200,17 @@ void SCH_COLLAB_SYNC::writeSyncBase( const wxString& aDocId )
         STRING_FORMATTER   formatter;
         SCH_IO_KICAD_SEXPR plugin;
 
+        // The writer keeps the sheet's loaded format version and raises it only when the design
+        // needs it.  There is no user in this path, so route that to the collab log: a base that
+        // silently jumped to the current format is the first sign the project stopped being
+        // openable by a collaborator on a stable KiCad.
+        WX_STRING_REPORTER formatReporter;
+        plugin.SetReporter( &formatReporter );
+
         plugin.FormatSchematicToFormatter( &formatter, sheet, &m_frame->Schematic() );
+
+        if( formatReporter.HasMessage() )
+            wxLogTrace( traceCollab, wxS( "sync base: %s" ), formatReporter.GetMessages() );
 
         COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
                                        m_frame->Prj().GetProjectName(),

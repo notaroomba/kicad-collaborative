@@ -153,3 +153,17 @@
 //#define SEXPR_SCHEMATIC_FILE_VERSION 20260818  // Line ending shapes
 //#define SEXPR_SCHEMATIC_FILE_VERSION 20260826 // Bold is a stroke-width multiplier; thickness stores the base width
 #define SEXPR_SCHEMATIC_FILE_VERSION 20260830 // Custom user properties
+
+/**
+ * The newest schematic file format version that may be missing the junctions Eeschema implies
+ * from merged colinear wires.
+ *
+ * SCHEMATIC::FixupJunctionsAfterImport() repairs those on load, but it is not read-only: it
+ * appends SCH_JUNCTIONs and splits the wires under them.  It used to be gated on
+ * SEXPR_SCHEMATIC_FILE_VERSION, which was fine while every save restamped the file to the
+ * current version -- the fixup then ran at most once.  Now that a save keeps the version the
+ * file was loaded with, that moving comparison would re-run the fixup on every single open of
+ * a preserved file, so the gate is pinned to the version that was current when the fixup was
+ * extended to native s-expression files (commit 0430106fb0).
+ */
+#define SEXPR_SCHEMATIC_IMPLIED_JUNCTIONS_VERSION 20260629

@@ -671,8 +671,11 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                 m_infoBar->RemoveAllButtons();
                 m_infoBar->AddCloseButton();
                 m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
-                                           "It will be converted to the new format when saved." ),
-                                        wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+                                           "It will be saved in that same format, so it stays "
+                                           "readable by that version, unless an edit needs "
+                                           "something only a newer format can store." ),
+                                        wxICON_INFORMATION,
+                                        WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
             }
 
             for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
@@ -789,13 +792,15 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     // entries to bus wires
     //
     // A native s-expression schematic written by an older version can drop the junctions implied
-    // by merged colinear wires, so the fixup also runs for pre-current native files.  It is limited
-    // to older files because the current version writes those junctions on save; running it on a
-    // current file could silently connect an intentional wire crossing and mask an
-    // ERCE_LABEL_MULTIPLE_WIRES violation.  It is idempotent and only adds needed junctions.
+    // by merged colinear wires, so the fixup also runs for old native files.  It is limited to
+    // them because any version from SEXPR_SCHEMATIC_IMPLIED_JUNCTIONS_VERSION on writes those
+    // junctions on save; running it on a newer file could silently connect an intentional wire
+    // crossing and mask an ERCE_LABEL_MULTIPLE_WIRES violation.  The bound is a fixed version
+    // rather than the current one because saving now preserves the loaded version, so a file
+    // below the current constant stays below it for good.
     bool nativeNeedsFixup = schFileType == SCH_IO_MGR::SCH_KICAD
                             && Schematic().RootScreen()->GetFileFormatVersionAtLoad()
-                                       < SEXPR_SCHEMATIC_FILE_VERSION;
+                                       < SEXPR_SCHEMATIC_IMPLIED_JUNCTIONS_VERSION;
 
     if( schFileType == SCH_IO_MGR::SCH_LEGACY || nativeNeedsFixup )
         Schematic().FixupJunctionsAfterImport();
@@ -1054,12 +1059,22 @@ bool SCH_EDIT_FRAME::saveSchematicFile( SCH_SHEET* aSheet, const wxString& aSave
     if( pluginType == SCH_IO_MGR::SCH_FILE_UNKNOWN )
         pluginType = SCH_IO_MGR::SCH_KICAD;
 
+    // The writer keeps the sheet's original file format version, and raises it only when the
+    // design has grown something that version cannot store.  Collect that so the user is told
+    // rather than finding out when a collaborator's older KiCad refuses the file.
+    //
+    // Declared before the plugin so it outlives it: the plugin holds a bare pointer to this
+    // reporter, and locals are destroyed in reverse order of declaration.
+    WX_STRING_REPORTER formatReporter;
+
     IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( pluginType ) );
 
     // On Windows, ensure the target file is writeable by clearing problematic attributes like
     // hidden or read-only. This can happen when files are synced via cloud services.
     if( schematicFileName.FileExists() )
         KIPLATFORM::IO::MakeWriteable( schematicFileName.GetFullPath() );
+
+    pi->SetReporter( &formatReporter );
 
     try
     {
@@ -1079,6 +1094,14 @@ bool SCH_EDIT_FRAME::saveSchematicFile( SCH_SHEET* aSheet, const wxString& aSave
     if( success )
     {
         screen->SetContentModified( false );
+
+        if( formatReporter.HasMessage() )
+        {
+            m_infoBar->RemoveAllButtons();
+            m_infoBar->AddCloseButton();
+            m_infoBar->ShowMessage( formatReporter.GetMessages(), wxICON_WARNING,
+                                    WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+        }
 
         msg.Printf( _( "File '%s' saved." ),  screen->GetFileName() );
         SetStatusText( msg, 0 );
@@ -1270,9 +1293,13 @@ bool SCH_EDIT_FRAME::SaveProject( bool aSaveAs )
         // File doesn't exist yet; true if we just imported something
         updateFileHistory = true;
     }
-    else if( screens.GetFirst() && screens.GetFirst()->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION )
+    else if( screens.GetFirst()
+             && screens.GetFirst()->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION
+             && wxGetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), nullptr ) )
     {
-        // Allow the user to save un-edited files in new format
+        // Allow the user to save un-edited files in the new format.  Only meaningful when
+        // version stamping is forced on: otherwise the save would rewrite the file byte for
+        // byte at the same version, so an unmodified older file has nothing to save.
     }
     else if( !IsContentModified() )
     {

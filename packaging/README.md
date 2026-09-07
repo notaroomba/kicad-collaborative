@@ -16,15 +16,34 @@ Installers are branded **KiCad Collaborative** and are designed to install
 - **No file associations.** The Windows installer does not register
   `.kicad_*` extensions and the macOS bundle uses its own bundle id, so
   double-clicking a board still opens your stock KiCad.
-- **The format version is never touched.** Saving a board or schematic
-  keeps the `(version …)` stamp the file was opened with, so a file that
-  came from stock KiCad 9 still identifies as a KiCad 9 file after being
-  edited here and opens there without a "newer format" warning. New files
-  (and legacy-format imports) get the current version. Set
-  `KICAD_COLLAB_STAMP_VERSIONS=1` to restore stock restamping. Note the
-  version stamp is preserved, not the grammar: if you use an editor
-  feature that only exists in newer formats, its tokens are still written
-  and an old KiCad may reject them.
+- **The format version is never touched silently.** Saving a board or
+  schematic keeps the `(version …)` stamp the file was opened with, so a
+  file that came from stock KiCad 10 still identifies as a KiCad 10 file
+  after being edited here and opens there without a "newer format"
+  warning. New files, new sub-sheets of a new project, and legacy-format
+  imports get the current version; a sub-sheet added to an existing
+  project inherits that project's version. Set
+  `KICAD_COLLAB_STAMP_VERSIONS` (to any value) to restore stock
+  restamping, and `kicad-cli sch upgrade` / `pcb upgrade` still upgrade on
+  request.
+
+  The stamp is only kept when the file's contents actually fit in it. Each
+  save measures the serialized body against a table of when every token
+  entered the format; if an edit has introduced something the old version
+  cannot express — a net chain, an ellipse, a pin-to-pad map — the version
+  is raised to the oldest one that can hold it and an infobar (or a CLI
+  warning) names the feature that forced it. Nothing is written under a
+  stamp it does not match without saying so.
+
+  Where a construct merely *changed representation*, the old
+  representation is written instead of upgrading, so the file round-trips:
+  a bold stroke-font width, for example, is written back with the bold
+  multiplier baked in for pre-20260826 files rather than shrinking by the
+  multiplier on every save.
+
+  Two known gaps: symbol libraries (`.kicad_sym`) and footprint files
+  (`.kicad_mod`) are still restamped unconditionally, and the token table
+  can only warn about grammar changes it has an entry for.
 
 ## macOS
 

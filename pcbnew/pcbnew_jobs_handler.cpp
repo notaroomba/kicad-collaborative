@@ -3321,6 +3321,12 @@ int PCBNEW_JOBS_HANDLER::JobUpgrade( JOB* aJob )
 
         if( shouldSave )
         {
+            // Saving normally keeps the version the board was loaded with.  This job is an
+            // explicit request to restamp, so drop the loaded version: with nothing to preserve
+            // the writer falls back to the current format.  (The value is only read by the
+            // writer, and the board is discarded when this job returns.)
+            brd->SetFileFormatVersionAtLoad( 0 );
+
             pi->SaveBoard( brd->GetFileName(), brd );
             m_reporter->Report( _( "Successfully saved board file using the latest format\n" ), RPT_SEVERITY_INFO );
         }

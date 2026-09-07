@@ -118,6 +118,7 @@ EDA_TEXT::EDA_TEXT( const EDA_TEXT& aText ) :
     m_attributes = aText.m_attributes;
     m_pos = aText.m_pos;
     m_visible = aText.m_visible;
+    m_legacyBoldStrokeWidth = aText.m_legacyBoldStrokeWidth;
 
     m_render_cache.reset();
 
@@ -148,6 +149,7 @@ EDA_TEXT& EDA_TEXT::operator=( const EDA_TEXT& aText )
     m_attributes = aText.m_attributes;
     m_pos = aText.m_pos;
     m_visible = aText.m_visible;
+    m_legacyBoldStrokeWidth = aText.m_legacyBoldStrokeWidth;
 
     m_render_cache.reset();
 
@@ -336,6 +338,27 @@ void EDA_TEXT::MigrateLegacyBoldStrokeWidth()
     // widths below ~3 IU (well under any physically meaningful stroke) can't round-trip exactly
     // through this floor; the effective width comes out slightly larger than before migration.
     SetTextThickness( std::max( 2, KiROUND( thickness / BOLD_STROKE_MULTIPLIER ) ) );
+
+    // Remember what was on disk: the division above is lossy, so Format() cannot recover it by
+    // multiplying back and would otherwise change the stored width on the first save of an
+    // otherwise untouched file.
+    m_legacyBoldStrokeWidth = thickness;
+}
+
+
+int EDA_TEXT::legacyBoldStrokeWidth() const
+{
+    const int thickness = GetTextThickness();
+
+    if( m_legacyBoldStrokeWidth > 0
+            && std::max( 2, KiROUND( m_legacyBoldStrokeWidth / BOLD_STROKE_MULTIPLIER ) )
+                       == thickness )
+    {
+        // Still the migrated value, so the original is still the right thing to write back.
+        return m_legacyBoldStrokeWidth;
+    }
+
+    return KiROUND( thickness * BOLD_STROKE_MULTIPLIER );
 }
 
 
@@ -1080,8 +1103,23 @@ void EDA_TEXT::Format( OUTPUTFORMATTER* aFormatter, int aControlBits ) const
 
     if( !GetAutoThickness() )
     {
+        int thickness = GetTextThickness();
+
+        // Before 20260826 a bold stroke-font width had the bold multiplier baked into the
+        // stored value, and the loader divides it back out (MigrateLegacyBoldStrokeWidth).
+        // When that older format is the one being written, bake it in again: otherwise every
+        // open/save cycle shrinks the stroke by the multiplier until it hits the floor.
+        const int fileVersion = aFormatter->GetFileFormatVersion();
+
+        if( fileVersion > 0 && fileVersion < 20260826 && IsBold() && thickness > 1
+                && isStrokeFont() )
+        {
+            thickness = legacyBoldStrokeWidth();
+            aFormatter->SetUsedLegacyRepresentation();
+        }
+
         aFormatter->Print( "(thickness %s)",
-                           EDA_UNIT_UTILS::FormatInternalUnits( m_IuScale, GetTextThickness() ).c_str() );
+                           EDA_UNIT_UTILS::FormatInternalUnits( m_IuScale, thickness ).c_str() );
     }
 
     if( IsBold() )

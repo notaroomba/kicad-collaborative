@@ -22,6 +22,7 @@
 #ifndef SCH_IO_KICAD_SEXPR_LIB_CACHE_H_
 #define SCH_IO_KICAD_SEXPR_LIB_CACHE_H_
 
+#include <reporter.h>
 #include "sch_io/sch_io_lib_cache.h"
 #include <set>
 
@@ -58,6 +59,9 @@ public:
     void SetFileFormatVersionAtLoad( int aVersion ) { m_fileFormatVersionAtLoad = aVersion; }
     int GetFileFormatVersionAtLoad()  const { return m_fileFormatVersionAtLoad; }
 
+    /// Where to report a format version that had to be raised on save; may be nullptr.
+    void SetReporter( REPORTER* aReporter ) { m_reporter = aReporter; }
+
 private:
     friend SCH_IO_KICAD_SEXPR;
 
@@ -71,11 +75,29 @@ private:
      */
     void updateParentSymbolLinks();
 
-    void formatLibraryHeader( OUTPUTFORMATTER& aFormatter );
+    void formatLibraryHeader( OUTPUTFORMATTER& aFormatter, int aVersion );
+
+    /**
+     * Serialize @a aSymbols into @a aFormatter, header included, keeping the format version the
+     * library was loaded with when the bytes fit in it.
+     *
+     * A restamped .kicad_sym is refused wholesale by an older KiCad, which leaves every symbol
+     * in every schematic that uses the library unresolved -- so the library has to be preserved
+     * for the schematic's own preservation to be worth anything.  Same shape as the schematic
+     * and board writers: serialize once at the loaded version, measure the result, and raise the
+     * stamp only when something in it cannot be stored that far back.
+     */
+    void formatLibrary( OUTPUTFORMATTER& aFormatter, const std::vector<LIB_SYMBOL*>& aSymbols );
+
+    /// The version the library should be preserved at, or 0 if there is nothing to preserve.
+    int preservableVersion() const;
 
     bool isLibraryPathValid() const;
 
     int m_fileFormatVersionAtLoad;
+
+    /// Set by the owning SCH_IO so a forced format-version upgrade reaches the user.
+    REPORTER* m_reporter = nullptr;
 
     std::set<wxString> m_pendingFileDeletes;
 

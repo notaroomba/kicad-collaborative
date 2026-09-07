@@ -24,6 +24,7 @@
 #define SCH_IO_KICAD_SEXPR_H_
 
 #include <memory>
+#include <utility>
 #include <sch_io/sch_io.h>
 #include <sch_io/sch_io_mgr.h>
 #include <sch_file_versions.h>
@@ -111,6 +112,18 @@ public:
 
     void Format( SCH_SHEET* aSheet );
 
+    /**
+     * Choose the file format version to stamp on @a aSheet's file.
+     *
+     * @param aSheet is the sheet about to be written.
+     * @param aBody is its already-serialized body (everything after the header).
+     * @param aFeature receives the untranslated name of the feature that forced an upgrade,
+     *                 or is left untouched when the loaded version is kept.
+     * @return the version to write, and the version the file was loaded at (0 when new).
+     */
+    std::pair<int, int> chooseFileFormatVersion( SCH_SHEET* aSheet, const std::string& aBody,
+                                                 const char** aFeature ) const;
+
     void Format( SCH_SELECTION* aSelection, SCH_SHEET_PATH* aSelectionPath,
                  SCHEMATIC& aSchematic, OUTPUTFORMATTER* aFormatter, bool aForClipboard );
 
@@ -168,6 +181,12 @@ private:
     void saveTable( SCH_TABLE* aTable );
     void saveGroup( SCH_GROUP* aGroup );
     void saveInstances( const std::vector<SCH_SHEET_INSTANCE>& aSheets );
+
+    /// Write everything after the `(kicad_sch (version ...) ...)` header, including the closing paren.
+    void formatSheetContents( SCH_SHEET* aSheet, const SCH_SHEET_LIST& aSheets );
+
+    /// The version the file should be preserved at, or 0 if there is nothing to preserve.
+    int preservableVersion( SCH_SCREEN* aScreen ) const;
 
     void cacheLib( const wxString& aLibraryFileName, const std::map<std::string, UTF8>* aProperties );
     bool isBuffering( const std::map<std::string, UTF8>* aProperties );

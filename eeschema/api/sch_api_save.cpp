@@ -21,6 +21,7 @@
 
 #include <base_screen.h>
 #include <kiplatform/io.h>
+#include <reporter.h>
 #include <pgm_base.h>
 #include <project.h>
 #include <project/project_file.h>
@@ -64,11 +65,25 @@ bool SaveSheetToFile( SCH_SHEET* aSheet, SCHEMATIC& aSchematic, const wxString& 
     if( pluginType == SCH_IO_MGR::SCH_FILE_UNKNOWN )
         pluginType = SCH_IO_MGR::SCH_KICAD;
 
+    // The writer keeps the sheet's loaded format version and raises it only when the design needs
+    // it.  There is no user in this path, so route that to the API trace rather than restamping
+    // the file silently.  Declared before the plugin: it holds a bare pointer to this.
+    WX_STRING_REPORTER formatReporter;
+
     IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( pluginType ) );
+
+    pi->SetReporter( &formatReporter );
 
     try
     {
         pi->SaveSchematicFile( schematicFileName.GetFullPath(), aSheet, &aSchematic );
+
+        if( formatReporter.HasMessage() )
+        {
+            wxLogTrace( wxS( "KI_TRACE_API" ), wxS( "SaveSheetToFile: %s" ),
+                        formatReporter.GetMessages() );
+        }
+
         return true;
     }
     catch( const IO_ERROR& ioe )
