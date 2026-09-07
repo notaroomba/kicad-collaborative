@@ -44,7 +44,7 @@ export function commitChanges(changes, label) {
     else if (c.kind === "MODIFIED" && it) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) });
   }
   applyChanges(changes);
-  if (E.ws && E.ws.readyState === 1) sendOp(changes); else toast("Not connected — change kept locally");
+  sendOp(changes);   // journalled and replayed on reconnect even when the socket is down
   undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift();
   redoStack.length = 0; publishUndo();
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
@@ -55,13 +55,13 @@ export function publishUndo() { store.set({ undo: { undo: undoStack.length, redo
 export function undoLast() {
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
   const redo = e.changes.map((c) => { const it = E.kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) } : c); });
-  applyChanges(e.inverse); if (E.ws && E.ws.readyState === 1) sendOp(e.inverse);
+  applyChanges(e.inverse); sendOp(e.inverse);
   redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); publishUndo(); toast("Undo " + e.label);
 }
 
 export function redoLast() {
   const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
-  applyChanges(e.changes); if (E.ws && E.ws.readyState === 1) sendOp(e.changes);
+  applyChanges(e.changes); sendOp(e.changes);
   undoStack.push(e); publishUndo(); toast("Redo " + e.label);
 }
 

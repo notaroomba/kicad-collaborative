@@ -8,7 +8,7 @@
 "use strict";
 const K = () => root.KiCadCanvas;
 const PROPS = () => root.CollabTools && root.CollabTools.props;
-const clone = (n) => JSON.parse(JSON.stringify(n));
+const clone = (n) => K().cloneNode(n);   // not JSON: that drops the reader's record of which atoms were quoted
 const str = (v) => v === undefined || v === null ? "" : String(v);
 const num = (v, d = 0) => { if (typeof v === "number") return v; if (v === undefined || v === null || v === "") return d; const x = Number(v); return isNaN(x) ? d : x; };
 const r4 = (v) => +(+v).toFixed(4);

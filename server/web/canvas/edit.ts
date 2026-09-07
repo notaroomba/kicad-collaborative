@@ -29,10 +29,43 @@ export function moveItem(doc, item, x, y, IU) {
     { name: "Position Y", before: { type: "int", v: Math.round(oy * IU) }, after: { type: "int", v: Math.round(y * IU) } }] };
 }
 
-/** Whole-item replace change for an item whose node was edited in place. */
-export function replaceChange(doc, item) { buildGeom(doc, item); return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
+/**
+ * The out-of-band keys a board change needs beside its s-expression, because a
+ * fragment cannot carry them across boards:
+ *  - netName / padNets: a fragment's (net …) is a *number* in this document's table, and
+ *    the desktop parses fragments with no board attached, so pads come back with no net at
+ *    all.  PCB_COLLAB::ApplyItemChange re-resolves from these names; without them
+ *    SwapItemData leaves every pad of the footprint orphaned (ratsnest gone, DRC unconnected).
+ *  - groupMembers: parseItemSexpr strips a parsed group's members (they point into the
+ *    temporary parse board) and rebuilds membership from this uuid list.  Without it the
+ *    group lands empty, and a MODIFIED empties one that had members.
+ */
+export function boardChangeExtras(doc, item, change) {
+  if (!doc || doc.type !== "pcb") return change;
+  const name = netNameOf(doc, item.node);
+  if (name) change.netName = name;
+  if (item.kind === "footprint") {
+    const pads = {};
+    for (const p of kids(item.node, "pad")) { const pn = netNameOf(doc, p); if (pn) pads[str(p[1])] = pn; }
+    change.padNets = pads;
+  }
+  if (item.kind === "group" || item.kind === "generated") change.groupMembers = groupMemberIds(item.node);
+  return change;
+}
 
-export function addChange(doc, item) { return { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }; }
+/** A board item's net name: the fragment may carry only the number, which the doc's net table names. */
+export function netNameOf(doc, node) {
+  const n = kid(node, "net"); if (!n) return "";
+  if (typeof n[1] === "number") return n.length > 2 ? str(n[2]) : str((doc && doc.nets.get(n[1])) || "");
+  return str(n[1]);
+}
+
+export function groupMemberIds(node) { const m = kid(node, "members"); return m ? m.slice(1).map(str) : []; }
+
+/** Whole-item replace change for an item whose node was edited in place. */
+export function replaceChange(doc, item) { buildGeom(doc, item); return boardChangeExtras(doc, item, { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }); }
+
+export function addChange(doc, item) { return boardChangeExtras(doc, item, { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) }); }
 
 export function removeChange(item) { return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] }; }
 

@@ -86,14 +86,14 @@ export function moveGroupDrag(mm) {
   if (dx === E.drag.last[0] && dy === E.drag.last[1]) return; E.drag.last = [dx, dy]; E.drag.moved = true;
   for (const m of E.drag.group) { const nx = m.ox + dx, ny = m.oy + dy; KiCadCanvas.applyChange(E.kdoc, moveOp(m.fp, nx, ny), E.IU); m.fp.x = nx; m.fp.y = ny; }
   requestRender();
-  const now = Date.now(); if (now - E.lastLiveMove > 150) { E.lastLiveMove = now; sendOp(E.drag.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y))); }
+  const now = Date.now(); if (now - E.lastLiveMove > 150) { E.lastLiveMove = now; sendOp(E.drag.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y)), true); }
 }
 
 export function finishGroupDrag() {
   const g = E.drag; E.drag = null; dragG.replaceChildren(); if (!g.moved || (!g.last[0] && !g.last[1])) return;
   const changes = g.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y));
   const inverse = g.group.map((m) => moveOp({ id: m.fp.id, x: m.fp.x, y: m.fp.y }, m.ox, m.oy));
-  if (E.ws && E.ws.readyState === 1) sendOp(changes);
+  sendOp(changes);
   undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 }

@@ -543,4 +543,51 @@ BOOST_AUTO_TEST_CASE( SchematicLeavingDoesNotStrandTheBoard )
 }
 
 
+
+// A footprint fragment is silent about pad nets (they are parsed with no board attached and
+// arrive orphaned), so a change with no "padNets" must not be read as "clear every net": the
+// receiver's ratsnest for that part would vanish and DRC would call its pads unconnected —
+// permanently, once the board is saved.
+BOOST_AUTO_TEST_CASE( FootprintChangeWithoutPadNetsKeepsExistingNets )
+{
+    FOOTPRINT* fp = new FOOTPRINT( m_authoring.get() );
+    fp->SetPosition( VECTOR2I( 4000000, 6000000 ) );
+    fp->SetReference( wxS( "U9" ) );
+
+    PAD* pad = new PAD( fp );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetNetCode( 1 );       // GND on the authoring board
+    fp->Add( pad );
+    m_authoring->Add( fp );
+
+    FOOTPRINT* twin = static_cast<FOOTPRINT*>( fp->Clone() );
+    const_cast<KIID&>( twin->m_Uuid ) = fp->m_Uuid;
+    m_receiving->Add( twin );
+    twin->Pads().front()->SetNetCode( 2 );   // GND under the receiver's numbering
+
+    BOOST_REQUIRE_EQUAL( twin->Pads().front()->GetNetname().ToStdString(), "GND" );
+
+    const wxString netBefore = twin->Pads().front()->GetNetname();
+
+    // The author drags the reference text: position changes, nets are not mentioned.
+    fp->SetPosition( VECTOR2I( 9000000, 9500000 ) );
+
+    FOOTPRINT* footprint = fp;
+
+    // Exactly what the browser's canvas layer used to send: sexpr only.
+    nlohmann::json change = MakeChange( footprint, "MODIFIED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( footprint );
+
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    FOOTPRINT* applied =
+            dynamic_cast<FOOTPRINT*>( m_receiving->ResolveItem( footprint->m_Uuid, true ) );
+    BOOST_REQUIRE( applied );
+    BOOST_REQUIRE( !applied->Pads().empty() );
+
+    BOOST_CHECK( applied->Pads().front()->GetNetname() == netBefore );
+    BOOST_CHECK( applied->Pads().front()->GetNetCode() > 0 );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()

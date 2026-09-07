@@ -26,6 +26,15 @@ export const E: any = {
   editsSeen: 0,
   opN: 0,
   lastPresence: 0,
+  lastPresenceMm: null,
+  presenceTimer: 0,
+  // Ops we have applied locally and sent (or made offline) that the server has not acked yet;
+  // clientOpId -> {docId, changes}.  Replayed on every (re)join — see net.ts replayPending.
+  pendingOps: new Map(),
+  joinedDocId: null,
+  lastSeq: 0,
+  resyncAt: 0,
+  applyFailed: false,
   lastLiveMove: 0,
   followPeer: null,
   suppressBreakout: false,

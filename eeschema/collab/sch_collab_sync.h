@@ -39,7 +39,7 @@ class SCH_ITEM;
 class SCH_SCREEN;
 class COLLAB_DOC_ADAPTER;
 class SCHEMATIC;
-
+class SCH_SHEET;
 
 namespace SCH_COLLAB
 {
@@ -53,6 +53,19 @@ namespace SCH_COLLAB
  *                library symbols for SCH_SYMBOLs.
  */
 std::string FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, SCH_ITEM* aItem );
+
+/**
+ * Load collaboration s-expression text into @p aSheet's screen.
+ *
+ * Two shapes reach us and they need different parser modes: a *fragment* is a bare sequence
+ * of item roots (optionally preceded by lib_symbols) — the clipboard grammar that
+ * SCH_IO_KICAD_SEXPR::LoadContent, i.e. ParseSchematic( aIsCopyableOnly = true ), accepts —
+ * while a *snapshot* is a whole (kicad_sch …) file, for which that same copyable-only loop has
+ * no case at all and throws on the first token.  This picks the mode from the text.
+ *
+ * @return false on a parse failure, with the message in @p aError when given.
+ */
+bool ParseIntoScreen( const std::string& aText, SCH_SHEET& aSheet, wxString* aError = nullptr );
 
 /**
  * Apply one wire-format change object to a schematic.
@@ -194,7 +207,7 @@ public:
      * flight now matches the server on disk, so make those the sync bases.
      */
     void RefreshSyncBasesFromDisk();
-    void OnSnapshotRequest();
+    void OnSnapshotRequest( const wxString& aDocId );
     void OnReset( const wxString& aDocId, long long aSeq );
 
 private:
@@ -219,7 +232,10 @@ private:
 
     void onIdle( wxIdleEvent& aEvent );
     void drainQueue();
-    void applyOp( const PENDING_OP& aOp );
+    /// Apply one queued op.  False means it could not be applied at all (no local screen for
+    /// its doc), which must keep the reported applied-seq where it is so a reconnect asks for
+    /// the tail again instead of claiming to be caught up.
+    bool applyOp( const PENDING_OP& aOp );
 
     ///< Save symbols that arrived from a library we do not have into a
     ///< project-local library, so the reference resolves here too.
@@ -235,6 +251,9 @@ private:
     ///< The server doc id for the document containing aScreen, or empty when the
     ///< screen's file is not part of the shared project.
     wxString docIdForScreen( const SCH_SCREEN* aScreen ) const;
+
+    /// Project-relative UNIX path of a sheet's file, resolved against the sheet that holds it.
+    wxString relPathForSheet( const SCH_SCREEN* aParentScreen, const SCH_SHEET* aSheet ) const;
 
     ///< Plot one sheet to SVG (the editor's own theme) for the web app; empty on failure.
     std::string plotSheetPreviewSvg( SCH_SCREEN* aScreen );

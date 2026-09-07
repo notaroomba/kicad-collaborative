@@ -195,6 +195,17 @@
   }
 
   // web/canvas/sexpr.ts
+  var QUOTED = /* @__PURE__ */ new WeakMap();
+  function quotedMask(node) {
+    return QUOTED.get(node) | 0;
+  }
+  function cloneNode(node) {
+    if (!isList(node)) return node;
+    const out = node.map(cloneNode);
+    const q = QUOTED.get(node);
+    if (q) QUOTED.set(out, q);
+    return out;
+  }
   function parse(text) {
     let i = 0;
     const n = text.length;
@@ -202,6 +213,7 @@
     function list() {
       i++;
       const out = [];
+      let q = 0;
       for (; ; ) {
         while (i < n && ws(text.charCodeAt(i))) i++;
         if (i >= n) break;
@@ -211,9 +223,13 @@
           break;
         }
         if (c === "(") out.push(list());
-        else if (c === '"') out.push(quoted());
-        else out.push(atom());
+        else if (c === '"') {
+          const at = out.length;
+          if (at < 30) q |= 1 << at;
+          out.push(quoted());
+        } else out.push(atom());
       }
+      if (q) QUOTED.set(out, q);
       return out;
     }
     function quoted() {
@@ -317,7 +333,17 @@
   }
   function uuidOf(node) {
     const u = kid(node, "uuid") || kid(node, "tstamp");
-    return u ? str(u[1]) : "";
+    if (u) return str(u[1]);
+    if (node[0] === "rule_area") {
+      for (let j = 1; j < node.length; j++) {
+        const c = node[j];
+        if (isList(c)) {
+          const nested = kid(c, "uuid");
+          if (nested) return str(nested[1]);
+        }
+      }
+    }
+    return "";
   }
   function atOf(node) {
     const t = kid(node, "transform");
@@ -2004,7 +2030,7 @@
 
   // web/canvas/doc.ts
   function newDoc(type) {
-    return { type, items: /* @__PURE__ */ new Map(), lib: /* @__PURE__ */ new Map(), page: [297, 210], layers: /* @__PURE__ */ new Map(), copper: [], bbox: null, nets: /* @__PURE__ */ new Map() };
+    return { type, items: /* @__PURE__ */ new Map(), lib: /* @__PURE__ */ new Map(), page: [297, 210], layers: /* @__PURE__ */ new Map(), copper: [], bbox: null, nets: /* @__PURE__ */ new Map(), version: 0 };
   }
   function paperSize(node) {
     const name = str(node[1]);
@@ -2042,7 +2068,10 @@
       if (!isList(node)) continue;
       const k = node[0];
       if (k === "paper") doc.page = paperSize(node);
-      else if (type === "pcb" && k === "layers") {
+      else if (k === "version") {
+        doc.version = num(node[1], 0);
+        continue;
+      } else if (type === "pcb" && k === "layers") {
         for (const l of node.slice(1)) if (isList(l)) {
           const name = str(l[1]), ltype = str(l[2]);
           doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== void 0 ? str(l[3]) : "" });
@@ -2051,14 +2080,66 @@
       } else if (k === "net") {
         if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2]));
         continue;
-      } else if (k === "lib_symbols" || k === "version" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "title_block" || k === "sheet_instances" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
+      } else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "title_block" || k === "sheet_instances" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
       else addItem(doc, node);
     }
     computeBBox(doc);
     return doc;
   }
-  var SCH_KINDS = /* @__PURE__ */ new Set(["symbol", "wire", "bus", "junction", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "no_connect", "sheet", "text", "text_box", "polyline", "rectangle", "circle", "arc", "bezier", "bus_entry", "image", "table", "rule_area"]);
-  var PCB_KINDS = /* @__PURE__ */ new Set(["footprint", "segment", "arc", "via", "zone", "gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_text", "gr_text_box", "gr_curve", "gr_bbox", "dimension", "target", "image", "group", "table", "generated"]);
+  var SCH_KINDS = /* @__PURE__ */ new Set([
+    "symbol",
+    "wire",
+    "bus",
+    "junction",
+    "label",
+    "global_label",
+    "hierarchical_label",
+    "netclass_flag",
+    "directive_label",
+    "no_connect",
+    "sheet",
+    "text",
+    "text_box",
+    "polyline",
+    "rectangle",
+    "circle",
+    "arc",
+    "bezier",
+    "bus_entry",
+    "image",
+    "table",
+    "rule_area",
+    "ellipse",
+    "ellipse_arc",
+    "net_chain"
+  ]);
+  var PCB_KINDS = /* @__PURE__ */ new Set([
+    "footprint",
+    "segment",
+    "arc",
+    "via",
+    "zone",
+    "gr_line",
+    "gr_rect",
+    "gr_circle",
+    "gr_arc",
+    "gr_poly",
+    "gr_text",
+    "gr_text_box",
+    "gr_curve",
+    "gr_bbox",
+    "dimension",
+    "target",
+    "image",
+    "group",
+    "table",
+    "generated",
+    "gr_ellipse",
+    "gr_ellipse_arc",
+    "barcode",
+    "point",
+    "grid_item"
+  ]);
   function addItem(doc, node) {
     const k = node[0];
     if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
@@ -3336,21 +3417,35 @@
     if (typeof canvas.toBlob === "function") return new Promise((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error("renderPng: toBlob failed")), type, opts.quality));
     return Promise.reject(new Error("renderPng: canvas cannot produce a blob"));
   }
-  function serialize(node) {
-    if (!isList(node)) {
-      if (typeof node === "number") return Number.isInteger(node) ? String(node) : String(+node.toFixed(6));
-      const s = String(node);
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return '"' + s + '"';
-      return /^[A-Za-z_][\w.:*-]*$/.test(s) ? s : '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
-    }
-    return "(" + node.map(serialize).join(" ") + ")";
+  function atomText(v, quoted) {
+    if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
+    const s = String(v);
+    if (quoted || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) || !/^[A-Za-z_][\w.:*-]*$/.test(s))
+      return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+    return s;
   }
+  function serialize(node) {
+    if (!isList(node)) return atomText(node, false);
+    const q = quotedMask(node);
+    let out = "(";
+    for (let j = 0; j < node.length; j++) {
+      if (j) out += " ";
+      const c = node[j];
+      out += isList(c) ? serialize(c) : atomText(c, j < 30 && (q >> j & 1) === 1);
+    }
+    return out + ")";
+  }
+  function wrapFragment(doc, body) {
+    if (doc.type === "sch") return body;
+    return "(kicad_pcb (version " + (doc.version || BOARD_FILE_VERSION) + ') (generator "kicad-collab-web") ' + body + ")";
+  }
+  var BOARD_FILE_VERSION = 20260728;
   function serializeItem(doc, item) {
     if (doc.type === "sch") {
       const lib = item.kind === "symbol" ? doc.lib.get(str((kid(item.node, "lib_id") || [])[1])) : null;
-      return '(kicad_sch (version 20250114) (generator "kicad-collab-web")' + (lib ? " (lib_symbols " + serialize(lib) + ")" : "") + " " + serialize(item.node) + ")";
+      return (lib ? "(lib_symbols " + serialize(lib) + ") " : "") + serialize(item.node);
     }
-    return serialize(item.node);
+    return wrapFragment(doc, serialize(item.node));
   }
 
   // web/canvas/ops.ts
@@ -3538,12 +3633,37 @@
       { name: "Position Y", before: { type: "int", v: Math.round(oy * IU) }, after: { type: "int", v: Math.round(y * IU) } }
     ] };
   }
+  function boardChangeExtras(doc, item, change) {
+    if (!doc || doc.type !== "pcb") return change;
+    const name = netNameOf(doc, item.node);
+    if (name) change.netName = name;
+    if (item.kind === "footprint") {
+      const pads = {};
+      for (const p of kids(item.node, "pad")) {
+        const pn = netNameOf(doc, p);
+        if (pn) pads[str(p[1])] = pn;
+      }
+      change.padNets = pads;
+    }
+    if (item.kind === "group" || item.kind === "generated") change.groupMembers = groupMemberIds(item.node);
+    return change;
+  }
+  function netNameOf(doc, node) {
+    const n = kid(node, "net");
+    if (!n) return "";
+    if (typeof n[1] === "number") return n.length > 2 ? str(n[2]) : str(doc && doc.nets.get(n[1]) || "");
+    return str(n[1]);
+  }
+  function groupMemberIds(node) {
+    const m = kid(node, "members");
+    return m ? m.slice(1).map(str) : [];
+  }
   function replaceChange(doc, item) {
     buildGeom(doc, item);
-    return { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) };
+    return boardChangeExtras(doc, item, { id: item.id, kind: "MODIFIED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) });
   }
   function addChange(doc, item) {
-    return { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) };
+    return boardChangeExtras(doc, item, { id: item.id, kind: "ADDED", typeName: typeNameOf(item), sexpr: serializeItem(doc, item) });
   }
   function removeChange(item) {
     return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] };
@@ -3649,6 +3769,10 @@
     addChange,
     removeChange,
     typeNameOf,
+    boardChangeExtras,
+    netNameOf,
+    groupMemberIds,
+    wrapFragment,
     pinPoints,
     wireEndsAt,
     newUuid,
@@ -3662,6 +3786,8 @@
     num,
     str,
     uuidOf,
+    cloneNode,
+    quotedMask,
     resolveLib,
     ORIENT,
     addItem,

@@ -1001,3 +1001,55 @@ test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / dup
   // the overlay draws the ratsnest and the markers without a DOM
   P.state.showRatsnest = true; pcb.runDRC(ctx); const c2 = stubCtx(800, 600); pcb.drawOverlay(c2, VIEW, ctx); assert.ok(c2.calls.stroke > 0 && c2.calls.arc > 0);
 });
+
+// The three things a board fragment cannot carry inside its s-expression, plus the one
+// thing the s-expression must carry and the web reader used to throw away.
+test("board changes: kicad_pcb wrapper, pad nets, group membership and a quoted group name", () => {
+  const doc = fixture();
+
+  // PCB_IO_KICAD_SEXPR::Parse (pcb_io_kicad_sexpr_parser.cpp) has cases only for kicad_pcb
+  // and footprint at top level; a bare (segment …) throws "Unknown token" and the op is dropped.
+  const seg = K.replaceChange(doc, doc.items.get("s-1"));
+  assert.ok(seg.sexpr.startsWith("(kicad_pcb (version 20260728) (generator "), seg.sexpr.slice(0, 60));
+  assert.ok(K.parseAll(seg.sexpr).length === 1 && K.kid(K.parse(seg.sexpr), "segment"), "one document holding the item");
+  assert.equal(seg.netName, "GND", "the desktop re-resolves the net by name");
+
+  // A footprint parses bare, but its pads come back with no net at all (the parse board is
+  // temporary), so SwapItemData would orphan every pad without this map.
+  const fp = K.replaceChange(doc, doc.items.get("fp-1"));
+  assert.deepEqual(fp.padNets, { 1: "GND", 2: "/SIG" });
+
+  // A board that names nets only in its table: the number in the fragment means nothing on
+  // the receiver, so the name has to be looked up here.
+  const coded = K.parseDoc(CODE_STYLE, "kicad_pcb");
+  assert.equal(K.replaceChange(coded, coded.items.get("cs-1")).netName, "GND");
+
+  // parseItemSexpr strips a parsed group's members; membership is rebuilt from this list.
+  const withGroup = K.parseDoc(FIXTURE.replace(/\n\)$/, '\n  (group "PowerStage" (uuid "grp-1") (members "s-1" "s-2"))\n)'), "kicad_pcb");
+  const g = K.replaceChange(withGroup, withGroup.items.get("grp-1"));
+  assert.deepEqual(g.groupMembers, ["s-1", "s-2"]);
+  // parseGROUP accepts only T_STRING (or locked) for the name: an identifier-shaped name
+  // must not come back bare, or the whole fragment is rejected.
+  assert.ok(g.sexpr.includes('(group "PowerStage"'), g.sexpr);
+  // the tools layer builds group edits through its own change builder; it must carry the list too
+  assert.deepEqual(P.groupMembersChanges(withGroup, withGroup.items.get("grp-1"), ["s-3"], [])[0].groupMembers, ["s-1", "s-2", "s-3"]);
+});
+
+// The desktop ghosts its router legs to us live; the reverse showed a bare cursor until the
+// track was committed, so the two directions looked like different products.
+test("ghostSegs: the in-flight route leg is offered to peers as mm segments", () => {
+  const doc = fixture(); const { ctx } = fakeCtx(doc);
+  pcb.onDocChanged(ctx);
+  assert.deepEqual(pcb.ghostSegs(ctx), [], "nothing in flight");
+  assert.equal(pcb.onKey("x", ev(), ctx), true);
+  assert.equal(pcb.onPointerDown(ev(), [100.2, 49.3], ctx), true);   // snaps onto pad 1
+  pcb.onPointerMove(ev(), [110, 52], ctx);
+  const segs = pcb.ghostSegs(ctx);
+  assert.ok(segs.length >= 1 && segs.length <= 2, JSON.stringify(segs));
+  for (const s of segs) { assert.equal(s.length, 5); assert.equal(s[4], P.state.route.width); }
+  assert.deepEqual(segs[0].slice(0, 2), P.state.route.last);
+  assert.deepEqual(segs[segs.length - 1].slice(2, 4), P.state.route.target);
+  pcb.onActivate("select", ctx);   // leaving the tool drops the unfixed leg
+  assert.equal(P.state.route, null);
+  assert.deepEqual(pcb.ghostSegs(ctx), [], "leaving the tool clears it, so peers stop drawing the stale leg");
+});

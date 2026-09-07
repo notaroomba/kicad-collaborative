@@ -25,18 +25,18 @@
 import { root } from "./env";
 import { PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, pcbColor, pcbZ } from "./colors";
 import { addItem, computeBBox, parseDoc } from "./doc";
-import { addChange, createItem, fieldAt, fieldBoxes, moveItem, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
-import { SvgPath, renderPng, renderSvg, serialize, serializeItem } from "./export";
+import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
+import { SvgPath, renderPng, renderSvg, serialize, serializeItem, wrapFragment } from "./export";
 import { buildGeom } from "./geom";
 import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
 import { HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawHalo, drawPad, drawSelectionHalo, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
-import { arcFrom3, atOf, bezierPts, boxOf, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, str, strokeOf, uuidOf } from "./sexpr";
+import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
 import { parseMarkup, textWidth } from "./text";
-export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, moveItem, replaceChange, addChange, removeChange, typeNameOf, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
+export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,

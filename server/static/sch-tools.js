@@ -65,7 +65,7 @@ const S = { ctx: null, tool: "select", wire: null, carry: null, drag: null, pend
   cursor: null, cursorClient: null, prompt: null, picker: null, dom: false, draw: null, highlight: null, sheetJob: null, imageWait: false };
 
 // ---------------------------------------------------------------- small helpers
-const deep = (n) => JSON.parse(JSON.stringify(n));
+const deep = (n) => K.cloneNode(n);   // not JSON: that drops the reader's record of which atoms were quoted
 const r4 = (v) => +(+v).toFixed(4);
 const same = (a, b, tol) => Math.abs(a[0] - b[0]) <= (tol || 1e-3) && Math.abs(a[1] - b[1]) <= (tol || 1e-3);
 const area = (b) => b ? Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]) : 0;
@@ -1357,6 +1357,28 @@ function outline(c, item, color, px, width) {
   else { const b = rectOf(item), pad = 0.4; c.setLineDash([4 * px, 3 * px]); c.strokeRect(b[0] - pad, b[1] - pad, b[2] - b[0] + 2 * pad, b[3] - b[1] + 2 * pad); }
   c.restore();
 }
+/**
+ * The geometry this module has in flight, in mm, as [x1, y1, x2, y2, widthMm] segments — what a
+ * peer should see while it is being drawn.  Until this existed, a web user rubber-banding a wire
+ * showed the desktop nothing but a cursor and the wire appeared out of nowhere on the drop,
+ * while a desktop user doing the same was ghosted live on the web the whole time.
+ */
+function ghostSegs() {
+  const out = [];
+  const w = S.wire;
+
+  if (w && w.pts.length) {
+    const width = w.kind === "bus" ? 0.3048 : 0.1524;
+    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w), w.flip));
+    for (let i = 1; i < pts.length; i++) out.push([pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], width]);
+  }
+  for (const seg of (S.drag && S.drag.preview) || []) {   // wires the drop will create
+    const width = seg.kind === "bus" ? 0.3048 : 0.1524;
+    for (let i = 1; i < seg.pts.length; i++) out.push([seg.pts[i - 1][0], seg.pts[i - 1][1], seg.pts[i][0], seg.pts[i][1], width]);
+  }
+  return out;
+}
+
 function drawOverlay(c, view, ctx) {
   S.ctx = ctx; installDom(ctx);
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
@@ -2744,7 +2766,7 @@ function runAction(id, ctx, opts) { const a = actions[id]; if (!a) return false;
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.sch = {
   id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
-  onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged,
+  onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged, ghostSegs,
   // for tests and the props panel
   state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; }, setImagePicker(fn) { imagePickerImpl = fn; },
   // connected drag engine, shared with app.js's select tool (symbols and sheets; an array drags a multi-selection)

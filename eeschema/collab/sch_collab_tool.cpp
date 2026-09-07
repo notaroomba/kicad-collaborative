@@ -89,6 +89,9 @@ static bool copyLinkToClipboard( const wxString& aUrl )
 
 /// Cap on how many selection boxes ride along in a presence update; the server
 /// rejects presence payloads over 8 KB.
+// Selection ids and their boxes both stop here.  150 boxes is ~5.6 KB and 150 uuids ~5.9 KB,
+// which together already exceed the server's 8 KB presence cap, so COLLAB_SESSION::ClampPresence
+// trims further when it has to; this only keeps the payload from being built huge in the first place.
 static constexpr size_t MAX_PRESENCE_BOXES = 150;
 
 /// Cap on in-flight ghost segments per presence update (same 8 KB budget).
@@ -782,13 +785,17 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
     // geometry is also what lets a peer highlight items it does not have yet.
     for( EDA_ITEM* item : m_selectionTool->GetSelection() )
     {
+        // Both lists are capped, and to the same count: the uuid list alone is ~37 bytes an
+        // entry, so an uncapped one crosses the server's 8 KB presence cap at roughly a
+        // hundred items and the whole payload is dropped (COLLAB_SESSION::ClampPresence is
+        // the backstop).  The receiver pairs boxes with ids by index, so they must match.
+        if( boxes.size() >= MAX_PRESENCE_BOXES )
+            break;
+
         selection.push_back( item->m_Uuid.AsStdString() );
 
-        if( boxes.size() < MAX_PRESENCE_BOXES )
-        {
-            const BOX2I bbox = item->GetBoundingBox();
-            boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
-        }
+        const BOX2I bbox = item->GetBoundingBox();
+        boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
     }
 
     // In-flight wire/bus segments ghost live on peers' canvases.
@@ -1018,10 +1025,10 @@ void SCH_COLLAB_TOOL::OnAck( const wxString& aClientOpId, long long aSeq )
 }
 
 
-void SCH_COLLAB_TOOL::OnSnapshotRequest()
+void SCH_COLLAB_TOOL::OnSnapshotRequest( const wxString& aDocId )
 {
     if( m_sync )
-        m_sync->OnSnapshotRequest();
+        m_sync->OnSnapshotRequest( aDocId );
 }
 
 
@@ -1029,6 +1036,23 @@ void SCH_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 {
     if( m_sync )
         m_sync->OnReset( aDocId, aSeq );
+}
+
+
+void SCH_COLLAB_TOOL::OnJoinRefused( const wxString& aDocId, const wxString& aCode )
+{
+    // Without this the editor keeps reporting a live session while nothing it draws reaches
+    // anyone: the ops are accepted locally, journalled, and refused by the server forever.
+    if( !m_frame )
+        return;
+
+    m_frame->ShowInfoBarError( aCode == wxS( "not_found" )
+            ? _( "This sheet is no longer part of the shared project; your edits to it are "
+                 "not being shared." )
+            : _( "Your access to this shared project has been withdrawn, so edits are no "
+                 "longer being shared. They are kept locally and sent if access is restored." ) );
+
+    OnSessionStateChanged();
 }
 
 

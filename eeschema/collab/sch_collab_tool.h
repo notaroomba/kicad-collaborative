@@ -92,8 +92,9 @@ public:
 
     ///< Cycle viewport-following through the connected peers.
     int FollowNextPeer( const TOOL_EVENT& aEvent );
-    void OnSnapshotRequest() override;
+    void OnSnapshotRequest( const wxString& aDocId ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
+    void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
 
     ///< The live-editing sync engine, or nullptr when no session is active.
     SCH_COLLAB_SYNC* GetSync() const { return m_sync.get(); }

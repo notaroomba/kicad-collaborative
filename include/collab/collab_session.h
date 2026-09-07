@@ -69,8 +69,13 @@ public:
     virtual void OnPresenceChanged() {}
     virtual void OnPeerJoined( const COLLAB_PEER& aPeer ) {}
     virtual void OnPeerLeft( const wxString& aClientId ) {}
-    virtual void OnSnapshotRequest() {}
+    /// The server wants a fresh snapshot of @p aDocId (it is chosen per doc, and a client
+    /// joined to several must serve the one asked for, not whatever it is displaying).
+    virtual void OnSnapshotRequest( const wxString& aDocId ) {}
     virtual void OnReset( const wxString& aDocId, long long aSeq ) {}
+    /// The server refused to let us into this doc (access revoked, or the doc is gone).
+    /// Nothing further will arrive for it and nothing we send for it will be accepted.
+    virtual void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) {}
     /// A comment thread changed (REST-driven; relayed live by the server).
     virtual void OnComment( const nlohmann::json& aMsg ) {}
     virtual void OnSessionStateChanged() {}
@@ -171,6 +176,11 @@ public:
     void SetAppliedSeq( const wxString& aDocId, long long aSeq );
 
     void SendPresence( const wxString& aDocId, const nlohmann::json& aState );
+
+    /// Shrink a presence state in place until the server's 8 KB cap will take it; the server
+    /// drops an oversized one outright, which silently freezes the sender's cursor for
+    /// everyone.  Public for the tests.
+    static void ClampPresence( nlohmann::json& aState );
     void SendOp( const wxString& aDocId, const wxString& aClientOpId,
                  std::optional<long long> aBaseSeq, const nlohmann::json& aChanges );
     void RequestResync( const wxString& aDocId );
@@ -205,6 +215,10 @@ private:
         COLLAB_DOC_ADAPTER*             adapter = nullptr;
         std::optional<long long>        sinceSeq;
         std::map<wxString, COLLAB_PEER> peers;
+        /// False until doc_info lands, and again once the server refuses the join.  Sending
+        /// ops for a doc the server has not accepted only fills the on-disk journal with
+        /// edits that are refused again on every reconnect, forever.
+        bool                            joined = false;
     };
 
     std::unique_ptr<COLLAB_WS_CLIENT> m_ws;
