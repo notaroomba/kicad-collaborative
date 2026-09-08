@@ -306,8 +306,14 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
             }
             ClientMsg::op { doc_id, client_op_id, base_seq, changes } => {
                 let Some(d) = joined.get(&doc_id) else {
+                    // Not a permission problem: the op simply arrived before (or without) a
+                    // join on this socket -- typically a client replaying its journal right
+                    // after a reconnect. Reported as permission_denied this was read by the
+                    // desktop as "your access has been withdrawn". No clientOpId on purpose:
+                    // older clients treat an op-scoped refusal as final and roll the edit back,
+                    // and this one is transient -- the client re-sends once the join lands.
                     let _ = out_tx.try_send(
-                        json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                        json!({ "type": "error", "code": "not_joined", "docId": doc_id })
                             .to_string(),
                     );
                     continue;

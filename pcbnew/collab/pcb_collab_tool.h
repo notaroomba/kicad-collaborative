@@ -139,6 +139,7 @@ private:
     void OnSnapshotRequest( const wxString& aDocId ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
     void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
+    void OnDocInfo( const nlohmann::json& aDocInfo ) override;
 
 public:
     ///< The live-editing sync engine, or nullptr when the board doc is not joined.

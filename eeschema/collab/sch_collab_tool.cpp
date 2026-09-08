@@ -1039,6 +1039,16 @@ void SCH_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 }
 
 
+void SCH_COLLAB_TOOL::OnDocInfo( const nlohmann::json& )
+{
+    // The server has accepted this doc on the current socket: only now can edits made
+    // while disconnected go out.  Replaying on the LIVE transition instead raced the
+    // join_doc messages and got every replayed op refused.
+    if( m_sync )
+        m_sync->ReplayUnacked();
+}
+
+
 void SCH_COLLAB_TOOL::OnJoinRefused( const wxString& aDocId, const wxString& aCode )
 {
     // Without this the editor keeps reporting a live session while nothing it draws reaches

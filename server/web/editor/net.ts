@@ -152,6 +152,11 @@ export function onOpRejected(sock, msg) {
     requestResync(sock);
     return;
   }
+  if (msg.code === "not_joined") {           // an op beat our join on this socket: re-join, doc_info replays what is pending
+    E.joinedDocId = null;
+    sock.send(JSON.stringify({ type: "join_doc", docId: msg.docId || state.docId }));
+    return;
+  }
   if (msg.code !== "permission_denied") { toast("The server could not open this document here"); setConn("err", "join refused"); return; }
   setViewOnly(true); E.drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here");
 }

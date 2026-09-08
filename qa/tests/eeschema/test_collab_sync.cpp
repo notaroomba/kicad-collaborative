@@ -28,6 +28,7 @@
  * needs a live frame and is exercised manually.
  */
 
+#include <algorithm>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <schematic_utils/schematic_file_util.h>
 
@@ -701,6 +702,109 @@ BOOST_AUTO_TEST_CASE( PresenceIsClampedToTheServerCap )
     // The receiver pairs a peer's selection ids with its boxes by index for live-drag ghosts,
     // so whatever survives has to stay aligned.
     BOOST_CHECK_EQUAL( state[ "selection" ].size(), state[ "boxes" ].size() );
+}
+
+
+// The "access withdrawn" false alarm.
+//
+// On hello_ok the session used to flip to LIVE first and re-send join_doc afterwards.
+// setState() notifies the adapters synchronously and the tools replay their
+// unacknowledged edits on LIVE, so on a reconnect those ops went out with `joined` still
+// true from the previous socket -- ahead of the join_doc messages.  The server answered
+// each with a permission_denied that carried no clientOpId, which the session read as the
+// join itself being refused, and the editor told the user their access had been
+// withdrawn while they were still the project's owner.
+//
+// Now: join_doc goes out first, SendOp holds until doc_info, the adapters replay from
+// OnDocInfo, the server names the transient case not_joined, and an unscoped
+// permission_denied only counts as a revocation while a join is actually pending.
+BOOST_AUTO_TEST_CASE( ReconnectRejoinsBeforeReplayingAndDoesNotFakeARevocation )
+{
+    struct REPLAYING_ADAPTER : public COLLAB_DOC_ADAPTER
+    {
+        wxString docId;
+        int      refusals = 0;
+
+        void replay()
+        {
+            COLLAB_SESSION::Get().SendOp( docId, wxS( "op-replay" ), std::nullopt,
+                                          nlohmann::json::array() );
+        }
+
+        // What the tools do: replay on LIVE (the old, racing place) and on OnDocInfo (the
+        // new one).  Both are exercised; only the second may actually reach the wire.
+        void OnSessionStateChanged() override
+        {
+            if( COLLAB_SESSION::Get().IsLive() )
+                replay();
+        }
+        void OnDocInfo( const nlohmann::json& ) override { replay(); }
+        void OnJoinRefused( const wxString&, const wxString& ) override { refusals++; }
+    };
+
+    COLLAB_SESSION&   session = COLLAB_SESSION::Get();
+    REPLAYING_ADAPTER editor;
+    editor.docId = wxS( "doc-reconnect" );
+
+    std::vector<std::string> wire;   // message types in send order
+    session.SetSendSinkForTests( [&]( const nlohmann::json& m ) { wire.push_back( m.value( "type", "" ) ); } );
+
+    session.JoinDoc( editor.docId, std::nullopt, &editor );
+    wire.clear();
+
+    const nlohmann::json helloOk = { { "type", "hello_ok" }, { "clientId", "9:test" },
+                                     { "userId", 9 }, { "login", "owner" } };
+    const nlohmann::json docInfo = { { "type", "doc_info" }, { "docId", "doc-reconnect" },
+                                     { "role", "editor" }, { "peers", nlohmann::json::array() } };
+
+    // First connection: the join goes out, the LIVE-time replay is held, doc_info releases it.
+    session.RouteMessageForTests( helloOk );
+    BOOST_REQUIRE( !wire.empty() );
+    BOOST_CHECK_EQUAL( wire.front(), "join_doc" );
+    BOOST_CHECK( std::find( wire.begin(), wire.end(), "op" ) == wire.end() );
+    session.RouteMessageForTests( docInfo );
+    BOOST_CHECK( std::find( wire.begin(), wire.end(), "op" ) != wire.end() );
+
+    // Reconnect with `joined` stale from the previous socket: join_doc must still precede
+    // the replayed op.  (Before the fix the op was first, and got refused.)
+    session.SetStateForTests( COLLAB_SESSION::STATE::CONNECTING );
+    wire.clear();
+    session.RouteMessageForTests( helloOk );
+    BOOST_REQUIRE( !wire.empty() );
+    BOOST_CHECK_EQUAL( wire.front(), "join_doc" );
+    BOOST_CHECK( std::find( wire.begin(), wire.end(), "op" ) == wire.end() );
+    session.RouteMessageForTests( docInfo );
+    auto joinAt = std::find( wire.begin(), wire.end(), "join_doc" );
+    auto opAt = std::find( wire.begin(), wire.end(), "op" );
+    BOOST_REQUIRE( opAt != wire.end() );
+    BOOST_CHECK( joinAt < opAt );
+
+    // The server's honest answer to the race is not a revocation, and neither is an
+    // unscoped permission_denied once the join has been confirmed.
+    session.RouteMessageForTests( { { "type", "error" }, { "code", "not_joined" },
+                                    { "docId", "doc-reconnect" } } );
+    session.RouteMessageForTests( { { "type", "error" }, { "code", "permission_denied" },
+                                    { "docId", "doc-reconnect" } } );
+    BOOST_CHECK_EQUAL( editor.refusals, 0 );
+    wire.clear();
+    editor.replay();
+    BOOST_CHECK( !wire.empty() );   // still joined: edits still flow
+
+    // A real refusal -- unscoped permission_denied while the join is pending -- still lands.
+    session.SetStateForTests( COLLAB_SESSION::STATE::CONNECTING );
+    session.RouteMessageForTests( helloOk );
+    session.RouteMessageForTests( { { "type", "error" }, { "code", "permission_denied" },
+                                    { "docId", "doc-reconnect" } } );
+    BOOST_CHECK_EQUAL( editor.refusals, 1 );
+    wire.clear();
+    editor.replay();
+    BOOST_CHECK( wire.empty() );    // refused: nothing goes out
+
+    session.LeaveDoc( editor.docId );
+    session.SetSendSinkForTests( nullptr );
+    session.SetStateForTests( COLLAB_SESSION::STATE::DISCONNECTED );
+    session.SetProjectId( wxEmptyString );
+    session.SetProjectDocs( nlohmann::json::array() );
 }
 
 

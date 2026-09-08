@@ -291,6 +291,9 @@ void COLLAB_SESSION::SetAppliedSeq( const wxString& aDocId, long long aSeq )
 
 void COLLAB_SESSION::sendJson( const nlohmann::json& aMsg )
 {
+    if( m_sendSink )
+        m_sendSink( aMsg );
+
     if( m_ws )
         m_ws->Send( aMsg.dump() );
 }
@@ -402,10 +405,15 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         m_selfLogin = wxString::FromUTF8( aMsg.value( "login", "" ) );
         m_selfUserId = aMsg.value( "userId", 0LL );
 
-        setState( STATE::LIVE );
-
         // (Re)join every registered doc — covers both initial connect and
-        // automatic reconnect.
+        // automatic reconnect.  This has to happen BEFORE the state flips to LIVE:
+        // setState() notifies the adapters synchronously, and on a reconnect they
+        // replay their unacknowledged edits.  With `joined` still true from the
+        // previous socket those ops went out ahead of the join_doc messages, the
+        // server refused them as "not joined", and the editor announced that the
+        // user's access had been withdrawn.  Resetting `joined` first makes SendOp
+        // hold everything until the doc_info that confirms the join, and the
+        // adapters replay from OnDocInfo instead.
         for( auto& [docId, doc] : m_docs )
         {
             doc.joined = false;   // set again by the doc_info the server answers with
@@ -421,6 +429,7 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
             sendJson( join );
         }
 
+        setState( STATE::LIVE );
         return;
     }
 
@@ -464,16 +473,34 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
             return;
         }
 
+        // An op reached the server before this socket's join did (a replay racing a
+        // reconnect).  Nothing is wrong with our access: the op stays unacknowledged and
+        // is re-sent once doc_info confirms the join.
+        if( code == "not_joined" )
+        {
+            wxLogTrace( traceCollab, wxS( "op for %s refused as not joined; will replay after "
+                                          "the join" ), docId );
+            return;
+        }
+
         // No clientOpId: this is about the *join*, not about one op.  The server sends it
         // when a collaborator's access has been revoked or the doc is gone.  Dropping it (as
         // this used to) leaves KiCad showing a live session while nothing it draws ever
         // reaches anyone, and every op it makes is journalled and re-sent forever.
-        if( code == "permission_denied" || code == "not_found" )
+        //
+        // It only means that while a join is actually pending, though: once doc_info has
+        // confirmed the join, a revocation shows up as op-scoped refusals (with a
+        // clientOpId) or a fresh refusal on the next reconnect, so an unscoped one here is
+        // an ordering artefact (or an older server) and must not declare access withdrawn.
+        if( ( code == "permission_denied" || code == "not_found" ) && !docIt->second.joined )
         {
-            docIt->second.joined = false;
-
             if( docIt->second.adapter )
                 docIt->second.adapter->OnJoinRefused( docId, wxString::FromUTF8( code ) );
+        }
+        else if( code == "permission_denied" || code == "not_found" )
+        {
+            wxLogTrace( traceCollab, wxS( "ignoring unscoped %s for %s: join already "
+                                          "confirmed" ), code, docId );
         }
 
         return;

@@ -199,6 +199,13 @@ public:
     void SetProjectDocs( const nlohmann::json& aDocs ) { m_projectDocs = aDocs; }
     const nlohmann::json& ProjectDocs() const { return m_projectDocs; }
 
+    /// Test seams: feed a server message through the real router, observe what would go
+    /// out on the socket, and force the connection state.  The QA suites drive the
+    /// reconnect ordering rules with these; production code never calls them.
+    void RouteMessageForTests( const nlohmann::json& aMsg ) { routeMessage( aMsg ); }
+    void SetSendSinkForTests( std::function<void( const nlohmann::json& )> aSink ) { m_sendSink = std::move( aSink ); }
+    void SetStateForTests( STATE aState ) { setState( aState ); }
+
 private:
     COLLAB_SESSION();
     ~COLLAB_SESSION() override;
@@ -222,6 +229,7 @@ private:
     };
 
     std::unique_ptr<COLLAB_WS_CLIENT> m_ws;
+    std::function<void( const nlohmann::json& )> m_sendSink;   // tests only
     STATE                             m_state = STATE::DISCONNECTED;
     wxString                          m_disconnectReason;
     wxString                          m_projectId;

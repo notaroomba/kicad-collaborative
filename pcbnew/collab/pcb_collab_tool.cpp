@@ -1469,6 +1469,14 @@ void PCB_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 }
 
 
+void PCB_COLLAB_TOOL::OnDocInfo( const nlohmann::json& )
+{
+    // See SCH_COLLAB_TOOL::OnDocInfo: replay only once the join is confirmed.
+    if( m_sync )
+        m_sync->ReplayUnacked();
+}
+
+
 void PCB_COLLAB_TOOL::OnJoinRefused( const wxString& aDocId, const wxString& aCode )
 {
     // Without this the editor keeps reporting a live session while nothing it draws reaches
