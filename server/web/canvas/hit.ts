@@ -9,7 +9,7 @@ export function movableItems(doc) {
   const out = [];
   for (const it of doc.items.values()) {
     if (!it.movable) continue;
-    out.push({ id: it.id, kind: it.kind, x: it.x, y: it.y, rot: it.rot || 0, ref: it.ref || "", value: it.value || "", lib: it.lib || "", layer: it.layer || "", bbox: it.bbox, name: it.name, file: it.file, w: it.w, h: it.h });
+    out.push({ id: it.id, kind: it.kind, x: it.x, y: it.y, rot: it.rot || 0, ref: it.ref || "", value: it.value || "", lib: it.lib || "", layer: it.layer || "", bbox: it.bbox, name: it.name, file: it.file, page: it.page, w: it.w, h: it.h });
   }
   return out;
 }

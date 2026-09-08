@@ -259,7 +259,7 @@ test("board table: layer colour and z, dashed border stroke, PCB_TEXTBOX::GetDra
   const z = texts(it, (g) => g.text === "z")[0]; assert.strictEqual(z.h, "left"); assert.strictEqual(z.v, "top"); near(z.x, 0.5, 1e-9); near(z.y, 4.5, 1e-9);
   assert.strictEqual(K.hitTest(doc, 5, 2, 0), "pt1"); assert.strictEqual(K.movableItems(doc).find((m) => m.id === "pt1").layer, "Cmts.User"); assert.strictEqual(K.typeNameOf(it), "PCB_TABLE");
   const ch = K.moveItem(doc, it, 100, 100, 1e6); assert.strictEqual(ch.typeName, "PCB_TABLE"); assert(ch.sexpr.startsWith("(kicad_pcb ") && ch.sexpr.includes("(table"), ch.sexpr.slice(0, 40));   // PCB_IO_KICAD_SEXPR::Parse takes only kicad_pcb / footprint at top level assert.deepStrictEqual(seg(lines(it).find((g) => g.dash && g.y1 === 100 && g.y2 === 100)), [100, 100, 120, 100]);
-  const hid = new Set(["Cmts.User"]); const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), { hidden: hid }); assert(!ctx.calls.fillText, "hidden layer hides the table");
+  const hid = new Set(["Cmts.User"]); const ctx = stubCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), { hidden: hid, frame: false }); assert(!ctx.calls.fillText, "hidden layer hides the table");
   assert(K.layerList(doc).some((l) => l.key === "Cmts.User"));
 });
 
@@ -407,6 +407,278 @@ test("selected: a halo for every id in the set; polylines with a fill", () => {
   ctx = stubCtx(800, 600); K.render(K.parseDoc(poly("(type background)", "p6")), ctx, view, {}); assert(ctx.calls.fill >= 1);
 });
 
+// ---------------------------------------------------------------- the drawing sheet (web/canvas/sheet.ts)
+// Every number below is KiCad's own: the (kicad_wks …) description in
+// common/drawing_sheet/drawing_sheet_default_description.cpp:117-151 resolved through
+// DS_DATA_ITEM::GetStartPos / IsInsidePage (ds_data_item.cpp:263-358) for an A4 landscape page.
+const A4_SCH = '(kicad_sch (version 20250114) (generator "eeschema") (paper "A4") (title_block (title "My Board") (date "2026-01-02") (rev "B") (company "Acme") (comment 1 "one") (comment 4 "four")) (sheet_instances (path "/" (page "3"))))';
+const sheetDoc = () => { const d = K.parseDoc(A4_SCH); d.fileName = "my_board.kicad_sch"; d.sheetPath = "/"; d.sheetCount = 5; d.kicadVersion = "9.9.9"; return d; };
+// KiCad stores A4 as 11693 x 8268 mils (common/page_info.cpp:34,42-49), so the page — and with it every
+// right/bottom-anchored coordinate on the sheet — is 297.0022 x 210.0072 mm, not 297 x 210.
+const A4W = 297.0022, A4H = 210.0072;
+const sheetOf = (doc) => { const it = K.documentDrawingSheet(doc); return { all: it,
+  rects: it.filter((g) => g.t === "rect"), lines: it.filter((g) => g.t === "line"), texts: it.filter((g) => g.t === "text") }; };
+const seg4 = (l) => [l.x1, l.y1, l.x2, l.y2].map((v) => +v.toFixed(6));
+
+test("drawing sheet: the built-in description parses to KiCad's setup and item list", () => {
+  const wks = K.parseDrawingSheet(K.DEFAULT_DRAWING_SHEET);
+  assert.deepStrictEqual(wks.setup, { textSizeX: 1.5, textSizeY: 1.5, lineWidth: 0.15, textLineWidth: 0.15, left: 10, right: 10, top: 10, bottom: 10 });
+  assert.strictEqual(wks.items.length, 29, "2 rects + 8 tick/label runs + 19 title-block items");
+  const [tb, frame, topTick, topLabel] = wks.items;
+  assert.deepStrictEqual(tb.start, { x: 110, y: 34, anchor: "rb" }); assert.deepStrictEqual(tb.end, { x: 2, y: 2, anchor: "rb" });
+  assert.strictEqual(frame.repeat, 2); assert.deepStrictEqual(frame.incr, [2, 2]); assert.deepStrictEqual(frame.start.anchor, "lt");
+  assert.strictEqual(topTick.repeat, 30); assert.deepStrictEqual(topTick.incr, [50, 0]);
+  assert.strictEqual(topLabel.text, "1"); assert.strictEqual(topLabel.repeat, 100); assert.strictEqual(topLabel.sizeY, 1.3);
+  assert.strictEqual(topLabel.hjust, "left"); assert.strictEqual(topLabel.vjust, "middle", "only (justify center) items are centred");
+  const rowLabel = wks.items.find((i) => i.text === "A"); assert.strictEqual(rowLabel.hjust, "center"); assert.strictEqual(rowLabel.vjust, "middle", "(justify center) sets both axes");
+  const title = wks.items.find((i) => i.text === "Title: ${TITLE}");
+  assert.strictEqual(title.sizeY, 2); assert.strictEqual(title.bold, true); assert.strictEqual(title.italic, true);
+});
+
+test("drawing sheet: pages are whole mils, as PAGE_INFO stores them", () => {
+  // MMsize( mm ) = EDA_UNIT_UTILS::Mm2mils( mm ) = KiROUND( mm * 1000 / 25.4 ) (common/page_info.cpp:34,
+  // common/eda_units.cpp:72), so the ISO papers are NOT their nominal millimetres.
+  const page = (paper) => K.parseDoc(`(kicad_sch (version 1) (generator "e") (paper "${paper}"))`).page.map((v) => +v.toFixed(4));
+  assert.deepStrictEqual(page("A5"), [210.0072, 148.0058]);
+  assert.deepStrictEqual(page("A4"), [297.0022, 210.0072]);
+  assert.deepStrictEqual(page("A3"), [419.989, 297.0022]);
+  assert.deepStrictEqual(page("A2"), [594.0044, 419.989]);
+  assert.deepStrictEqual(page("A1"), [840.994, 594.0044]);
+  assert.deepStrictEqual(page("A0"), [1188.9994, 840.994]);
+  assert.strictEqual(K.mm2mils(297), 11693); assert.strictEqual(K.mm2mils(420), 16535);
+  // the imperial papers are already whole mils, so they are exact
+  assert.deepStrictEqual(page("USLetter"), [279.4, 215.9]);
+  assert.deepStrictEqual(page("USLegal"), [355.6, 215.9]);
+  assert.deepStrictEqual(page("USLedger"), [431.8, 279.4]);
+  // a custom page keeps its millimetres: SetWidthMM feeds SetWidthMils a double (include/page_info.h:136)
+  assert.deepStrictEqual(page2(K.parseDoc('(kicad_sch (version 1) (generator "e") (paper "User" 200 150))')), [200, 150]);
+});
+function page2(d) { return d.page.map((v) => +v.toFixed(4)); }
+
+test("drawing sheet: frame rectangles, tick counts and label sequences for A4 landscape", () => {
+  const { rects, lines, texts } = sheetOf(sheetDoc());
+  const r4 = (v) => +v.toFixed(4);
+  // item 1: the title-block box; item 2 (repeat 2, incr 2 2): the frame on the margins and 2 mm inside it
+  assert.deepStrictEqual(rects.map((r) => [r.x, r.y, r.x + r.w, r.y + r.h].map(r4)),
+    [[177.0022, 166.0072, 285.0022, 198.0072], [10, 10, 287.0022, 200.0072], [12, 12, 285.0022, 198.0072]]);
+  for (const r of rects) near(r.lw, 0.15, 1e-9);
+  // 50 mm ticks spanning the 2 mm band, one run per edge; the run stops when a copy leaves the framed area
+  const at = (pred) => lines.filter(pred).map(seg4).map((l) => l.map(r4));
+  assert.deepStrictEqual(at((l) => l.y1 === 12 && l.y2 === 10), [[60, 12, 60, 10], [110, 12, 110, 10], [160, 12, 160, 10], [210, 12, 210, 10], [260, 12, 260, 10]], "top ticks");
+  assert.deepStrictEqual(at((l) => r4(l.y1) === r4(A4H - 12) && r4(l.y2) === r4(A4H - 10)),
+    [[60, 198.0072, 60, 200.0072], [110, 198.0072, 110, 200.0072], [160, 198.0072, 160, 200.0072], [210, 198.0072, 210, 200.0072], [260, 198.0072, 260, 200.0072]], "bottom ticks");
+  assert.deepStrictEqual(at((l) => l.x1 === 10 && l.x2 === 12), [[10, 60, 12, 60], [10, 110, 12, 110], [10, 160, 12, 160]], "left ticks");
+  assert.deepStrictEqual(at((l) => r4(l.x1) === r4(A4W - 10)),
+    [[287.0022, 60, 285.0022, 60], [287.0022, 110, 285.0022, 110], [287.0022, 160, 285.0022, 160]], "right ticks");
+  // labels: one more than the ticks — the last one lands exactly on RB and IsInsidePage is inclusive
+  const lab = (pred) => texts.filter(pred).map((t) => [t.text, r4(t.x), r4(t.y)]);
+  assert.deepStrictEqual(lab((t) => t.y === 11), [["1", 35, 11], ["2", 85, 11], ["3", 135, 11], ["4", 185, 11], ["5", 235, 11], ["6", 285, 11]], "top column labels");
+  assert.deepStrictEqual(lab((t) => r4(t.y) === r4(A4H - 11)),
+    [["1", 35, 199.0072], ["2", 85, 199.0072], ["3", 135, 199.0072], ["4", 185, 199.0072], ["5", 235, 199.0072], ["6", 285, 199.0072]], "bottom column labels");
+  assert.deepStrictEqual(lab((t) => t.x === 11), [["A", 11, 35], ["B", 11, 85], ["C", 11, 135], ["D", 11, 185]], "left row labels");
+  assert.deepStrictEqual(lab((t) => r4(t.x) === r4(A4W - 11)),
+    [["A", 286.0022, 35], ["B", 286.0022, 85], ["C", 286.0022, 135], ["D", 286.0022, 185]], "right row labels");
+  for (const t of texts.filter((x) => x.size === 1.3)) { near(t.w, 0.15, 1e-9); assert.strictEqual(t.v, "middle"); }
+  // A3 is wider and taller: the runs simply go further.  RB.x is 419.989 - 10 = 409.989, so the copy at
+  // x = 410 falls OUTSIDE the framed area and IsInsidePage drops it — 7 ticks, not 8.
+  const a3 = K.parseDoc(A4_SCH.replace('(paper "A4")', '(paper "A3")'));
+  const s3 = sheetOf(a3);
+  assert.deepStrictEqual(s3.rects.map((r) => [r.x, r.y, r.x + r.w, r.y + r.h].map(r4)),
+    [[299.989, 253.0022, 407.989, 285.0022], [10, 10, 409.989, 287.0022], [12, 12, 407.989, 285.0022]]);
+  assert.deepStrictEqual(s3.lines.filter((l) => l.y1 === 12 && l.y2 === 10).map((l) => l.x1), [60, 110, 160, 210, 260, 310, 360], "A3 top ticks stop at 360");
+  assert.deepStrictEqual(s3.texts.filter((t) => t.y === 11).map((t) => t.text), ["1", "2", "3", "4", "5", "6", "7", "8"]);
+  assert.deepStrictEqual(s3.texts.filter((t) => t.x === 11).map((t) => t.text), ["A", "B", "C", "D", "E", "F"]);
+  // A2 is 419.989 tall, so its left and right tick runs stop at 360 for the same reason
+  const a2 = sheetOf(K.parseDoc(A4_SCH.replace('(paper "A4")', '(paper "A2")')));
+  assert.deepStrictEqual(a2.lines.filter((l) => l.x1 === 10 && l.x2 === 12).map((l) => l.y1), [60, 110, 160, 210, 260, 310, 360], "A2 left ticks stop at 360");
+  // portrait A4: the page swaps, so the bands do too
+  const port = K.parseDoc(A4_SCH.replace('(paper "A4")', '(paper "A4" portrait)'));
+  assert.deepStrictEqual(port.page.map(r4), [210.0072, 297.0022]);
+  const pr = sheetOf(port).rects[1];
+  assert.deepStrictEqual([pr.x, pr.y, r4(pr.w), r4(pr.h), pr.lw], [10, 10, 190.0072, 277.0022, 0.15]);
+});
+
+test("drawing sheet: title-block rules and text land on KiCad's anchors, with its sizes and pen widths", () => {
+  const { lines, texts } = sheetOf(sheetDoc());
+  const r4 = (v) => +v.toFixed(4);
+  const inTb = (x, y) => x >= 177 && x <= 286 && y >= 166 && y <= 199;   // inside the title-block box, so not the tick runs
+  const rules = lines.filter((l) => inTb(l.x1, l.y1) && inTb(l.x2, l.y2)).map(seg4).map((l) => l.map(r4));
+  assert.deepStrictEqual(rules, [[177.0022, 194.5072, 285.0022, 194.5072], [177.0022, 191.5072, 285.0022, 191.5072],
+    [177.0022, 187.5072, 285.0022, 187.5072], [177.0022, 181.5072, 285.0022, 181.5072],
+    [197.0022, 191.5072, 197.0022, 194.5072], [261.0022, 191.5072, 261.0022, 198.0072]], "four horizontal rules and the two short verticals");
+  const by = (t) => texts.find((g) => g.text === t);
+  const place = (t) => { const g = by(t); assert(g, "expected " + JSON.stringify(t)); return [r4(g.x), r4(g.y), g.size, +g.w.toFixed(6), g.h, g.v, !!g.bold, !!g.italic]; };
+  assert.deepStrictEqual(place("Date: 2026-01-02"), [200.0022, 193.1072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.deepStrictEqual(place("Size: A4"), [178.0022, 193.1072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.deepStrictEqual(place("Rev: B"), [263.0022, 193.1072, 1.5, 0.3, "left", "middle", true, false], "bold feeds pen 0, so the auto-bold size/5 applies");
+  assert.deepStrictEqual(place("Id: 3/5"), [263.0022, 195.9072, 1.5, 0.15, "left", "middle", false, false], "${#} from (sheet_instances), ${##} from the app");
+  assert.deepStrictEqual(place("Title: My Board"), [178.0022, 189.3072, 2, 0.4, "left", "middle", true, true]);
+  assert.deepStrictEqual(place("File: my_board.kicad_sch"), [178.0022, 185.7072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.deepStrictEqual(place("Sheet: /"), [178.0022, 183.0072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.deepStrictEqual(place("Acme"), [178.0022, 180.0072, 1.5, 0.3, "left", "middle", true, false]);
+  assert.deepStrictEqual(place("one"), [178.0022, 177.0072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.deepStrictEqual(place("four"), [178.0022, 168.0072, 1.5, 0.15, "left", "middle", false, false]);
+  // ${KICAD_VERSION} is `productName + " " + GetBaseVersion()` (ds_painter.cpp:40,119-121) — the cell
+  // at wks (pos 109 4.1), bottom-left of the title block.  The base version is baked in from the KiCad
+  // this tree builds (canvas/version.ts) so the desktop and the web read the same string.
+  assert.deepStrictEqual(place("KiCad E.D.A. 9.9.9"), [178.0022, 195.9072, 1.5, 0.15, "left", "middle", false, false]);
+  assert.strictEqual(K.PRODUCT_NAME, "KiCad E.D.A.");
+  assert(!texts.some((t) => t.text.indexOf("KICAD_VERSION") >= 0 || t.text.indexOf("${") >= 0), "no unresolved references");
+});
+
+test("drawing sheet: empty title-block fields keep their labels, as KiCad's resolver does", () => {
+  const bare = K.parseDoc('(kicad_sch (version 20250114) (generator "e") (paper "A4"))');
+  const { texts } = sheetOf(bare);
+  for (const t of ["Date: ", "Rev: ", "Title: ", "File: ", "Sheet: ", "Size: A4", "Id: 1/1"]) assert(texts.some((g) => g.text === t), "expected " + JSON.stringify(t));
+  assert(texts.some((g) => g.text.startsWith("KiCad E.D.A. ")), "the version cell is drawn on every page");
+  assert(!texts.some((t) => t.text === ""), "an empty ${COMPANY} / ${COMMENTn} draws nothing at all");
+  assert.strictEqual(K.parseDoc(A4_SCH).pageNumber, "3");
+  assert.deepStrictEqual(K.parseDoc(A4_SCH).titleBlock, { title: "My Board", date: "2026-01-02", rev: "B", company: "Acme", comment1: "one", comment4: "four" });
+  assert.strictEqual(K.parseDoc(A4_SCH).paper, "A4");
+});
+
+test("drawing sheet: text variables expand like ExpandTextVars, unresolved ones stay put", () => {
+  const vars = K.sheetTextVars(Object.assign(K.parseDoc(A4_SCH), { fileName: "b.kicad_sch", sheetPath: "/sub/", sheetCount: 4 }));
+  assert.strictEqual(vars.TITLE, "My Board"); assert.strictEqual(vars.REVISION, "B"); assert.strictEqual(vars.ISSUE_DATE, "2026-01-02");
+  assert.strictEqual(vars.COMMENT1, "one"); assert.strictEqual(vars.COMMENT2, ""); assert.strictEqual(vars["#"], "3"); assert.strictEqual(vars["##"], "4");
+  const r = K.varResolver(vars);
+  assert.strictEqual(K.expandTextVars("Title: ${TITLE}", r), "Title: My Board");
+  assert.strictEqual(K.expandTextVars("Id: ${#}/${##}", r), "Id: 3/4");
+  assert.strictEqual(K.expandTextVars("x ${NOPE} y", r), "x ${NOPE} y", "an unresolved reference is left verbatim");
+  assert.strictEqual(K.expandTextVars("plain", r), "plain");
+  assert.strictEqual(K.expandTextVars("${COMPANY}${COMMENT2}", r), "Acme");
+  // BuildFullText re-runs the worksheet resolver over a resolved title-block value with
+  // `m_titleBlock = nullptr` (ds_painter.cpp:174-186), so a WORKSHEET token nested in a title-block
+  // field resolves and another TITLE-BLOCK token deliberately does not.
+  const nest = (over) => K.expandTextVars("${TITLE}", K.varResolver(Object.assign({}, vars, over)));
+  assert.strictEqual(nest({ TITLE: "v${REVISION}" }), "v${REVISION}", "a title-block token inside a title-block field stays put");
+  assert.strictEqual(nest({ TITLE: "p${PAPER}" }), "pA4", "a worksheet token inside one still resolves");
+  assert.strictEqual(nest({ TITLE: "${COMMENT1}" }), "${COMMENT1}");
+  // TITLE_BLOCK::TextVarResolver rewrites *aToken to the field's value BEFORE deciding it did not
+  // resolve it (title_block.cpp:186-188), and ExpandTextVars then wraps the rewritten token
+  // (common.cpp:311-315): a self-referencing field really does come out doubled.
+  assert.strictEqual(K.expandTextVars("Rev: ${REVISION}", K.varResolver(Object.assign({}, vars, { REVISION: "${REVISION}" }))), "Rev: ${${REVISION}}");
+  // the project's text_variables are the last resolver (ds_painter.cpp:222-223), and they are what
+  // rescue a real (rev "${REVISION}") — qa/data/eeschema/netlists/issue24220 is shaped that way
+  const proj = { project: { REVISION: "r7", MYVAR: "from project" } };
+  assert.strictEqual(K.expandTextVars("Rev: ${REVISION}", K.varResolver(Object.assign({}, vars, { REVISION: "${REVISION}" }), proj)), "Rev: r7");
+  assert.strictEqual(K.expandTextVars("${TITLE}", K.varResolver(Object.assign({}, vars, { TITLE: "${MYVAR}" }), proj)), "from project");
+  assert.strictEqual(K.expandTextVars("${MYVAR}", K.varResolver(vars, proj)), "from project", "a token nothing else claims falls through to the project");
+  assert(K.WS_TOKENS.has("KICAD_VERSION") && K.WS_TOKENS.has("FILEPATH") && K.TB_TOKENS.has("COMMENT9") && !K.TB_TOKENS.has("COMMENT10"));
+});
+
+test("drawing sheet: a \\n in a field becomes a centred multiline run, as EDA_TEXT lays it out", () => {
+  // DS_DATA_ITEM_TEXT::ReplaceAntiSlashSequence turns the escape into a newline and marks the item
+  // multiline; EDA_TEXT::GetLinePositions (common/eda_text.cpp:937-978) then spreads the lines one
+  // STROKE_FONT interline apart and centres the block on the anchor, so one line never moves.
+  const doc = K.parseDoc('(kicad_sch (version 1) (generator "e") (paper "A4") (title_block (comment 2 "lit $ {NOT} \\n done")))');
+  const g = sheetOf(doc).texts.find((t) => t.multiline);
+  assert(g, "the field is flagged multiline");
+  assert.strictEqual(g.text, "lit $ {NOT} \n done");
+  near(K.TEXT_INTERLINE, 1.68 * 0.9583, 1e-12);
+  assert.deepStrictEqual(K.lineOffsets(2, "middle"), [-0.5, 0.5]);
+  assert.deepStrictEqual(K.lineOffsets(1, "middle"), [0], "a single line sits exactly where it always did");
+  assert.deepStrictEqual(K.lineOffsets(3, "top"), [0, 1, 2]);
+  assert.deepStrictEqual(K.lineOffsets(3, "bottom"), [-2, -1, 0]);
+  // the canvas draws one run per line, 2.4149 mm apart for 1.5 mm text, centred on the anchor's baseline
+  const ctx = recCtx(1200, 900); K.render(doc, ctx, fitView(doc, 1200, 900), { grid: 0 });
+  const runs = ctx.ops.filter((o) => o.op === "fillText" && /lit|done/.test(o.args[0])).map((o) => [o.args[0], +o.args[2].toFixed(4)]);
+  assert.deepStrictEqual(runs, [["lit $ {NOT} ", -0.4575], [" done", 1.9575]], "two baselines an interline apart, straddling the single-line baseline of 0.75");
+  near(runs[1][1] - runs[0][1], 1.5 * K.TEXT_INTERLINE, 1e-4);   // the values above are rounded to 4 dp
+  // and the SVG export emits one <text> per line instead of one that whitespace-collapses
+  const svg = K.renderSvg(doc, {});
+  assert(svg.includes('<text y="-0.4575"') && svg.includes('<text y="1.9575"'), "two <text> elements");
+  assert(!/<text[^>]*>[^<]*\n[^<]*<\/text>/.test(svg), "no literal newline left inside a <text>");
+});
+
+test("drawing sheet: a subsheet's ${#} and ${SHEETPATH} come from the PARENT's (sheet …) node", () => {
+  // A child .kicad_sch has no (sheet_instances …) at all: its page number lives in the parent's
+  // (sheet … (instances (project … (path … (page "N"))))) and reaches the title block through
+  // SCH_SCREEN::GetPageNumber() (eeschema/sch_view.cpp:134).  The web has to read it the same way.
+  const parent = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (paper "A4")
+    (sheet (at 10 10) (size 20 20) (uuid "s1") (property "Sheetname" "Power") (property "Sheetfile" "power.kicad_sch")
+      (instances (project "proj" (path "/root-uuid" (page "2")))))
+    (sheet_instances (path "/" (page "1"))))`);
+  const sheets = K.movableItems(parent).filter((m) => m.kind === "sheet");
+  assert.deepStrictEqual(sheets.map((m) => [m.name, m.file, m.page]), [["Power", "power.kicad_sch", "2"]]);
+  assert.strictEqual(parent.pageNumber, "1", "the root still reads its own (sheet_instances …)");
+  // the child, given what its parent says, prints "Id: 2/2" and "Sheet: /Power/"
+  const child = K.parseDoc('(kicad_sch (version 20250114) (generator "eeschema") (paper "A4"))');
+  assert.strictEqual(child.pageNumber, "1", "on its own the child can only say 1");
+  child.pageNumber = sheets[0].page; child.sheetName = sheets[0].name; child.sheetPath = "/" + sheets[0].name + "/"; child.sheetCount = 2;
+  const t = sheetOf(child).texts;
+  assert(t.some((g) => g.text === "Id: 2/2"), "Id: 2/2");
+  assert(t.some((g) => g.text === "Sheet: /Power/"), "Sheet: /Power/");
+  // …and on KiCad's own five-page hierarchy the numbers are 1..5, matching a kicad-cli PDF of it
+  const hier = path.join(__dirname, "..", "..", "..", "qa", "data", "eeschema", "issue22938");
+  if (fs.existsSync(path.join(hier, "issue22938.kicad_sch"))) {
+    const root = K.parseDoc(fs.readFileSync(path.join(hier, "issue22938.kicad_sch"), "utf8"), "kicad_sch");
+    assert.strictEqual(root.pageNumber, "1");
+    const byName = {}; for (const m of K.movableItems(root)) if (m.kind === "sheet") byName[m.name] = m.page;
+    assert.deepStrictEqual(byName, { Spannungsversorgung: "2", Anschluss: "3", Schrittmotor: "4", Kompressor: "5" });
+  }
+});
+
+test("drawing sheet: repeated labels step like STRING_INCREMENTER", () => {
+  assert.strictEqual(K.incrementLabel("1", 1), "2"); assert.strictEqual(K.incrementLabel("9", 1), "10");
+  assert.strictEqual(K.incrementLabel("09", 1), "10"); assert.strictEqual(K.incrementLabel("009", 1), "010", "zero padding survives only while the number is no wider");
+  assert.strictEqual(K.incrementLabel("A", 1), "B"); assert.strictEqual(K.incrementLabel("A", 25), "Z");
+  assert.strictEqual(K.incrementLabel("A", 26), "AA", "past Z the label grows: Z -> AA -> AB");
+  assert.strictEqual(K.incrementLabel("A", 27), "AB"); assert.strictEqual(K.incrementLabel("A", 51), "AZ"); assert.strictEqual(K.incrementLabel("A", 52), "BA");
+  assert.strictEqual(K.incrementLabel("a", 1), "b", "case is kept");
+  assert.strictEqual(K.incrementLabel("Sheet A", 1), "Sheet B", "only the rightmost incrementable chunk moves");
+  assert.strictEqual(K.incrementLabel("A1", 1), "A2", "an integer suffix wins over the letters before it");
+  assert.strictEqual(K.incrementLabel("--", 1), "--", "nothing incrementable: the base text stands");
+  assert.strictEqual(K.indexFromAlphabetic("A"), 0); assert.strictEqual(K.indexFromAlphabetic("Z"), 25);
+  assert.strictEqual(K.indexFromAlphabetic("AA"), 26); assert.strictEqual(K.indexFromAlphabetic("BA"), 52);
+  assert.strictEqual(K.alphabeticFromIndex(0), "A"); assert.strictEqual(K.alphabeticFromIndex(26), "AA"); assert.strictEqual(K.alphabeticFromIndex(52), "BA");
+  // a page big enough to run the column labels past Z
+  const wide = K.parseDoc('(kicad_sch (version 1) (generator "e") (paper "User" 1400 300))');
+  const cols = sheetOf(wide).texts.filter((t) => t.y === 11).map((t) => t.text);
+  assert.deepStrictEqual(cols.slice(0, 3), ["1", "2", "3"]); assert.strictEqual(cols.length, 28);
+});
+
+test("drawing sheet: KiCad's colours and widths on the canvas, page limits last and in the lighter grey", () => {
+  const doc = sheetDoc();
+  const ctx = recCtx(1200, 900); K.render(doc, ctx, fitView(doc, 1200, 900), { grid: 0 });
+  const sheetStrokes = ctx.ops.filter((o) => o.op === "stroke" && o.stroke === K.SCH.frame);
+  assert(sheetStrokes.length >= 1, "the sheet is stroked in LAYER_SCHEMATIC_DRAWINGSHEET #840000");
+  assert.strictEqual(K.SCH.frame, "#840000"); assert.strictEqual(K.SCH.pageLimits, "#B5B5B5");
+  const border = ctx.ops.filter((o) => o.op === "strokeRect" && o.stroke === K.SCH.pageLimits);
+  assert.strictEqual(border.length, 1, "one page outline, in LAYER_SCHEMATIC_PAGE_LIMITS grey — not the sheet's dark red");
+  assert.deepStrictEqual(border[0].args.map((v) => +v.toFixed(4)), [0, 0, A4W, A4H]);
+  assert.strictEqual(ctx.ops.indexOf(border[0]), ctx.ops.length - 1 - ctx.ops.slice().reverse().indexOf(border[0]), "drawn once");
+  assert(ctx.ops.some((o) => o.op === "fillText" && o.args[0] === "Title: My Board"), "the title block's text is drawn");
+  // the board draws the same sheet in the board's own layer colours (pcbnew shares DS_DATA_MODEL)
+  const pcb = K.parseDoc(PCB_HEAD + '(gr_line (start 0 0) (end 10 0) (stroke (width 0.2) (type solid)) (layer "Edge.Cuts") (uuid "e1")))');
+  const pctx = recCtx(1200, 900); K.render(pcb, pctx, fitView(pcb, 1200, 900), { grid: 0 });
+  assert(pctx.ops.some((o) => o.op === "stroke" && o.stroke === "#C872AB"), "LAYER_DRAWINGSHEET pink on a board");
+  assert(pctx.ops.some((o) => o.op === "strokeRect" && o.stroke === "#848484"), "LAYER_PAGE_LIMITS grey on a board");
+  // Flip Board View mirrors the board but not the sheet — "Draw the title block normally even if the
+  // view is flipped" (ds_proxy_view_item.cpp:114-128)
+  const fctx = fullCtx(1200, 900); K.render(pcb, fctx, fitView(pcb, 1200, 900), { grid: 0, flip: true });
+  const sheetTf = fctx.ops.filter((o) => o.op === "strokeRect" && o.stroke === "#848484");
+  assert.strictEqual(sheetTf.length, 1); assert(sheetTf[0].tf[0] > 0, "the sheet keeps an unmirrored transform under flip");
+  // opts.frame === false still skips the whole sheet (the subset-export contract)
+  const off = recCtx(1200, 900); K.render(doc, off, fitView(doc, 1200, 900), { grid: 0, frame: false });
+  assert(!off.ops.some((o) => o.stroke === K.SCH.frame || o.stroke === K.SCH.pageLimits), "frame: false draws no sheet at all");
+  assert(!off.ops.some((o) => o.op === "fillText"), "and none of its text");
+});
+
+test("drawing sheet: renderSvg emits the same geometry for a whole page and none of it for a subset", () => {
+  const doc = sheetDoc();
+  const svg = K.renderSvg(doc, {});
+  assert(svg.includes('<rect x="10" y="10" width="277.0022" height="190.0072" fill="none" stroke="#840000" stroke-width="0.15"/>'), "outer frame");
+  assert(svg.includes('<rect x="12" y="12" width="273.0022" height="186.0072" fill="none" stroke="#840000" stroke-width="0.15"/>'), "inner frame");
+  assert(svg.includes('<rect x="177.0022" y="166.0072" width="108" height="32" fill="none" stroke="#840000" stroke-width="0.15"/>'), "title-block box");
+  assert(svg.includes('<line x1="60" y1="12" x2="60" y2="10" stroke="#840000" stroke-width="0.15"/>'), "a tick");
+  assert(svg.includes('<rect x="0" y="0" width="297.0022" height="210.0072" fill="none" stroke="#B5B5B5"'), "page outline in the page-limits grey");
+  assert(svg.includes(">Title: My Board</text>") && svg.includes('font-weight="600" font-style="italic"'), "the bold italic title");
+  assert(svg.includes(">Sheet: /</text>") && svg.includes(">Id: 3/5</text>"));
+  const sub = K.renderSvg(doc, { ids: [], background: false });
+  assert(!sub.includes("#840000") && !sub.includes("#B5B5B5") && !sub.includes("Title:"), "a subset export carries no sheet");
+});
+
 // ---------------------------------------------------------------- display options: stroke styles, nets, ratsnest, markers, net names, zone previews, flip, hidden text, exports
 /** Recording context that also logs the composite mode, line width, text alignment and the transform in force at each drawing call. */
 function fullCtx(w, h) {
@@ -445,7 +717,7 @@ test("stroke types: dash / dot / dash_dot / dash_dot_dot records, KiCad's ISO 12
   const pcb = K.parseDoc(NET_HEAD + '(gr_line (start 0 0) (end 10 0) (stroke (width 0.2) (type dash_dot)) (layer "Dwgs.User") (uuid "l1")) (gr_circle (center 5 5) (end 6 5) (stroke (width 0.1) (type dash)) (fill none) (layer "Dwgs.User") (uuid "c1")) (gr_text_box "tb" (start 0 8) (end 10 12) (stroke (width 0.1) (type dot)) (border yes) (layer "Dwgs.User") (uuid "tb1") (effects (font (size 1 1)))) (gr_line (start 0 14) (end 10 14) (stroke (width 0.2) (type solid)) (layer "Dwgs.User") (uuid "l2")))');
   assert.strictEqual(pcb.items.get("l2").geom[0].dash, undefined);
   assert.strictEqual(pcb.items.get("l1").geom[0].dashType, "dash_dot"); assert.strictEqual(pcb.items.get("c1").geom[0].dashType, "dash"); assert.strictEqual(pcb.items.get("tb1").geom.find((g) => g.t === "poly").dashType, "dot");
-  const ctx = fullCtx(1000, 800); K.render(pcb, ctx, V40, {});
+  const ctx = fullCtx(1000, 800); K.render(pcb, ctx, V40, { frame: false });   // frame: false — count the items' strokes, not the drawing sheet's
   const dashed = ctx.ops.filter((o) => o.op === "stroke" && o.dash.length);
   assert(dashed.some((o) => o.dash.map((v) => +v.toFixed(6)).join() === "2.2,0.8,0.04,0.8"), "gr_line dash_dot pattern from its 0.2 mm width");
   assert(dashed.some((o) => o.dash.map((v) => +v.toFixed(6)).join() === "1.1,0.4"), "dashed circle");
@@ -511,9 +783,9 @@ test("netNames: track labels sized to the track, skipped when short or too thin 
   const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 12 0) (width 1) (layer "F.Cu") (net 1) (uuid "s1")) (segment (start 0 3) (end 12 3) (width 0.25) (layer "F.Cu") (net 2) (uuid "s2")) (segment (start 0 6) (end 2 6) (width 1) (layer "F.Cu") (net 2) (uuid "s3")) (segment (start 14 0) (end 14 10) (width 1) (layer "B.Cu") (net 1) (uuid "s4")) (segment (start 0 8) (end 4 12) (width 1) (layer "F.Cu") (net 0) (uuid "s5")) ' +
     '(via (at 8 8) (size 2) (drill 1) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (via blind (at 12 8) (size 2) (drill 1) (layers "F.Cu" "In1.Cu") (net 2) (uuid "v2")) (via (at 16 8) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v3")) ' +
     '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 18 2) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2 "VCC") (uuid "p1"))))');
-  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {});
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { frame: false });   // frame: false — the drawing sheet's title block is text too
   assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "VCC"], "without the option only the pad number and pad net name");
-  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true });
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true, frame: false });
   const labels = textOps(ctx).filter((o) => !o.args[0].match(/^(1|VCC)$/) || o.fill !== "rgba(255,255,255,0.9)");
   const gnd = labels.filter((o) => o.args[0] === "GND"); assert.strictEqual(gnd.length, 3, "s1 (1 mm wide), s4 (vertical), and the 2 mm via; not the 0.6 mm via: " + JSON.stringify(labels.map((o) => o.args[0])));
   assert(gnd.some((o) => o.fill === "rgba(255,255,255,0.7)"), "NETNAMES_LAYER_ID_START white @ 0.7 on the dark copper"); assert(gnd.some((o) => o.fill === K.VIA_NETNAME_COLOR), "LAYER_VIA_NETNAMES on the via"); assert.strictEqual(K.VIA_NETNAME_COLOR, "rgba(50,50,50,0.9)");
@@ -593,8 +865,8 @@ test("padNumbers, showHiddenText and knockout text", () => {
   assert.deepStrictEqual(fp.hiddenGeom.map((g) => [g.text, g.hiddenText, g.layer]), [["R1", true, "F.SilkS"], ["note", true, "F.Fab"]]);
   const bare = K.parseDoc(NET_HEAD + '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 5 5) (property "Value" "10k" (at 0 2 0) (layer "F.Fab") (effects (font (size 1 1)))) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "GND") (uuid "p1"))))');
   assert.deepStrictEqual(fp.bbox, bare.items.get("fp1").bbox, "hidden text does not grow the bbox");
-  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, {}); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "10k", "GND", "KO", "box"]);
-  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { padNumbers: false }); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["10k", "GND", "KO", "box"], "pad numbers off, net names kept");
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { frame: false }); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "10k", "GND", "KO", "box"]);
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { padNumbers: false, frame: false }); assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["10k", "GND", "KO", "box"], "pad numbers off, net names kept");
   ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { showHiddenText: true, hidden: new Set(["F.Fab"]) });
   const r1 = textOps(ctx, "R1"); assert.strictEqual(r1.length, 1); assert.strictEqual(r1[0].alpha, K.HIDDEN_TEXT_ALPHA); assert.strictEqual(r1[0].fill, "#F2EDA1"); assert(!textOps(ctx, "note").length, "hidden text on a hidden layer stays hidden");
   ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { showHiddenText: true, showHiddenPins: true }); assert.strictEqual(textOps(ctx, "note").length, 1);
@@ -636,7 +908,7 @@ test("renderSvg: whole document, subsets, layer visibility, text anchoring, arcs
     const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 10 10) (xy 20 10)) (stroke (width 0) (type default)) (uuid "w1")) (label "~{RST}" (at 12 10 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1")) (arc (start 30 10) (mid 32 12) (end 30 14) (stroke (width 0.2) (type dash)) (fill (type none)) (uuid "a1")) (circle (center 40 40) (radius 3) (stroke (width 0) (type default)) (fill (type background)) (uuid "c1")) (text "rot" (at 50 50 90) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "t1")) ' + `(image (at 60 60) (uuid "im1") ${dataAtoms(b64)})` + ")");
     const svg = K.renderSvg(sch, {});
     assert(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg"') && svg.endsWith("</svg>"));
-    assert(svg.includes('width="297mm" height="210mm" viewBox="0 0 297 210"'), "whole sheet"); assert(svg.includes(`fill="${K.SCH.bg}"`), "sheet background"); assert(svg.includes(`stroke="${K.SCH.frame}"`), "page frame");
+    assert(svg.includes('width="297.0022mm" height="210.0072mm" viewBox="0 0 297.0022 210.0072"'), "whole sheet"); assert(svg.includes(`fill="${K.SCH.bg}"`), "sheet background"); assert(svg.includes(`stroke="${K.SCH.frame}"`), "page frame");
     assert(svg.includes('<path d="M10 10L20 10" fill="none" stroke="#009600" stroke-width="0.1524" stroke-linecap="round"/>'), "wire");
     assert(/<text y="0" font-family='[^']*' font-size="1.778" text-anchor="start" fill="#0F0F0F">RST<\/text>/.test(svg), "label text with the same anchoring as the canvas"); assert(/<path d="M0 -1\.5621L[\d.]+ -1\.5621" fill="none" stroke="#0F0F0F"/.test(svg), "overbar");
     assert(/<path d="M30 10A2 2 0 0 [01] 30 14" fill="none" stroke="#0000C2" stroke-width="0.2" stroke-linecap="butt" stroke-dasharray="2.2 0.8"\/>/.test(svg), "dashed arc as an A command");

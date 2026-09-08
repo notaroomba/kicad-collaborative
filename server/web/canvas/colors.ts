@@ -23,6 +23,10 @@ export const SCH = {
   sheetFile: "#725600", sheetFields: "#840084", sheetLabel: "#006464", noconnect: "#000084", notes: "#0000C2",
   busEntry: "#009600", dnp: "rgba(220,9,13,0.85)", netclass: "#484848", ruleArea: "#FF0000", excluded: "rgba(194,194,194,0.95)",
   hidden: "#C2C2C2", privateNotes: "#4848FF", frame: "#840000",
+  // LAYER_SCHEMATIC_DRAWINGSHEET ("schematic.worksheet") is `frame`; the page outline is a separate,
+  // lighter layer — DS_PAINTER::DrawBorder paints it in LAYER_SCHEMATIC_PAGE_LIMITS, not the sheet ink
+  // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
+  pageLimits: "#B5B5B5",
   brightened: "#FF00FF",   // LAYER_BRIGHTENED: net highlighting / selection disambiguation
 };
 
@@ -53,6 +57,10 @@ export const PCB_COLORS = {
 export const USER_COLORS = ["#C2C2C2", "#5994DC", "#B4DBD2", "#D8C852"];
    // User.1.. cycle (User.9 = B.SilkS colour in the theme)
 export const PCB_BG = "#001023", PCB_GRID = "#848484", VIA_HOLE = "#E3B72E", HOLE_WALL = "#ECECEC", NPTH = "#1AC4D2", PAD_TEXT = "rgba(255,255,255,0.9)";
+
+// The board's drawing sheet and page outline: LAYER_DRAWINGSHEET / LAYER_PAGE_LIMITS
+// (builtin_color_themes.h:178-179).  pcbnew draws the same sheet as eeschema, in these colours.
+export const PCB_SHEET = "#C872AB", PCB_PAGE_LIMITS = "#848484";
 
 export const PCB_HIDDEN_DEFAULT = new Set(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.Adhes", "B.Adhes", "F.Fab", "B.Fab", "F.CrtYd", "B.CrtYd", "Margin", "Eco1.User", "Eco2.User"]);
 
