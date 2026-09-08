@@ -5,6 +5,7 @@ WORKDIR /web
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci --no-audit --no-fund
 COPY web ./web
+COPY scripts ./scripts
 RUN npm run check && npm run build
 
 FROM rust:1-slim-bookworm AS build
