@@ -95,6 +95,7 @@ public:
     void OnSnapshotRequest( const wxString& aDocId ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
     void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
+    void OnDocInfo( const nlohmann::json& aDocInfo ) override;
 
     ///< The live-editing sync engine, or nullptr when no session is active.
     SCH_COLLAB_SYNC* GetSync() const { return m_sync.get(); }

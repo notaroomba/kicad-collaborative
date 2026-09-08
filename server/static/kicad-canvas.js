@@ -2050,7 +2050,7 @@
   }
 
   // web/canvas/version.ts
-  var KICAD_BASE_VERSION = "10.99.0-3732-g58f94f7119";
+  var KICAD_BASE_VERSION = "10.99.0-3734-g6b600ff349-dirty";
 
   // web/canvas/doc.ts
   function newDoc(type) {
