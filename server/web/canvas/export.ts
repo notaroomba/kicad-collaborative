@@ -1,10 +1,11 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { PCB_BG, SCH } from "./colors";
+import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH } from "./colors";
 import { bboxOf } from "./hit";
 import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, dashPattern, makeCanvas, render, tracePath } from "./render";
 import { isList, kid, quotedMask, str } from "./sexpr";
-import { textWidth } from "./text";
+import { documentDrawingSheet } from "./sheet";
+import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 // ---------------------------------------------------------------- export (File → Plot / Export)
 export const fmt = (v) => { const s = (+v).toFixed(4); return s.replace(/\.?0+$/, "") === "-0" ? "0" : s.replace(/\.?0+$/, "") || "0"; };
 
@@ -57,14 +58,23 @@ export function svgGeom(g, hairline, isPcb, bg) {
       const w = textWidth(g.text, size, pen), m = Math.max(pen / 2, size / 9); const x0 = g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2;
       pre = `<rect x="${fmt(x0 - m)}" y="${fmt(base0 - size - m)}" width="${fmt(w + 2 * m)}" height="${fmt(size + 2 * m)}" fill="${g.color}"/>`; color = bg;
     }
-    const bold = !g.knockout && !g.padText && extra > 0.01 && isPcb ? ` stroke="${color}" stroke-width="${fmt(extra)}" stroke-linejoin="round" paint-order="stroke"` : "";
+    const bold = !g.knockout && !g.padText && !g.bold && extra > 0.01 && isPcb ? ` stroke="${color}" stroke-width="${fmt(extra)}" stroke-linejoin="round" paint-order="stroke"` : "";
     let bars = "";
     if (g.bars && g.bars.length) {
       const total = textWidth(g.text, size, pen); const shift = g.h === "center" ? -total / 2 : g.h === "right" ? -total : 0; const y = base0 - size * 1.23;
       let d = ""; for (const [i0, i1] of g.bars) d += `M${fmt(shift + textWidth(g.text.slice(0, i0), size, pen))} ${fmt(y)}L${fmt(shift + textWidth(g.text.slice(0, i1), size, pen))} ${fmt(y)}`;
       bars = `<path d="${d}" fill="none" stroke="${color}" stroke-width="${fmt(Math.max(pen || size / 8, hairline))}"/>`;
     }
-    return `<g transform="${tr}"${op}>${pre}<text y="${fmt(base0)}" font-family='${FONT_FAMILY}' font-size="${fmt(size * FONT_EM)}" text-anchor="${anchor}" fill="${color}"${bold}>${esc(g.text)}</text>${bars}</g>`;
+    const face = (g.bold ? ' font-weight="600"' : "") + (g.italic ? ' font-style="italic"' : "");
+    const attrs = `font-family='${FONT_FAMILY}' font-size="${fmt(size * FONT_EM)}" text-anchor="${anchor}" fill="${color}"${face}${bold}`;
+    // A multiline drawing-sheet field becomes one <text> per line, an interline apart, with the block
+    // centred on the anchor — EDA_TEXT::GetLinePositions.  SVG would swallow the newline otherwise.
+    let body;
+    if (g.multiline && g.text.indexOf("\n") >= 0) {
+      const ls = g.text.split("\n"), step = size * TEXT_INTERLINE, offs = lineOffsets(ls.length, g.v);
+      body = ls.map((t, i) => `<text y="${fmt(base0 + offs[i] * step)}" ${attrs}>${esc(t)}</text>`).join("");
+    } else body = `<text y="${fmt(base0)}" ${attrs}>${esc(g.text)}</text>`;
+    return `<g transform="${tr}"${op}>${pre}${body}${bars}</g>`;
   }
   if (t === "image") {
     const e = g.entry; if (!e || !e.url) return "";
@@ -92,11 +102,31 @@ export function exportBox(doc, opts) {
 }
 
 /**
+ * KiCad's drawing sheet as SVG elements, under the document — the same records the canvas paints
+ * (web/canvas/sheet.ts), then DS_PAINTER::DrawBorder's page outline in the page-limits colour.
+ */
+export function svgDrawingSheet(doc, hairline) {
+  const isPcb = doc.type === "pcb";
+  const ink = isPcb ? PCB_SHEET : SCH.frame;
+  const out = [];
+  for (const it of documentDrawingSheet(doc)) {
+    if (it.t === "line") out.push(`<line x1="${fmt(it.x1)}" y1="${fmt(it.y1)}" x2="${fmt(it.x2)}" y2="${fmt(it.y2)}" stroke="${ink}" stroke-width="${fmt(it.w)}"/>`);
+    else if (it.t === "rect") out.push(`<rect x="${fmt(it.x)}" y="${fmt(it.y)}" width="${fmt(it.w)}" height="${fmt(it.h)}" fill="none" stroke="${ink}" stroke-width="${fmt(it.lw)}"/>`);
+    else if (it.t === "text") out.push(svgGeom({ t: "text", x: it.x, y: it.y, text: it.text, size: it.size, w: it.w, color: it.color || ink,
+      rot: it.rot, h: it.h, v: it.v, bold: it.bold, italic: it.italic, multiline: it.multiline }, hairline, isPcb, null));
+  }
+  out.push(`<rect x="0" y="0" width="${fmt(doc.page[0])}" height="${fmt(doc.page[1])}" fill="none" stroke="${isPcb ? PCB_PAGE_LIMITS : SCH.pageLimits}" stroke-width="${fmt(hairline)}"/>`);
+  return out;
+}
+
+
+/**
  * The document as an SVG string (mm user units, 1 mm = 1 unit, width/height in mm) built from the geometry records
  * in draw order with KiCad's colours.  opts: ids (Set/array: only those items), bbox ([x0, y0, x1, y1] mm: the
  * export area), margin (mm around the area; 1 mm for boards / subsets, 0 for a whole sheet), hidden (Set of
- * layer keys, honoured like render), background (css or false; default the theme background), frame (schematic
- * page frame; default only for whole sheets), zoneOutline, showHiddenPins, showHiddenText, padNumbers,
+ * layer keys, honoured like render), background (css or false; default the theme background), frame (KiCad's
+ * drawing sheet — frame, tick band, title block and page outline; default only for a whole schematic page,
+ * since a board export is cropped to the board), zoneOutline, showHiddenPins, showHiddenText, padNumbers,
  * hairline (mm, the width zero-width strokes get; 0.1).  Text is <text> with the same anchoring, rotation and
  * mirroring as the canvas (board text keeps its mirror), images become data-URI <image>s.
  */
@@ -107,8 +137,10 @@ export function renderSvg(doc, opts) {
   const bg = opts.background === undefined ? (isPcb ? PCB_BG : SCH.bg) : opts.background;
   const out = [`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${fmt(w)}mm" height="${fmt(h)}mm" viewBox="${fmt(x0)} ${fmt(y0)} ${fmt(w)} ${fmt(h)}" stroke-linejoin="round">`];
   if (bg) out.push(`<rect x="${fmt(x0)}" y="${fmt(y0)}" width="${fmt(w)}" height="${fmt(h)}" fill="${bg}"/>`);
+  // The board export crops to the board, so the sheet would come out sliced: it is drawn only for a
+  // whole schematic page unless the caller asks (opts.frame), which is the contract this always had.
   const frame = opts.frame !== undefined ? opts.frame : (!isPcb && !ids && !opts.bbox);
-  if (frame && !isPcb) out.push(`<rect x="0" y="0" width="${fmt(doc.page[0])}" height="${fmt(doc.page[1])}" fill="none" stroke="${SCH.frame}" stroke-width="0.15"/>`);
+  if (frame) out.push(...svgDrawingSheet(doc, hairline));
   const buckets = new Map();
   const take = (g) => { const z = g.z === undefined ? 0 : g.z; let arr = buckets.get(z); if (!arr) { arr = []; buckets.set(z, arr); } arr.push(g); };
   for (const it of doc.items.values()) {

@@ -215,6 +215,11 @@ export function buildSheetGeom(item, n) {
   if (f.color) G(item, { t: "rect", x, y, w, h, wd: 0, color: f.color, fill: f.color, layer: "Sheets", z: SCH_Z.sheetBg, noStroke: true });
   G(item, Object.assign({ t: "rect", x, y, w, h, wd: bw, color: strokeColorOf(n) || SCH.sheet, fill: null, layer: "Sheets", z: SCH_Z.sheet }, dashOf(n)));
   item.movable = true; item.x = x; item.y = y; item.w = w; item.h = h; item.rot = 0;
+  // A subsheet's page number lives HERE, in the parent's instance data — the child's own file has no
+  // (sheet_instances …) at all.  SCH_SCREEN::GetPageNumber() is what feeds the child's ${#}
+  // (eeschema/sch_view.cpp:134), so the child cannot answer it from its own text.
+  const inst = kid(n, "instances");
+  if (inst) for (const proj of kids(inst, "project")) for (const path of kids(proj, "path")) { const pg = kid(path, "page"); if (pg) { item.page = str(pg[1]); break; } }
   for (const p of kids(n, "property")) {
     const name = str(p[1]), val = str(p[2]); const ef = effectsOf(p);
     if (name === "Sheetname") item.name = val; if (name === "Sheetfile") item.file = val;

@@ -22,14 +22,101 @@ export function syncItemsFromDoc() {
   if (!E.kdoc) return;
   const mv = KiCadCanvas.movableItems(E.kdoc);
   E.items = mv.filter((m) => m.kind !== "sheet").map((m) => ({ id: m.id, ref: m.ref, value: m.value, lib: m.lib, layer: m.layer, x: Math.round(m.x * E.IU), y: Math.round(m.y * E.IU), rot: m.rot, bbox: m.bbox }));
-  E.sheets = mv.filter((m) => m.kind === "sheet").map((m) => ({ id: m.id, name: m.name, file: m.file, x: m.x * E.IU, y: m.y * E.IU, w: m.w * E.IU, h: m.h * E.IU }));
+  E.sheets = mv.filter((m) => m.kind === "sheet").map((m) => ({ id: m.id, name: m.name, file: m.file, page: m.page, x: m.x * E.IU, y: m.y * E.IU, w: m.w * E.IU, h: m.h * E.IU }));
+  // Remember what this sheet calls its children and what page number it gives them: a child .kicad_sch
+  // carries neither (its ${SHEETPATH} name and its ${#} both live in the parent's (sheet …) node), and
+  // KiCad reads them off the sheet path / SCH_SCREEN::GetPageNumber() rather than out of the child file.
+  const dir = state.doc ? state.doc.path.split("/").slice(0, -1).join("/") : "";
+  for (const sh of E.sheets) {
+    if (!sh.file) continue;
+    const path = dir ? `${dir}/${sh.file}` : sh.file;
+    if (sh.name) sheetNames.set(path, sh.name);
+    if (sh.page) sheetPages.set(path, sh.page);
+  }
   if (E.selected) E.selected = E.items.find((f) => f.id === E.selected.id) || null;
   renderObjects();
 }
 
+/**
+ * The drawing sheet's identity for the open document — what eeschema hands DS_PROXY_VIEW_ITEM
+ * (eeschema/sch_view.cpp:131-138, pcbnew/pcb_edit_frame.cpp:927-953) so the title block can
+ * resolve ${FILENAME}, ${SHEETPATH}, ${#} and ${##}.  The title-block fields, the paper name and
+ * the root sheet's own page number come out of the file itself (canvas/doc.ts).
+ *
+ * ${SHEETPATH} is SCH_SHEET_PATH::PathHumanReadable(): "/" on the root sheet, "/<sheet name>/"
+ * one level down.  A sheet reached through the hierarchy carries the name its parent gave it
+ * (E.sheets, remembered in sheetNames); opened cold by URL, the file's own stem is the best the
+ * browser has.  A board has no sheet path at all — EDA_DRAW_FRAME::GetFullScreenDesc returns
+ * empty for pcbnew, so KiCad's board title block reads "Sheet: ".
+ */
+export const sheetNames = new Map();
+   // sheet file path -> the Sheetname its parent gives it
+export const sheetPages = new Map();
+   // sheet file path -> the (page "N") its parent's (sheet … (instances …)) gives it
+
+/** The root sheet's own name: SCH_SHEET_FILE's loader calls it "Root" (eeschema/files-io.cpp:383). */
+export const ROOT_SHEET_NAME = "Root";
+
+/**
+ * The project's text variables — the .kicad_pro's `text_variables` object, which is PROJECT's own
+ * resolver and BuildFullText's last fallback (ds_painter.cpp:222-223).  Null until the file lands.
+ */
+export function projectTextVars() {
+  if (!E.proSettings) return null;
+  try { const j = JSON.parse(E.proSettings); const v = j && j.text_variables; return v && typeof v === "object" && Object.keys(v).length ? v : null; }
+  catch (e) { return null; }
+}
+
+/**
+ * Harvest the root schematic's (sheet …) nodes once per project, so a subsheet opened cold by URL —
+ * with no parent ever on screen — still knows the Sheetname and the (page "N") its parent gives it.
+ * eeschema always has the whole hierarchy loaded; the browser has one file at a time, so this is the
+ * one extra read that makes ${SHEETPATH} and ${#} agree with the desktop.
+ */
+let hierarchyLearned = null;
+export async function learnHierarchy() {
+  const pid = state.project ? state.project.projectId : null;
+  const root = pid ? rootSchematic() : null;
+  if (!root || hierarchyLearned === pid) return;
+  hierarchyLearned = pid;
+  try {
+    const r = await fetch(`/api/docs/${root.docId}/content`);
+    if (!r.ok) return;
+    const d = KiCadCanvas.parseDoc(await r.text(), "kicad_sch");
+    const dir = root.path.split("/").slice(0, -1).join("/");
+    for (const m of KiCadCanvas.movableItems(d)) {
+      if (m.kind !== "sheet" || !m.file) continue;
+      const path = dir ? `${dir}/${m.file}` : m.file;
+      if (m.name && !sheetNames.has(path)) sheetNames.set(path, m.name);
+      if (m.page && !sheetPages.has(path)) sheetPages.set(path, m.page);
+    }
+  } catch (e) { /* unreadable root: fall back to the file's own stem and page number */ }
+}
+
+export function applySheetContext(d) {
+  const doc = state.doc;
+  d.fileName = doc ? doc.path.split("/").pop() : "";
+  d.filePath = doc ? doc.path : "";
+  d.projectName = state.project ? state.project.name : "";
+  d.projectVars = projectTextVars();
+  if (d.type !== "sch") { d.sheetName = ""; d.sheetPath = ""; d.sheetCount = 1; return; }
+  const sch = state.docs.filter((x) => x.docType === "kicad_sch");
+  d.sheetCount = sch.length || 1;
+  const root = state.project ? rootSchematic() : null;
+  if (!doc || (root && root.docId === doc.docId)) { d.sheetName = ROOT_SHEET_NAME; d.sheetPath = "/"; return; }
+  const name = sheetNames.get(doc.path) || d.fileName.replace(/\.kicad_sch$/, "");
+  d.sheetName = name; d.sheetPath = "/" + name + "/";
+  // ${#} comes from SCH_SCREEN::GetPageNumber(), which the parent's instance data fills in; the
+  // child's own (sheet_instances …) — if it even has one — is not what eeschema shows.
+  const page = sheetPages.get(doc.path);
+  if (page) d.pageNumber = page;
+}
+
+
 export function setDocFromText(text) {
   let d;
   try { d = KiCadCanvas.parseDoc(text, E.DOC_TYPE); } catch (e) { console.warn("document parse failed", e); return false; }
+  applySheetContext(d);
   E.kdoc = d; E.vbPerMm = 1;
   if (isSch()) E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
   else { const b = E.kdoc.bbox, m = 5; E.vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
@@ -153,7 +240,9 @@ export async function openEditor(id) {
 export function rootSchematic() {
   const sch = state.docs.filter((d) => d.docType === "kicad_sch");
   const pro = state.project.docs.find((d) => d.docType === "kicad_pro");
-  if (pro && E.proSettings === null) { E.proSettings = ""; api(`/api/docs/${pro.docId}/content`).then((t) => { E.proSettings = typeof t === "string" ? t : JSON.stringify(t); if (CollabTools.pcb && CollabTools.pcb.setDesignSettings) { try { CollabTools.pcb.setDesignSettings(E.proSettings); } catch (e) { /* module without rules */ } } }).catch(() => { E.proSettings = ""; }); }
+  if (pro && E.proSettings === null) { E.proSettings = ""; api(`/api/docs/${pro.docId}/content`).then((t) => { E.proSettings = typeof t === "string" ? t : JSON.stringify(t); if (CollabTools.pcb && CollabTools.pcb.setDesignSettings) { try { CollabTools.pcb.setDesignSettings(E.proSettings); } catch (e) { /* module without rules */ } }
+    // the title block's last resolver arrives with this file, so a sheet already on screen needs a repaint
+    if (E.kdoc) { applySheetContext(E.kdoc); requestRender(); } }).catch(() => { E.proSettings = ""; }); }
   const stem = pro && pro.path.split("/").pop().replace(/\.kicad_pro$/, "");
   return sch.find((d) => d.path.split("/").pop() === stem + ".kicad_sch")
     || sch.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0];
@@ -223,6 +312,13 @@ export async function openDoc(doc) {
     const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
     if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; ok = setDocFromText(text); }
   } catch {}
+  // a subsheet opened cold knows neither its Sheetname nor its page number: both live in its parent
+  if (ok && isSch() && state.doc && !(sheetNames.has(state.doc.path) && sheetPages.has(state.doc.path))) {
+    const rootSch = state.project ? rootSchematic() : null;
+    if (rootSch && rootSch.docId !== docId) {
+      learnHierarchy().then(() => { if (state.docId === docId && E.kdoc) { applySheetContext(E.kdoc); requestRender(); } });
+    }
+  }
   if (!ok) {
     const itemsReq = isSch()
       ? api(`/api/docs/${docId}/items`).then((j) => { if (state.docId !== docId) return;

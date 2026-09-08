@@ -1,9 +1,10 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
-import { PCB_BG, PCB_GRID, SCH, parseColor, pcbZ, rgba } from "./colors";
+import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
-import { textWidth } from "./text";
+import { documentDrawingSheet } from "./sheet";
+import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 // ---------------------------------------------------------------- rendering
 export const HAS_PATH2D = typeof Path2D !== "undefined";
 
@@ -67,7 +68,14 @@ export function tracePad(ctx, g) {
  *   ids            (both)      — Set (or array) of item ids: only those items are drawn (export subsets);
  *   background     (both)      — css colour under the drawing, or false for none (transparent export);
  *                                default: the theme's sheet / board background;
- *   frame          (schematic) — false skips the page frame (subset exports);
+ *   frame          (both)      — false skips KiCad's drawing sheet entirely (subset exports).  Otherwise the
+ *                                sheet is drawn under the document from the built-in (kicad_wks …) description
+ *                                (web/canvas/sheet.ts): the two frame rectangles on the 10 mm margins, the 2 mm
+ *                                tick band with its 50 mm ticks and A/B/C · 1/2/3 labels, the title block and its
+ *                                text (${TITLE}, ${REVISION}, ${ISSUE_DATE}, ${PAPER}, ${FILENAME}, ${SHEETPATH},
+ *                                ${COMPANY}, ${COMMENT1..4}, ${#}/${##}) resolved from the document, then the
+ *                                page outline in the page-limits grey.  Schematics use the schematic sheet colour
+ *                                (#840000), boards the board one (#C872AB), exactly as eeschema and pcbnew do;
  *   ratsnest       (board)     — [{net, name, a: [x, y], b: [x, y]}] (mm): unrouted connections drawn like
  *                                RATSNEST_VIEW_ITEM — LAYER_RATSNEST rgba(0,248,255,0.35), 0.5 device px
  *                                hairlines, above copper and holes, below the user layers, markers and the
@@ -250,8 +258,14 @@ export function render(doc, ctx, view, opts) {
       ctx.fill();
     }
   }
-  // page frame for schematics
-  if (doc.type === "sch" && opts.frame !== false) { ctx.strokeStyle = SCH.frame; ctx.lineWidth = Math.max(0.15, 1 / s); ctx.strokeRect(0, 0, doc.page[0], doc.page[1]); }
+  // the drawing sheet (frame, tick band, title block) and, above it, the page outline.  Under the
+  // flipped board view KiCad mirrors the sheet back about the page — "Draw the title block normally
+  // even if the view is flipped" (ds_proxy_view_item.cpp:114-128) — so it is drawn unflipped here.
+  if (opts.frame !== false) {
+    if (flip) ctx.setTransform(s, 0, 0, s, tx, ty);
+    drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s);
+    if (flip) ctx.setTransform(A, 0, 0, s, E, ty);
+  }
   // collect visible geometry into the z buckets (arrays reused across frames)
   for (const arr of BUCKETS.values()) arr.length = 0;
   for (const arr of NAME_BUCKETS.values()) arr.length = 0;
@@ -584,7 +598,11 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   if (flip && (g.padText || !SIDE_SPECIFIC.test(g.layer || ""))) { mx = -mx; h = flipH(h); }
   if (base) ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
   else { ctx.save(); ctx.translate(g.x, g.y); if (a) ctx.rotate(a); if (mx < 0) ctx.scale(-1, 1); }
-  let font = FONT_CACHE.get(g.size); if (!font) { font = `${g.size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(g.size, font); }
+  // KiCad's bold/italic are a thicker and a sheared stroke font; with a real face the equivalent is
+  // the face's own weight and slant.  Only geometry that asks for them (the drawing sheet) is affected.
+  const key = g.bold || g.italic ? `${g.size}|${g.bold ? "b" : ""}${g.italic ? "i" : ""}` : g.size;
+  let font = FONT_CACHE.get(key);
+  if (!font) { font = `${g.italic ? "italic " : ""}${g.bold ? "600 " : ""}${g.size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(key, font); }
   ctx.font = font;
   ctx.textAlign = h; ctx.textBaseline = "alphabetic";
   const base0 = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
@@ -599,10 +617,21 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   }
   ctx.fillStyle = color;
   if (g.padText) { ctx.fillText(g.text, 0, base0); if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore(); return; }
-  // stroke-font thickness beyond a filled face's own stem (~0.13·size) reads as bold
-  const extra = g.w - 0.13 * g.size;
-  if (extra > 0.01 && docType === "pcb") { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; ctx.strokeText(g.text, 0, base0); }
-  ctx.fillText(g.text, 0, base0);
+  // stroke-font thickness beyond a filled face's own stem (~0.13·size) reads as bold; text that
+  // already carries the bold flag gets its weight from the face instead of a second stroke pass
+  const extra = g.bold ? 0 : g.w - 0.13 * g.size;
+  const boldPass = extra > 0.01 && docType === "pcb";
+  if (boldPass) { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; }
+  // A drawing-sheet field carrying a \n is a multiline run: KiCad lays the lines out an interline
+  // apart and centres the block on the anchor (EDA_TEXT::GetLinePositions, common/eda_text.cpp:937-978).
+  const lines = g.multiline && g.text.indexOf("\n") >= 0 ? g.text.split("\n") : null;
+  if (lines) {
+    const step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
+    for (let i = 0; i < lines.length; i++) { const y = base0 + offs[i] * step; if (boldPass) ctx.strokeText(lines[i], 0, y); ctx.fillText(lines[i], 0, y); }
+  } else {
+    if (boldPass) ctx.strokeText(g.text, 0, base0);
+    ctx.fillText(g.text, 0, base0);
+  }
   if (g.bars && ctx.measureText) {
     // overbar: KiCad draws it 1.23·size above the baseline with the text pen
     const total = ctx.measureText(g.text).width; const shift = h === "center" ? -total / 2 : h === "right" ? -total : 0;
@@ -612,6 +641,50 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   }
   if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore();
 }
+
+/**
+ * KiCad's drawing sheet under the document: the frame rectangles, the 50 mm tick band with its
+ * A/B/C · 1/2/3 labels and the title block, from web/canvas/sheet.ts's reading of the built-in
+ * (kicad_wks …) description — then DS_PAINTER::DrawBorder's page outline on top of it.
+ *
+ * Every stroke is the description's own width (0.15 mm for the built-in sheet; DS_RENDER_SETTINGS
+ * carries a default pen of 0, so KiCad's max() never raises it), floored at one device pixel so it
+ * does not disappear when zoomed out.  The page outline is KiCad's hairline in the lighter
+ * page-limits colour — the bug this replaces painted that rectangle in the sheet's dark red and
+ * drew nothing else.  Colours: eeschema LAYER_SCHEMATIC_DRAWINGSHEET / _PAGE_LIMITS, pcbnew
+ * LAYER_DRAWINGSHEET / LAYER_PAGE_LIMITS (ds_proxy_view_item.cpp:130-148, sch_view.cpp:137-138).
+ */
+export function drawDrawingSheet(ctx, doc, s, minW) {
+  const isPcb = doc.type === "pcb";
+  const ink = isPcb ? PCB_SHEET : SCH.frame;
+  const items = documentDrawingSheet(doc);
+  ctx.strokeStyle = ink; ctx.fillStyle = ink; ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+  let width = -1;
+  const setWidth = (w) => { const lw = Math.max(w, minW); if (lw !== width) { width = lw; ctx.lineWidth = lw; } };
+  ctx.beginPath();
+  let open = false;
+  for (const it of items) {
+    if (it.t === "line" || it.t === "rect") {
+      const w = Math.max(it.t === "line" ? it.w : it.lw, minW);
+      if (open && w !== width) { ctx.stroke(); ctx.beginPath(); open = false; }
+      setWidth(w);
+      if (it.t === "line") { ctx.moveTo(it.x1, it.y1); ctx.lineTo(it.x2, it.y2); }
+      else ctx.rect(it.x, it.y, it.w, it.h);
+      open = true;
+    }
+  }
+  if (open) ctx.stroke();
+  for (const it of items) {
+    if (it.t !== "text") continue;
+    drawText(ctx, { t: "text", x: it.x, y: it.y, text: it.text, size: it.size, w: it.w, color: it.color || ink,
+      rot: it.rot, h: it.h, v: it.v, bold: it.bold, italic: it.italic, multiline: it.multiline, minPx: 3 }, s, doc.type, minW, null, null, false, null);
+  }
+  // DS_PAINTER::DrawBorder (ds_painter.cpp:383-396): the paper outline, last, in the page-limits colour
+  ctx.strokeStyle = isPcb ? PCB_PAGE_LIMITS : SCH.pageLimits;
+  ctx.lineWidth = minW;
+  ctx.strokeRect(0, 0, doc.page[0], doc.page[1]);
+}
+
 
 /** Put the canvas into document space (mm) for a given view — for tool overlays; pass the document as `flipDoc` to match the flipped board view. */
 export function setViewTransform(ctx, view, flipDoc) {

@@ -3,7 +3,7 @@
 // press-and-hold, like wx), separators and the aux bar's controls.  The vertical bars are a single
 // scrolling column.  The right bar also carries the collab tools app.js keeps in its File menu on
 // the desktop, and a hidden `#ltools` marker that tells sch-tools which tool is active.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
 import { EXTRA_TOOLS, TRACK_WIDTHS, VIA_SIZES, ZOOM_PRESETS, toolFor } from "../tables";
@@ -19,10 +19,20 @@ function useEditor(): Editor | null { return useApp((s) => s.document.editor); }
    sch-tools query them); the styling is entirely the utilities that follow them. */
 const KB = "kb relative w-7.5 h-7.5 p-0.5 border border-transparent rounded-[3px] bg-transparent text-ink inline-flex items-center justify-center flex-none"
   + " hover:bg-paper hover:border-line on:bg-on on:border-on-line on:shadow-[inset_0_1px_2px] on:shadow-black/[13.3%] desk:opacity-[.38] desk:hover:opacity-70 active:translate-y-px";
-/* horizontal bars (top / aux): wrap when the window is narrow */
-const KTB = "ktb flex items-center flex-wrap gap-px px-1 py-0.5 bg-bench border-b border-line min-w-0";
-/* vertical bars never wrap into a second column: they scroll (wheel / touch) when the window is short, like KiCad's overflow chevron */
-const KTB_V = "ktb ktb-v flex flex-col flex-nowrap items-center justify-start gap-px px-0.5 py-1 bg-bench min-h-0 w-8.5 overflow-y-auto overflow-x-hidden scrollbar-none [&>*]:flex-none";
+/* No KiCad toolbar ever wraps: wxAuiToolBar keeps its one row (or column) and hides the tools that do
+   not fit behind an overflow chevron that pops them up as a menu — ACTION_TOOLBAR's
+   `SetOverflowVisible( !GetToolBarFits() )` (common/tool/action_toolbar.cpp:259-266).  OverflowBar
+   below does the same on both axes, so nothing is ever cut off at the window edge and the canvas
+   never loses height to a second row of buttons.
+   In each bar the outer box is the grid cell and holds the chevron; the inner track is what clips,
+   so the chevron always stays inside the window even when the tools do not. */
+const KTB = "ktb flex items-stretch bg-bench border-b border-line min-w-0";
+const KTB_INNER = "ktb-row flex flex-row flex-nowrap items-center justify-start gap-px px-1 py-0.5 flex-1 min-w-0 overflow-hidden [&>*]:flex-none";
+const KTB_V = "ktb ktb-v flex flex-col items-center min-h-0 w-8.5 bg-bench";
+const KTB_V_INNER = "ktb-col flex flex-col flex-nowrap items-center justify-start gap-px px-0.5 py-1 w-full flex-1 min-h-0 overflow-hidden [&>*]:flex-none";
+/* the overflow chevron: KB's look without KB's `relative`, so it stays a plain flex item at the end of the bar */
+const KMORE = "kb kmore flex-none w-7.5 h-7.5 p-0.5 border border-transparent rounded-[3px] bg-transparent text-ink-2 inline-flex items-center justify-center"
+  + " hover:bg-paper hover:border-line hover:text-ink [&[hidden]]:hidden";
 const KSEL = "ksel bg-panel border border-line rounded-[3px] px-1 py-0.5 h-6 text-sm text-ink max-w-[170px]";
 
 // ---------------------------------------------------------------- buttons
@@ -172,40 +182,194 @@ function useBar(loc: ToolbarLoc): ToolbarItem[] {
 
 export function TopToolbar() {
   const a = useAvail(); const items = useBar("top");
-  return <div id="tbTop" className={cx(KTB, "min-h-8.5")}><Items items={items} a={a} /></div>;
+  const groupCurrent = useApp((s) => s.groupCurrent);
+  return <OverflowBar id="tbTop" cls="min-h-8.5" a={a} entries={barEntries(items, a, groupCurrent)} />;
 }
 export function AuxToolbar() {
   const a = useAvail(); const items = useBar("aux");
-  return <div id="tbAux" className={cx(KTB, "min-h-7.5 [&[hidden]]:hidden")} hidden={!items.length}><Items items={items} a={a} /></div>;
+  const groupCurrent = useApp((s) => s.groupCurrent);
+  return <OverflowBar id="tbAux" cls="min-h-7.5 [&[hidden]]:hidden" a={a} entries={barEntries(items, a, groupCurrent)} hidden={!items.length} />;
 }
+// ---------------------------------------------------------------- overflow (wxAuiToolBar's chevron)
+/** One entry of a bar: what to draw in the bar, and what the overflow menu should list for it. */
+interface BarEntry { key: string; node: ReactNode; menu?: { id: string; label: string; icon?: string | null; glyph?: string; control?: boolean } | null }
+
+/** The aux bar's controls, titled as wxAuiToolBar's overflow menu titles them (the tool's label). */
+const CONTROL_LABELS: Record<string, string> = { currentVariant: "Current variant", overrideLocks: "Override locks", trackWidth: "Track width",
+  viaDiameter: "Via size", viaStack: "Via stack", layerSelector: "Active layer", gridSelect: "Grid", zoomSelect: "Zoom" };
+
+/** The overflow menu: the tools that did not fit, in bar order, as a wxAUI drop-down. */
+function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entries: BarEntry[]; anchor: HTMLElement; onRight: boolean; vertical: boolean; a: Avail; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
+  useLayoutEffect(() => {
+    const r = anchor.getBoundingClientRect();
+    const w = ref.current ? ref.current.offsetWidth : 220, h = ref.current ? ref.current.offsetHeight : 200;
+    // a side bar's menu opens beside the bar; a top bar's drops straight down from the chevron, right-aligned to it
+    const left = vertical ? (onRight ? r.left - w - 4 : r.right + 4) : r.right - w;
+    const top = vertical ? Math.min(r.bottom - h, window.innerHeight - h - 4) : r.bottom + 2;
+    setStyle({ left: Math.max(4, Math.min(left, window.innerWidth - w - 4)) + "px", top: Math.max(4, Math.min(top, window.innerHeight - h - 4)) + "px" });
+  }, [anchor, onRight, vertical, entries.length]);
+  useEffect(() => {
+    const down = (ev: PointerEvent) => { if (ref.current && !ref.current.contains(ev.target as Node) && !anchor.contains(ev.target as Node)) onClose(); };
+    const t = setTimeout(() => document.addEventListener("pointerdown", down, true), 0);
+    return () => { clearTimeout(t); document.removeEventListener("pointerdown", down, true); };
+  }, [anchor, onClose]);
+  return createPortal(
+    <div className="kpalette koverflow fixed z-70 bg-panel border border-line rounded-sm shadow-panel p-1 min-w-50 max-h-[80vh] overflow-y-auto" ref={ref} style={style}>
+      {entries.map((e) => {
+        const m = e.menu!;
+        // wxAuiToolBar cannot re-parent a control into its overflow menu, so it lists it as a
+        // disabled item (wx/aui/auibar.cpp OnOverflowClick) — the label alone, exactly as here.
+        if (m.control) return <div key={e.key} className="krow flex items-center gap-2 w-full rounded-xs px-2 py-1 text-ink-3 text-left opacity-60">{m.label}</div>;
+        const why = unavailable(a, m.id); const k = keyFor(a, m.id);
+        return (
+          <button type="button" key={e.key} title={titleFor(a, m.id)} data-uiact={m.id}
+            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-blue hover:text-white desk:opacity-[.45]", why && "desk")}
+            onClick={(ev) => { onClose(); runUiAction(a, m.id, ev.currentTarget); }}>
+            {m.glyph ? <Glyph svg={m.glyph} /> : <KIcon name={m.icon || "options_generic"} />}
+            <span className="flex-1">{m.label}</span>
+            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-white">{k}</kbd> : null}
+          </button>
+        );
+      })}
+    </div>, document.body);
+}
+
+/**
+ * A toolbar that behaves like wxAuiToolBar when it does not fit: the tools that would be clipped
+ * stay laid out (so the measurement never oscillates) but are made invisible, and an overflow
+ * chevron at the end of the bar pops them up as a menu.  Before this the vertical bars ran off the
+ * bottom of the window (on 1280x780, 15 of the board's 34 draw tools — delete, measure, comment and
+ * pan among them — were unreachable) and the horizontal bars wrapped into a second row, which
+ * wxAuiToolBar never does and which stole 19-30 px of canvas at common laptop widths.
+ */
+function OverflowBar({ id, cls, entries, a, tail, vertical, hidden }: { id: string; cls: string; entries: BarEntry[]; a: Avail; tail?: ReactNode; vertical?: boolean; hidden?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  const [cut, setCut] = useState(-1);
+  const [open, setOpen] = useState(false);
+  const cutRef = useRef(-1);
+  const chevron = useRef(30);
+   // KMORE is a 30 px button; re-measured from the DOM the first time it is shown
+  const view = useApp((s) => s.view);
+  /**
+   * Which tools fit.  Measured against the OUTER box, whose size along the bar does not depend on the
+   * answer — the track is `flex-1`, so asking it would make showing the chevron shrink the space that
+   * decides whether to show it, and a bar that fits by a hair would flip-flop for ever.  The items keep
+   * their boxes either way (`justify-start`, fixed sizes), so their offsets are a stable input too.
+   *
+   * The offsets are taken as client-rect deltas from the TRACK's own leading edge.  `offsetTop` /
+   * `offsetLeft` would be measured from the nearest positioned ancestor — which for these buttons is
+   * the document body — so they carry the bar's distance from the top of the page (102 px, more once
+   * the top bars are two rows deep) and comparing them against a height cut the bar far too early.
+   */
+  const measure = useCallback(() => {
+    const el = ref.current, outer = box.current; if (!el || !outer) return;
+    // the track's own children are the tools, in `entries` order; `#ltools` is a marker, not a tool
+    const kids = Array.from(el.children).filter((k) => k.id !== "ltools") as HTMLElement[];
+    let n = -1;
+    if (kids.length) {
+      const cs = getComputedStyle(el);
+      const pad = parseFloat(vertical ? cs.paddingBottom : cs.paddingRight) || 0;
+      const moreEl = more.current;
+      const moreSize = moreEl && (vertical ? moreEl.offsetHeight : moreEl.offsetWidth);
+      if (moreSize) chevron.current = moreSize;
+      const trackRect = el.getBoundingClientRect();
+      const start = vertical ? trackRect.top : trackRect.left;
+      const full = vertical ? outer.clientHeight : outer.clientWidth;
+      const endOf = (k: HTMLElement) => { const r = k.getBoundingClientRect(); return (vertical ? r.bottom : r.right) - start; };
+      if (endOf(kids[kids.length - 1]) + pad > full + 0.5) {
+        const limit = full - chevron.current - pad;
+        n = kids.findIndex((k) => endOf(k) > limit);
+        n = n < 0 ? kids.length : Math.max(n, 1);
+      }
+    }
+    // hide the tail without taking it out of the flow, so the next measurement sees the same boxes
+    kids.forEach((k, i) => { const off = n >= 0 && i >= n; k.style.visibility = off ? "hidden" : ""; k.style.pointerEvents = off ? "none" : ""; });
+    if (n !== cutRef.current) { cutRef.current = n; setCut(n); }
+  }, [vertical]);
+  useLayoutEffect(() => { measure(); });
+  useEffect(() => {
+    const outer = box.current; if (!outer) return;
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(outer);
+    window.addEventListener("resize", measure);
+    // web fonts and the icon sheet land after the first layout and change every button's size
+    if (typeof document !== "undefined" && (document as any).fonts && (document as any).fonts.ready) (document as any).fonts.ready.then(measure).catch(() => {});
+    return () => { if (ro) ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, [measure]);
+  useEffect(() => { if (cut < 0 || view !== "editor") setOpen(false); }, [cut, view]);
+  const hiddenEntries = cut >= 0 ? entries.slice(cut).filter((e) => e.menu) : [];
+  return (
+    <div id={id} className={cx(vertical ? KTB_V : KTB, cls)} ref={box} hidden={hidden}>
+      <div className={vertical ? KTB_V_INNER : KTB_INNER} ref={ref}>
+        {entries.map((e) => <Fragment key={e.key}>{e.node}</Fragment>)}
+        {tail}
+      </div>
+      <button type="button" ref={more} data-more="" hidden={cut < 0} title="More tools" aria-label="More tools"
+        className={cx(KMORE, vertical ? "mb-1" : "self-center mr-1")} onClick={() => setOpen((o) => !o)}>
+        <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4l5 4 5-4M3 9l5 4 5-4" /></svg>
+      </button>
+      {open && cut >= 0 && more.current && hiddenEntries.length
+        ? <OverflowMenu entries={hiddenEntries} anchor={more.current} onRight={id === "tbRight"} vertical={!!vertical} a={a} onClose={() => setOpen(false)} /> : null}
+    </div>
+  );
+}
+
+/** The spec's items as bar entries, each carrying what the overflow menu should show for it. */
+function barEntries(items: ToolbarItem[], a: Avail, groupCurrent: Record<string, string>, vertical?: boolean): BarEntry[] {
+  return items.map((it, i) => {
+    if (isSep(it)) return { key: "s" + i, node: <Sep v={vertical} />, menu: null };
+    if (isGroup(it)) {
+      const cur = groupCurrent[it.group] || it.items[0].id;
+      const item = it.items.find((x) => x.id === cur) || it.items[0];
+      const meta = actionMeta(item.id) || item;
+      return { key: "g" + it.group + i, node: <GroupButton group={it} a={a} />, menu: { id: item.id, label: meta.label || item.id, icon: meta.icon } };
+    }
+    if (isControl(it)) return { key: "c" + it.control + i, node: <Control item={it} />,
+      menu: it.control === "ipcScripting" ? null : { id: "", label: CONTROL_LABELS[it.control] || it.control, control: true } };
+    const meta = actionMeta(it.id) || it;
+    return { key: it.id + i, node: <ActionButton item={it} a={a} />, menu: { id: it.id, label: meta.label || it.id, icon: meta.icon } };
+  });
+}
+
 export function LeftOptionsToolbar() {
   const a = useAvail(); const items = useBar("left");
-  return <div id="tbLeft" className={cx(KTB_V, "border-r border-line")}><Items items={items} a={a} v /></div>;
+  const groupCurrent = useApp((s) => s.groupCurrent);
+  return <OverflowBar id="tbLeft" cls="border-r border-line" vertical a={a} entries={barEntries(items, a, groupCurrent, true)} />;
 }
 export function RightDrawToolbar() {
   const a = useAvail(); const items = useBar("right");
   const tool = useApp((s) => s.tool.current);
+  const groupCurrent = useApp((s) => s.groupCurrent);
   const moduleTools = useApp((s) => s.tool.moduleTools);
   const isModuleTool = a.moduleTools.has(tool);
+  const entries = barEntries(items, a, groupCurrent, true);
+  entries.push({ key: "extrasep", node: <Sep v />, menu: null });
+  for (const e of EXTRA_TOOLS) {
+    const avail = a.appTools.has(e.tool);
+    entries.push({
+      key: e.id,
+      node: (
+        <button type="button" className={cx(KB, "glyph", !avail && "desk", tool === e.tool && "on")} data-uiact={e.id} data-ktool={e.tool}
+          title={e.name + (avail && e.key ? `  (${e.key})` : "")} onClick={(ev) => runUiAction(a, e.id, ev.currentTarget)}>
+          <Glyph svg={e.glyph} />
+        </button>
+      ),
+      menu: { id: e.id, label: e.name, glyph: e.glyph },
+    });
+  }
   return (
-    <div id="tbRight" className={cx(KTB_V, "border-l border-line")}>
-      <Items items={items} a={a} v />
-      <Sep v />
-      {EXTRA_TOOLS.map((e) => {
-        const avail = a.appTools.has(e.tool);
-        return (
-          <button type="button" key={e.id} className={cx(KB, "glyph", !avail && "desk", tool === e.tool && "on")} data-uiact={e.id} data-ktool={e.tool}
-            title={e.name + (avail && e.key ? `  (${e.key})` : "")} onClick={(ev) => runUiAction(a, e.id, ev.currentTarget)}>
-            <Glyph svg={e.glyph} />
-          </button>
-        );
-      })}
-      {/* sch-tools.js reads `#ltools .tb.on` (data-modtool / data-tool) for the active tool and
-          `#ltools [data-modtool="wire"]` to know the schematic module is in charge. */}
-      <span id="ltools" hidden>
-        <i className="tb on" data-modtool={isModuleTool ? tool : undefined} data-tool={isModuleTool ? undefined : tool} />
-        {moduleTools.map((t) => <i key={t.id} className="tb" data-modtool={t.id} />)}
-      </span>
-    </div>
+    <OverflowBar id="tbRight" cls="border-l border-line" vertical a={a} entries={entries}
+      // sch-tools.js reads `#ltools .tb.on` (data-modtool / data-tool) for the active tool and
+      // `#ltools [data-modtool="wire"]` to know the schematic module is in charge.
+      tail={
+        <span id="ltools" hidden>
+          <i className="tb on" data-modtool={isModuleTool ? tool : undefined} data-tool={isModuleTool ? undefined : tool} />
+          {moduleTools.map((t) => <i key={t.id} className="tb" data-modtool={t.id} />)}
+        </span>
+      } />
   );
 }

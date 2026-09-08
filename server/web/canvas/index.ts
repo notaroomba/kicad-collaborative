@@ -24,23 +24,29 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
 import { PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, pcbColor, pcbZ } from "./colors";
-import { addItem, computeBBox, parseDoc } from "./doc";
+import { PAPER_SIZES, addItem, computeBBox, mm2mils, parseDoc } from "./doc";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
-import { SvgPath, renderPng, renderSvg, serialize, serializeItem, wrapFragment } from "./export";
+import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingSheet, wrapFragment } from "./export";
 import { buildGeom } from "./geom";
 import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
-import { HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawHalo, drawPad, drawSelectionHalo, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawPad, drawSelectionHalo, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
+import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
-import { parseMarkup, textWidth } from "./text";
+import { TEXT_INTERLINE, lineOffsets, parseMarkup, textWidth } from "./text";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
   drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable,
+  // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter
+  // and the text-variable resolution the title block uses; render()/renderSvg() paint what it returns
+  DEFAULT_DRAWING_SHEET, parseDrawingSheet, defaultDrawingSheet, buildDrawingSheet, documentDrawingSheet,
+  sheetTextVars, varResolver, expandTextVars, incrementLabel, indexFromAlphabetic, alphabeticFromIndex, sheetTextPen, drawDrawingSheet, svgDrawingSheet,
+  PRODUCT_NAME, WS_TOKENS, TB_TOKENS, PAPER_SIZES, mm2mils, TEXT_INTERLINE, lineOffsets,
   fieldBoxes, fieldAt, pointInQuad, hitTestDetail, geomHit, geomBox,
   // exposed for tests and tools
   symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf,
