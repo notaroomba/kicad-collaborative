@@ -47,6 +47,7 @@
 #include <wx/filename.h>
 #include <wx/utils.h>
 #include <zone.h>
+#include <tool/tool_manager.h>
 
 #include <nlohmann/json.hpp>
 
@@ -587,6 +588,153 @@ BOOST_AUTO_TEST_CASE( FootprintChangeWithoutPadNetsKeepsExistingNets )
 
     BOOST_CHECK( applied->Pads().front()->GetNetname() == netBefore );
     BOOST_CHECK( applied->Pads().front()->GetNetCode() > 0 );
+}
+
+
+// ---- Remote op application ------------------------------------------------------------------
+//
+// ApplyRemoteOp applies a remote op in one commit and re-asserts this client's provably newer
+// own edits over the items it touched (last writer wins), then frees what the commit removed.
+// The schematic editor crashed on reopening a project from freeing what was *asked* to be
+// removed instead: a remote deletion re-asserted over by an own upsert leaves the item in
+// place, and freeing it anyway left a dead pointer for the next walk of the document.  The
+// board engine shares the design, so it gets the same rule and the same proof.
+
+/// Every track on the board must still be a live object (a virtual call on each).
+static void CheckEveryTrackIsLive( BOARD* aBoard )
+{
+    for( PCB_TRACK* track : aBoard->Tracks() )
+        BOOST_CHECK( !track->GetClass().IsEmpty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveOverriddenByOwnUpsertKeepsTheTrackAlive )
+{
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+    KIID       id = track->m_Uuid;
+
+    // Our own newer edit: a whole-item upsert of the track at a new position.
+    VECTOR2I newEnd( 5000000, 2000000 );
+    track->SetEnd( newEnd );
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( track, "ADDED" ) );
+    own.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( track );
+    own.back()[ "netName" ] = "GND";
+
+    // The older remote op deletes that same track.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( track, "REMOVED" ) );
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, newerOwn, &toolMgr );
+
+    // Last writer wins: the upsert stands, so the track is still on the board -- the same
+    // live object, at our geometry -- and nothing on the board is a freed object.
+    BOARD_ITEM* survivor = m_receiving->ResolveItem( id, true );
+    BOOST_REQUIRE( survivor );
+    BOOST_CHECK( survivor == twin );
+    BOOST_CHECK_EQUAL( static_cast<PCB_TRACK*>( survivor )->GetEnd().x, newEnd.x );
+    CheckEveryTrackIsLive( m_receiving.get() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveAndOwnRemoveOfTheSameTrackFreeItOnce )
+{
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+    KIID       id = track->m_Uuid;
+
+    // Both sides deleted it; ours is still in flight when the remote deletion lands, so the
+    // same live object is asked to go twice.  It must be freed exactly once (a double free
+    // here aborts the process).
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( track, "REMOVED" ) );
+
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( track, "REMOVED" ) );
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, newerOwn, &toolMgr );
+
+    BOOST_CHECK( m_receiving->ResolveItem( id, true ) == nullptr );
+    CheckEveryTrackIsLive( m_receiving.get() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveWinsOverOwnPropertyEdit )
+{
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+    KIID       id = track->m_Uuid;
+
+    // Our own newer edit is a property-level change...
+    track->SetWidth( 400000 );
+
+    std::vector<PROPERTY_DELTA> deltas = DiffItemProperties( twin, track );
+    BOOST_REQUIRE( !deltas.empty() );
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( track, "MODIFIED" ) );
+
+    for( const PROPERTY_DELTA& delta : deltas )
+        own.back()[ "properties" ].push_back( delta.ToJson() );
+
+    own = nlohmann::json::parse( own.dump() );
+
+    // ...over an older remote deletion.  Every other client applies the deletion and then
+    // finds nothing to change, so the deletion has to win here as well -- and the track
+    // must not be left on the board as a freed object.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( track, "REMOVED" ) );
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, newerOwn, &toolMgr );
+
+    BOOST_CHECK( m_receiving->ResolveItem( id, true ) == nullptr );
+    CheckEveryTrackIsLive( m_receiving.get() );
+}
+
+
+BOOST_AUTO_TEST_CASE( OwnRemoveWinsOverRemoteReAddOfTheSameTrack )
+{
+    PCB_TRACK* twin = nullptr;
+    PCB_TRACK* track = MakeTrackPair( &twin );
+    KIID       id = track->m_Uuid;
+
+    // We deleted it (our REMOVED is the newer op, still in flight)...
+    m_receiving->Remove( twin );
+    delete twin;
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( track, "REMOVED" ) );
+
+    // ...while an older remote op re-adds it in full.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( track, "ADDED" ) );
+    remote.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( track );
+    remote.back()[ "netName" ] = "GND";
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, newerOwn, &toolMgr );
+
+    // The re-add is only staged, not yet on the board, when our deletion is re-asserted;
+    // it must still be dropped, or the track came back on this side only.
+    BOOST_CHECK( m_receiving->ResolveItem( id, true ) == nullptr );
+    CheckEveryTrackIsLive( m_receiving.get() );
 }
 
 

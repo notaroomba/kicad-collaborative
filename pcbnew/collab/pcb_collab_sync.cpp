@@ -41,6 +41,8 @@
 #include <pcb_group.h>
 #include <ki_exception.h>
 #include <netinfo.h>
+#include <algorithm>
+#include <functional>
 #include <map>
 
 #include <pad.h>
@@ -352,9 +354,44 @@ std::string PCB_COLLAB::FormatItemSexpr( const BOARD_ITEM* aItem )
 }
 
 
+namespace
+{
+
+/// The entry staging aItem for the change type aType (CHT_ADD/CHT_REMOVE/CHT_MODIFY), or
+/// nullptr.
+const COMMIT::COMMIT_LINE* stagedEntry( const BOARD_COMMIT& aCommit, const EDA_ITEM* aItem,
+                                        int aType )
+{
+    for( const COMMIT::COMMIT_LINE& entry : aCommit.GetEntries() )
+    {
+        if( entry.m_item == aItem && ( entry.m_type & CHT_TYPE ) == aType )
+            return &entry;
+    }
+
+    return nullptr;
+}
+
+
+/// The entry staging the add of an item with KIID aId, or nullptr.
+const COMMIT::COMMIT_LINE* stagedAddOf( const BOARD_COMMIT& aCommit, const KIID& aId )
+{
+    for( const COMMIT::COMMIT_LINE& entry : aCommit.GetEntries() )
+    {
+        if( ( entry.m_type & CHT_TYPE ) == CHT_ADD && entry.m_item
+            && entry.m_item->m_Uuid == aId )
+        {
+            return &entry;
+        }
+    }
+
+    return nullptr;
+}
+
+} // namespace
+
+
 bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
-                                  BOARD_COMMIT* aCommit, BOARD_ITEM** aRemovedItem,
-                                  KIGFX::PCB_VIEW* aView )
+                                  BOARD_COMMIT* aCommit, KIGFX::PCB_VIEW* aView )
 {
     if( !aBoard || !aChange.is_object() )
         return false;
@@ -379,7 +416,25 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
         if( kind == "REMOVED" )
         {
             if( !item )
+            {
+                // Not on the board, but about to be: an add staged earlier in this same
+                // commit (someone's concurrent re-add, overtaken by this deletion).  Drop
+                // the add rather than let the push revive what was just deleted.
+                if( aCommit )
+                {
+                    if( const COMMIT::COMMIT_LINE* add = stagedAddOf( *aCommit, id ) )
+                    {
+                        EDA_ITEM* orphan = add->m_item;
+
+                        // Staging the removal of a staged add cancels the add
+                        // (COMMIT::Stage); the never-added item is ours to free.
+                        aCommit->Remove( orphan );
+                        delete orphan;
+                    }
+                }
+
                 return true;    // already gone: delete beats concurrent modify (LWW)
+            }
 
             // A removed group must release its members first: their back-
             // pointers would dangle at the deleted group otherwise (IsLocked
@@ -389,10 +444,10 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
 
             if( aCommit )
             {
+                // The push detaches it; ApplyRemoteOp frees what the commit ends up
+                // removing -- which may not be this item, if a newer own change of it
+                // is re-asserted later in the same commit.
                 aCommit->Remove( item );
-
-                if( aRemovedItem )
-                    *aRemovedItem = item;
             }
             else
             {
@@ -536,6 +591,11 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
             if( !item )
                 return true;    // deleted concurrently: no-op (LWW)
 
+            // Staged for removal in this very commit: the deletion wins here too, as it
+            // does on every other client, where the same property edit finds no item.
+            if( aCommit && stagedEntry( *aCommit, item, CHT_REMOVE ) )
+                return true;
+
             std::vector<PROPERTY_RESOLUTION> resolutions;
 
             for( const nlohmann::json& propJson : aChange.value( "properties",
@@ -572,6 +632,126 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
         wxLogTrace( traceCollab, wxS( "ApplyItemChange: malformed change: %s" ),
                     wxString::FromUTF8( e.what() ) );
         return false;
+    }
+}
+
+
+void PCB_COLLAB::ApplyRemoteOp( BOARD* aBoard, const nlohmann::json& aChanges,
+                                const std::vector<const nlohmann::json*>& aNewerOwnChanges,
+                                TOOL_MANAGER* aToolMgr, KIGFX::PCB_VIEW* aView,
+                                const std::function<void( BOARD_ITEM* )>& aBeforeFree )
+{
+    BOARD_COMMIT commit( aToolMgr );
+
+    // Stage one change list.  Some flows (the IPC API among them) express a move as
+    // REMOVED + ADDED of the same id in one batch; applying both would stage the same
+    // live object as both a removal and a modification -- the removal wins and the item
+    // is destroyed.  Collapse the pair: the ADDED alone upserts.  Two passes: a group
+    // change resolves member uuids against the board, so members added in the same
+    // list must land first.
+    auto stage = [&]( const nlohmann::json& aList, const std::set<std::string>* aOnlyIds )
+    {
+        if( !aList.is_array() )
+            return;
+
+        std::set<std::string> reAdded;
+
+        for( const nlohmann::json& change : aList )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
+                reAdded.insert( change.value( "id", "" ) );
+        }
+
+        for( int pass : { 0, 1 } )
+        {
+            for( const nlohmann::json& change : aList )
+            {
+                if( !change.is_object() )
+                    continue;
+
+                bool isGroup = change.contains( "groupMembers" );
+
+                if( ( pass == 1 ) != isGroup )
+                    continue;
+
+                std::string id = change.value( "id", "" );
+
+                if( change.value( "kind", "" ) == "REMOVED" && reAdded.count( id ) )
+                    continue;
+
+                if( aOnlyIds && !aOnlyIds->count( id ) )
+                    continue;
+
+                if( !ApplyItemChange( aBoard, change, &commit, aView )
+                    && wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                {
+                    fprintf( stderr, "COLLAB apply failed: kind=%s type=%s id=%s\n",
+                             change.value( "kind", "?" ).c_str(),
+                             change.value( "typeName", "?" ).c_str(), id.c_str() );
+                }
+            }
+        }
+    };
+
+    stage( aChanges, nullptr );
+
+    // Last-writer-wins repair: every own change list here is provably NEWER than this op.
+    // Re-assert it over the items the op touched, or a concurrent older edit would
+    // clobber ours on our side only and the boards would diverge.  Oldest first, so
+    // where two own edits touch one item the later one is what stands.
+    std::set<std::string> remoteIds;
+
+    if( aChanges.is_array() )
+    {
+        for( const nlohmann::json& change : aChanges )
+        {
+            if( change.is_object() )
+                remoteIds.insert( change.value( "id", "" ) );
+        }
+    }
+
+    for( const nlohmann::json* own : aNewerOwnChanges )
+    {
+        if( own )
+            stage( *own, &remoteIds );
+    }
+
+    // What the push will detach is what the commit ends up staging as a removal -- not
+    // what was asked for along the way: a re-asserted own upsert turns a staged removal
+    // back into a modification and the item stays on the board, and the same item can be
+    // asked for twice.  Freeing by request left freed items in the board's containers.
+    std::vector<BOARD_ITEM*> detached;
+
+    for( const COMMIT::COMMIT_LINE& entry : commit.GetEntries() )
+    {
+        if( ( entry.m_type & CHT_TYPE ) != CHT_REMOVE )
+            continue;
+
+        BOARD_ITEM* item = dynamic_cast<BOARD_ITEM*>( entry.m_item );
+
+        if( item && std::find( detached.begin(), detached.end(), item ) == detached.end() )
+            detached.push_back( item );
+    }
+
+    if( !commit.Empty() )
+        commit.Push( _( "Remote Edit" ), SKIP_UNDO );
+
+    for( BOARD_ITEM* item : detached )
+    {
+        // The push detached removed items from the board, view and selection but did
+        // not free them (SKIP_UNDO).  One it left on the board after all is not ours to
+        // free: a freed item still in the board's containers is a crash in waiting.
+        if( aBoard->ResolveItem( item->m_Uuid, true ) == item )
+        {
+            wxLogTrace( traceCollab, wxS( "ApplyRemoteOp: %s still on the board; not freed" ),
+                        item->m_Uuid.AsString() );
+            continue;
+        }
+
+        if( aBeforeFree )
+            aBeforeFree( item );
+
+        delete item;
     }
 }
 
@@ -839,7 +1019,7 @@ void PCB_COLLAB_SYNC::flushBatch()
 
     session.SendOp( m_docId, clientOpId, baseSeq, m_batch );
 
-    m_unacked[ clientOpId ] = { std::move( m_batch ) };
+    m_unacked[ clientOpId ] = { std::move( m_batch ), ++m_unackedOrder };
     m_batch = nlohmann::json();
 }
 
@@ -1523,7 +1703,7 @@ void PCB_COLLAB_SYNC::OpenJournal( const wxString& aProjectPath, const wxString&
     for( const COLLAB_JOURNAL::ENTRY& entry : m_journal.Pending() )
     {
         if( entry.docId == m_docId )
-            m_unacked[ entry.clientOpId ] = { entry.changes };
+            m_unacked[ entry.clientOpId ] = { entry.changes, ++m_unackedOrder };
     }
 }
 
@@ -1769,126 +1949,36 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     if( m_frame->GetCanvas() )
         view = static_cast<KIGFX::PCB_VIEW*>( m_frame->GetCanvas()->GetView() );
 
-    BOARD_COMMIT             commit( m_frame->GetToolManager() );
-    std::vector<BOARD_ITEM*> removedItems;
-
-    // Some flows (the IPC API among them) express a move as REMOVED + ADDED of
-    // the same id in one batch.  Applying both would stage the same live object
-    // as both a removal and a modification in one commit — the removal wins and
-    // the item is destroyed.  Collapse the pair: the ADDED alone upserts.
-    std::set<std::string> reAddedIds;
-
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
-            reAddedIds.insert( change.value( "id", "" ) );
-    }
-
-    // Two passes: a group change resolves member uuids against the board, so
-    // members added in the same batch must land first.
-    for( int pass : { 0, 1 } )
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        bool isGroup = change.is_object() && change.contains( "groupMembers" );
-
-        if( ( pass == 1 ) != isGroup )
-            continue;
-
-        if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
-            && reAddedIds.count( change.value( "id", "" ) ) )
-        {
-            continue;
-        }
-
-        BOARD_ITEM* removedItem = nullptr;
-
-        if( !PCB_COLLAB::ApplyItemChange( board, change, &commit, &removedItem, view )
-            && wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
-        {
-            fprintf( stderr, "COLLAB apply failed: seq=%lld kind=%s type=%s id=%s\n", aOp.seq,
-                     change.value( "kind", "?" ).c_str(), change.value( "typeName", "?" ).c_str(),
-                     change.value( "id", "?" ).c_str() );
-        }
-
-        if( removedItem )
-            removedItems.push_back( removedItem );
-    }
-
-    // Last-writer-wins repair: acks and broadcasts share one in-order stream, so
-    // any of our ops still unacked here — and any acked with seq > this op's —
-    // is provably NEWER than this remote op.  Re-assert our changes for the
-    // items it touched, or a concurrent older edit would clobber ours on our
-    // side only and the boards would diverge.
-    std::set<std::string> remoteIds;
-
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        if( change.is_object() )
-            remoteIds.insert( change.value( "id", "" ) );
-    }
-
-    auto reassert = [&]( const nlohmann::json& aOwnChanges )
-    {
-        if( !aOwnChanges.is_array() )
-            return;
-
-        // Same collapse as the main loop: a REMOVED+ADDED pair for one id must
-        // not stage the same live object as both a removal and a modification.
-        std::set<std::string> ownReAdded;
-
-        for( const nlohmann::json& change : aOwnChanges )
-        {
-            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
-                ownReAdded.insert( change.value( "id", "" ) );
-        }
-
-        for( int pass : { 0, 1 } )
-        for( const nlohmann::json& change : aOwnChanges )
-        {
-            bool isGroup = change.is_object() && change.contains( "groupMembers" );
-
-            if( ( pass == 1 ) != isGroup )
-                continue;
-
-            if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
-                && ownReAdded.count( change.value( "id", "" ) ) )
-            {
-                continue;
-            }
-
-            if( change.is_object() && remoteIds.count( change.value( "id", "" ) ) )
-            {
-                BOARD_ITEM* removedItem = nullptr;
-                PCB_COLLAB::ApplyItemChange( board, change, &commit, &removedItem, view );
-
-                if( removedItem )
-                    removedItems.push_back( removedItem );
-            }
-        }
-    };
+    // Acks and broadcasts share one in-order stream, so any own op acked with a seq above
+    // this op's -- and any still unacked -- is provably NEWER than this remote op.  Those
+    // are re-asserted over what it touches (see ApplyRemoteOp), oldest first.
+    std::vector<const nlohmann::json*> newerOwn;
 
     for( const auto& [ownSeq, changes] : m_ownRecent )
     {
         if( ownSeq > aOp.seq )
-            reassert( changes );
+            newerOwn.push_back( &changes );
     }
 
-    for( const auto& [clientOpId, unacked] : m_unacked )
-        reassert( unacked.changes );
+    std::vector<const UNACKED*> unacked;
 
-    if( !commit.Empty() )
-        commit.Push( _( "Remote Edit" ), SKIP_UNDO );
+    for( const auto& [clientOpId, op] : m_unacked )
+        unacked.push_back( &op );
 
-    // The push detached removed items from the board, view and selection but did not
-    // free them (SKIP_UNDO).  Scrub the undo/redo stacks before freeing so a later
-    // local undo cannot dereference them.
-    for( BOARD_ITEM* item : removedItems )
-    {
-        KIID uuid = item->m_Uuid;
+    // The map is keyed by clientOpId, whose text order is not send order.
+    std::sort( unacked.begin(), unacked.end(),
+               []( const UNACKED* a, const UNACKED* b ) { return a->order < b->order; } );
 
-        m_frame->PurgeItemFromUndoRedo( uuid );
-        delete item;
-    }
+    for( const UNACKED* op : unacked )
+        newerOwn.push_back( &op->changes );
+
+    PCB_COLLAB::ApplyRemoteOp( board, aOp.changes, newerOwn, m_frame->GetToolManager(), view,
+                               [this]( BOARD_ITEM* aItem )
+                               {
+                                   // Scrub the undo/redo stacks before the item is freed,
+                                   // so a later local undo cannot dereference it.
+                                   m_frame->PurgeItemFromUndoRedo( aItem->m_Uuid );
+                               } );
 
     saveMissingLibraries( aOp.changes );
 }

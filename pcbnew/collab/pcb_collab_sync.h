@@ -20,9 +20,11 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <collab/collab_journal.h>
 #include <kiid.h>
@@ -36,6 +38,7 @@ class BOARD_ITEM;
 class COMMIT;
 class PCB_EDIT_FRAME;
 class PICKED_ITEMS_LIST;
+class TOOL_MANAGER;
 
 namespace KIGFX
 {
@@ -68,17 +71,43 @@ std::string FormatItemSexpr( const BOARD_ITEM* aItem );
  * rewritten.
  *
  * When @p aCommit is provided the mutation is staged through it and the caller
- * pushes (with SKIP_UNDO); a REMOVED item is detached by the push but not freed,
- * so it is returned through @p aRemovedItem for the caller to purge from the undo
- * stacks and delete.  Without a commit the board is mutated directly (headless /
- * QA use) and removed items are freed immediately.
+ * pushes (with SKIP_UNDO) and frees what the push detached -- see ApplyRemoteOp(),
+ * which reads that set off the commit itself.  Without a commit the board is mutated
+ * directly (headless / QA use) and removed items are freed immediately.
+ *
+ * Changes staged in one commit resolve under the same last-writer rules: a REMOVED of
+ * an item the commit is about to add drops that add, and a property-level MODIFIED of
+ * an item the commit is about to remove is a no-op (the deletion wins, as it does on
+ * every other client), while a whole-item upsert of such an item revives it.
  *
  * @param aView the live canvas view, needed to swap child view items on footprint
  *              and table replaces; may be null (headless).
  * @return false when the change is malformed or could not be applied.
  */
 bool ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange, BOARD_COMMIT* aCommit,
-                      BOARD_ITEM** aRemovedItem = nullptr, KIGFX::PCB_VIEW* aView = nullptr );
+                      KIGFX::PCB_VIEW* aView = nullptr );
+
+/**
+ * Apply one remote op to the board in a single commit and free what it removed.
+ *
+ * @p aChanges is the op's change list.  @p aNewerOwnChanges are this client's own change
+ * lists that are provably newer than the op (acked with a higher seq, or still in flight),
+ * oldest first: each is re-applied over the items the op touched, so a concurrent older
+ * remote edit cannot clobber a newer local one on this side only (last writer wins).
+ * Group changes are staged after their members in both lists, since membership resolves
+ * against the board.
+ *
+ * Only what the commit finally stages as a removal is freed, after the push has detached
+ * it, and each item once: a re-asserted own upsert turns a staged removal back into a
+ * modification and leaves the item on the board, and the same item can be named twice.
+ * Freeing by what was *asked* for instead left freed items in the board's containers.
+ * @p aBeforeFree runs for each item about to be freed (the frame purges it from the undo
+ * stacks there).
+ */
+void ApplyRemoteOp( BOARD* aBoard, const nlohmann::json& aChanges,
+                    const std::vector<const nlohmann::json*>& aNewerOwnChanges,
+                    TOOL_MANAGER* aToolMgr, KIGFX::PCB_VIEW* aView = nullptr,
+                    const std::function<void( BOARD_ITEM* )>& aBeforeFree = {} );
 
 } // namespace PCB_COLLAB
 
@@ -227,11 +256,13 @@ private:
     struct UNACKED
     {
         nlohmann::json changes;
+        unsigned       order = 0;   ///< send order (journal first); re-asserts follow it
     };
 
     ///< clientOpId -> sent-but-unacked op. Mirrored to m_journal so edits made
     ///< while offline (or lost to a crash mid-flight) can be replayed.
     std::map<wxString, UNACKED> m_unacked;
+    unsigned                    m_unackedOrder = 0;
 
     ///< Own acked ops kept until lastAppliedSeq passes them, so a concurrent
     ///< remote op with a lower seq cannot clobber our newer edit (LWW).

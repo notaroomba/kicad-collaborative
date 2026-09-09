@@ -50,6 +50,7 @@
 #include <reporter.h>
 #include <sch_symbol.h>
 #include <settings/settings_manager.h>
+#include <tool/tool_manager.h>
 
 #include <nlohmann/json.hpp>
 
@@ -113,6 +114,15 @@ struct COLLAB_SYNC_FIXTURE
         }
 
         return nullptr;
+    }
+
+    ///< Every entry of the screen's RTree must still be a live object: the plot that follows
+    ///< a remote op walks them all, and a freed one there crashed the editor on its first
+    ///< virtual call.  (Run under MallocScribble=1 to make a freed entry fail for certain.)
+    static void CheckEveryItemIsLive( SCH_SCREEN* aScreen )
+    {
+        for( SCH_ITEM* item : aScreen->Items() )
+            BOOST_CHECK( !item->GetClass().IsEmpty() );
     }
 
     ///< Minimal wire-format change object (the fields the apply path consumes).
@@ -805,6 +815,240 @@ BOOST_AUTO_TEST_CASE( ReconnectRejoinsBeforeReplayingAndDoesNotFakeARevocation )
     session.SetStateForTests( COLLAB_SESSION::STATE::DISCONNECTED );
     session.SetProjectId( wxEmptyString );
     session.SetProjectDocs( nlohmann::json::array() );
+}
+
+
+// ---- Remote op application ------------------------------------------------------------------
+//
+// ApplyRemoteOp applies a remote op in one commit and re-asserts this client's provably newer
+// own edits over the items it touched (last writer wins), then frees what the commit removed.
+// The 1.0.6 crash on reopening a project came from freeing what was *asked* to be removed
+// instead: a remote deletion re-asserted over by an own upsert leaves the item on the sheet,
+// and freeing it anyway left a dead pointer in the screen's RTree for the next sheet plot.
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveOverriddenByOwnUpsertKeepsTheItemAlive )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   twin = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( twin );
+
+    KIID id = subject->m_Uuid;
+
+    // Our own newer edit: a whole-item upsert of the symbol at a new position (what a move
+    // journals when no property-level delta describes it).
+    VECTOR2I newPos = subject->GetPosition() + VECTOR2I( 2540, -2540 );
+    subject->SetPosition( newPos );
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( subject, "ADDED" ) );
+    own.back()[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, pathA.LastScreen(),
+                                                          subject );
+
+    // The older remote op deletes that same item.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( subject, "REMOVED" ) );
+
+    TOOL_MANAGER                       toolMgr;
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, screenB, remote, newerOwn, &toolMgr );
+
+    // Last writer wins: the upsert stands, so the item is still on the sheet -- the same
+    // live object, at our position -- and nothing on the sheet is a freed object.
+    SCH_ITEM* survivor = FindTwin( *m_receiving, id, nullptr );
+    BOOST_REQUIRE( survivor );
+    BOOST_CHECK( survivor == twin );
+    BOOST_CHECK( screenB->CheckIfOnDrawList( twin ) );
+    BOOST_CHECK_EQUAL( survivor->GetPosition().x, newPos.x );
+    BOOST_CHECK_EQUAL( survivor->GetPosition().y, newPos.y );
+    CheckEveryItemIsLive( screenB );
+}
+
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveAndOwnRemoveOfTheSameItemFreeItOnce )
+{
+    SCH_SYMBOL* subject = FindAnySymbol( *m_authoring, nullptr );
+    BOOST_REQUIRE( subject );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   twin = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( twin );
+
+    KIID id = subject->m_Uuid;
+
+    // Both sides deleted it; ours is still in flight when the remote deletion lands, so the
+    // same live object is asked to go twice.  It must be freed exactly once (a double free
+    // here aborts the process).
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( subject, "REMOVED" ) );
+
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( subject, "REMOVED" ) );
+
+    TOOL_MANAGER                       toolMgr;
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, screenB, remote, newerOwn, &toolMgr );
+
+    BOOST_CHECK( FindTwin( *m_receiving, id, nullptr ) == nullptr );
+    CheckEveryItemIsLive( screenB );
+}
+
+
+BOOST_AUTO_TEST_CASE( RemoteRemoveWinsOverOwnPropertyEdit )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   twin = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( twin );
+
+    KIID id = subject->m_Uuid;
+
+    // Our own newer edit is a property-level move...
+    VECTOR2I newPos = subject->GetPosition() + VECTOR2I( 5000, 2500 );
+    subject->SetPosition( newPos );
+
+    std::vector<PROPERTY_DELTA> deltas;
+
+    {
+        SHEET_SCOPE scopeA( m_authoring.get(), &pathA );
+        deltas = DiffItemProperties( twin, subject );
+    }
+
+    BOOST_REQUIRE( !deltas.empty() );
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( subject, "MODIFIED" ) );
+
+    for( const PROPERTY_DELTA& delta : deltas )
+        own.back()[ "properties" ].push_back( delta.ToJson() );
+
+    own = nlohmann::json::parse( own.dump() );
+
+    // ...over an older remote deletion.  Every other client applies the deletion and then
+    // finds nothing to move, so the deletion has to win here as well -- and the item must
+    // not be left on the sheet as a freed object.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( subject, "REMOVED" ) );
+
+    TOOL_MANAGER                       toolMgr;
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, screenB, remote, newerOwn, &toolMgr );
+
+    BOOST_CHECK( FindTwin( *m_receiving, id, nullptr ) == nullptr );
+    CheckEveryItemIsLive( screenB );
+}
+
+
+BOOST_AUTO_TEST_CASE( OwnRemoveWinsOverRemoteReAddOfTheSameItem )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   twin = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( twin );
+
+    KIID id = subject->m_Uuid;
+
+    // We deleted it (our REMOVED is the newer op, still in flight)...
+    screenB->Remove( twin );
+    delete twin;
+
+    nlohmann::json own = nlohmann::json::array();
+    own.push_back( MakeChange( subject, "REMOVED" ) );
+
+    // ...while an older remote op re-adds it in full.
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( subject, "ADDED" ) );
+    remote.back()[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, pathA.LastScreen(),
+                                                             subject );
+
+    TOOL_MANAGER                       toolMgr;
+    std::vector<const nlohmann::json*> newerOwn{ &own };
+
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, screenB, remote, newerOwn, &toolMgr );
+
+    // The re-add is only staged, not yet on the sheet, when our deletion is re-asserted;
+    // it must still be dropped, or the item came back on this side only.
+    BOOST_CHECK( FindTwin( *m_receiving, id, nullptr ) == nullptr );
+    CheckEveryItemIsLive( screenB );
+}
+
+
+// The ops since a snapshot are folded into the parsed snapshot copy before the merge.  That
+// copy is a detached scratch screen: the fold must resolve items inside it, never through the
+// hierarchy, which knows only the live sheet and has items of the very same KIIDs.
+BOOST_AUTO_TEST_CASE( SnapshotOpsFoldIntoTheScratchScreenOnly )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+
+    SCH_SCREEN* screenB = nullptr;
+    SCH_ITEM*   live = FindTwin( *m_receiving, subject->m_Uuid, &screenB );
+    BOOST_REQUIRE( live );
+
+    KIID     id = subject->m_Uuid;
+    VECTOR2I livePos = live->GetPosition();
+
+    // The scratch copy: the item parsed into a screen the hierarchy knows nothing about.
+    SCH_SHEET   scratchSheet;
+    SCH_SCREEN* scratch = new SCH_SCREEN( m_receiving.get() );
+    scratchSheet.SetScreen( scratch );
+
+    wxString error;
+    BOOST_REQUIRE_MESSAGE(
+            SCH_COLLAB::ParseIntoScreen(
+                    SCH_COLLAB::FormatItemSexpr( *m_authoring, pathA.LastScreen(), subject ),
+                    scratchSheet, &error ),
+            error );
+
+    auto inScratch = [&]() -> SCH_ITEM*
+    {
+        for( SCH_ITEM* item : scratch->Items() )
+        {
+            if( item->m_Uuid == id )
+                return item;
+        }
+
+        return nullptr;
+    };
+
+    BOOST_REQUIRE( inScratch() );
+
+    // A server-side deletion folded into the scratch copy leaves the live sheet alone...
+    nlohmann::json removal = MakeChange( subject, "REMOVED" );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, scratch, removal, nullptr, true ) );
+    BOOST_CHECK( inScratch() == nullptr );
+    BOOST_CHECK( FindTwin( *m_receiving, id, nullptr ) == live );
+    BOOST_CHECK( screenB->CheckIfOnDrawList( live ) );
+
+    // ...and a server-side upsert lands in the scratch copy, not on the live item.
+    VECTOR2I moved = subject->GetPosition() + VECTOR2I( 5080, 0 );
+    subject->SetPosition( moved );
+
+    nlohmann::json upsert = MakeChange( subject, "ADDED" );
+    upsert[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, pathA.LastScreen(), subject );
+
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, scratch, upsert, nullptr, true ) );
+
+    SCH_ITEM* rebuilt = inScratch();
+    BOOST_REQUIRE( rebuilt );
+    BOOST_CHECK_EQUAL( rebuilt->GetPosition().x, moved.x );
+    BOOST_CHECK_EQUAL( rebuilt->GetPosition().y, moved.y );
+    BOOST_CHECK_EQUAL( live->GetPosition().x, livePos.x );
+    BOOST_CHECK_EQUAL( live->GetPosition().y, livePos.y );
+    CheckEveryItemIsLive( screenB );
 }
 
 
