@@ -11,6 +11,7 @@ use zip::write::SimpleFileOptions;
 
 use crate::auth::{self, AuthUser};
 use crate::error::{AppError, AppResult};
+use crate::lenient_json::LenientJson;
 use crate::persist;
 use crate::AppState;
 
@@ -186,7 +187,7 @@ pub async fn update_project(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<UpdateProjectRequest>,
+    LenientJson(req): LenientJson<UpdateProjectRequest>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
@@ -758,7 +759,7 @@ pub async fn create_comment(
     State(state): State<AppState>,
     auth::MaybeAuthUser(user): auth::MaybeAuthUser,
     Path(doc_id): Path<Uuid>,
-    Json(req): Json<NewCommentRequest>,
+    LenientJson(req): LenientJson<NewCommentRequest>,
 ) -> AppResult<Response> {
     let (_, user) = comment_access(&state, user, doc_id, true).await?;
     let user = user.ok_or(AppError::Forbidden)?;
@@ -798,7 +799,7 @@ pub async fn update_comment(
     State(state): State<AppState>,
     auth::MaybeAuthUser(user): auth::MaybeAuthUser,
     Path(id): Path<i64>,
-    Json(req): Json<UpdateCommentRequest>,
+    LenientJson(req): LenientJson<UpdateCommentRequest>,
 ) -> AppResult<Response> {
     let comment = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     let (doc, user) = comment_access(&state, user, comment.doc_id, true).await?;
@@ -965,7 +966,7 @@ pub async fn create_link(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<CreateLinkRequest>,
+    LenientJson(req): LenientJson<CreateLinkRequest>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
@@ -1100,7 +1101,7 @@ pub async fn invite(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<InviteRequest>,
+    LenientJson(req): LenientJson<InviteRequest>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
@@ -1290,7 +1291,7 @@ pub async fn create_doc(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<NewDocRequest>,
+    LenientJson(req): LenientJson<NewDocRequest>,
 ) -> AppResult<Response> {
     let role = persist::effective_role(&state.pool, user.id, id)
         .await?
@@ -1403,7 +1404,7 @@ pub async fn create_checkpoint(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<CheckpointRequest>,
+    LenientJson(req): LenientJson<CheckpointRequest>,
 ) -> AppResult<Response> {
     let role = persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
     if role != "editor" {
@@ -1470,7 +1471,7 @@ pub async fn restore_checkpoint(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<CheckpointRequest>,
+    LenientJson(req): LenientJson<CheckpointRequest>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
