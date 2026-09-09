@@ -2,6 +2,7 @@ mod auth;
 mod doc_actor;
 mod error;
 mod http;
+mod lenient_json;
 mod pages;
 mod persist;
 mod registry;
