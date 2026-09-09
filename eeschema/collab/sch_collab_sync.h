@@ -20,10 +20,12 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <collab/collab_journal.h>
 #include <kiid.h>
@@ -40,6 +42,7 @@ class SCH_SCREEN;
 class COLLAB_DOC_ADAPTER;
 class SCHEMATIC;
 class SCH_SHEET;
+class TOOL_MANAGER;
 
 namespace SCH_COLLAB
 {
@@ -79,15 +82,46 @@ bool ParseIntoScreen( const std::string& aText, SCH_SHEET& aSheet, wxString* aEr
  * UUID is a silent no-op.  UUIDs are never rewritten.
  *
  * When @p aCommit is provided the mutation is staged through it and the caller is
- * responsible for pushing (with SKIP_UNDO | SKIP_CLEANUP); a REMOVED item is detached
- * by the push but not freed, so it is returned through @p aRemovedItem for the caller
- * to purge from the undo stacks and delete.  Without a commit the screen is mutated
- * directly (headless / QA use) and removed items are freed immediately.
+ * responsible for pushing (with SKIP_UNDO | SKIP_CLEANUP) and for freeing what the push
+ * detached -- see ApplyRemoteOp(), which reads that set off the commit itself.  Without a
+ * commit the screen is mutated directly (headless / QA use) and removed items are freed
+ * immediately.
+ *
+ * Items are found by KIID through the schematic's hierarchy, so the change lands on the
+ * live document even when @p aScreen is somewhere else.  With @p aResolveInScreen the
+ * lookup is confined to @p aScreen instead: the mode for a detached scratch screen (a
+ * parsed snapshot being brought up to date), which the hierarchy knows nothing about and
+ * whose items must not be confused with the live ones of the same KIID.
+ *
+ * Changes staged in one commit resolve under the same last-writer rules: a REMOVED of an
+ * item the commit is about to add drops that add, and a property-level MODIFIED of an item
+ * the commit is about to remove is a no-op (the deletion wins, as it does on every other
+ * client), while a whole-item upsert of such an item revives it.
  *
  * @return false when the change is malformed or could not be applied.
  */
 bool ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, const nlohmann::json& aChange,
-                      SCH_COMMIT* aCommit, SCH_ITEM** aRemovedItem = nullptr );
+                      SCH_COMMIT* aCommit, bool aResolveInScreen = false );
+
+/**
+ * Apply one remote op to the live document in a single commit and free what it removed.
+ *
+ * @p aChanges is the op's change list.  @p aNewerOwnChanges are this client's own change
+ * lists that are provably newer than the op (acked with a higher seq, or still in flight),
+ * oldest first: each is re-applied over the items the op touched, so a concurrent older
+ * remote edit cannot clobber a newer local one on this side only (last writer wins).
+ *
+ * Only what the commit finally stages as a removal is freed, after the push has detached
+ * it, and each item once: a re-asserted own upsert turns a staged removal back into a
+ * modification and leaves the item on the sheet, and the same item can be named twice.
+ * Freeing by what was *asked* for instead left freed items in the screen's RTree, where
+ * the next sheet plot walked them.  @p aBeforeFree runs for each item about to be freed
+ * (the frame purges it from the undo stacks there).
+ */
+void ApplyRemoteOp( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, const nlohmann::json& aChanges,
+                    const std::vector<const nlohmann::json*>& aNewerOwnChanges,
+                    TOOL_MANAGER* aToolMgr,
+                    const std::function<void( SCH_ITEM* )>& aBeforeFree = {} );
 
 /**
  * The server project id a session must be left with once @p aProject has been folded in.
@@ -283,11 +317,13 @@ private:
     {
         wxString       docId;
         nlohmann::json changes;
+        unsigned       order = 0;   ///< send order (journal first); re-asserts follow it
     };
 
     ///< clientOpId -> sent-but-unacked op. Mirrored to m_journal so edits made
     ///< while offline (or lost to a crash mid-flight) can be replayed.
     std::map<wxString, UNACKED> m_unacked;
+    unsigned                    m_unackedOrder = 0;
 
     ///< docId -> (seq -> changes): own acked ops kept until lastAppliedSeq passes
     ///< them, so a concurrent remote op with a lower seq cannot clobber our newer

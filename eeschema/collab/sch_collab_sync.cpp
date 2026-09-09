@@ -19,6 +19,8 @@
 
 #include "sch_collab_sync.h"
 
+#include <algorithm>
+#include <functional>
 #include <set>
 
 #include <collab/collab_auth.h>
@@ -243,6 +245,50 @@ SCH_ITEM* parseItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aDestScreen,
 }
 
 
+/// The top-level item of aScreen with KIID aId, or nullptr.
+SCH_ITEM* findInScreen( SCH_SCREEN* aScreen, const KIID& aId )
+{
+    for( SCH_ITEM* item : aScreen->Items() )
+    {
+        if( item->m_Uuid == aId )
+            return item;
+    }
+
+    return nullptr;
+}
+
+
+/// The entry staging aItem for the change type aType (CHT_ADD/CHT_REMOVE/CHT_MODIFY), or
+/// nullptr.
+const COMMIT::COMMIT_LINE* stagedEntry( const SCH_COMMIT& aCommit, const EDA_ITEM* aItem,
+                                        int aType )
+{
+    for( const COMMIT::COMMIT_LINE& entry : aCommit.GetEntries() )
+    {
+        if( entry.m_item == aItem && ( entry.m_type & CHT_TYPE ) == aType )
+            return &entry;
+    }
+
+    return nullptr;
+}
+
+
+/// The entry staging the add of an item with KIID aId, or nullptr.
+const COMMIT::COMMIT_LINE* stagedAddOf( const SCH_COMMIT& aCommit, const KIID& aId )
+{
+    for( const COMMIT::COMMIT_LINE& entry : aCommit.GetEntries() )
+    {
+        if( ( entry.m_type & CHT_TYPE ) == CHT_ADD && entry.m_item
+            && entry.m_item->m_Uuid == aId )
+        {
+            return &entry;
+        }
+    }
+
+    return nullptr;
+}
+
+
 const char* changeKindWireString( CHANGE_KIND aKind )
 {
     // The server validates against upper-case spellings; the in-tree
@@ -304,9 +350,12 @@ std::string SCH_COLLAB::FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScr
 
 bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                                   const nlohmann::json& aChange, SCH_COMMIT* aCommit,
-                                  SCH_ITEM** aRemovedItem )
+                                  bool aResolveInScreen )
 {
     if( !aChange.is_object() )
+        return false;
+
+    if( aResolveInScreen && !aScreen )
         return false;
 
     try
@@ -318,7 +367,8 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
         if( !aSchematic.HasHierarchy() )
             aSchematic.RefreshHierarchy();
 
-        SCH_ITEM* item = aSchematic.ResolveItem( id, nullptr, true );
+        SCH_ITEM* item = aResolveInScreen ? findInScreen( aScreen, id )
+                                          : aSchematic.ResolveItem( id, nullptr, true );
 
         // Ops address top-level screen items only; a hit on a child (field, pin) means
         // a malformed or unsupported op.
@@ -334,14 +384,33 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
         if( kind == "REMOVED" )
         {
             if( !item )
+            {
+                // Not on the sheet, but about to be: an add staged earlier in this same
+                // commit (someone's concurrent re-add, overtaken by this deletion).  Drop
+                // the add rather than let the push revive what was just deleted.
+                if( aCommit )
+                {
+                    if( const COMMIT::COMMIT_LINE* add = stagedAddOf( *aCommit, id ) )
+                    {
+                        EDA_ITEM*    orphan = add->m_item;
+                        BASE_SCREEN* addScreen = add->m_screen;
+
+                        // Staging the removal of a staged add cancels the add
+                        // (COMMIT::Stage); the never-appended item is ours to free.
+                        aCommit->Remove( orphan, addScreen );
+                        delete orphan;
+                    }
+                }
+
                 return true;    // already gone: delete beats concurrent modify (LWW)
+            }
 
             if( aCommit )
             {
+                // The push detaches it; ApplyRemoteOp frees what the commit ends up
+                // removing -- which may not be this item, if a newer own change of it
+                // is re-asserted later in the same commit.
                 aCommit->Remove( item, screen );
-
-                if( aRemovedItem )
-                    *aRemovedItem = item;
             }
             else
             {
@@ -445,6 +514,11 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             if( !item )
                 return true;    // deleted concurrently: no-op (LWW)
 
+            // Staged for removal in this very commit: the deletion wins here too, as it
+            // does on every other client, where the same property edit finds no item.
+            if( aCommit && stagedEntry( *aCommit, item, CHT_REMOVE ) )
+                return true;
+
             std::vector<PROPERTY_RESOLUTION> resolutions;
 
             for( const nlohmann::json& propJson : aChange.value( "properties",
@@ -494,6 +568,117 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
         wxLogTrace( traceCollab, wxS( "ApplyItemChange: malformed change: %s" ),
                     wxString::FromUTF8( e.what() ) );
         return false;
+    }
+}
+
+
+void SCH_COLLAB::ApplyRemoteOp( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
+                                const nlohmann::json& aChanges,
+                                const std::vector<const nlohmann::json*>& aNewerOwnChanges,
+                                TOOL_MANAGER* aToolMgr,
+                                const std::function<void( SCH_ITEM* )>& aBeforeFree )
+{
+    SCH_COMMIT commit( aToolMgr );
+
+    // Stage one change list.  A REMOVED + ADDED pair for the same id in one list would
+    // stage the same live object as both a removal and a modification -- the removal
+    // wins and the item is destroyed.  Collapse: the ADDED alone upserts.
+    auto stage = [&]( const nlohmann::json& aList, const std::set<std::string>* aOnlyIds )
+    {
+        if( !aList.is_array() )
+            return;
+
+        std::set<std::string> reAdded;
+
+        for( const nlohmann::json& change : aList )
+        {
+            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
+                reAdded.insert( change.value( "id", "" ) );
+        }
+
+        for( const nlohmann::json& change : aList )
+        {
+            if( !change.is_object() )
+                continue;
+
+            std::string id = change.value( "id", "" );
+
+            if( change.value( "kind", "" ) == "REMOVED" && reAdded.count( id ) )
+                continue;
+
+            if( aOnlyIds && !aOnlyIds->count( id ) )
+                continue;
+
+            ApplyItemChange( aSchematic, aScreen, change, &commit );
+        }
+    };
+
+    stage( aChanges, nullptr );
+
+    // Last-writer-wins repair: every own change list here is provably NEWER than this op.
+    // Re-assert it over the items the op touched, or a concurrent older edit would
+    // clobber ours on our side only and the documents would diverge.  Oldest first, so
+    // where two own edits touch one item the later one is what stands.
+    std::set<std::string> remoteIds;
+
+    if( aChanges.is_array() )
+    {
+        for( const nlohmann::json& change : aChanges )
+        {
+            if( change.is_object() )
+                remoteIds.insert( change.value( "id", "" ) );
+        }
+    }
+
+    for( const nlohmann::json* own : aNewerOwnChanges )
+    {
+        if( own )
+            stage( *own, &remoteIds );
+    }
+
+    // What the push will detach is what the commit ends up staging as a removal -- not
+    // what was asked for along the way: a re-asserted own upsert turns a staged removal
+    // back into a modification and the item stays on the sheet, and the same item can be
+    // asked for twice.  Freeing by request left freed items in the screen's RTree, and
+    // the next sheet plot walked them.
+    std::vector<std::pair<SCH_ITEM*, SCH_SCREEN*>> detached;
+
+    for( const COMMIT::COMMIT_LINE& entry : commit.GetEntries() )
+    {
+        if( ( entry.m_type & CHT_TYPE ) != CHT_REMOVE )
+            continue;
+
+        SCH_ITEM* item = dynamic_cast<SCH_ITEM*>( entry.m_item );
+
+        if( !item )
+            continue;
+
+        bool seen = std::any_of( detached.begin(), detached.end(),
+                                 [&]( const auto& aPair ) { return aPair.first == item; } );
+
+        if( !seen )
+            detached.emplace_back( item, dynamic_cast<SCH_SCREEN*>( entry.m_screen ) );
+    }
+
+    if( !commit.Empty() )
+        commit.Push( _( "Remote Edit" ), SKIP_UNDO | SKIP_CLEANUP );
+
+    for( const auto& [item, screen] : detached )
+    {
+        // The push detached removed items from the screen, view and selection but did
+        // not free them (SKIP_UNDO).  One it left on its screen after all is not ours to
+        // free: a freed item still in the RTree is a crash in waiting.
+        if( screen && screen->CheckIfOnDrawList( item ) )
+        {
+            wxLogTrace( traceCollab, wxS( "ApplyRemoteOp: %s still on its screen; not freed" ),
+                        item->m_Uuid.AsString() );
+            continue;
+        }
+
+        if( aBeforeFree )
+            aBeforeFree( item );
+
+        delete item;
     }
 }
 
@@ -794,7 +979,7 @@ void SCH_COLLAB_SYNC::flushBatch()
 
         session.SendOp( docId, clientOpId, baseSeq, changes );
 
-        m_unacked[ clientOpId ] = { docId, std::move( changes ) };
+        m_unacked[ clientOpId ] = { docId, std::move( changes ), ++m_unackedOrder };
     }
 
     m_batch.clear();
@@ -1038,7 +1223,7 @@ void SCH_COLLAB_SYNC::OpenJournal( const wxString& aProjectPath, const wxString&
     // the next connection replays it. The server dedups by clientOpId, so a
     // replay of something it already has is harmless.
     for( const COLLAB_JOURNAL::ENTRY& entry : m_journal.Pending() )
-        m_unacked[ entry.clientOpId ] = { entry.docId, entry.changes };
+        m_unacked[ entry.clientOpId ] = { entry.docId, entry.changes, ++m_unackedOrder };
 }
 
 
@@ -1099,7 +1284,11 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
         return;
 
     // The server's truth is the snapshot plus every op since it; fold those in
-    // headlessly so the merge sees one consistent online state.
+    // headlessly so the merge sees one consistent online state.  Resolve within the
+    // scratch screen only: the hierarchy lookup found the live items of the same KIIDs
+    // and applied the server's ops to the open sheet instead -- deleting live items
+    // behind the view's back, and leaving the scratch copy without the deletions so the
+    // merge then resurrected what the server had removed.
     if( aThenOps.is_array() )
     {
         for( const nlohmann::json& opJson : aThenOps )
@@ -1107,7 +1296,8 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
             for( const nlohmann::json& change :
                  opJson.value( "changes", nlohmann::json::array() ) )
             {
-                SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), serverScreen, change, nullptr );
+                SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), serverScreen, change, nullptr,
+                                             true );
             }
         }
     }
@@ -1757,110 +1947,40 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
 
     APPLYING_REMOTE_SCOPE applying( m_applyingRemote );
 
-    SCH_COMMIT             commit( m_frame->GetToolManager() );
-    std::vector<SCH_ITEM*> removedItems;
-
-    // A REMOVED + ADDED pair for the same id in one batch would stage the same
-    // live object as both a removal and a modification in one commit — the
-    // removal wins and the item is destroyed.  Collapse: the ADDED alone upserts.
-    std::set<std::string> reAddedIds;
-
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
-            reAddedIds.insert( change.value( "id", "" ) );
-    }
-
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
-            && reAddedIds.count( change.value( "id", "" ) ) )
-        {
-            continue;
-        }
-
-        SCH_ITEM* removedItem = nullptr;
-
-        SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), screen, change, &commit,
-                                     &removedItem );
-
-        if( removedItem )
-            removedItems.push_back( removedItem );
-    }
-
-    // Last-writer-wins repair: acks and broadcasts share one in-order stream, so
-    // any of our ops still unacked here — and any acked with seq > this op's —
-    // is provably NEWER than this remote op.  Re-assert our changes for the
-    // items it touched, or a concurrent older edit would clobber ours on our
-    // side only and the documents would diverge.
-    std::set<std::string> remoteIds;
-
-    for( const nlohmann::json& change : aOp.changes )
-    {
-        if( change.is_object() )
-            remoteIds.insert( change.value( "id", "" ) );
-    }
-
-    auto reassert = [&]( const nlohmann::json& aOwnChanges )
-    {
-        if( !aOwnChanges.is_array() )
-            return;
-
-        // Same collapse as the main loop: a REMOVED+ADDED pair for one id must
-        // not stage the same live object as both a removal and a modification.
-        std::set<std::string> ownReAdded;
-
-        for( const nlohmann::json& change : aOwnChanges )
-        {
-            if( change.is_object() && change.value( "kind", "" ) == "ADDED" )
-                ownReAdded.insert( change.value( "id", "" ) );
-        }
-
-        for( const nlohmann::json& change : aOwnChanges )
-        {
-            if( change.is_object() && change.value( "kind", "" ) == "REMOVED"
-                && ownReAdded.count( change.value( "id", "" ) ) )
-            {
-                continue;
-            }
-
-            if( change.is_object() && remoteIds.count( change.value( "id", "" ) ) )
-            {
-                SCH_ITEM* removedItem = nullptr;
-                SCH_COLLAB::ApplyItemChange( m_frame->Schematic(), screen, change, &commit,
-                                             &removedItem );
-
-                if( removedItem )
-                    removedItems.push_back( removedItem );
-            }
-        }
-    };
+    // Acks and broadcasts share one in-order stream, so any own op acked with a seq above
+    // this op's -- and any still unacked -- is provably NEWER than this remote op.  Those
+    // are re-asserted over what it touches (see ApplyRemoteOp), oldest first.
+    std::vector<const nlohmann::json*> newerOwn;
 
     for( const auto& [ownSeq, changes] : m_ownRecent[ aOp.docId ] )
     {
         if( ownSeq > aOp.seq )
-            reassert( changes );
+            newerOwn.push_back( &changes );
     }
 
-    for( const auto& [clientOpId, unacked] : m_unacked )
+    std::vector<const UNACKED*> unacked;
+
+    for( const auto& [clientOpId, op] : m_unacked )
     {
-        if( unacked.docId == aOp.docId )
-            reassert( unacked.changes );
+        if( op.docId == aOp.docId )
+            unacked.push_back( &op );
     }
 
-    if( !commit.Empty() )
-        commit.Push( _( "Remote Edit" ), SKIP_UNDO | SKIP_CLEANUP );
+    // The map is keyed by clientOpId, whose text order is not send order.
+    std::sort( unacked.begin(), unacked.end(),
+               []( const UNACKED* a, const UNACKED* b ) { return a->order < b->order; } );
 
-    // The push detached removed items from the screen, view and selection but did not
-    // free them (SKIP_UNDO).  Scrub the undo/redo stacks before freeing so a later
-    // local undo cannot dereference them.
-    for( SCH_ITEM* item : removedItems )
-    {
-        KIID uuid = item->m_Uuid;
+    for( const UNACKED* op : unacked )
+        newerOwn.push_back( &op->changes );
 
-        m_frame->PurgeItemFromUndoRedo( uuid );
-        delete item;
-    }
+    SCH_COLLAB::ApplyRemoteOp( m_frame->Schematic(), screen, aOp.changes, newerOwn,
+                               m_frame->GetToolManager(),
+                               [this]( SCH_ITEM* aItem )
+                               {
+                                   // Scrub the undo/redo stacks before the item is freed,
+                                   // so a later local undo cannot dereference it.
+                                   m_frame->PurgeItemFromUndoRedo( aItem->m_Uuid );
+                               } );
 
     saveMissingLibraries( aOp.changes );
     ensureSheetDocs( aOp.docId, aOp.changes, false );

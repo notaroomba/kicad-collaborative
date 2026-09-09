@@ -71,6 +71,17 @@ static std::optional<nlohmann::json> performJson( KICAD_CURL_EASY& aCurl )
 }
 
 
+/// Attach a JSON request body.  The label matters as much as the bytes: the server's JSON
+/// extractor answers 415 to anything but application/json, and libcurl's default label for a
+/// POST body is application/x-www-form-urlencoded -- checkpoints, restores, comments and new
+/// sheet docs all failed on exactly that while the requests that set the header worked.
+static void setJsonBody( KICAD_CURL_EASY& aCurl, const nlohmann::json& aBody )
+{
+    aCurl.SetHeader( "Content-Type", "application/json" );
+    aCurl.SetPostFields( aBody.dump() );
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::ClaimLink( const wxString& aServerUrl,
                                                       const wxString& aToken,
                                                       const wxString& aLinkToken )
@@ -141,8 +152,7 @@ std::optional<nlohmann::json> COLLAB_REST::CreateShareLink( const wxString& aSer
         { "role", aRole.ToStdString( wxConvUTF8 ) },
     };
 
-    curl.SetHeader( "Content-Type", "application/json" );
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -229,8 +239,7 @@ bool COLLAB_REST::RenameProject( const wxString& aServerUrl, const wxString& aTo
 
     nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
 
-    curl.SetHeader( "Content-Type", "application/json" );
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
     curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
 
     return performOk( curl );
@@ -245,8 +254,7 @@ bool COLLAB_REST::SetProjectPublic( const wxString& aServerUrl, const wxString& 
 
     nlohmann::json body = { { "public", aPublic } };
 
-    curl.SetHeader( "Content-Type", "application/json" );
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
     curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
 
     return performOk( curl );
@@ -289,8 +297,7 @@ std::optional<nlohmann::json> COLLAB_REST::Invite( const wxString& aServerUrl,
     else if( !aEmail.IsEmpty() )
         body[ "email" ] = aEmail.ToStdString( wxConvUTF8 );
 
-    curl.SetHeader( "Content-Type", "application/json" );
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -348,7 +355,7 @@ std::optional<nlohmann::json> COLLAB_REST::CreateDoc( const wxString& aServerUrl
                   aToken );
 
     nlohmann::json body = { { "path", aPath.ToStdString( wxConvUTF8 ) } };
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -411,7 +418,7 @@ std::optional<nlohmann::json> COLLAB_REST::CreateCheckpoint( const wxString& aSe
                   aToken );
 
     nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -427,7 +434,7 @@ std::optional<nlohmann::json> COLLAB_REST::RestoreCheckpoint( const wxString& aS
                   aToken );
 
     nlohmann::json body = { { "name", aName.ToStdString( wxConvUTF8 ) } };
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -463,7 +470,7 @@ std::optional<nlohmann::json> COLLAB_REST::CreateComment( const wxString& aServe
         body[ "y" ] = aY;
     }
 
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
 
     return performJson( curl );
 }
@@ -479,7 +486,7 @@ bool COLLAB_REST::SetCommentResolved( const wxString& aServerUrl, const wxString
                   aToken );
 
     nlohmann::json body = { { "resolved", aResolved } };
-    curl.SetPostFields( body.dump() );
+    setJsonBody( curl, body );
     curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PATCH" );
 
     return performJson( curl ).has_value();
