@@ -32,6 +32,7 @@
 #include <settings/settings_manager.h>
 #include <tool/tool_manager.h>
 #include <kiplatform/ui.h>
+#include <widgets/ui_common.h>
 #include <widgets/unit_binder.h>
 
 #include <wx/display.h>
@@ -201,6 +202,10 @@ DIALOG_SHIM::DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& titl
 DIALOG_SHIM::~DIALOG_SHIM()
 {
     m_isClosing = true;
+
+    // A drop-down still open here would be hidden from inside its combo's base-class
+    // destructor, too late for the kill-focus that provokes (see KIUI::DismissComboPopups).
+    KIUI::DismissComboPopups( this, false );
 
     Unbind( wxEVT_CLOSE_WINDOW, &DIALOG_SHIM::OnCloseWindow, this );
     Unbind( wxEVT_BUTTON, &DIALOG_SHIM::OnButton, this );
@@ -585,6 +590,10 @@ bool DIALOG_SHIM::Show( bool show )
         if ( m_eventLoop )
             m_eventLoop->Exit( GetReturnCode() );   // Needed for APP-MODAL dlgs on OSX
 #endif
+
+        // Ending a dialog (EndModal comes through here) with a combo's list dropped down
+        // left that list floating over a hidden dialog, to be torn down with it.
+        KIUI::DismissComboPopups( this, false );
 
         ret = wxDialog::Show( show );
 
@@ -1903,6 +1912,13 @@ void DIALOG_SHIM::OnCharHook( wxKeyEvent& aEvt )
     else if( aEvt.GetKeyCode() == WXK_ESCAPE )
     {
         wxObject* eventSource = aEvt.GetEventObject();
+
+        // An open drop-down list takes the first Escape, as it does everywhere else; the
+        // char hook reaches the dialog ahead of the combo when the list's own window did
+        // not take the keyboard (macOS), and closing the dialog under an open list is
+        // how the symbol chooser used to crash.
+        if( KIUI::DismissComboPopups( this, true ) )
+            return;
 
         if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( eventSource ) )
         {

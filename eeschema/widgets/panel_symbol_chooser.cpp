@@ -30,6 +30,7 @@
 #include <widgets/symbol_preview_widget.h>
 #include <widgets/footprint_preview_widget.h>
 #include <widgets/footprint_select_widget.h>
+#include <widgets/ui_common.h>
 #include <settings/settings_manager.h>
 #include <project/project_file.h>
 #include <eeschema_settings.h>
@@ -347,6 +348,13 @@ void PANEL_SYMBOL_CHOOSER::OnChar( wxKeyEvent& aEvent )
     if( aEvent.GetKeyCode() == WXK_ESCAPE )
     {
         wxObject* eventSource = aEvent.GetEventObject();
+
+        // With the footprint list dropped down, Escape closes the list, not the chooser.
+        // This runs ahead of DIALOG_SHIM's own hook, so the rule has to live here too;
+        // ending the dialog under the open list tore it down with the list still up and
+        // crashed the editor (macOS).
+        if( KIUI::DismissComboPopups( wxGetTopLevelParent( this ), true ) )
+            return;
 
         if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( eventSource ) )
         {
