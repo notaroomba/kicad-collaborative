@@ -126,6 +126,22 @@ KICOMMON_API bool IsInputControlEditable( wxWindow* aControl );
 KICOMMON_API bool IsModalDialogFocused();
 
 /**
+ * Close the drop-down list of every wxComboCtrl under @p aRoot (itself included) that
+ * currently has it open.
+ *
+ * Call it before a window holding such controls is hidden or destroyed.  A drop-down is
+ * a separate top-level window whose list keeps keyboard focus; if it is still open when
+ * its combo is torn down, wxWidgets only hides it from inside the combo's base-class
+ * destructor, and the kill-focus that hiding provokes then measures rows through a combo
+ * that no longer is one -- the symbol chooser crashed on macOS on exactly that whenever
+ * Escape closed it with the footprint list dropped down.
+ *
+ * @param aGenerateEvent whether the combos send their usual close-up event.
+ * @return true if any drop-down was open.
+ */
+KICOMMON_API bool DismissComboPopups( wxWindow* aRoot, bool aGenerateEvent );
+
+/**
  * Makes a window read-only.  Does some extra work over wxWindow::Disable() to make sure you
  * can still scroll around in sub-windows.
  */

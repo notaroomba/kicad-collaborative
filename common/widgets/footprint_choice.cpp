@@ -35,6 +35,12 @@ FOOTPRINT_CHOICE::FOOTPRINT_CHOICE( wxWindow* aParent, int aId ) :
 
 FOOTPRINT_CHOICE::~FOOTPRINT_CHOICE()
 {
+    // Take the list down while this is still a whole owner-drawn combo.  Left to
+    // wxComboCtrlBase's destructor, the hide arrives after this class and
+    // wxOwnerDrawnComboBox are gone, and the kill-focus it provokes measures rows through
+    // OnMeasureItem() on what no longer has one.
+    if( IsPopupShown() )
+        HidePopup( false );
 }
 
 

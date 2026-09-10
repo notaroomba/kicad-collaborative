@@ -20,6 +20,7 @@
 #include <wx/dcclient.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
+#include <wx/combo.h>
 #include <wx/menu.h>
 #include <wx/menuitem.h>
 #include <wx/listbox.h>
@@ -326,6 +327,33 @@ bool KIUI::IsInputControlEditable( wxWindow* aFocus )
 bool KIUI::IsModalDialogFocused()
 {
     return !Pgm().m_ModalDialogs.empty();
+}
+
+
+bool KIUI::DismissComboPopups( wxWindow* aRoot, bool aGenerateEvent )
+{
+    if( !aRoot )
+        return false;
+
+    bool dismissed = false;
+
+    if( wxComboCtrlBase* combo = dynamic_cast<wxComboCtrlBase*>( aRoot ) )
+    {
+        if( combo->IsPopupShown() )
+        {
+            combo->HidePopup( aGenerateEvent );
+            dismissed = true;
+        }
+    }
+
+    // Hiding a drop-down moves focus around; walk a copy so nothing that does to the
+    // child list can disturb the iteration.
+    wxWindowList children = aRoot->GetChildren();
+
+    for( wxWindow* child : children )
+        dismissed |= DismissComboPopups( child, aGenerateEvent );
+
+    return dismissed;
 }
 
 
