@@ -137,6 +137,11 @@ KICOMMON_API void        WriteSyncBase( const wxString& aProjectPath, const wxSt
 KICOMMON_API std::string ReadSyncBase( const wxString& aProjectPath, const wxString& aProjectName,
                                        const wxString& aRelPath );
 
+/// Where the base of aRelPath lives on disk (<project>.collab/base/<aRelPath>), or empty for
+/// a path that climbs out of the project.
+KICOMMON_API wxString SyncBasePath( const wxString& aProjectPath, const wxString& aProjectName,
+                                    const wxString& aRelPath );
+
 /// Copy the document on disk at aRelPath into its base (after a save while in sync).
 KICOMMON_API void RefreshSyncBaseFromDisk( const wxString& aProjectPath,
                                            const wxString& aProjectName,

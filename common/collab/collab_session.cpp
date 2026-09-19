@@ -715,6 +715,9 @@ void COLLAB_SESSION::ClampPresence( nlohmann::json& aState )
     for( size_t keep : { 50u, 20u, 0u } )
     {
         trim( "ghost", keep );
+        trim( "dragLines", keep );
+        trim( "children", keep );
+        trim( "dragAdded", keep );
 
         if( aState.dump().size() <= BUDGET )
             return;

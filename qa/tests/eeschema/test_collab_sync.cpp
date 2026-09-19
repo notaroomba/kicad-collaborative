@@ -49,6 +49,7 @@
 #include <sch_sheet_path.h>
 #include <reporter.h>
 #include <sch_symbol.h>
+#include <sch_line.h>
 #include <settings/settings_manager.h>
 #include <tool/tool_manager.h>
 
@@ -254,6 +255,200 @@ BOOST_AUTO_TEST_CASE( ModifiedPropertiesConverge )
 
     BOOST_CHECK_EQUAL( twin->GetPosition().x, newPos.x );
     BOOST_CHECK_EQUAL( twin->GetPosition().y, newPos.y );
+}
+
+
+BOOST_AUTO_TEST_CASE( StretchedWireAndNewBendConvergeAndUndo )
+{
+    // Root() is the virtual container; RootScreen() is the sheet the hierarchy walks.
+    SCH_SCREEN* screenA = m_authoring->RootScreen();
+    SCH_SCREEN* screenB = m_receiving->RootScreen();
+    auto* wire = new SCH_LINE( VECTOR2I( 1000000, 1000000 ), LAYER_WIRE );
+    wire->SetEndPoint( VECTOR2I( 1000000, 2000000 ) );
+    screenA->Append( wire );
+
+    auto add = MakeChange( wire, "ADDED" );
+    add[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, screenA, wire );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, add, nullptr ) );
+    auto* twin = static_cast<SCH_LINE*>( FindTwin( *m_receiving, wire->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( twin );
+
+    // Stretch only one endpoint. Translating the old bounding box would also move
+    // the fixed endpoint and cannot reproduce this geometry.
+    SCH_LINE before( *wire );
+    wire->SetEndPoint( VECTOR2I( 1000000, 2500000 ) );
+    auto modified = MakeChange( wire, "MODIFIED" );
+
+    for( const auto& delta : DiffItemProperties( &before, wire ) )
+        modified[ "properties" ].push_back( delta.ToJson() );
+
+    BOOST_REQUIRE( !modified[ "properties" ].empty() );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB,
+                                              nlohmann::json::parse( modified.dump() ), nullptr ) );
+    BOOST_CHECK( twin->GetStartPoint() == before.GetStartPoint() );
+    BOOST_CHECK( twin->GetEndPoint() == wire->GetEndPoint() );
+
+    auto* bend = new SCH_LINE( wire->GetEndPoint(), LAYER_WIRE );
+    bend->SetEndPoint( VECTOR2I( 1500000, 2500000 ) );
+    screenA->Append( bend );
+    auto bendAdd = MakeChange( bend, "ADDED" );
+    bendAdd[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, screenA, bend );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, bendAdd, nullptr ) );
+    auto* bendTwin = static_cast<SCH_LINE*>( FindTwin( *m_receiving, bend->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( bendTwin );
+    BOOST_CHECK( twin->GetEndPoint() == bendTwin->GetStartPoint() );
+    BOOST_CHECK( bend->GetEndPoint() == bendTwin->GetEndPoint() );
+
+    auto undo = MakeChange( wire, "MODIFIED" );
+
+    for( const auto& delta : DiffItemProperties( wire, &before ) )
+        undo[ "properties" ].push_back( delta.ToJson() );
+
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, undo, nullptr ) );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB,
+                                              MakeChange( bend, "REMOVED" ), nullptr ) );
+    BOOST_CHECK( twin->GetStartPoint() == before.GetStartPoint() );
+    BOOST_CHECK( twin->GetEndPoint() == before.GetEndPoint() );
+    BOOST_CHECK( !FindTwin( *m_receiving, bend->m_Uuid, nullptr ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( DerivedLengthDeltaNeverDistortsAWire )
+{
+    // Root() is the virtual container; RootScreen() is the sheet the hierarchy walks.
+    SCH_SCREEN* screenA = m_authoring->RootScreen();
+    SCH_SCREEN* screenB = m_receiving->RootScreen();
+    auto* wire = new SCH_LINE( VECTOR2I( 1231900, 863600 ), LAYER_WIRE );
+    wire->SetEndPoint( VECTOR2I( 1231900, 965200 ) );
+    screenA->Append( wire );
+
+    auto add = MakeChange( wire, "ADDED" );
+    add[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, screenA, wire );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, add, nullptr ) );
+    auto* twin = static_cast<SCH_LINE*>( FindTwin( *m_receiving, wire->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( twin );
+
+    // A drag that slid this wire one grid step sideways and shortened it shipped exactly
+    // these deltas, in this order.  Applied literally, SetLength() rescaled the end along
+    // the half-updated diagonal (the start had not moved yet) and left it off grid, so the
+    // wire missed its pin and drew as a slanted stub on the other client.
+    auto intDelta = []( const char* aName, int aBefore, int aAfter )
+    {
+        nlohmann::json j;
+        j[ "name" ] = aName;
+        j[ "before" ] = { { "type", "int" }, { "v", aBefore } };
+        j[ "after" ] = { { "type", "int" }, { "v", aAfter } };
+        return j;
+    };
+
+    auto modified = MakeChange( wire, "MODIFIED" );
+    modified[ "properties" ] = { intDelta( "End X", 1231900, 1219200 ),
+                                 intDelta( "End Y", 965200, 914400 ),
+                                 nlohmann::json{ { "name", "Length" },
+                                                 { "before", { { "type", "double" }, { "v", 101600.0 } } },
+                                                 { "after", { { "type", "double" }, { "v", 50800.0 } } } },
+                                 intDelta( "Start X", 1231900, 1219200 ) };
+
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, modified, nullptr ) );
+    BOOST_CHECK( twin->GetStartPoint() == VECTOR2I( 1219200, 863600 ) );
+    BOOST_CHECK( twin->GetEndPoint() == VECTOR2I( 1219200, 914400 ) );
+
+    // And the sender does not put it on the wire in the first place.
+    SCH_LINE before( *wire );
+    wire->SetStartPoint( VECTOR2I( 1219200, 863600 ) );
+    wire->SetEndPoint( VECTOR2I( 1219200, 914400 ) );
+
+    std::vector<PROPERTY_DELTA> deltas = DiffItemProperties( &before, wire );
+
+    auto hasLength = [&]()
+    {
+        return std::any_of( deltas.begin(), deltas.end(),
+                            []( const PROPERTY_DELTA& d ) { return d.name == wxS( "Length" ); } );
+    };
+
+    BOOST_CHECK( hasLength() );     // the property system does report it
+    SCH_COLLAB::StripDerivedDeltas( wire, deltas );
+    BOOST_CHECK( !hasLength() );
+    BOOST_CHECK( !deltas.empty() ); // the endpoint deltas are what travels
+}
+
+
+BOOST_AUTO_TEST_CASE( SymbolFragmentsKeepTheirSheetInstance )
+{
+    SCH_SHEET_PATH pathA;
+    SCH_SYMBOL*    subject = FindAnySymbol( *m_authoring, &pathA );
+    BOOST_REQUIRE( subject );
+    SCH_SCREEN* screenA = pathA.LastScreen();
+
+    // The fixture's symbol only carries an instance for a sheet that no longer exists (that
+    // is what issue18606 is about); give it a proper one for its sheet, as annotation would.
+    const wxString ref = subject->GetRef( &pathA );
+    subject->SetRef( &pathA, ref );
+
+    SCH_SYMBOL_INSTANCE original;
+    BOOST_REQUIRE( subject->GetInstance( original, pathA.Path() ) );
+
+    // The clipboard grammar stores the instance relative to the sending sheet: the empty path.
+    const std::string fragment = SCH_COLLAB::FormatItemSexpr( *m_authoring, screenA, subject );
+    BOOST_CHECK( fragment.find( "(path \"\"" ) != std::string::npos );
+
+    // A scratch screen (the join-time merge compares the sync base and the server snapshot
+    // from one) is outside the hierarchy; serialised against the live sheet, an untouched
+    // symbol must read identically from either copy or every join counts it as an edit.
+    SCH_SCREEN  scratch( m_authoring.get() );
+    SCH_SYMBOL* clone = new SCH_SYMBOL( *subject );
+    scratch.Append( clone );
+    BOOST_CHECK_EQUAL( SCH_COLLAB::FormatItemSexpr( *m_authoring, &scratch, clone, &pathA ),
+                       fragment );
+
+    // A merge folds server ops into a scratch screen with no sheet path, so the fold's copy
+    // of this symbol keeps the relative instance; anchored to the live sheet it serialises
+    // exactly like the live one (a symbol with only a relative instance writes no instance
+    // block at all, and used to count as changed on every join).
+    {
+        SCH_SHEET   foldSheet;
+        SCH_SCREEN* fold = new SCH_SCREEN( m_authoring.get() );
+        foldSheet.SetScreen( fold );
+
+        nlohmann::json foldAdd = MakeChange( subject, "ADDED" );
+        foldAdd[ "sexpr" ] = fragment;
+        BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_authoring, fold, foldAdd, nullptr, true ) );
+
+        SCH_SYMBOL* folded = nullptr;
+
+        for( SCH_ITEM* item : fold->Items().OfType( SCH_SYMBOL_T ) )
+            folded = static_cast<SCH_SYMBOL*>( item );
+
+        BOOST_REQUIRE( folded );
+        BOOST_CHECK( SCH_COLLAB::FormatItemSexpr( *m_authoring, fold, folded, &pathA ) != fragment );
+        SCH_COLLAB::AnchorSymbolInstance( folded, pathA.Path() );
+        BOOST_CHECK_EQUAL( SCH_COLLAB::FormatItemSexpr( *m_authoring, fold, folded, &pathA ),
+                           fragment );
+    }
+
+    // On the receiving side the upsert re-anchors the relative instance under the sheet the
+    // symbol lands on, so its reference survives the next save.
+    SCH_SCREEN* screenB = nullptr;
+    auto* twin = static_cast<SCH_SYMBOL*>( FindTwin( *m_receiving, subject->m_Uuid, &screenB ) );
+    BOOST_REQUIRE( twin && screenB );
+    SCH_SHEET_PATH pathB = m_receiving->Hierarchy().FindSheetForScreen( screenB );
+    BOOST_REQUIRE( pathB.size() > 0 );
+
+    auto add = MakeChange( subject, "ADDED" );
+    add[ "sexpr" ] = fragment;
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, screenB, add, nullptr ) );
+
+    twin = static_cast<SCH_SYMBOL*>( FindTwin( *m_receiving, subject->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( twin );
+
+    SCH_SYMBOL_INSTANCE anchored;
+    BOOST_CHECK( twin->GetInstance( anchored, pathB.Path() ) );
+    BOOST_CHECK_EQUAL( anchored.m_Reference, original.m_Reference );
+    BOOST_CHECK_EQUAL( anchored.m_Unit, original.m_Unit );
+    BOOST_CHECK_EQUAL( twin->GetRef( &pathB ), ref );
+
+    for( const SCH_SYMBOL_INSTANCE& instance : twin->GetInstances() )
+        BOOST_CHECK( !instance.m_Path.empty() );
 }
 
 
@@ -693,12 +888,19 @@ BOOST_AUTO_TEST_CASE( PresenceIsClampedToTheServerCap )
     state[ "selection" ] = nlohmann::json::array();
     state[ "boxes" ] = nlohmann::json::array();
     state[ "ghost" ] = nlohmann::json::array();
+    state[ "dragLines" ] = nlohmann::json::array();
+    state[ "children" ] = nlohmann::json::array();
+    state[ "dragAdded" ] = nlohmann::json::array();
 
     for( int ii = 0; ii < 400; ++ii )
     {
+        state[ "children" ].push_back( { KIID().AsStdString(), "Reference", ii, ii, 500, 200 } );
+        state[ "dragAdded" ].push_back( KIID().AsStdString() );
         state[ "selection" ].push_back( KIID().AsStdString() );
         state[ "boxes" ].push_back( { ii * 1000, ii * 1000, 500000, 500000 } );
         state[ "ghost" ].push_back( { ii, ii, ii + 10, ii + 10, 100000 } );
+        state[ "dragLines" ].push_back( { KIID().AsStdString(), ii, ii, ii + 10,
+                                          ii + 10, 100000, static_cast<int>( LAYER_WIRE ) } );
     }
 
     BOOST_REQUIRE( state.dump().size() > 8 * 1024 );
@@ -712,6 +914,12 @@ BOOST_AUTO_TEST_CASE( PresenceIsClampedToTheServerCap )
     // The receiver pairs a peer's selection ids with its boxes by index for live-drag ghosts,
     // so whatever survives has to stay aligned.
     BOOST_CHECK_EQUAL( state[ "selection" ].size(), state[ "boxes" ].size() );
+
+    for( const auto& line : state[ "dragLines" ] )
+    {
+        BOOST_CHECK_EQUAL( line.size(), 7 );
+        BOOST_CHECK( line[ 0 ].is_string() );
+    }
 }
 
 

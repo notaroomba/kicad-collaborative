@@ -42,7 +42,15 @@ class SCH_SCREEN;
 class COLLAB_DOC_ADAPTER;
 class SCHEMATIC;
 class SCH_SHEET;
+class SCH_SHEET_PATH;
+class SCH_SYMBOL;
+class KIID_PATH;
 class TOOL_MANAGER;
+
+namespace KICAD_DIFF
+{
+struct PROPERTY_DELTA;
+}
 
 namespace SCH_COLLAB
 {
@@ -54,8 +62,34 @@ namespace SCH_COLLAB
  *
  * @param aScreen the screen the item lives on (or is being added to); required to embed
  *                library symbols for SCH_SYMBOLs.
+ * @param aSheetPath the sheet to serialise relative to.  Symbol instances are written
+ *                   relative to it (the clipboard grammar).  Defaults to the sheet whose
+ *                   screen @p aScreen is; pass it explicitly for a scratch screen outside
+ *                   the hierarchy (a snapshot or sync base being compared) so the same
+ *                   symbol serialises identically from either copy.
  */
-std::string FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, SCH_ITEM* aItem );
+std::string FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen, SCH_ITEM* aItem,
+                             const SCH_SHEET_PATH* aSheetPath = nullptr );
+
+/**
+ * Drop property deltas that are functions of other properties in the same change (a
+ * wire's Length is its start-to-end distance).  Their setters re-derive geometry from
+ * the item's *current* state, so applying one between the deltas it depends on leaves
+ * the item off by the rounding of a half-updated direction.  Used by the sender before
+ * an op goes out and by the receiver before an op is applied.
+ */
+void StripDerivedDeltas( const SCH_ITEM* aItem,
+                         std::vector<KICAD_DIFF::PROPERTY_DELTA>& aDeltas );
+
+/**
+ * Give a symbol an instance for @p aSheetPath if it has none, from the one a fragment
+ * carried relative to its sending sheet (the empty path -- the clipboard grammar) or,
+ * failing that, its only instance.  Fragments are re-anchored this way when they land on a
+ * screen, as paste does, and again for the scratch copies a merge compares: a symbol with
+ * only a relative instance serialises with no instance block at all and so never compares
+ * equal to its live twin.
+ */
+void AnchorSymbolInstance( SCH_SYMBOL* aSymbol, const KIID_PATH& aSheetPath );
 
 /**
  * Load collaboration s-expression text into @p aSheet's screen.

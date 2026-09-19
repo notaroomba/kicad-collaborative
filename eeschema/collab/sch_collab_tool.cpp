@@ -35,10 +35,14 @@
 #include <sch_screen.h>
 #include <sch_sheet_path.h>
 #include <schematic.h>
+#include <map>
+#include <sch_field.h>
 #include <sch_line.h>
 #include <tools/sch_actions.h>
 #include <tools/sch_line_wire_bus_tool.h>
+#include <tools/sch_move_tool.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <gal/painter.h>
 #include <view/view.h>
 #include <view/view_controls.h>
 
@@ -779,6 +783,19 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
     nlohmann::json selection = nlohmann::json::array();
     nlohmann::json boxes = nlohmann::json::array();
 
+    // Symbol fields have no persisted uuid (each client mints its own at load), so a
+    // dragged field is named by its owner's uuid and its field name instead.
+    nlohmann::json children = nlohmann::json::array();
+
+    // A drag pulls the attached wires (and their riders) into the selection.  They move,
+    // so they still ghost, but they are not what the user picked: the peer's outline
+    // should frame the component, not every wire hanging off it.
+    nlohmann::json   dragAdded = nlohmann::json::array();
+    std::set<KIID>   dragAddedIds;
+
+    if( SCH_MOVE_TOOL* moveTool = m_toolMgr->GetTool<SCH_MOVE_TOOL>() )
+        dragAddedIds.insert( moveTool->GetDragAdditions().begin(), moveTool->GetDragAdditions().end() );
+
     // Send our own bounding boxes rather than only ids: the receiver would
     // otherwise draw them from its own (last committed) copy, so a drag in
     // progress would not be visible until it was committed.  Sending live
@@ -796,6 +813,19 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
         const BOX2I bbox = item->GetBoundingBox();
         boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+
+        if( dragAddedIds.count( item->m_Uuid ) || item->HasFlag( SELECTED_BY_DRAG ) )
+            dragAdded.push_back( item->m_Uuid.AsStdString() );
+
+        EDA_ITEM* parent = item->GetParent();
+
+        if( item->Type() == SCH_FIELD_T && parent && parent != m_frame->GetScreen()
+            && children.size() < MAX_PRESENCE_BOXES )
+        {
+            children.push_back( { parent->m_Uuid.AsStdString(),
+                                  static_cast<SCH_FIELD*>( item )->GetName().ToStdString( wxConvUTF8 ),
+                                  bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+        }
     }
 
     // In-flight wire/bus segments ghost live on peers' canvases.
@@ -813,7 +843,28 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
             ghost.push_back( { line->GetStartPoint().x, line->GetStartPoint().y,
                                line->GetEndPoint().x, line->GetEndPoint().y,
-                               line->GetLineWidth() } );
+                               line->GetPenWidth() } );
+        }
+    }
+
+    // A bounding-box translation cannot represent a stretched endpoint or a new bend.
+    // Keep each id with its geometry so presence-budget trimming cannot hide an original
+    // without also delivering its replacement.
+    nlohmann::json dragLines = nlohmann::json::array();
+
+    if( SCH_MOVE_TOOL* moveTool = m_toolMgr->GetTool<SCH_MOVE_TOOL>() )
+    {
+        for( SCH_LINE* line : moveTool->GetDragLines() )
+        {
+            if( dragLines.size() >= MAX_GHOST_SEGS )
+                break;
+
+            // The pen width (a stroke width of 0 means the schematic default) and the layer,
+            // so a peer without its own copy of a new bend still draws it as a wire.
+            dragLines.push_back( { line->m_Uuid.AsStdString(),
+                                   line->GetStartPoint().x, line->GetStartPoint().y,
+                                   line->GetEndPoint().x, line->GetEndPoint().y,
+                                   line->GetPenWidth(), static_cast<int>( line->GetLayer() ) } );
         }
     }
 
@@ -824,7 +875,10 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selection },
         { "boxes", boxes },
+        { "dragAdded", dragAdded },
+        { "children", children },
         { "ghost", ghost },
+        { "dragLines", dragLines },
         { "sheetFile", sheetFile.ToStdString( wxConvUTF8 ) },
         { "sheetPath", m_frame->GetCurrentSheet().PathAsString().ToStdString( wxConvUTF8 ) },
     };
@@ -1579,13 +1633,183 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 draw.hasCursor = true;
             }
 
+            SCH_SCREEN*         screen = m_frame->GetScreen();
+            std::set<SCH_ITEM*> ghostedChildren;
+
+            // Ghosts hold no item pointers: a remote op between two presence ticks can free
+            // the item (a field move arrives as a whole-symbol replace, which swaps the old
+            // fields out and deletes them), so each draw resolves its target by uuid again
+            // and simply draws nothing when it is gone.
+            auto ghostWhole =
+                    [this, &draw, &ghostedNow]( SCH_ITEM* aItem, const VECTOR2I& aOffset )
+                    {
+                        REMOTE_GHOST_ITEM ghost;
+                        const KIID        id = aItem->m_Uuid;
+                        ghost.custom =
+                                [this, id, aOffset]( KIGFX::PAINTER* aPainter, KIGFX::GAL* aGal )
+                                {
+                                    SCH_ITEM* item = m_frame->Schematic().ResolveItem( id, nullptr, true );
+
+                                    if( !item || !m_frame->GetScreen()
+                                        || item->GetParent() != m_frame->GetScreen() )
+                                        return;
+
+                                    aGal->Save();
+                                    aGal->Translate( aOffset );
+
+                                    for( int layer : item->ViewGetLayers() )
+                                        aPainter->Draw( item, layer );
+
+                                    aGal->Restore();
+                                };
+                        draw.ghostItems.push_back( std::move( ghost ) );
+                        ghostedNow.insert( id );
+                    };
+
+            // A symbol field is not a screen item: the view draws it as part of its owner.
+            // Ghost it by hiding the owner and redrawing it with the dragged fields moved,
+            // or the peer's box travels while the text stays put.  All of one owner's
+            // dragged fields go into a single redraw: one redraw per field showed every
+            // field both at home and displaced.
+            std::map<KIID, std::vector<std::pair<wxString, VECTOR2I>>> fieldGhosts;
+
+            auto ghostChild =
+                    [&fieldGhosts]( SCH_ITEM* aOwner, const wxString& aFieldName,
+                                    const VECTOR2I& aOffset )
+                    {
+                        fieldGhosts[ aOwner->m_Uuid ].emplace_back( aFieldName, aOffset );
+                    };
+
+            auto flushFieldGhosts =
+                    [this, &draw, &ghostedNow, &fieldGhosts]()
+                    {
+                        for( auto& [ownerId, fields] : fieldGhosts )
+                        {
+                            if( draw.ghostItems.size() >= MAX_GHOST_ITEMS )
+                                break;
+
+                            REMOTE_GHOST_ITEM ghost;
+                            ghost.custom =
+                                    [this, ownerId, fields]( KIGFX::PAINTER* aPainter, KIGFX::GAL* )
+                                    {
+                                        SCH_ITEM* owner = m_frame->Schematic().ResolveItem( ownerId, nullptr, true );
+
+                                        if( !owner || !m_frame->GetScreen()
+                                            || owner->GetParent() != m_frame->GetScreen() )
+                                            return;
+
+                                        // Displaced only for the length of this draw: the
+                                        // document is untouched once the painter returns.
+                                        std::vector<std::pair<SCH_ITEM*, VECTOR2I>> moved;
+
+                                        for( const auto& [name, offset] : fields )
+                                        {
+                                            owner->RunOnChildren(
+                                                    [&]( SCH_ITEM* aChild )
+                                                    {
+                                                        if( aChild->Type() == SCH_FIELD_T
+                                                            && static_cast<SCH_FIELD*>( aChild )->GetName() == name )
+                                                        {
+                                                            moved.emplace_back( aChild, aChild->GetPosition() );
+                                                            aChild->SetPosition( aChild->GetPosition() + offset );
+                                                        }
+                                                    },
+                                                    RECURSE_MODE::NO_RECURSE );
+                                        }
+
+                                        for( int layer : owner->ViewGetLayers() )
+                                            aPainter->Draw( owner, layer );
+
+                                        for( auto& [child, home] : moved )
+                                            child->SetPosition( home );
+                                    };
+                            draw.ghostItems.push_back( std::move( ghost ) );
+                            ghostedNow.insert( ownerId );
+                        }
+
+                        fieldGhosts.clear();
+                    };
+
+            // Dragged fields, named by owner uuid + field name (fields carry no uuid of
+            // their own across clients).
+            if( peer.state.contains( "children" ) && peer.state[ "children" ].is_array() )
+            {
+                for( const nlohmann::json& entry : peer.state[ "children" ] )
+                {
+                    if( !entry.is_array() || entry.size() != 6 || !entry[ 0 ].is_string()
+                        || !entry[ 1 ].is_string()
+                        || !std::all_of( entry.begin() + 2, entry.end(),
+                                        []( const auto& v ) { return v.is_number_integer(); } ) )
+                        continue;
+
+                    if( draw.ghostItems.size() >= MAX_GHOST_ITEMS )
+                        break;
+
+                    KIID      ownerId( wxString::FromUTF8( entry[ 0 ].get<std::string>() ) );
+                    SCH_ITEM* owner = m_frame->Schematic().ResolveItem( ownerId, nullptr, true );
+
+                    if( !owner || owner->GetParent() != screen || owner->HasFlag( IS_MOVING ) )
+                        continue;
+
+                    const wxString name = wxString::FromUTF8( entry[ 1 ].get<std::string>() );
+                    SCH_ITEM*      child = nullptr;
+
+                    owner->RunOnChildren(
+                            [&]( SCH_ITEM* aChild )
+                            {
+                                if( !child && aChild->Type() == SCH_FIELD_T
+                                    && static_cast<SCH_FIELD*>( aChild )->GetName() == name )
+                                {
+                                    child = aChild;
+                                }
+                            },
+                            RECURSE_MODE::NO_RECURSE );
+
+                    if( !child || !ghostedChildren.insert( child ).second )
+                        continue;
+
+                    const BOX2I local = child->GetBoundingBox();
+                    VECTOR2I    offset( entry[ 2 ].get<int>() - local.GetX(),
+                                        entry[ 3 ].get<int>() - local.GetY() );
+
+                    if( std::abs( offset.x ) > 1 || std::abs( offset.y ) > 1 )
+                        ghostChild( owner, name, offset );
+                }
+            }
+
             // Prefer the sender's own geometry (live during their drags); fall
             // back to resolving ids locally for peers on an older client.
             if( peer.state.contains( "boxes" ) && peer.state[ "boxes" ].is_array() )
             {
-                for( const nlohmann::json& box : peer.state[ "boxes" ] )
+                // Items the peer's drag pulled along (attached wires, riders) still ghost,
+                // but the outline frames only what the peer actually picked.
+                std::set<std::string> dragAdded;
+
+                if( peer.state.contains( "dragAdded" ) && peer.state[ "dragAdded" ].is_array() )
                 {
+                    for( const nlohmann::json& id : peer.state[ "dragAdded" ] )
+                    {
+                        if( id.is_string() )
+                            dragAdded.insert( id.get<std::string>() );
+                    }
+                }
+
+                const nlohmann::json& boxList = peer.state[ "boxes" ];
+                const nlohmann::json* idList = nullptr;
+
+                if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+                    idList = &peer.state[ "selection" ];
+
+                for( size_t ii = 0; ii < boxList.size(); ++ii )
+                {
+                    const nlohmann::json& box = boxList[ ii ];
+
                     if( !box.is_array() || box.size() < 4 )
+                        continue;
+
+                    if( !dragAdded.empty() && idList && ii < idList->size()
+                        && ( *idList )[ ii ].is_string()
+                        && dragAdded.count( ( *idList )[ ii ].get<std::string>() ) )
                         continue;
 
                     draw.selectionBoxes.emplace_back(
@@ -1599,7 +1823,6 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 {
                     const nlohmann::json& ids = peer.state[ "selection" ];
                     const nlohmann::json& boxes = peer.state[ "boxes" ];
-                    SCH_SCREEN*           screen = m_frame->GetScreen();
 
                     for( size_t ii = 0; ii < ids.size() && ii < boxes.size()
                                         && draw.ghostItems.size() < MAX_GHOST_ITEMS; ++ii )
@@ -1611,8 +1834,29 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                         KIID kiid( wxString::FromUTF8( ids[ ii ].get<std::string>() ) );
                         SCH_ITEM* item = m_frame->Schematic().ResolveItem( kiid, nullptr, true );
 
-                        if( !item || item->GetParent() != screen )
+                        if( !item || item->HasFlag( IS_MOVING ) || item->Type() == SCH_LINE_T )
                             continue;
+
+                        // A symbol field or sheet pin is not a screen item: the view draws it
+                        // as part of its owner.  Ghost such a child by hiding the owner and
+                        // redrawing it with just that child moved, or the peer's box travels
+                        // while the text stays put.
+                        SCH_ITEM* owner = item;
+
+                        if( item->GetParent() != screen )
+                        {
+                            EDA_ITEM* parent = item->GetParent();
+
+                            if( !parent || parent->GetParent() != screen
+                                || ( item->Type() != SCH_FIELD_T
+                                     && item->Type() != SCH_SHEET_PIN_T ) )
+                                continue;
+
+                            owner = static_cast<SCH_ITEM*>( parent );
+
+                            if( owner->HasFlag( IS_MOVING ) )
+                                continue;
+                        }
 
                         VECTOR2I offset( boxes[ ii ][ 0 ].get<int>()
                                                  - item->GetBoundingBox().GetX(),
@@ -1620,10 +1864,17 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                                                  - item->GetBoundingBox().GetY() );
 
                         // Only ghost items that are actually displaced (i.e. mid-drag).
-                        if( std::abs( offset.x ) > 1 || std::abs( offset.y ) > 1 )
+                        if( std::abs( offset.x ) <= 1 && std::abs( offset.y ) <= 1 )
+                            continue;
+
+                        if( owner == item )
                         {
-                            draw.ghostItems.push_back( { item, offset } );
-                            ghostedNow.insert( item->m_Uuid );
+                            ghostWhole( item, offset );
+                        }
+                        else if( item->Type() == SCH_FIELD_T
+                                 && ghostedChildren.insert( item ).second )
+                        {
+                            ghostChild( owner, static_cast<SCH_FIELD*>( item )->GetName(), offset );
                         }
                     }
                 }
@@ -1641,6 +1892,42 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                         draw.selectionBoxes.push_back( item->GetBoundingBox() );
                 }
             }
+
+            // Exact drag geometry also includes bends which have no committed local item.
+            if( peer.state.contains( "dragLines" ) && peer.state[ "dragLines" ].is_array() )
+            {
+                for( const nlohmann::json& line : peer.state[ "dragLines" ] )
+                {
+                    // [uuid, sx, sy, ex, ey, width] with an optional trailing layer.
+                    if( !line.is_array() || ( line.size() != 6 && line.size() != 7 )
+                        || !line[ 0 ].is_string()
+                        || !std::all_of( line.begin() + 1, line.end(),
+                                        []( const auto& v ) { return v.is_number_integer(); } ) )
+                        continue;
+
+                    KIID id( wxString::FromUTF8( line[ 0 ].get<std::string>() ) );
+                    SCH_ITEM* item = m_frame->Schematic().ResolveItem( id, nullptr, true );
+
+                    if( item && ( item->GetParent() != m_frame->GetScreen()
+                                  || item->Type() != SCH_LINE_T || item->HasFlag( IS_MOVING ) ) )
+                        continue;
+
+                    // Draw it as the wire it stands in for: our own copy knows its layer, a
+                    // new bend says which one it is on, and an older sender means a wire.
+                    int layer = item ? item->GetLayer()
+                                     : line.size() == 7 ? line[ 6 ].get<int>()
+                                                        : static_cast<int>( LAYER_WIRE );
+
+                    draw.ghostSegs.push_back( { VECTOR2I( line[ 1 ].get<int>(), line[ 2 ].get<int>() ),
+                                                VECTOR2I( line[ 3 ].get<int>(), line[ 4 ].get<int>() ),
+                                                line[ 5 ].get<int>(), layer } );
+
+                    if( item )
+                        ghostedNow.insert( id );
+                }
+            }
+
+            flushFieldGhosts();
 
             // In-flight wire/bus segments the peer is drawing right now.
             if( peer.state.contains( "ghost" ) && peer.state[ "ghost" ].is_array() )

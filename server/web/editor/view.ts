@@ -159,10 +159,17 @@ export function drawPeers(peers) {
       line.setAttribute("stroke-width", Math.max(mm(g[4] || 0), 2 / s)); line.setAttribute("stroke-linecap", "round");
       peersG.appendChild(line);
     }
-    for (const b of st.boxes || []) {
+    // Same rules as the desktop's COLLAB_CURSOR_ITEM: an outline in the peer colour and no
+    // fill, one union box for a multi-selection, and nothing around the items a drag pulled
+    // along (attached wires, riders -- listed in `dragAdded`), only what the peer picked.
+    const dragAdded = new Set(st.dragAdded || []), sel = st.selection || [];
+    const own = (st.boxes || []).filter((b, i) => !(dragAdded.size && dragAdded.has(sel[i])));
+    if (own.length) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const b of own) { x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3]); }
       const rect = document.createElementNS(NS, "rect");
-      rect.setAttribute("x", mm(b[0])); rect.setAttribute("y", mm(b[1])); rect.setAttribute("width", mm(b[2])); rect.setAttribute("height", mm(b[3]));
-      rect.setAttribute("fill", color); rect.setAttribute("fill-opacity", "0.18"); rect.setAttribute("stroke", color); rect.setAttribute("stroke-width", 3 / s);
+      rect.setAttribute("x", mm(x0)); rect.setAttribute("y", mm(y0)); rect.setAttribute("width", mm(x1 - x0)); rect.setAttribute("height", mm(y1 - y0));
+      rect.setAttribute("fill", "none"); rect.setAttribute("stroke", color); rect.setAttribute("stroke-opacity", "0.9"); rect.setAttribute("stroke-width", 1.5 / s);
       peersG.appendChild(rect);
     }
     if (Array.isArray(st.cursor)) {

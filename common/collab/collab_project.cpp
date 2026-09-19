@@ -235,6 +235,13 @@ static wxString syncBasePath( const wxString& aProjectPath, const wxString& aPro
 }
 
 
+wxString COLLAB_PROJECT::SyncBasePath( const wxString& aProjectPath, const wxString& aProjectName,
+                                       const wxString& aRelPath )
+{
+    return syncBasePath( aProjectPath, aProjectName, aRelPath );
+}
+
+
 static std::string readWholeFile( const wxString& aPath )
 {
     if( aPath.IsEmpty() || !wxFileName::FileExists( aPath ) )

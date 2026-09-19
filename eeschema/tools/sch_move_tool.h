@@ -85,6 +85,13 @@ public:
      */
     int AlignToGrid( const TOOL_EVENT& aEvent );
 
+    /// Live line geometry, including unselected stretches and temporary bends.
+    std::vector<SCH_LINE*> GetDragLines() const;
+
+    /// The items a drag pulled into the selection on its own (attached wires, riders): part of
+    /// the move, but not what the user picked.  Empty when no move is in progress.
+    const std::vector<KIID>& GetDragAdditions() const;
+
 private:
     bool doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aCommit );
 

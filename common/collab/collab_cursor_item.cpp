@@ -29,6 +29,7 @@
 #include <gal/painter.h>
 #include <geometry/eda_angle.h>
 #include <math/util.h>
+#include <render_settings.h>
 #include <view/view.h>
 
 using KIGFX::COLOR4D;
@@ -81,6 +82,12 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 
             for( const REMOTE_GHOST_ITEM& ghost : peer.ghostItems )
             {
+                if( ghost.custom )
+                {
+                    ghost.custom( painter, gal );
+                    continue;
+                }
+
                 if( !ghost.item )
                     continue;
 
@@ -94,32 +101,96 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
             }
         }
 
-        // In-flight route/wire segments, semi-transparent in the peer colour.
+        // Line ghosts.  A wire the peer is reshaping replaces its hidden original, so it
+        // draws like a wire (its layer colour, opaque); a segment that does not exist yet
+        // (a route or wire being drawn) is semi-transparent in the peer colour.
         if( !peer.ghostSegs.empty() )
         {
+            const KIGFX::RENDER_SETTINGS* settings = aView->GetPainter()->GetSettings();
+
             gal->SetIsFill( false );
             gal->SetIsStroke( true );
-            gal->SetStrokeColor( peer.color.WithAlpha( 0.55 ) );
 
             for( const REMOTE_GHOST_SEG& seg : peer.ghostSegs )
             {
+                if( seg.layer >= 0 && settings )
+                    gal->SetStrokeColor( settings->GetLayerColor( seg.layer ) );
+                else
+                    gal->SetStrokeColor( peer.color.WithAlpha( 0.55 ) );
+
                 gal->SetLineWidth( static_cast<float>(
                         std::max( static_cast<double>( seg.width ), 1.5 * w ) ) );
                 gal->DrawLine( seg.a, seg.b );
             }
         }
 
-        // Selection highlights: a translucent wash plus a solid outline in the
-        // peer colour, so a peer's selection reads at a glance even on a dense
-        // board (a thin outline alone disappeared into the copper).
-        gal->SetIsFill( true );
+        // The highlights sit right on the ghosts they mark, and the overlay's depth test
+        // drops anything drawn at the depth already taken: step up first.
+        gal->AdvanceDepth();
+
+        // Selection highlights: a thin outline in the peer's cursor colour and nothing
+        // else.  A translucent wash of that colour read as a bright block on light themes
+        // and hid what the peer had selected, and a background-coloured halo under the
+        // outline read as a white box; the cursor colour alone says who has the item.
+        //
+        // A wire or track is as thin as its box, so an outline of that box lands on the
+        // line itself and vanishes: those get a solid band along the line instead, a
+        // little wider than the line, in the same colour as the outline.
+        const double thinPx = 6.0;
+        const double bandPx = 4.0;
+
+        gal->SetIsFill( false );
         gal->SetIsStroke( true );
-        gal->SetFillColor( peer.color.WithAlpha( 0.18 ) );
-        gal->SetStrokeColor( peer.color.WithAlpha( 0.95 ) );
-        gal->SetLineWidth( static_cast<float>( 2.0 * selLinePx * w ) );
+
+        // Several items: one box around them all, the way a design tool shows a group
+        // selection, rather than a clutter of one outline per item.
+        if( peer.selectionBoxes.size() > 1 )
+        {
+            BOX2I all = peer.selectionBoxes.front();
+
+            for( const BOX2I& box : peer.selectionBoxes )
+                all.Merge( box );
+
+            gal->SetStrokeColor( peer.color.WithAlpha( 0.9 ) );
+            gal->SetLineWidth( static_cast<float>( selLinePx * w ) );
+            gal->DrawRectangle( all );
+        }
 
         for( const BOX2I& box : peer.selectionBoxes )
-            gal->DrawRectangle( box );
+        {
+            if( peer.selectionBoxes.size() > 1 )
+                break;
+
+            const double wPx = box.GetWidth() * scale;
+            const double hPx = box.GetHeight() * scale;
+
+            if( std::min( wPx, hPx ) < thinPx )
+            {
+                const VECTOR2D c = box.GetCenter();
+                VECTOR2D       a, b;
+
+                if( wPx < hPx )
+                {
+                    a = VECTOR2D( c.x, box.GetTop() );
+                    b = VECTOR2D( c.x, box.GetBottom() );
+                }
+                else
+                {
+                    a = VECTOR2D( box.GetLeft(), c.y );
+                    b = VECTOR2D( box.GetRight(), c.y );
+                }
+
+                gal->SetStrokeColor( peer.color.WithAlpha( 0.9 ) );
+                gal->SetLineWidth( static_cast<float>( bandPx * w ) );
+                gal->DrawLine( a, b );
+            }
+            else
+            {
+                gal->SetStrokeColor( peer.color.WithAlpha( 0.9 ) );
+                gal->SetLineWidth( static_cast<float>( selLinePx * w ) );
+                gal->DrawRectangle( box );
+            }
+        }
 
         if( !peer.hasCursor )
             continue;

@@ -1153,7 +1153,21 @@ void WX_VIEW_CONTROLS::handleCursorCapture( int x, int y )
         }
 
         if( warp )
+        {
+            // wxOSX's WarpPointer() dispatches a synthetic motion event before it returns,
+            // and the real pointer still reads as outside the canvas when that arrives (the
+            // warp lands asynchronously), so this recursed until the stack overflowed the
+            // moment a captured pointer left the canvas -- an interactive wire draw that
+            // strayed over the toolbar crashed the editor.  One warp per real motion.
+            static bool s_warping = false;
+
+            if( s_warping )
+                return;
+
+            s_warping = true;
             KIPLATFORM::UI::WarpPointer( m_parentPanel, x, y );
+            s_warping = false;
+        }
     }
 }
 
