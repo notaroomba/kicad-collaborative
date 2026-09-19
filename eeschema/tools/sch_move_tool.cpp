@@ -242,6 +242,32 @@ void SCH_MOVE_TOOL::Reset( RESET_REASON aReason )
 }
 
 
+std::vector<SCH_LINE*> SCH_MOVE_TOOL::GetDragLines() const
+{
+    if( !m_moveInProgress )
+        return {};
+
+    std::unordered_set<SCH_LINE*> lines( m_newDragLines );
+    lines.insert( m_changedDragLines.begin(), m_changedDragLines.end() );
+
+    for( EDA_ITEM* item : m_selectionTool->GetSelection() )
+    {
+        if( SCH_LINE* line = dynamic_cast<SCH_LINE*>( item ) )
+            lines.insert( line );
+    }
+
+    return { lines.begin(), lines.end() };
+}
+
+
+const std::vector<KIID>& SCH_MOVE_TOOL::GetDragAdditions() const
+{
+    static const std::vector<KIID> none;
+
+    return m_moveInProgress ? m_dragAdditions : none;
+}
+
+
 void SCH_MOVE_TOOL::orthoLineDrag( SCH_COMMIT* aCommit, SCH_LINE* line, const VECTOR2I& splitDelta,
                                    int& xBendCount, int& yBendCount, const EE_GRID_HELPER& grid )
 {

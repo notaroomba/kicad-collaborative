@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <functional>
 #include <vector>
 
 #include <eda_item.h>
@@ -30,6 +31,8 @@
 
 namespace KIGFX
 {
+class GAL;
+class PAINTER;
 class VIEW;
 }
 
@@ -40,6 +43,11 @@ struct REMOTE_GHOST_SEG
     VECTOR2I a;
     VECTOR2I b;
     int      width = 0;
+
+    /// The layer whose colour to draw in, for an existing line a peer is reshaping (it
+    /// stands in for the hidden original, so it should look like one); -1 draws in the
+    /// peer colour, for a segment that does not exist yet.
+    int      layer = -1;
 };
 
 
@@ -48,6 +56,10 @@ struct REMOTE_GHOST_ITEM
 {
     const EDA_ITEM* item = nullptr;
     VECTOR2I        offset;
+
+    /// When set, draws the ghost itself instead of translating @c item by @c offset: for a
+    /// child (a symbol field, a sheet pin) the owner is redrawn with just that child moved.
+    std::function<void( KIGFX::PAINTER*, KIGFX::GAL* )> custom;
 };
 
 

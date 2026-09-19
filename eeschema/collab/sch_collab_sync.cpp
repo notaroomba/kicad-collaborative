@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <set>
 
 #include <collab/collab_auth.h>
@@ -57,6 +58,8 @@
 #include <tools/sch_selection.h>
 #include <tools/sch_selection_tool.h>
 #include <undo_redo_container.h>
+#include <view/view.h>
+#include <sch_draw_panel.h>
 
 #include <reporter.h>
 #include <wx/app.h>
@@ -225,6 +228,22 @@ SCH_ITEM* parseItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aDestScreen,
 
         if( source )
             symbol->SetLibSymbol( new LIB_SYMBOL( *source ) );
+
+        // The clipboard grammar stores a symbol's instance relative to the sending sheet,
+        // so a symbol on that sheet arrives with the empty path.  Paste re-anchors it under
+        // the destination sheet; do the same.  Left relative, the symbol has no instance
+        // for the sheet it lands on: it still draws with its field text, but the next save
+        // writes the bare prefix and an empty (instances) block, and its annotation is gone.
+        if( aDestScreen )
+        {
+            if( !aSchematic.HasHierarchy() )
+                aSchematic.RefreshHierarchy();
+
+            SCH_SHEET_PATH dest = aSchematic.Hierarchy().FindSheetForScreen( aDestScreen );
+
+            if( dest.size() > 0 )
+                SCH_COLLAB::AnchorSymbolInstance( symbol, dest.Path() );
+        }
     }
 
     // Remove the references from the temporary screen to prevent freeing on the DTOR,
@@ -324,7 +343,7 @@ long long SCH_COLLAB::ResolveOwnerId( const nlohmann::json& aProject, long long 
 
 
 std::string SCH_COLLAB::FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
-                                         SCH_ITEM* aItem )
+                                         SCH_ITEM* aItem, const SCH_SHEET_PATH* aSheetPath )
 {
     wxCHECK( aItem, std::string() );
 
@@ -335,7 +354,26 @@ std::string SCH_COLLAB::FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScr
         aSchematic.RefreshHierarchy();
 
     SCH_SHEET_LIST hierarchy = aSchematic.Hierarchy();
-    SCH_SHEET_PATH path = hierarchy.FindSheetForScreen( aScreen );
+    SCH_SHEET_PATH path = aSheetPath ? *aSheetPath : hierarchy.FindSheetForScreen( aScreen );
+
+    // A scratch screen (a snapshot or sync base being compared, a fold of pending ops) is
+    // outside the hierarchy.  With no sheet path the clipboard writer emits symbol
+    // instances with their absolute paths, while the live copy of the same symbol emits
+    // the path relative to its sheet (empty): the two compared unequal and every join
+    // re-sent every symbol as an upsert.  Stand in the sheet whose file the screen holds.
+    if( path.size() == 0 && aScreen && !aScreen->GetFileName().IsEmpty() )
+    {
+        for( const SCH_SHEET_PATH& candidate : hierarchy )
+        {
+            SCH_SCREEN* live = candidate.LastScreen();
+
+            if( live && live->GetFileName() == aScreen->GetFileName() )
+            {
+                path = candidate;
+                break;
+            }
+        }
+    }
 
     STRING_FORMATTER   formatter;
     SCH_IO_KICAD_SEXPR plugin;
@@ -345,6 +383,71 @@ std::string SCH_COLLAB::FormatItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aScr
     plugin.Format( &selection, &path, aSchematic, &formatter, true );
 
     return formatter.GetString();
+}
+
+
+void SCH_COLLAB::AnchorSymbolInstance( SCH_SYMBOL* aSymbol, const KIID_PATH& aSheetPath )
+{
+    SCH_SYMBOL_INSTANCE anchored;
+
+    if( !aSymbol || aSheetPath.empty() || aSymbol->GetInstance( anchored, aSheetPath ) )
+        return;
+
+    const std::vector<SCH_SYMBOL_INSTANCE> instances = aSymbol->GetInstances();
+    const SCH_SYMBOL_INSTANCE*             relative = nullptr;
+
+    for( const SCH_SYMBOL_INSTANCE& instance : instances )
+    {
+        if( instance.m_Path.empty() )
+        {
+            relative = &instance;
+            break;
+        }
+    }
+
+    // A sender that serialised against no sheet path wrote its absolute path instead;
+    // with one instance that is still this sheet's.
+    if( !relative && instances.size() == 1 )
+        relative = &instances.front();
+
+    if( !relative )
+        return;
+
+    anchored = *relative;
+    anchored.m_Path = aSheetPath;
+    aSymbol->RemoveInstance( relative->m_Path );
+    aSymbol->AddHierarchicalReference( anchored );
+}
+
+
+void SCH_COLLAB::StripDerivedDeltas( const SCH_ITEM* aItem,
+                                     std::vector<KICAD_DIFF::PROPERTY_DELTA>& aDeltas )
+{
+    if( !aItem || aDeltas.empty() )
+        return;
+
+    // A wire's Length is its start-to-end distance, but SCH_LINE::SetLength() rescales the
+    // end along the line's *current* direction.  A drag that slides a wire sideways ships
+    // "End X", "End Y", "Length", "Start X" in that order; applied literally, Length ran
+    // against the half-updated diagonal and left the end a few hundred units off grid, so
+    // the wire missed its pin and drew as a slanted stub on every other client.
+    static const std::map<KICAD_T, std::set<wxString>> derived = {
+        { SCH_LINE_T, { wxS( "Length" ) } },
+    };
+
+    auto it = derived.find( aItem->Type() );
+
+    if( it == derived.end() )
+        return;
+
+    const std::set<wxString>& names = it->second;
+
+    aDeltas.erase( std::remove_if( aDeltas.begin(), aDeltas.end(),
+                                   [&]( const KICAD_DIFF::PROPERTY_DELTA& aDelta )
+                                   {
+                                       return names.count( aDelta.name ) > 0;
+                                   } ),
+                   aDeltas.end() );
 }
 
 
@@ -519,13 +622,21 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             if( aCommit && stagedEntry( *aCommit, item, CHT_REMOVE ) )
                 return true;
 
-            std::vector<PROPERTY_RESOLUTION> resolutions;
+            std::vector<PROPERTY_DELTA> deltas;
 
             for( const nlohmann::json& propJson : aChange.value( "properties",
                                                                  nlohmann::json::array() ) )
             {
-                PROPERTY_DELTA delta = PROPERTY_DELTA::FromJson( propJson );
+                deltas.push_back( PROPERTY_DELTA::FromJson( propJson ) );
+            }
 
+            // Clients that predate the sender-side strip still send derived deltas.
+            SCH_COLLAB::StripDerivedDeltas( item, deltas );
+
+            std::vector<PROPERTY_RESOLUTION> resolutions;
+
+            for( const PROPERTY_DELTA& delta : deltas )
+            {
                 PROPERTY_RESOLUTION resolution;
                 resolution.name = delta.name;
                 resolution.kind = PROP_RES::CUSTOM;
@@ -885,6 +996,7 @@ void SCH_COLLAB_SYNC::captureItem( SCH_ITEM* aItem, SCH_ITEM* aBefore, SCH_SCREE
             SHEET_SCOPE    scope( &m_frame->Schematic(), &path );
 
             deltas = DiffItemProperties( aBefore, aItem );
+            SCH_COLLAB::StripDerivedDeltas( aItem, deltas );
         }
 
         // Items are routinely staged without being changed (e.g. a dialog OK'd with no
@@ -1366,17 +1478,55 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
     int            kept = 0;
     int            conflicts = 0;
 
+    // The snapshot and base screens are scratch copies outside the hierarchy: serialise
+    // all three against the live sheet, or a symbol's instance path differs between them
+    // (absolute vs. relative) and an untouched symbol counts as an offline edit on every
+    // join, re-sent as an upsert that strips the other clients' annotation.
+    if( !m_frame->Schematic().HasHierarchy() )
+        m_frame->Schematic().RefreshHierarchy();
+
+    const SCH_SHEET_PATH livePath = m_frame->Schematic().Hierarchy().FindSheetForScreen( screen );
+
+    // Symbols the fold parsed from fragments carry their instance relative to the sending
+    // sheet; anchor them like a landing fragment or they serialise with no instance block.
+    for( SCH_ITEM* item : serverScreen->Items().OfType( SCH_SYMBOL_T ) )
+        SCH_COLLAB::AnchorSymbolInstance( static_cast<SCH_SYMBOL*>( item ), livePath.Path() );
+
+    // A join writes the merged in-memory document as the new base, so once this copy is
+    // closed without saving, the file on disk is OLDER than the base: whatever differs
+    // between them is the last save, not an edit made offline.  Treating it as one pushed
+    // the stale file over everyone's newer work.  A file written after the base is the
+    // only kind that can hold offline edits.
+    bool localIsStale = false;
+
+    if( haveBase )
+    {
+        wxFileName localFile( screen->GetFileName() );
+        wxFileName baseFile( COLLAB_PROJECT::SyncBasePath( m_frame->Prj().GetProjectPath(),
+                                                           m_frame->Prj().GetProjectName(),
+                                                           relPath ) );
+
+        if( localFile.FileExists() && baseFile.FileExists()
+            && baseFile.GetModificationTime() > localFile.GetModificationTime() )
+        {
+            localIsStale = true;
+        }
+    }
+
     for( const KIID& id : ids )
     {
         SCH_ITEM* L = find( localItems, id );
         SCH_ITEM* R = find( serverItems, id );
         SCH_ITEM* B = find( baseItems, id );
 
-        std::string ls = L ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), screen, L )
+        std::string ls = L ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), screen, L,
+                                                          &livePath )
                            : std::string();
-        std::string rs = R ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), serverScreen, R )
+        std::string rs = R ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), serverScreen, R,
+                                                          &livePath )
                            : std::string();
-        std::string bs = B ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), baseScreen, B )
+        std::string bs = B ? SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), baseScreen, B,
+                                                          &livePath )
                            : std::string();
 
         // An item that will not serialize cannot be compared; leave it be.
@@ -1394,7 +1544,8 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
         }
 
         const bool haveB = B && !bs.empty();
-        const bool localChanged = ( L != nullptr ) != haveB || ( L && ls != bs );
+        const bool localChanged = !localIsStale
+                                  && ( ( L != nullptr ) != haveB || ( L && ls != bs ) );
         const bool remoteChanged = ( R != nullptr ) != haveB || ( R && rs != bs );
 
         if( !localChanged && !remoteChanged )
@@ -1580,6 +1731,14 @@ void SCH_COLLAB_SYNC::rollbackFromSnapshot( const wxString& aDocId,
         return;
     }
 
+    if( !m_frame->Schematic().HasHierarchy() )
+        m_frame->Schematic().RefreshHierarchy();
+
+    const SCH_SHEET_PATH livePath = m_frame->Schematic().Hierarchy().FindSheetForScreen( screen );
+
+    for( SCH_ITEM* item : tempScreen->Items().OfType( SCH_SYMBOL_T ) )
+        SCH_COLLAB::AnchorSymbolInstance( static_cast<SCH_SYMBOL*>( item ), livePath.Path() );
+
     // Synthesize one upsert (or removal) per touched item from the server's
     // state and run it through the same applier as any remote op.
     nlohmann::json changes = nlohmann::json::array();
@@ -1602,8 +1761,8 @@ void SCH_COLLAB_SYNC::rollbackFromSnapshot( const wxString& aDocId,
 
         if( item )
         {
-            std::string sexpr =
-                    SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen, item );
+            std::string sexpr = SCH_COLLAB::FormatItemSexpr( m_frame->Schematic(), tempScreen,
+                                                             item, &livePath );
 
             if( sexpr.empty() )
                 continue;
@@ -1981,6 +2140,20 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
                                    // so a later local undo cannot dereference it.
                                    m_frame->PurgeItemFromUndoRedo( aItem->m_Uuid );
                                } );
+
+    // The frame only re-tests dangling ends after its own edits, so a remote move or
+    // upsert left "unconnected" circles on pins whose wires plainly reach them.
+    if( screen && m_frame->GetCanvas() )
+    {
+        std::function<void( SCH_ITEM* )> repaint =
+                [this]( SCH_ITEM* aItem )
+                {
+                    m_frame->GetCanvas()->GetView()->Update( aItem, KIGFX::REPAINT );
+                };
+
+        SCH_SHEET_PATH path = m_frame->Schematic().Hierarchy().FindSheetForScreen( screen );
+        screen->TestDanglingEnds( path.size() > 0 ? &path : nullptr, &repaint );
+    }
 
     saveMissingLibraries( aOp.changes );
     ensureSheetDocs( aOp.docId, aOp.changes, false );
