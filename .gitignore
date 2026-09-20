@@ -159,3 +159,6 @@ qa/data/**/*.spice
 /resources/msw/RC*
 /server/scripts/node_modules
 /server/protocol/target
+
+# Screenshots for the collaboration README
+!docs/screenshots/*.png
