@@ -314,6 +314,15 @@ void PCB_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
         return;
     }
 
+    // A folder syncs with one online project (see SCH_COLLAB_TOOL::joinWithToken).
+    if( !COLLAB_PROJECT::ConfirmRelink( frame<PCB_EDIT_FRAME>(),
+                                        frame<PCB_EDIT_FRAME>()->Prj().GetProjectPath(),
+                                        frame<PCB_EDIT_FRAME>()->Prj().GetProjectName(),
+                                        wxString::FromUTF8( project->value( "projectId", "" ) ) ) )
+    {
+        return;
+    }
+
     // Remember the pairing so this copy rejoins automatically next time.
     COLLAB_PROJECT::WriteLocalLink( frame<PCB_EDIT_FRAME>()->Prj().GetProjectPath(),
                                     frame<PCB_EDIT_FRAME>()->Prj().GetProjectName(),
@@ -331,6 +340,14 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
     PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
     wxString        url;
     wxString        error;
+
+    // Same guard as the manager's Publish (see SCH_COLLAB_TOOL::startWithToken).
+    if( COLLAB_PROJECT::IsLinked( editFrame->Prj().GetProjectPath(), editFrame->Prj().GetProjectName() ) )
+    {
+        editFrame->ShowInfoBarError( _( "This project is already synced with an online project. "
+                                        "Use File > Online Sync in the project manager to change that." ) );
+        return;
+    }
 
     std::optional<nlohmann::json> project =
             COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,

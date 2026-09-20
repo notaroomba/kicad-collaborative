@@ -30,6 +30,7 @@
 #include <wx/mstream.h>
 #include <wx/translation.h>
 #include <wx/wfstream.h>
+#include <wx/msgdlg.h>
 #include <wx/zipstrm.h>
 
 
@@ -74,6 +75,25 @@ std::string COLLAB_PROJECT::ZipProjectFiles( const wxString& aProjectPath )
             wxFileName rel( files[ i ] );
             rel.MakeRelativeTo( aProjectPath );
             wxString entryName = rel.GetFullPath( wxPATH_UNIX );
+
+            // The extension whitelist alone let the sync folder through: its base copies of
+            // the board and schematic went up as documents of their own (and backups and
+            // local history hold design files too).  Nothing under those directories is
+            // project content.
+            bool localState = false;
+
+            for( const wxString& dir : rel.GetDirs() )
+            {
+                if( dir.EndsWith( wxS( ".collab" ) ) || dir.EndsWith( wxS( "-backups" ) )
+                    || dir.StartsWith( wxS( "." ) ) )
+                {
+                    localState = true;
+                    break;
+                }
+            }
+
+            if( localState )
+                continue;
 
             wxFFileInputStream input( files[ i ] );
 
@@ -433,6 +453,39 @@ void COLLAB_PROJECT::ForgetLocalCopy( const wxString& aProjectId )
 }
 
 
+bool COLLAB_PROJECT::IsLinked( const wxString& aProjectPath, const wxString& aProjectName )
+{
+    wxString server;
+    return !ReadLocalLink( aProjectPath, aProjectName, server ).IsEmpty();
+}
+
+
+bool COLLAB_PROJECT::ConfirmRelink( wxWindow* aParent, const wxString& aProjectPath,
+                                    const wxString& aProjectName, const wxString& aNewProjectId )
+{
+    wxString server;
+    wxString current = ReadLocalLink( aProjectPath, aProjectName, server );
+
+    if( current.IsEmpty() || current == aNewProjectId )
+        return true;
+
+    int answer = wxMessageBox(
+            _( "This project folder is already synced with a different online project.\n\n"
+               "A folder can follow only one online project.  Link it to the new one instead?  "
+               "The previous link is dropped (the online project itself is not changed), and "
+               "edits made here since the last sync are merged into the new project." ),
+            _( "Join Online Project" ), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, aParent );
+
+    if( answer != wxYES )
+        return false;
+
+    // The registry maps a project id to its local copy; the old id must not keep claiming
+    // this folder or "Open" from the online list lands two projects in it.
+    ForgetLocalCopy( current );
+    return true;
+}
+
+
 void COLLAB_PROJECT::ForgetLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId )
 {
     std::string text = readWholeFile( localCopiesPathIn( aRegistryDir ) );
@@ -495,7 +548,24 @@ void COLLAB_PROJECT::RecordLocalCopyIn( const wxString& aRegistryDir, const wxSt
     if( !map.is_object() )
         map = nlohmann::json::object();
 
-    map[ aProjectId.ToStdString( wxConvUTF8 ) ] = aProFile.ToStdString( wxConvUTF8 );
+    // One folder, one project: whatever other id claimed this .kicad_pro loses it (a folder
+    // re-published or re-joined used to be listed under both ids).
+    const std::string proFile = aProFile.ToStdString( wxConvUTF8 );
+
+    for( auto it = map.begin(); it != map.end(); )
+    {
+        if( it.key() != aProjectId.ToStdString( wxConvUTF8 ) && it.value().is_string()
+            && it.value().get<std::string>() == proFile )
+        {
+            it = map.erase( it );
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    map[ aProjectId.ToStdString( wxConvUTF8 ) ] = proFile;
 
     wxFFileOutputStream out( localCopiesPathIn( aRegistryDir ) );
 

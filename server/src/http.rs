@@ -54,6 +54,14 @@ fn doc_type_for(path: &str) -> &'static str {
     }
 }
 
+/// A path inside a project's own bookkeeping: `<name>.collab/` (sync bases, journals),
+/// `<name>-backups/`, `.history/` or `.git/`.  Never project content.
+fn is_local_state_path(name: &str) -> bool {
+    name.split('/').any(|dir| {
+        dir.ends_with(".collab") || dir.ends_with("-backups") || dir == ".history" || dir == ".git"
+    })
+}
+
 fn safe_zip_name(name: &str) -> Option<String> {
     let name = name.replace('\\', "/");
     if name.is_empty()
@@ -113,6 +121,12 @@ pub async fn create_project(
             let Some(name) = safe_zip_name(f.name()) else {
                 return Err(format!("unsafe path in archive: {}", f.name()));
             };
+            // People zip whole project folders: the sync folder, backups and local history
+            // hold copies of the design (a `<name>.collab/base/x.kicad_pcb` once became a
+            // second board document of a project), so those directories are skipped.
+            if is_local_state_path(&name) {
+                continue;
+            }
             if !allowed_file(&name) {
                 return Err(format!("file type not allowed: {name}"));
             }

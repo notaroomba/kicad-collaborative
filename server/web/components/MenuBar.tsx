@@ -7,6 +7,7 @@ import { HOME_MENUS, LINKS, MENUS, MODULE_ACTION_MENUS, type MenuEntry } from ".
 import { useApp, type ModuleAction } from "../store";
 import { isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
+import { PRODUCT_VERSION } from "../generated/product-version";
 
 // A menu entry (button or link): a full-width row with KiCad's blue hover, its shortcut at the right.
 const ITEM = "flex justify-between w-full text-left bg-transparent border-0 py-1.5 px-2.5 rounded-xs text-ink hover:bg-blue hover:text-white hover:no-underline";
@@ -116,7 +117,7 @@ export function MenuBar() {
     <div id="menubar" className="flex items-center gap-0.5 px-2 bg-bench border-b border-line select-none">
       <div className="brand flex items-center gap-2 font-semibold mr-3">
         <svg className="logo w-4.5 h-4.5 block" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023" /><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" strokeWidth="2.6" strokeLinecap="round" /><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434" /><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4" /></svg>
-        KiCad Collaborative <span className="ver text-xs font-mono font-normal leading-[normal] text-ink-3">1.0.3</span>
+        KiCad Collaborative <span className="ver text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
       </div>
       <div id={inEditor ? "kmenus" : "homeMenus"} className="flex gap-0.5">
         {menus.map(([title, entries]) => <Menu key={title} title={title} entries={entries} open={open === title} setOpen={setOpen} a={a} />)}
