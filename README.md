@@ -6,7 +6,7 @@
 
 ![Alice and Bob editing the LEDify schematic together](docs/screenshots/alice-bob-schematic.png)
 
-Two schematic editors on the same sheet, each at its own zoom. The named cursor in each window is the other person's: Bob's editor (left) shows where Alice is working, and Alice's (right) shows Bob.
+Two schematic editors on the same sheet, each at its own zoom. The named cursor in each window is the other person's: Alice's editor (left) shows where Bob is working, and Bob's (right) shows Alice.
 
 ![Alice and Bob connected to the LEDify PCB project](docs/screenshots/alice-bob-pcb.png)
 
