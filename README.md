@@ -1,4 +1,56 @@
-# KiCad README
+# KiCad Collaborative
+
+**Design circuits together, live.** KiCad Collaborative brings multiplayer editing directly into KiCad’s schematic and PCB editors: shared cursors, live changes, cloud projects, and version history.
+
+## Screenshots
+
+![Alice and Bob editing the LEDify schematic together](docs/screenshots/alice-bob-schematic.png)
+
+Two schematic editors on the same sheet, each at its own zoom. The named cursor in each window is the other person's: Bob's editor (left) shows where Alice is working, and Alice's (right) shows Bob.
+
+![Alice and Bob connected to the LEDify PCB project](docs/screenshots/alice-bob-pcb.png)
+
+Two independent desktop clients connected to the same LEDify demo project. The image above combines screenshots of Alice’s and Bob’s editor windows.
+
+| Alice’s PCB editor | Bob’s PCB editor |
+| --- | --- |
+| ![Alice’s connected PCB editor](docs/screenshots/alice-pcb.png) | ![Bob’s connected PCB editor](docs/screenshots/bob-pcb.png) |
+
+## Features
+
+- **Live schematic and PCB editing.** Share component moves, property changes, additions, deletions, wires, tracks, vias, text, and shapes.
+- **Presence on the canvas.** Named, color-coded cursors and selections show where collaborators are working. Follow a peer’s viewport while reviewing a design.
+- **In-progress previews.** See peers’ routing, wiring, and drag previews before they commit an edit.
+- **Cloud projects.** Upload, browse, and open shared projects from the project manager; paired projects automatically rejoin their session.
+- **Sharing and roles.** Invite collaborators by GitHub username or email, or create revocable editor/viewer links.
+- **Comments and review.** Discuss the design through document comment threads and canvas pins.
+- **Version history.** Create named checkpoints and restore an earlier version as the project owner.
+- **Offline recovery.** Local edits are journalled and replayed after reconnection, with duplicate operations suppressed.
+- **Libraries travel with your work.** Placed symbols and footprints are embedded in synchronization operations; project archives can include local libraries and 3D models.
+- **Synchronized undo and redo.** Reverted edits are broadcast to collaborators. Undo is per-user and can overwrite newer changes to the same item.
+
+## Try it
+
+1. Open KiCad Collaborative and choose **File → Online Projects…** in the project manager.
+2. Sign in with GitHub, then upload a project or open one shared with you.
+3. Use **Share…** to invite a collaborator or create an editor/viewer link.
+4. Open the same schematic or PCB in both clients. Cursors and supported edits synchronize live.
+
+See [the collaboration guide](COLLABORATION.md) for supported operations and limitations, and [the server README](server/README.md) for self-hosting and protocol details.
+
+## How it works
+
+The native C++ editors send property-level changes over WebSocket to a Rust server backed by PostgreSQL. The server orders and durably stores operations before acknowledging and broadcasting them. Clients apply changes in that order; changes to the same property use last-writer-wins resolution. Presence is a separate, ephemeral channel.
+
+This is a KiCad fork: collaboration overlays and edit hooks are built into the editors.
+
+## Current limits
+
+Board group/generator additions and edits, schematic sheet hierarchy changes, and schematic group membership are not fully synchronized. Remote zone outlines synchronize, but fills are rebuilt locally. The server currently supports one replica. See [known limitations](COLLABORATION.md#limitations) before using it for shared production work.
+
+---
+
+## Upstream KiCad
 
 For specific documentation about [building KiCad](https://dev-docs.kicad.org/en/build/), policies
 and guidelines, and source code documentation see the
