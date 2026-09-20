@@ -769,8 +769,15 @@ test("markers: MARKER_BASE flag polygon, DRC / ERC colours, zoom scale, shadow, 
   assert.deepStrictEqual(fills.map((o) => o.fill), [K.MARKER_COLORS.pcb.error, K.MARKER_COLORS.pcb.warning, K.MARKER_COLORS.pcb.exclusion, K.MARKER_COLORS.pcb.error], "unknown severities draw as errors");
   assert.strictEqual(K.MARKER_COLORS.pcb.error, "rgba(215,91,107,0.8)"); assert.strictEqual(K.MARKER_COLORS.pcb.warning, "rgba(255,208,66,0.8)"); assert.strictEqual(K.MARKER_COLORS.sch.error, "rgba(230,9,13,0.8)"); assert.strictEqual(K.MARKER_COLORS.sch.warning, "rgba(209,146,0,0.8)");
   const shadows = ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "rgba(0,16,35,0.5)"); assert.strictEqual(shadows.length, 4, "LAYER_MARKER_SHADOWS: background @ 0.5"); near(shadows[0].lw, K.markerScale("pcb", V40), 1e-9, "shadow one scale unit wide");
-  const track = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === "#C83434"), first = ctx.ops.indexOf(fills[0]), sel = ctx.ops.findIndex((o) => o.stroke === "#66B2FF");
-  assert(track < first && first < sel, "markers above the geometry, below the selection halo");
+  // A selected board item is repainted in its layer's selected colour (PCB_PAINTER::getColor via
+  // RENDER_SETTINGS::m_layerColorsSel); pcbnew draws no selection shadow, so no halo op appears.
+  const selCu = K.selectedColor("#C83434");
+  const track = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === selCu), first = ctx.ops.indexOf(fills[0]);
+  assert(track >= 0 && track < first, "selected track in the selected colour, markers above the geometry");
+  assert(!ctx.ops.some((o) => o.stroke === "#66B2FF" || o.fill === "#66B2FF"), "no selection halo on a board");
+  assert.strictEqual(selCu, "#d97272", "F.Cu selected: factor 0.25 + brightness^3 = 0.304, Brightened");
+  assert.strictEqual(K.selectedColor("#4D7FC4"), "#8cacd9", "B.Cu selected");
+  assert.strictEqual(K.selectedColor("#000000"), "#000000", "near-black layers keep their colour");
   assert.strictEqual(ctx.calls.moveTo - 8 * 0, ctx.calls.moveTo); assert(ctx.calls.lineTo >= 4 * 7, "8 corners per flag");
   const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")))');
   ctx = fullCtx(800, 600); K.render(sch, ctx, V40, { markers: [{ x: 2, y: 2, severity: "warning" }] });

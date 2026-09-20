@@ -2050,7 +2050,7 @@
   }
 
   // web/canvas/version.ts
-  var KICAD_BASE_VERSION = "10.99.0-3734-g6b600ff349-dirty";
+  var KICAD_BASE_VERSION = "10.99.0-3739-g353cdfb14f";
 
   // web/canvas/doc.ts
   function newDoc(type) {
@@ -3036,6 +3036,27 @@
     }
     return v;
   }
+  var SEL_CACHE = /* @__PURE__ */ new Map();
+  function selectedColor(c) {
+    let v = SEL_CACHE.get(c);
+    if (v) return v;
+    const [r, g, b, a] = parseColor(c), R = r / 255, G2 = g / 255, B = b / 255;
+    const bright = (x, y, z) => 0.299 * x + 0.587 * y + 0.114 * z, br = bright(R, G2, B);
+    if (br < 0.05) v = c;
+    else {
+      const f = Math.min(1, 0.25 + br * br * br), up = (x) => x * (1 - f) + f;
+      let sr = up(R), sg = up(G2), sb = up(B);
+      if (Math.abs(bright(sr, sg, sb) - br) < 0.05) {
+        const d = (x) => x * (1 - 0.2);
+        sr = d(R);
+        sg = d(G2);
+        sb = B * (1 - f) + f;
+      }
+      v = rgba(Math.round(sr * 255), Math.round(sg * 255), Math.round(sb * 255), a);
+    }
+    SEL_CACHE.set(c, v);
+    return v;
+  }
   function highlightFill(g) {
     return g.z !== void 0 && g.z < 0 ? "rgba(255,0,255,0.2)" : SCH.brightened;
   }
@@ -3115,6 +3136,8 @@
     const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
     const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
     const hlGeoms = hl ? /* @__PURE__ */ new Set() : null;
+    const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;
+    const selGeoms = selPcb ? /* @__PURE__ */ new Set() : null;
     const hlColor = (c) => highlightColor(c, isPcb);
     const ids = opts.ids ? opts.ids instanceof Set ? opts.ids : new Set(opts.ids) : null;
     const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
@@ -3167,12 +3190,14 @@
       const b = it.bbox;
       if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
       const isHl = hl ? hl.has(it.id) : false;
+      const isSel = selPcb ? selPcb.has(it.id) : false;
       for (const g of it.geom) {
         if (hidden.has(g.layer) || zoneOutline && g.zoneFill) continue;
         if (!padNumbers && g.padNum) continue;
         const z = g.z === void 0 ? 0 : g.z;
         bucket(BUCKETS, z).push(g);
         if (isHl) hlGeoms.add(g);
+        if (isSel) selGeoms.add(g);
         if (netNames && g.net > 0) {
           if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5).push(g);
           else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -3286,6 +3311,10 @@
             if (fill) fill = nc;
           }
         }
+        if (selPcb && selGeoms.has(g) && !g.hole) {
+          color = selectedColor(color);
+          if (fill) fill = selectedColor(fill);
+        }
         if (hl) {
           if (hlGeoms.has(g)) {
             color = hlColor(color);
@@ -3393,7 +3422,7 @@
     ctx.globalAlpha = 1;
     if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
     if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
-    if (opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
+    if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
   function drawRatsnest(ctx, lines, nets, netColors, s, dpr, vr) {
@@ -4433,6 +4462,7 @@
     parseDoc,
     setViewTransform,
     drawSelectionHalo,
+    selectedColor,
     moveItem,
     replaceChange,
     addChange,

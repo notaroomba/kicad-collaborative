@@ -160,6 +160,28 @@ export function highlightColor(c, isPcb) {
   let v = HL_CACHE.get(c); if (!v) { v = brightened(c, 0.5); HL_CACHE.set(c, v); } return v;
 }
 
+/**
+ * The colour of a SELECTED board item: RENDER_SETTINGS::update() derives m_layerColorsSel from each layer
+ * colour, and PCB_PAINTER::getColor() paints a selected item in it -- there is no shadow or halo on a board.
+ * With m_selectFactor 0.5: factor = min(1, 0.25 + brightness^3), colour.Brightened(factor); when that changes
+ * the brightness by under 0.05 (near-white layers) fall back to Darkened(0.2) with the blue channel pushed
+ * toward 1 by `factor`.  Layers darker than 0.05 keep their colour.  Brightness is 0.299 r + 0.587 g + 0.114 b.
+ */
+export const SEL_CACHE = new Map();
+export function selectedColor(c) {
+  let v = SEL_CACHE.get(c); if (v) return v;
+  const [r, g, b, a] = parseColor(c), R = r / 255, G = g / 255, B = b / 255;
+  const bright = (x, y, z) => 0.299 * x + 0.587 * y + 0.114 * z, br = bright(R, G, B);
+  if (br < 0.05) v = c;
+  else {
+    const f = Math.min(1, 0.25 + br * br * br), up = (x) => x * (1 - f) + f;
+    let sr = up(R), sg = up(G), sb = up(B);
+    if (Math.abs(bright(sr, sg, sb) - br) < 0.05) { const d = (x) => x * (1 - 0.2); sr = d(R); sg = d(G); sb = B * (1 - f) + f; }
+    v = rgba(Math.round(sr * 255), Math.round(sg * 255), Math.round(sb * 255), a);
+  }
+  SEL_CACHE.set(c, v); return v;
+}
+
 /** Fills of a highlighted schematic item: background-layer fills go translucent (SCH_PAINTER: alpha 0.2), the rest take the highlight colour. */
 export function highlightFill(g) { return g.z !== undefined && g.z < 0 ? "rgba(255,0,255,0.2)" : SCH.brightened; }
 
@@ -225,6 +247,8 @@ export function render(doc, ctx, view, opts) {
   const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
   const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
   const hlGeoms = hl ? new Set() : null;   // geometry of the highlighted items
+  const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;   // board selection: repainted, not haloed
+  const selGeoms = selPcb ? new Set() : null;
   const hlColor = (c) => highlightColor(c, isPcb);
   const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
   const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
@@ -276,12 +300,14 @@ export function render(doc, ctx, view, opts) {
     if (ids && !ids.has(it.id)) continue;
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
+    const isSel = selPcb ? selPcb.has(it.id) : false;
     for (const g of it.geom) {
       if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
       if (!padNumbers && g.padNum) continue;
       const z = g.z === undefined ? 0 : g.z;
       bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
+      if (isSel) selGeoms.add(g);
       if (netNames && g.net > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -328,6 +354,8 @@ export function render(doc, ctx, view, opts) {
       if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
       if (netColors && g.net > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net); if (nc) { color = nc; if (fill) fill = nc; } }
+      // board selection: the item repainted in its layer's selected colour (PCB_PAINTER::getColor), holes untouched
+      if (selPcb && selGeoms.has(g) && !g.hole) { color = selectedColor(color); if (fill) fill = selectedColor(fill); }
       if (hl) { if (hlGeoms.has(g)) { color = hlColor(color); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); } else alpha *= HL_DIM; }
       setAlpha(alpha);
       const t = g.t;
@@ -390,8 +418,9 @@ export function render(doc, ctx, view, opts) {
   if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
   if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
-  // selection: KiCad's selection shadow — a translucent halo around the item's own geometry
-  if (opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
+  // selection: eeschema draws a selection shadow (a translucent halo around the item's own geometry);
+  // pcbnew repaints the item in its selected colour instead, which the geometry pass above already did
+  if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 

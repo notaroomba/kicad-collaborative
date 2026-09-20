@@ -367,6 +367,16 @@ void SCH_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
         return;
     }
 
+    // A folder syncs with one online project.  Joining another one from a folder that is
+    // already linked silently re-pointed it (and split the edits between two projects); make
+    // that an explicit choice.
+    if( !COLLAB_PROJECT::ConfirmRelink( m_frame, m_frame->Prj().GetProjectPath(),
+                                        m_frame->Prj().GetProjectName(),
+                                        wxString::FromUTF8( project->value( "projectId", "" ) ) ) )
+    {
+        return;
+    }
+
     // Remember the pairing so this copy rejoins automatically next time.
     COLLAB_PROJECT::WriteLocalLink( m_frame->Prj().GetProjectPath(),
                                     m_frame->Prj().GetProjectName(),
@@ -383,6 +393,15 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 {
     wxString url;
     wxString error;
+
+    // Same guard as the manager's Publish: a linked folder already IS an online project;
+    // publishing it again made a duplicate that carried the sync folder along.
+    if( COLLAB_PROJECT::IsLinked( m_frame->Prj().GetProjectPath(), m_frame->Prj().GetProjectName() ) )
+    {
+        m_frame->ShowInfoBarError( _( "This project is already synced with an online project. "
+                                      "Use File > Online Sync in the project manager to change that." ) );
+        return;
+    }
 
     std::optional<nlohmann::json> project =
             COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,

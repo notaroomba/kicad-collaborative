@@ -26,6 +26,8 @@
 #include <nlohmann/json.hpp>
 #include <wx/string.h>
 
+class wxWindow;
+
 /**
  * Project-level collaboration plumbing shared by the editors: packaging a
  * project for upload, and the REST sequences behind "Start Collaboration
@@ -124,6 +126,17 @@ KICOMMON_API void UnlinkLocalProject( const wxString& aProjectPath,
 
 /// Drop the registry entry mapping aProjectId to a local copy.
 KICOMMON_API void ForgetLocalCopy( const wxString& aProjectId );
+
+/// True when <project>.collab/link.json names an online project.
+KICOMMON_API bool IsLinked( const wxString& aProjectPath, const wxString& aProjectName );
+
+/**
+ * Before pointing a folder at online project @p aNewProjectId: when it is already linked to a
+ * different one, ask the user (a folder syncs with one project; re-pointing it silently split
+ * one project's edits across two).  True when the link may be written.
+ */
+KICOMMON_API bool ConfirmRelink( wxWindow* aParent, const wxString& aProjectPath,
+                                 const wxString& aProjectName, const wxString& aNewProjectId );
 KICOMMON_API void ForgetLocalCopyIn( const wxString& aRegistryDir, const wxString& aProjectId );
 
 /**
