@@ -8,14 +8,6 @@
 
 Two schematic editors on the same sheet, each at its own zoom. The named cursor in each window is the other person's: Alice's editor (left) shows where Bob is working, and Bob's (right) shows Alice.
 
-![Alice and Bob connected to the LEDify PCB project](docs/screenshots/alice-bob-pcb.png)
-
-Two independent desktop clients connected to the same LEDify demo project. The image above combines screenshots of Alice’s and Bob’s editor windows.
-
-| Alice’s PCB editor | Bob’s PCB editor |
-| --- | --- |
-| ![Alice’s connected PCB editor](docs/screenshots/alice-pcb.png) | ![Bob’s connected PCB editor](docs/screenshots/bob-pcb.png) |
-
 ## Features
 
 - **Live schematic and PCB editing.** Share component moves, property changes, additions, deletions, wires, tracks, vias, text, and shapes.

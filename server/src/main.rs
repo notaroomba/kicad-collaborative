@@ -34,6 +34,9 @@ pub struct Config {
     /// Extra hostnames (besides public_url) the browser may sign in from; the
     /// OAuth dance is brokered on public_url and the session handed back here.
     pub allowed_origins: Vec<String>,
+    /// `KC_DEV_LOGIN=1`: enable `/auth/dev` (session cookie from a JWT minted with the
+    /// server's own secret) so a local browser test rig can sign in without GitHub.
+    pub dev_login: bool,
 }
 
 #[derive(Clone)]
@@ -82,7 +85,11 @@ async fn main() -> anyhow::Result<()> {
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty())
             .collect(),
+        dev_login: std::env::var("KC_DEV_LOGIN").map(|v| v == "1").unwrap_or(false),
     };
+    if cfg.dev_login {
+        tracing::warn!("KC_DEV_LOGIN=1 — /auth/dev accepts any JWT signed with JWT_SECRET (development only)");
+    }
     if cfg.github_client_id.is_none() {
         tracing::warn!("GITHUB_CLIENT_ID/SECRET not set — sign-in disabled until configured");
     }
@@ -160,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/me", get(auth::me))
         .route("/api/ws-ticket", get(auth::ws_ticket))
         .route("/auth/adopt", get(auth::adopt))
+        .route("/auth/dev", get(auth::dev_login))
         .route("/api/projects", post(http::create_project).get(http::list_projects))
         .route(
             "/api/projects/{id}",
