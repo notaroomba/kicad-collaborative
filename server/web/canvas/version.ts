@@ -2,4 +2,4 @@
 //
 // GetBaseVersion() (common/build_version.cpp:96): the KICAD_VERSION the KiCad in this tree is built
 // with.  ${KICAD_VERSION} in a drawing sheet's title block is "KiCad E.D.A. " + this.
-export const KICAD_BASE_VERSION = "10.99.0-3739-g353cdfb14f";
+export const KICAD_BASE_VERSION = "10.99.0-3739-g353cdfb14f-dirty";

@@ -387,6 +387,35 @@ pub async fn github_callback(
     finish_login(&state, jar, user, pending).await
 }
 
+#[derive(Deserialize)]
+pub struct DevLoginQuery {
+    pub jwt: String,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+/// Development only (`KC_DEV_LOGIN=1`): set the session cookie from a JWT minted with the
+/// server's secret, then continue to `next`.  A local browser test rig cannot inject the
+/// cookie itself, and the GitHub round trip needs a registered OAuth app.
+pub async fn dev_login(
+    State(state): State<AppState>,
+    Query(q): Query<DevLoginQuery>,
+    jar: CookieJar,
+) -> AppResult<Response> {
+    if !state.cfg.dev_login {
+        return Err(AppError::NotFound);
+    }
+    verify_jwt(&state, &q.jwt).ok_or_else(|| AppError::BadRequest("bad token".into()))?;
+    let cookie = Cookie::build((COOKIE_NAME, q.jwt.clone()))
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .build();
+    let jar = jar.add(cookie);
+    let next = q.next.filter(|n| n.starts_with('/') && !n.starts_with("//")).unwrap_or_else(|| "/".into());
+    Ok((jar, Redirect::to(&next)).into_response())
+}
+
 /// Shared tail of the browser flow: either hand a one-time code back to the
 /// desktop loopback, or set the session cookie and continue to `next`.
 #[derive(Deserialize)]
