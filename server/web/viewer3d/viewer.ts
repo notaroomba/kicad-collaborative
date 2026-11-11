@@ -61,6 +61,12 @@ export class Viewer {
   private software = false;
   /** the camera is where Zoom to Fit left it (so a resized window refits) */
   private fitted = true;
+  // a view change in flight (KiCad's 3D viewer animates them: "Enable animation", eda_3d_viewer_settings);
+  // the objects are reused from one animation to the next
+  private anim = { raf: 0, t0: 0, q0: new THREE.Quaternion(), q1: new THREE.Quaternion(), c0: new THREE.Vector3(), c1: new THREE.Vector3() };
+  private tmpQ = new THREE.Quaternion(); private tmpQ2 = new THREE.Quaternion(); private tmpV = new THREE.Vector3();
+  /** milliseconds a view change takes (0: none) */
+  animationMs = 220;
 
   constructor(host: HTMLElement) {
     this.host = host;
@@ -171,6 +177,7 @@ export class Viewer {
 
   /** Zoom by a factor about a canvas point (the centre when omitted): the board under it stays put. */
   zoomBy(factor: number, at?: { x: number; y: number }): void {
+    this.stopAnimation(true);
     const fit = this.fitDistance(); this.fitted = false;
     if (this.ortho) {
       const before = this.depth0(); const after = Math.max(fit / MAX_ZOOM, Math.min(fit / MIN_ZOOM, before / factor));
@@ -189,12 +196,38 @@ export class Viewer {
   zoomIn(): void { this.zoomBy(ZOOM_STEP); }
   zoomOut(): void { this.zoomBy(1 / ZOOM_STEP); }
   /** Zoom to Fit / Home: the camera back to its distance and centre, the board's rotation kept. */
-  fit(): void { this.cam.set(0, 0, this.fitDistance()); this.fitted = true; this.requestRender(); }
+  fit(): void { this.animateTo(this.anim.raf ? this.anim.q1 : this.pivot.quaternion, this.tmpV.set(0, 0, this.fitDistance())); this.fitted = true; }
 
   view(name: ViewName): void {
     const v = VIEWS[name];
-    this.pivot.quaternion.setFromEuler(new THREE.Euler(rad(v[0]), rad(v[1]), rad(v[2]), "XYZ"));
-    this.fit();
+    this.tmpQ2.setFromEuler(new THREE.Euler(rad(v[0]), rad(v[1]), rad(v[2]), "XYZ"));
+    this.animateTo(this.tmpQ2, this.tmpV.set(0, 0, this.fitDistance())); this.fitted = true;
+  }
+
+  /** Ease the board's rotation and the camera to a new pose over animationMs (at once when animation is off). */
+  private animateTo(q: THREE.Quaternion, cam: THREE.Vector3): void {
+    const a = this.anim;
+    a.q1.copy(q); a.c1.copy(cam);
+    let reduce = false; try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* old browser */ }
+    if (this.animationMs <= 0 || reduce || this.disposed) { this.stopAnimation(false); this.pivot.quaternion.copy(a.q1); this.cam.copy(a.c1); this.requestRender(); return; }
+    a.q0.copy(this.pivot.quaternion); a.c0.copy(this.cam); a.t0 = performance.now();
+    if (a.raf) return;
+    const step = (now: number): void => {
+      a.raf = 0; if (this.disposed) return;
+      const t = Math.min(1, (now - a.t0) / this.animationMs), e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      this.pivot.quaternion.slerpQuaternions(a.q0, a.q1, e); this.cam.lerpVectors(a.c0, a.c1, e);
+      this.renderNow();
+      if (t < 1) a.raf = requestAnimationFrame(step);
+    };
+    a.raf = requestAnimationFrame(step);
+  }
+
+  /** Stop a view change: where it is now, or (`finish`) at its end. */
+  private stopAnimation(finish: boolean): void {
+    const a = this.anim; if (!a.raf) return;
+    cancelAnimationFrame(a.raf); a.raf = 0;
+    if (finish) { this.pivot.quaternion.copy(a.q1); this.cam.copy(a.c1); }
+    this.requestRender();
   }
 
   /** Rotate the board about one of its own axes; `cw` as the toolbar names it (EDA_3D_CONTROLLER::RotateView). */
@@ -202,25 +235,27 @@ export class Viewer {
     // "Y rotations are backward b/c the RHR has Y pointing into the screen" (eda_3d_controller.cpp)
     const sign = axis === "y" ? (cw ? 1 : -1) : (cw ? -1 : 1);
     const v = axis === "x" ? new THREE.Vector3(1, 0, 0) : axis === "y" ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-    this.pivot.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(v, sign * rad(degrees))).normalize();
-    this.requestRender();
+    const from = this.anim.raf ? this.anim.q1 : this.pivot.quaternion;
+    this.tmpQ2.copy(from).multiply(this.tmpQ.setFromAxisAngle(v, sign * rad(degrees))).normalize();
+    this.animateTo(this.tmpQ2, this.anim.raf ? this.anim.c1 : this.cam);
   }
 
   flip(): void {
-    this.pivot.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI)).normalize();
-    this.requestRender();
+    const from = this.anim.raf ? this.anim.q1 : this.pivot.quaternion;
+    this.tmpQ2.copy(from).multiply(this.tmpQ.setFromAxisAngle(this.tmpV.set(0, 1, 0), Math.PI)).normalize();
+    this.animateTo(this.tmpQ2, this.anim.raf ? this.anim.c1 : this.cam);
   }
 
   /** Move the board on the screen by a fraction of the view (the arrow keys). */
   move(dx: number, dy: number): void {
+    this.stopAnimation(true);
     const step = 0.2 * this.target().depth * TAN;
     this.cam.x -= dx * step; this.cam.y -= dy * step; this.fitted = false; this.requestRender();
   }
 
   private orbit(dxPx: number, dyPx: number): void {
     const k = Math.PI / Math.max(200, Math.min(this.width, this.height));
-    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dxPx * k)
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dyPx * k));
+    const q = this.tmpQ.setFromAxisAngle(this.tmpV.set(0, 1, 0), dxPx * k).multiply(this.tmpQ2.setFromAxisAngle(this.tmpV.set(1, 0, 0), dyPx * k));
     this.pivot.quaternion.premultiply(q).normalize();
     this.requestRender();
   }
@@ -232,11 +267,11 @@ export class Viewer {
   }
 
   /** The board's rotation as a quaternion [x, y, z, w] (tests). */
-  get orientation(): [number, number, number, number] { const q = this.pivot.quaternion; return [q.x, q.y, q.z, q.w]; }
+  get orientation(): [number, number, number, number] { const q = this.anim.raf ? this.anim.q1 : this.pivot.quaternion; return [q.x, q.y, q.z, q.w]; }
   /** Magnification relative to Zoom to Fit, measured at the centre of the view. */
   get zoomLevel(): number { return this.fitDistance() / (this.ortho ? this.depth0() : this.target().depth); }
   /** Camera position [x, y, z] in millimetres (tests). */
-  get cameraPosition(): [number, number, number] { return [this.cam.x, this.cam.y, this.cam.z]; }
+  get cameraPosition(): [number, number, number] { const c = this.anim.raf ? this.anim.c1 : this.cam; return [c.x, c.y, c.z]; }
 
   // ---------------------------------------------------------------- input
 
@@ -244,6 +279,7 @@ export class Viewer {
     const c = this.canvas;
     c.addEventListener("pointerdown", (ev) => {
       if (this.drag) return;
+      this.stopAnimation(false);
       const mode = ev.button === 0 && !ev.shiftKey ? "orbit" : "pan";
       const r = c.getBoundingClientRect();
       this.drag = { id: ev.pointerId, mode, x: ev.clientX, y: ev.clientY, depth: this.target({ x: ev.clientX - r.left, y: ev.clientY - r.top }).depth };
@@ -266,6 +302,7 @@ export class Viewer {
     c.addEventListener("auxclick", (ev) => ev.preventDefault());
     c.addEventListener("wheel", (ev) => {
       ev.preventDefault();
+      this.stopAnimation(false);
       const r = c.getBoundingClientRect();
       const steps = Math.max(-3, Math.min(3, -ev.deltaY / 100));
       this.zoomBy(Math.pow(ZOOM_STEP, steps || (ev.deltaY < 0 ? 1 : -1)), { x: ev.clientX - r.left, y: ev.clientY - r.top });
@@ -311,6 +348,7 @@ export class Viewer {
   dispose(): void {
     this.disposed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.anim.raf) cancelAnimationFrame(this.anim.raf);
     if (this.resizeObs) this.resizeObs.disconnect();
     if (this.board) { this.pivot.remove(this.board.group); this.board.dispose(); this.board = null; }
     this.renderer.dispose();

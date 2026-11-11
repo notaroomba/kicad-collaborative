@@ -96,6 +96,62 @@ function cap(m: MeshData, contour: Pt[], holes: Pt[][], z: number, up: boolean, 
   for (const f of faces) m.tri(base + f[0], base + f[1], base + f[2], 0, 0, nz);
 }
 
+/** The inward offset of a convex loop by d (null when the loop is not convex enough to shrink cleanly). */
+function insetLoop(loop: Pt[], d: number): Pt[] | null {
+  const n = loop.length; if (n < 3 || d <= 0) return null;
+  const ccw = polyArea(loop) > 0; const out: Pt[] = [];
+  const nrm = (a: Pt, b: Pt): Pt => { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return ccw ? [-dy / l, dx / l] : [dy / l, -dx / l]; };
+  for (let i = 0; i < n; i++) {
+    const p = loop[i], n1 = nrm(loop[(i + n - 1) % n], p), n2 = nrm(p, loop[(i + 1) % n]);
+    const k = 1 + n1[0] * n2[0] + n1[1] * n2[1]; if (k < 0.2) return null;
+    out.push([p[0] + d * (n1[0] + n2[0]) / k, p[1] + d * (n1[1] + n2[1]) / k]);
+  }
+  return polyArea(out) * polyArea(loop) > 0 ? out : null;
+}
+
+/** A vertical prism from z0 (on the board) to z1 (its top; sgn: the direction the part grows), the top edge bevelled by `bevel`. */
+function prismSolid(m: MeshData, loop: Pt[], z0: number, z1: number, sgn: number, color: RGBA, round: boolean, bevel: number): void {
+  if (loop.length < 3 || Math.abs(z1 - z0) < 1e-6) { if (loop.length >= 3) cap(m, loop, [], z1, sgn > 0, color); return; }
+  let centre: Pt | undefined;
+  if (round) { let sx = 0, sy = 0; for (const p of loop) { sx += p[0]; sy += p[1]; } centre = [sx / loop.length, sy / loop.length]; }
+  const b = Math.min(bevel, Math.abs(z1 - z0) * 0.45);
+  const inner = b > 0.01 ? insetLoop(loop, b) : null;
+  if (!inner) { wall(m, loop, z1, z0, color, false, centre); cap(m, loop, [], z1, sgn > 0, color); return; }
+  const zb = z1 - sgn * b;
+  wall(m, loop, zb, z0, color, false, centre);
+  // the bevel band: outward and up, half and half
+  const ccw = polyArea(loop) > 0, n = loop.length, k = Math.SQRT1_2;
+  for (let i = 0; i < n; i++) {
+    const a = loop[i], c = loop[(i + 1) % n], ia = inner[i], ic = inner[(i + 1) % n];
+    const dx = c[0] - a[0], dy = c[1] - a[1], l = Math.hypot(dx, dy); if (l < 1e-9) continue;
+    let ox = (ccw ? dy : -dy) / l, oy = (ccw ? -dx : dx) / l;
+    let ax = ox, ay = oy, cx = ox, cy = oy;
+    if (centre) { const ra = Math.hypot(a[0] - centre[0], a[1] - centre[1]) || 1, rc = Math.hypot(c[0] - centre[0], c[1] - centre[1]) || 1; ax = (a[0] - centre[0]) / ra; ay = (a[1] - centre[1]) / ra; cx = (c[0] - centre[0]) / rc; cy = (c[1] - centre[1]) / rc; }
+    const v0 = m.vertex(a[0], a[1], zb, ax * k, ay * k, sgn * k, color), v1 = m.vertex(c[0], c[1], zb, cx * k, cy * k, sgn * k, color);
+    const v2 = m.vertex(ic[0], ic[1], z1, cx * k, cy * k, sgn * k, color), v3 = m.vertex(ia[0], ia[1], z1, ax * k, ay * k, sgn * k, color);
+    ox *= k; oy *= k;
+    m.tri(v0, v1, v2, ox, oy, sgn * k); m.tri(v0, v2, v3, ox, oy, sgn * k);
+  }
+  cap(m, inner, [], z1, sgn > 0, color);
+}
+
+/** A horizontal cylinder from a to b (model XY) with its axis at height z, smooth-shaded, both ends capped. */
+function cylinderSolid(m: MeshData, a: Pt, b: Pt, r: number, z: number, color: RGBA, seg = 18): void {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy); if (l < 1e-6 || r <= 0) return;
+  const ux = dx / l, uy = dy / l, px = -uy, py = ux;   // axis and the horizontal perpendicular
+  const ring = (c: Pt): number[] => { const ids: number[] = []; for (let i = 0; i < seg; i++) { const t = 2 * Math.PI * i / seg, ct = Math.cos(t), st = Math.sin(t); ids.push(m.vertex(c[0] + r * ct * px, c[1] + r * ct * py, z + r * st, ct * px, ct * py, st, color)); } return ids; };
+  const ra = ring(a), rb = ring(b);
+  for (let i = 0; i < seg; i++) {
+    const j = (i + 1) % seg, t = 2 * Math.PI * (i + 0.5) / seg, nx = Math.cos(t) * px, ny = Math.cos(t) * py, nz = Math.sin(t);
+    m.tri(ra[i], rb[i], rb[j], nx, ny, nz); m.tri(ra[i], rb[j], ra[j], nx, ny, nz);
+  }
+  for (const [c, sgn] of [[a, -1], [b, 1]] as [Pt, number][]) {
+    const mid = m.vertex(c[0], c[1], z, sgn * ux, sgn * uy, 0, color); const ids: number[] = [];
+    for (let i = 0; i < seg; i++) { const t = 2 * Math.PI * i / seg; ids.push(m.vertex(c[0] + r * Math.cos(t) * px, c[1] + r * Math.cos(t) * py, z + r * Math.sin(t), sgn * ux, sgn * uy, 0, color)); }
+    for (let i = 0; i < seg; i++) m.tri(mid, ids[i], ids[(i + 1) % seg], sgn * ux, sgn * uy, 0);
+  }
+}
+
 function material(opts: THREE.MeshPhongMaterialParameters): THREE.MeshPhongMaterial {
   return new THREE.MeshPhongMaterial(Object.assign({ shininess: 18, specular: new THREE.Color(0x222222) }, opts));
 }
@@ -208,6 +264,15 @@ export class BoardScene {
   }
 
   private addBody(m: MeshData, body: Body, toModel: (p: Pt) => Pt, thickness: number, lift: number): void {
+    if (body.solids && body.solids.length) {
+      // heights are from the face the part sits on: up from the front, down from the back
+      const sgn = body.back ? -1 : 1, zOf = (h: number) => (body.back ? -thickness - lift - h : lift + h);
+      for (const so of body.solids) {
+        if (so.k === "prism") prismSolid(m, so.pts.map(toModel), zOf(so.z0), zOf(so.z1), sgn, so.color, !!so.round, so.bevel || 0);
+        else cylinderSolid(m, toModel(so.a), toModel(so.b), so.r, zOf(so.z), so.color);
+      }
+      return;
+    }
     const pts = body.pts.map(toModel);
     const z0 = body.back ? -thickness - lift : lift, z1 = body.back ? -thickness - lift - body.height : lift + body.height;
     const round = pts.length > 8; let centre: Pt | undefined;

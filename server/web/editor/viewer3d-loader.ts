@@ -63,9 +63,12 @@ export function show3DViewer(): void {
       // in connection.edits: any of them moving means the board may have changed.
       subscribe(onChange) {
         const stamp = () => { const s = app.get(); return [s.document.docId, s.document.version, s.undo.undo, s.undo.redo, s.connection.edits].join("|"); };
-        let last = stamp();
+        let last = stamp(); const docId = app.get().document.docId;
         return app.subscribe(() => {
-          if (app.get().view !== "editor") { viewer.close(); return; }   // left the editor (home, another project): the window goes with it
+          // left the board editor (home, another project, a schematic sheet, another board): the window goes with it, as
+          // KiCad's 3D viewer closes with its PCB frame
+          const s = app.get(), d = editor.kdoc;
+          if (s.view !== "editor" || (s.document.docId && s.document.docId !== docId) || (d && d.type !== "pcb")) { viewer.close(); return; }
           const now = stamp(); if (now !== last) { last = now; onChange(); }
         });
       },

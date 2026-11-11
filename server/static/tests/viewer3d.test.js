@@ -157,5 +157,41 @@ test("texture extent respects the GPU limit and the pixel budget", () => {
   const small = G.textureExtent([0, 0, 320, 110], 2048); assert(small.width <= 2048);
 });
 
+test("part models: axial along the leads, DIP with a notch, SOIC with leads, chip ends, cans, headers", () => {
+  const pad = (num, x, y, drill, w = 1.6, h = 1.6) => ({ num: String(num), x, y, w, h, drill });
+  const top = (ss) => Math.max(...ss.map((s) => (s.k === "prism" ? s.z1 : s.z + s.r)));
+  // R_Axial_DIN0207: a 6.3 mm x 2.5 mm cylinder centred between pads 10.16 mm apart, lying along X
+  let s = G.partSolids("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal", "R1", [pad(1, 0, 0, true), pad(2, 10.16, 0, true)], null, null, false);
+  const body = s.find((x) => x.k === "cyl" && x.r > 1);
+  near(body.r, 1.25); near(Math.abs(body.b[0] - body.a[0]), 6.3, 1e-6); near((body.a[0] + body.b[0]) / 2, 5.08, 1e-6); near(body.a[1], 0); assert(top(s) < 3, "an axial lies low");
+  // a diode gets its cathode band at pad 1
+  s = G.partSolids("Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal", "D1", [pad(1, 0, 0, true), pad(2, 7.62, 0, true)], null, null, false);
+  const band = s.filter((x) => x.k === "cyl" && x.r > 0.5)[1]; assert(band && band.a[0] < 3.81, "band at pad 1's end");
+  // DIP-40 600 mil: body between the rows, ~3.8 mm high, a notch at pin 1's end
+  const dip = []; for (let i = 0; i < 20; i++) { dip.push(pad(i + 1, 0, i * 2.54, true)); dip.push(pad(40 - i, 15.24, i * 2.54, true)); }
+  s = G.partSolids("Package_DIP:DIP-40_W15.24mm", "U1", dip, null, null, false);
+  const db = s[0]; const xs = db.pts.map((p) => p[0]); near(Math.max(...xs) - Math.min(...xs), 13.94, 1e-6); near(db.z1, 3.8, 1e-6);
+  const notch = s.find((x) => x.round); assert(notch && Math.min(...notch.pts.map((p) => p[1])) < 0, "notch at the pin-1 end");
+  // a socketed DIP stands on its socket
+  s = G.partSolids("Package_DIP:DIP-8_W7.62mm_Socket", "U2", [pad(1, 0, 0, true), pad(2, 0, 2.54, true), pad(3, 7.62, 2.54, true), pad(4, 7.62, 0, true)], null, null, false);
+  assert(top(s) > 6 && top(s) < 7.5, "socket + package");
+  // SOIC-8 from its name: 3.9 x 4.9 body, 1.6 high, leads out to the pads
+  const so = [pad(1, -2.7, -1.905, false, 1.5, 0.6), pad(2, -2.7, -0.635, false, 1.5, 0.6), pad(3, -2.7, 0.635, false, 1.5, 0.6), pad(4, -2.7, 1.905, false, 1.5, 0.6), pad(5, 2.7, 1.905, false, 1.5, 0.6), pad(6, 2.7, 0.635, false, 1.5, 0.6), pad(7, 2.7, -0.635, false, 1.5, 0.6), pad(8, 2.7, -1.905, false, 1.5, 0.6)];
+  s = G.partSolids("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "U3", so, null, null, true);
+  const sx = s[0].pts.map((p) => p[0]); near(Math.max(...sx) - Math.min(...sx), 3.9, 1e-6); assert(top(s) <= 1.7 && top(s) >= 1.2, "SOIC height " + top(s));
+  assert.strictEqual(s.filter((x) => x.k === "prism" && x.z1 < 0.5).length, 8, "eight leads");
+  // chip resistor 0805: body + two tinned ends, oriented along its pads
+  s = G.partSolids("Resistor_SMD:R_0805_2012Metric", "R2", [pad(1, 0, -0.9, false, 1, 1.2), pad(2, 0, 0.9, false, 1, 1.2)], null, null, true);
+  assert.strictEqual(s.length, 3); const ys = s.flatMap((x) => x.pts.map((p) => p[1])); near(Math.max(...ys) - Math.min(...ys), 2.0, 1e-6);
+  // an electrolytic can from its D, centred on the fab circle
+  s = G.partSolids("Capacitor_THT:CP_Radial_D8.0mm_P3.50mm", "C1", [pad(1, 0, 0, true), pad(2, 3.5, 0, true)], null, { x: 1.75, y: 0, r: 4 }, false);
+  near(top(s), 11.02, 1e-6); assert(s[0].round, "a can is round");
+  // pin header: plastic strip and 8.5 mm posts
+  s = G.partSolids("Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical", "J1", [pad(1, 0, 0, true), pad(2, 0, 2.54, true), pad(3, 0, 5.08, true)], null, null, false);
+  near(top(s), 8.5, 1e-6); assert.strictEqual(s.length, 4);
+  // nothing recognisable: no model (the plain body is drawn instead)
+  assert.strictEqual(G.partSolids("Lib:Mystery", "X1", [pad(1, 0, 0, true), pad(2, 5, 0, true)], null, null, false), null);
+});
+
 console.log(`viewer3d: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

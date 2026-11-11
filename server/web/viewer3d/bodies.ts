@@ -3,6 +3,7 @@
 // extruded to a plausible height for the kind of part.  Pure geometry: no DOM, no three.js.
 import type { RGBA } from "./colors";
 import type { Pt } from "./outline";
+import { type Solid, localPads, partSolids } from "./parts";
 
 /** KiCad's footprint attribute classes, the 3D viewer's three model toggles. */
 export type BodyClass = "tht" | "smd" | "virtual";
@@ -16,6 +17,9 @@ export interface Body {
   height: number;
   color: RGBA;
   ref: string;
+  /** the part drawn as solids (board millimetres, heights from the face it sits on) when its library name is one
+   *  parts.ts models; otherwise the body is the plain prism over `pts` */
+  solids?: Solid[];
 }
 
 const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
@@ -92,11 +96,12 @@ export function footprintBody(item: KItem): Body | null {
   if (ext.pts.length < 2) { ext = layerExtent(item, back ? "B.Fab" : "F.Fab"); inset = 0; }
   if (ext.pts.length < 2) return null;
   const ref = item.ref || "";
+  const solids = modelSolids(item, cls === "smd" || (cls === "virtual" && !hasDrill(item)), back);
   if (ext.circle) {
     const r = Math.max(0.15, ext.circle.r - inset); const n = 32; const pts: Pt[] = [];
     for (let i = 0; i < n; i++) { const a = 2 * Math.PI * i / n; pts.push([ext.circle.x + r * Math.cos(a), ext.circle.y + r * Math.sin(a)]); }
     const st = bodyStyle(cls === "virtual" ? "tht" : cls, ref, 2 * r, 2 * r, true);
-    return { cls, back, pts, height: st.height, color: st.color, ref };
+    return { cls, back, pts, height: st.height, color: st.color, ref, solids };
   }
   // the bounding box in the footprint's own frame, so a rotated part gets a rotated box (sexpr.ts rotator's convention)
   const fx = num(item.x), fy = num(item.y); const a = num(item.rot) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
@@ -110,7 +115,30 @@ export function footprintBody(item: KItem): Body | null {
   if (!(x1 - x0 > 0.05) || !(y1 - y0 > 0.05)) return null;
   const world = (lx: number, ly: number): Pt => [fx + lx * c + ly * s, fy - lx * s + ly * c];
   const st = bodyStyle(cls === "virtual" ? (hasDrill(item) ? "tht" : "smd") : cls, ref, x1 - x0, y1 - y0, false);
-  return { cls, back, pts: [world(x0, y0), world(x1, y0), world(x1, y1), world(x0, y1)], height: st.height, color: st.color, ref };
+  return { cls, back, pts: [world(x0, y0), world(x1, y0), world(x1, y1), world(x0, y1)], height: st.height, color: st.color, ref, solids };
+}
+
+/** parts.ts's solids for a footprint, mapped from its own frame to the board's; undefined when it models nothing. */
+function modelSolids(item: KItem, smd: boolean, back: boolean): Solid[] | undefined {
+  const fx = num(item.x), fy = num(item.y); const a = num(item.rot) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const local = (p: Pt): Pt => { const dx = p[0] - fx, dy = p[1] - fy; return [dx * c - dy * s, dx * s + dy * c]; };
+  const world = (p: Pt): Pt => [fx + p[0] * c + p[1] * s, fy - p[0] * s + p[1] * c];
+  const fab = layerExtent(item, back ? "B.Fab" : "F.Fab");
+  let box: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  if (fab.pts.length >= 2) {
+    box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const p of fab.pts) { const [lx, ly] = local(p); box.x0 = Math.min(box.x0, lx); box.x1 = Math.max(box.x1, lx); box.y0 = Math.min(box.y0, ly); box.y1 = Math.max(box.y1, ly); }
+  }
+  // a can's silk / fab circle (an electrolytic's outline), in the footprint's frame
+  let circle: { x: number; y: number; r: number } | null = null;
+  for (const layer of [back ? "B.Fab" : "F.Fab", back ? "B.SilkS" : "F.SilkS"]) {
+    for (const g of item.geom) if (g.layer === layer && g.t === "circle" && (!circle || num(g.r) > circle.r)) { const [lx, ly] = local([num(g.x), num(g.y)]); circle = { x: lx, y: ly, r: num(g.r) }; }
+    if (circle) break;
+  }
+  let solids: Solid[] | null = null;
+  try { solids = partSolids(item.lib || "", item.ref || "", localPads(item.node), box, circle, smd); } catch { solids = null; }
+  if (!solids || !solids.length) return undefined;
+  return solids.map((so) => so.k === "prism" ? Object.assign({}, so, { pts: so.pts.map(world) }) : Object.assign({}, so, { a: world(so.a), b: world(so.b) }));
 }
 
 function padCount(item: KItem): number { let n = 0; for (const c of item.node) if (Array.isArray(c) && c[0] === "pad") n++; return n; }
