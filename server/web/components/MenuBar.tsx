@@ -382,6 +382,7 @@ export function MenuBar() {
           <>
             {me.avatarUrl ? <img className="w-5 h-5 rounded-[50%]" src={me.avatarUrl} alt="" /> : null}
             <span>{me.name || me.login}</span>
+            {!inEditor ? <button type="button" className="btn sm" id="logoutBtn" onClick={() => window.CollabHome?.signOut()}>Log out</button> : null}
           </>
         ) : <a className="btn sm" id="signinBtn" href={`/auth/github/login?next=${next}`}>Sign in with GitHub</a>}
       </div>

@@ -10,16 +10,19 @@
 .hp-dim { color: var(--ink-3); font-weight: 400; }
 
 /* The editor status bar's cursor / zoom / grid cells mean nothing on the home view. */
-body:not([data-editor]) #statusbar .sbcell { display: none; }
-body:not([data-editor]) #sbMsg { visibility: hidden; }   /* the editor's mouse hints mean nothing here */
-/* the home has its own account button (sidebar / top bar) */
-body:not([data-editor]) #userBox { display: none; }
+/* The editor's status bar (connection, zoom, cursor, grid, units) means nothing over a list of projects. */
+body:not([data-editor]) #statusbar { display: none; }
+body:not([data-editor]) #app { grid-template-rows: 40px minmax(0, 1fr); }
+body:not([data-editor]) #menubar { padding: 0 12px 0 14px; }
+body:not([data-editor]) #userBox { gap: 10px; color: var(--ink); font-weight: 500; }
+.hp-side-foot { gap: 4px; }
+.hp-side-foot .hp-account { margin-top: 4px; }
 
 /* ---- sidebar ---- */
 .hp-side { background: var(--bench); border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: auto; }
 .hp-nav, .hp-side-acts, .hp-side-foot { display: flex; flex-direction: column; gap: 1px; }
 .hp-side-acts { border-top: 1px solid var(--line); padding-top: 10px; }
-.hp-side-foot { margin-top: auto; gap: 8px; }
+.hp-side-foot { margin-top: auto; }
 .hp-nav a, .hp-side-btn { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; border-radius: 3px; color: var(--ink);
   background: none; border: 0; text-align: left; text-decoration: none; width: 100%; }
 @media (hover: hover) { .hp-nav a:hover, .hp-side-btn:hover { background: var(--paper); text-decoration: none; } }

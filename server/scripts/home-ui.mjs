@@ -100,6 +100,10 @@ const a = await open(ids.ta); const b = await open(ids.tb);
 await a.waitForSelector('.hp-item:not(.skel)'); await b.waitForSelector('.hp-item:not(.skel)');
 
 await step('list', async () => {
+  const frame = await a.evaluate(() => ({ sb: document.querySelector('#statusbar')?.getBoundingClientRect().height || 0, menus: document.querySelectorAll('#homeMenus .menu').length,
+    gap: innerHeight - document.querySelector('.hp').getBoundingClientRect().bottom, out: [...document.querySelectorAll('#logoutBtn, .hp-logout')].filter((e) => e.getBoundingClientRect().width > 0).length }));
+  check('the dashboard has no editor status bar or menus, and fills the window', frame.sb === 0 && frame.menus === 0 && Math.abs(frame.gap) < 1, JSON.stringify(frame));
+  check('Log out is one click away, in the top bar and the sidebar', frame.out === 2, JSON.stringify(frame));
   check('alice sees her 3 projects and the one shared with her', (await names(a)).length === 4, (await names(a)).join(', '));
   check('role pills: owner on own, editor on shared', await card(a, 'StickHub').locator('.pill.owner').count() === 1 && await card(a, 'Video card').locator('.pill.editor').count() === 1);
   await a.click('.hp-seg button:has-text("Shared with me")'); check('"Shared with me" filter', (await names(a)).join() === 'Video card');
@@ -553,7 +557,7 @@ await step('phone', async () => {
   check('phone: invite from the typeahead works by touch', true);
   await m.locator('.hp-x').tap();
   await m.locator('.hp-tabbar a >> nth=1').tap(); await m.waitForSelector('.hp-item:not(.skel)'); check('phone: Explore tab', await m.locator('.hp-head h1').textContent() === 'Explore');
-  await m.locator('.hp-topbar .hp-account').tap(); await m.locator('.hp-menu button', { hasText: 'Sign out' }).tap();
+  await m.locator('.hp-topbar .hp-account').tap(); await m.locator('.hp-menu button', { hasText: 'Log out' }).tap();
   // Signed out, "/" is the public home page (web/landing), not this app.
   await m.waitForFunction(() => !document.querySelector('.hp-account') && document.readyState === 'complete' && /KiCad Collaborative/.test(document.title));
   check('sign out returns to the public home page', (await m.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401);

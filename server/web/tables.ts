@@ -205,10 +205,10 @@ export const EDITOR_ONLY: Record<string, Editor> = { move: "sch", drag: "sch", e
 export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
 
 /** The project manager's bar (home view): the same entries the old markup carried. */
-export const HOME_MENUS: [string, MenuEntry[]][] = [
-  ["File", ["newProject", "joinLink", "importGithub", "-", "openTrash", "-", "signOut"]],
-  ["Help", ["downloadDesktop", "sourceCode", "-", "about"]],
-];
+// The projects home has no menu bar of its own: everything it offered (new project, join, import, Trash,
+// log out, the desktop app) is one click away in the sidebar, and a File menu over a list of projects only
+// repeated it.  The top bar there carries the product name and the account.
+export const HOME_MENUS: [string, MenuEntry[]][] = [];
 
 /** Labels for entries that are ours rather than KiCad TOOL_ACTIONs. */
 export const LOCAL_LABELS: Record<string, string> = {
@@ -220,7 +220,7 @@ export const LOCAL_LABELS: Record<string, string> = {
   theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About KiCad Collaborative",
   languageEnglish: "English", showSearch: "Search", toDLabel: "Change to Directive Label", decrement: "Decrement", netInspector: "Net Inspector",
   // home-view menu entries
-  share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Sign Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
+  share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Log Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
   "tab-appearance": "Layers", "tab-props": "Properties", "tab-peers": "Collaborators", "tab-comments": "Comments", "tab-history": "History",
 };
 export const LOCAL_KEYS: Record<string, string> = { zoomin: "+", zoomout: "−", fit: "Home", undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", selectAll: "Ctrl+A" };

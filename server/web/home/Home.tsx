@@ -807,6 +807,7 @@ export function Home() {
             <div className="hp-side-foot">
               <a className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
               {accountBtn}
+              {me ? <button type="button" className="hp-side-btn hp-logout" onClick={() => signOut()}><Ic name="signout" size={18} /><span>Log out</span></button> : null}
             </div>
           </aside>
           <main className="hp-main" id="homeMain">
@@ -840,7 +841,7 @@ export function Home() {
         { id: "gh", label: "GitHub profile", icon: "open", run: () => { window.open(`https://github.com/${me.login}`, "_blank", "noopener"); } },
         { id: "app", label: "Get the desktop app", icon: "desktop", run: () => { window.open(RELEASES, "_blank", "noopener"); } },
         "-",
-        { id: "out", label: "Sign out", icon: "signout", run: () => { signOut(); } },
+        { id: "out", label: "Log out", icon: "signout", run: () => { signOut(); } },
       ]} /> : null}
     </>
   );
