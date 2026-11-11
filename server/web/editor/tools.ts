@@ -1,7 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setStatusBar, state, store } from "./appstore";
-import { toolCursor } from "./crosshair";
+import { refreshCrosshair, toolCursor } from "./crosshair";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
 import { toolChanging } from "./gestures";
 import { sendOp } from "./net";
@@ -43,6 +43,8 @@ export function toolCtx(extra) {
     // Ask a desktop editor in this document to do what the browser cannot (fill zones).
     requestDesktop(action) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },
     setStatus(text) { setStatusBar({ mode: text || "" }); },
+    // WarpMouseCursor: the browser cannot move the pointer, so the crosshair and the cursor position go there
+    warpCursor(mm) { if (!mm) return; E.lastCursorMm = [mm[0], mm[1]]; store.slice("viewport", { cursor: E.lastCursorMm }); refreshCrosshair(); requestRender(); },
   }, extra || {});
 }
 
@@ -166,6 +168,10 @@ export function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
   // a viewer may highlight, measure and pan; a drawing or editing tool does not start (KiCad greys it, and so do our bars)
   if (E.viewOnly && moduleTool(t) && t !== "highlight") { toast("View-only access"); if (E.tool !== "select" && moduleTool(E.tool) && E.tool !== "highlight") setTool("select"); return; }
+  // KiCad refuses to activate another tool while a wire, a placement or a move is in flight (the module says
+  // "Press <ESC> to cancel …" in the infobar and keeps going)
+  const vm = activeModule() as unknown as { vetoTool?: (id: string, c: unknown) => boolean } | null;
+  if (vm && vm.vetoTool && t !== "pan" && t !== "zoomtool") { try { if (vm.vetoTool(t, toolCtx())) return; } catch (e) { console.warn(e); } }
   const prev = E.tool; if (t !== prev) toolChanging(t);   // a drag in flight is put back; a drawing tool starts with nothing selected
   E.tool = t;
   store.slice("tool", { current: t });

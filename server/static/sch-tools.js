@@ -22,7 +22,7 @@ const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
 const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
 const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
 const SHAPE_KINDS = new Set(["rectangle", "circle", "arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
-const DRAW_TOOLS = new Set(["rect", "circle", "arc", "lines", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
+const DRAW_TOOLS = new Set(["rect", "circle", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
 // Kinds the canvas has no SCH_TYPE_NAMES entry for: the desktop's GetClass() names.
 const TYPE_NAMES = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };
 // KiCad's delete cursor: a small bin with a crosshair hotspot
@@ -40,7 +40,7 @@ const TOOLS = [
   { id: "place", label: "Place symbol", key: "A", cursor: "crosshair", icon: '<rect x="7" y="5" width="10" height="14"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
   { id: "power", label: "Power symbol", key: "P", cursor: "crosshair", icon: '<path d="M12 21v-9M6 12h12M12 12l-5-7M12 12l5-7"/>' },
   { id: "classlabel", label: "Directive label", key: "", cursor: "crosshair", icon: '<path d="M4 20l8-8"/><circle cx="14" cy="10" r="2.5"/><path d="M15 4h6v3h-6z"/>' },
-  { id: "lines", label: "Lines", key: "I", cursor: "crosshair", icon: '<path d="M3 20l6-10 5 6 7-12"/>' },
+  { id: "lines", label: "Lines", key: "I", kind: "polyline", cursor: "crosshair", icon: '<path d="M3 20l6-10 5 6 7-12"/>' },
   { id: "rect", label: "Rectangle", key: "", cursor: "crosshair", icon: '<rect x="4" y="6" width="16" height="12"/>' },
   { id: "circle", label: "Circle", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="8"/>' },
   { id: "arc", label: "Arc", key: "", cursor: "crosshair", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
@@ -473,9 +473,12 @@ function mmPerPx(ctx) {
   if (ctx.worldMm && ctx.stage) { try { const a = ctx.worldMm({ clientX: 0, clientY: 0 }), b = ctx.worldMm({ clientX: 100, clientY: 0 }); const v = (b[0] - a[0]) / 100; if (v > 0 && isFinite(v)) return v; } catch (e) { /* no layout yet */ } }
   return ctx.pxPerMm ? 1 / ctx.pxPerMm : 0.25;
 }
-// Grid snap, but a pin or line end within reach wins (KiCad's connection snapping).
-function snapConn(ctx, mm, kind) {
-  const g = ctx.snap([mm[0], mm[1]]);
+// Grid snap, but a pin or line end within reach wins (KiCad's connection snapping).  As in every SCH tool loop,
+// Shift turns the magnetic snap to anchors off (grid.SetSnap( !MD_SHIFT )) and Ctrl the grid (DisableGridSnapping).
+function snapConn(ctx, mm, kind, ev) {
+  const noGrid = !!(ev && (ev.ctrlKey || ev.metaKey)), noAnchors = !!(ev && ev.shiftKey);
+  const g = noGrid ? [mm[0], mm[1]] : ctx.snap([mm[0], mm[1]]);
+  if (noAnchors) return [r4(g[0]), r4(g[1])];
   const r = Math.max((ctx.gridPitch || 1.27) * 0.45, 6 * mmPerPx(ctx));
   let best = null, bd = r;
   const take = (x, y) => { const d = Math.hypot(x - mm[0], y - mm[1]); if (d < bd) { bd = d; best = [x, y]; } };
@@ -484,71 +487,410 @@ function snapConn(ctx, mm, kind) {
   return best ? [r4(best[0]), r4(best[1])] : [r4(g[0]), r4(g[1])];
 }
 
-// ---------------------------------------------------------------- wires and buses
-// One leg from the last fixed point to the cursor: straight when aligned, else two segments.
-function legPoints(a, c, hFirst, flip) {
-  if (same(a, c)) return [];
-  const dx = c[0] - a[0], dy = c[1] - a[1];
-  if (S.lineMode === "free" || Math.abs(dx) <= 1e-6 || Math.abs(dy) <= 1e-6) return [c];
-  if (S.lineMode === "45") {                                // straight run then a 45° diagonal; '/' goes diagonal first
-    const ax = Math.abs(dx), ay = Math.abs(dy), sx = Math.sign(dx), sy = Math.sign(dy);
-    if (Math.abs(ax - ay) <= 1e-6) return [c];
-    if (ax > ay) return flip ? [[r4(a[0] + sx * ay), c[1]], c] : [[r4(c[0] - sx * ay), a[1]], c];
-    return flip ? [[c[0], r4(a[1] + sy * ax)], c] : [[a[0], r4(c[1] - sy * ax)], c];
+// ---------------------------------------------------------------- wires and buses (eeschema/tools/sch_line_wire_bus_tool.cpp)
+// KiCad's model: m_wires is a list of segments [start, end]; the last one (and in 90° / 45° mode the one
+// before it) are live and follow the cursor through computeBreakPoint.  A click fixes the first live
+// segment in 90° mode (the second becomes the first of the next pair, so it keeps stretching along its
+// axis) and both in 45° mode.  `kind` is "wire", "bus" or "polyline" (drawLines, LAYER_NOTES).
+S.posture = false;                         // doDrawSegments' static posture flag: kept across invocations
+const segNull = (s) => same(s[0], s[1]);
+const twoSegments = () => S.lineMode !== "free";
+// The sheet pin at p, with the side of the sheet it sits on (SCH_SCREEN::GetSheetPin).
+function sheetPinSideAt(doc, p) {
+  for (const it of doc.items.values()) {
+    if (it.kind !== "sheet") continue;
+    for (const pin of kids(it.node, "pin")) {
+      const [x, y, rot] = atOf(pin); if (!same([x, y], p)) continue;
+      const r = ((Math.round(rot || 0) % 360) + 360) % 360;
+      return { x, y, side: r === 0 ? "right" : r === 90 ? "top" : r === 180 ? "left" : "bottom", item: it };
+    }
   }
-  return hFirst ? [[c[0], a[1]], c] : [[a[0], c[1]], c];
+  return null;
 }
-function posture(w) { const a = w.pts[w.pts.length - 1], c = w.cur; const auto = Math.abs(c[0] - a[0]) >= Math.abs(c[1] - a[1]); return w.flip ? !auto : auto; }
+/**
+ * computeBreakPoint: bend `seg` / `next` so that the pair runs from seg's start to `pos`.  The first segment
+ * keeps its current orientation when it can (preferVertical / preferHorizontal), a sheet-pin start forces a
+ * horizontal first leg and pushes a cursor on the pin's x one grid outside the sheet.  Returns the end point.
+ */
+function computeBreakPoint(doc, seg, next, pos, mode, posture, grid) {
+  pos = [pos[0], pos[1]];
+  const start = seg[0], delta = [pos[0] - start[0], pos[1] - start[1]];
+  const xDir = delta[0] > 0 ? 1 : -1, yDir = delta[1] > 0 ? 1 : -1;
+  const nz = (v) => Math.abs(v) > 1e-9;
+  let preferH, preferV;
+  if (mode === "45" && posture) { preferH = nz(next[1][0] - next[0][0]); preferV = nz(next[1][1] - next[0][1]); }
+  else { preferH = nz(seg[1][0] - seg[0][0]); preferV = nz(seg[1][1] - seg[0][1]); }
+  const pin = doc ? sheetPinSideAt(doc, start) : null;
+  if (pin && (pin.side === "left" || pin.side === "right")) {
+    if (Math.abs(pos[0] - pin.x) < 1e-6) pos[0] = r4(pos[0] + (grid || 1.27) * (pin.side === "left" ? -1 : 1));   // push outside the sheet
+    preferH = true; preferV = false;
+  }
+  let mid = [0, 0];
+  const breakVertical = () => {
+    if (mode === "45") mid = !posture ? [start[0], pos[1] - yDir * Math.abs(delta[0])] : [pos[0], start[1] + yDir * Math.abs(delta[0])];
+    else mid = [start[0], pos[1]];
+  };
+  const breakHorizontal = () => {
+    if (mode === "45") mid = !posture ? [pos[0] - xDir * Math.abs(delta[1]), start[1]] : [start[0] + xDir * Math.abs(delta[1]), pos[1]];
+    else mid = [pos[0], start[1]];
+  };
+  if (preferV) breakVertical(); else if (preferH) breakHorizontal();
+  const dm = [mid[0] - start[0], mid[1] - start[1]], sb = (v) => v < 0;
+  if (mode === "45" && !posture && (sb(dm[0]) !== sb(delta[0]) || sb(dm[1]) !== sb(delta[1]))) { preferV = false; preferH = false; }
+  else if (mode === "45" && posture && (Math.abs(dm[0]) > Math.abs(delta[0]) + 1e-9 || Math.abs(dm[1]) > Math.abs(delta[1]) + 1e-9)) { preferV = false; preferH = false; }
+  if (!preferH && !preferV) { if (Math.abs(delta[0]) < Math.abs(delta[1])) breakVertical(); else breakHorizontal(); }
+  mid = [r4(mid[0]), r4(mid[1])];
+  seg[1] = mid; next[0] = mid.slice(); next[1] = pos.slice();
+  return pos;
+}
+// The live segments follow the cursor (doDrawSegments' motion handler).
+function wireFollow(ctx, p) {
+  const w = S.wire; if (!w) return; const n = w.segs.length, seg = w.segs[n - 1];
+  if (twoSegments() && n >= 2) computeBreakPoint(ctx.doc, w.segs[n - 2], seg, p, S.lineMode, S.posture, ctx.gridPitch);
+  else seg[1] = p.slice();
+  w.cur = p.slice();
+}
+/** The drawn polyline: the points of every non-null segment, in order. */
+function wirePoints(w) {
+  const out = [];
+  for (const s of w.segs) { if (segNull(s)) continue; if (!out.length || !same(out[out.length - 1], s[0])) out.push(s[0].slice()); out.push(s[1].slice()); }
+  return out;
+}
+// startSegments: one segment at the point, two in 90° / 45° mode.  `opts.quitOnDraw` returns to the
+// select tool once the wire is finished (a wire auto-started from a pin by the selection tool).
+function startWire(ctx, kind, p, opts) {
+  const segs = [[p.slice(), p.slice()]]; if (twoSegments()) segs.push([p.slice(), p.slice()]);
+  S.wire = { kind, segs, cur: p.slice(), quitOnDraw: !!(opts && opts.quitOnDraw) };
+  ctx.requestRender();
+}
+// SCH_SCREEN::IsTerminalPoint: where a click ends the wire by itself.
+function isTerminalPoint(doc, p, kind) {
+  if (kind === "polyline") { for (const it of doc.items.values()) if (it.kind === "polyline" && segs(it).some(([a, b]) => segDist(p, a, b) <= 1e-3)) return true; return false; }
+  const lineAt = (k) => lineEndsAt(doc, p[0], p[1], k).length > 0 || lineMidsAt(doc, p[0], p[1], k).length > 0;
+  if (kind === "bus") return lineAt("bus") || sheetPinsAt(doc, p).length > 0 || labelsAt(doc, p).some((l) => l.kind !== "netclass_flag" && l.kind !== "directive_label");
+  if (busEntriesAt(doc, p).length || junctionAt(doc, p[0], p[1]) || pinsAt(doc, p[0], p[1]).length || lineAt("wire")) return true;
+  return labelsAt(doc, p).length > 0 || sheetPinsAt(doc, p).length > 0;
+}
+function wireClick(ctx, p, dbl) {
+  const w = S.wire; if (!w) return;
+  if (S.unfold && !S.unfold.placed) S.unfold.placed = true;        // the first click of an unfold places the label
+  wireFollow(ctx, p);
+  const n = w.segs.length, seg = w.segs[n - 1];
+  if (!segNull(seg) || (twoSegments() && n >= 2 && !segNull(w.segs[n - 2]))) {
+    if (isTerminalPoint(ctx.doc, p, w.kind)) { finishWire(ctx); return; }   // KiCad ends a wire on a pin, junction, label or line
+    const placed = S.lineMode === "45" ? 2 : 1;                    // 45°: the angled end is what the user aims, both legs are placed
+    seg[1] = p.slice();
+    for (let i = 0; i < placed; i++) w.segs.push([p.slice(), p.slice()]);
+  }
+  if (dbl && S.wire) finishWire(ctx);
+  else ctx.requestRender();
+}
+// SCH_ACTIONS::undoLastSegment / ACTIONS::doDelete / ACTIONS::undo while drawing: the last segment goes, the
+// cursor goes to the new end and the bend is recomputed.  False when there is nothing left to take back
+// (Ctrl+Z then falls through to the document's undo; Delete / Backspace just beep).
+function undoSegment(ctx) {
+  const w = S.wire; if (!w) return false;
+  const n = w.segs.length;
+  if (!((S.lineMode === "free" && n > 1) || n > 2)) return false;
+  w.segs.pop();
+  const seg = w.segs[w.segs.length - 1], p = seg[1].slice();
+  S.cursor = p.slice(); if (typeof ctx.warpCursor === "function") ctx.warpCursor(p);
+  if (twoSegments() && w.segs.length >= 2) computeBreakPoint(ctx.doc, w.segs[w.segs.length - 2], seg, p, S.lineMode, S.posture, ctx.gridPitch);
+  else seg[1] = p;
+  w.cur = p; ctx.requestRender();
+  return true;
+}
+// switchSegmentPosture ('/'), only with two or more segments: 90° swaps the two live legs, 45° flips the posture.
+function switchPosture(ctx) {
+  const w = S.wire; if (!w || w.segs.length < 2) return false;
+  S.posture = !S.posture;
+  const n = w.segs.length, l2 = w.segs[n - 1], l1 = w.segs[n - 2];
+  if (S.lineMode === "90") {
+    const d2 = [l2[1][0] - l2[0][0], l2[1][1] - l2[0][1]], d1 = [l1[1][0] - l1[0][0], l1[1][1] - l1[0][1]];
+    l2[0] = [r4(l2[1][0] - d1[0]), r4(l2[1][1] - d1[1])]; l1[1] = [r4(l1[0][0] + d2[0]), r4(l1[0][1] + d2[1])];
+  } else computeBreakPoint(ctx.doc, l1, l2, w.cur || l2[1], S.lineMode, S.posture, ctx.gridPitch);
+  ctx.requestRender(); return true;
+}
+// A line-mode change while drawing adds or drops the extra live segment.
+function wireModeChanged(ctx, from, to) {
+  const w = S.wire; if (!w || from === to) return;
+  const cur = (w.cur || w.segs[w.segs.length - 1][1]).slice();
+  if (to === "free" && w.segs.length >= 2) { w.segs.pop(); w.segs[w.segs.length - 1][1] = cur; }
+  else if (from === "free") { w.segs[w.segs.length - 1][1] = cur; w.segs.push([cur.slice(), cur.slice()]); }
+  wireFollow(ctx, cur);
+}
+// simplifyWireList: null segments go, consecutive overlapping ones (a backtrack) merge.
+function simplifyWireList(segs) {
+  const out = [];
+  for (const s of segs) {
+    if (segNull(s)) continue;
+    const prev = out[out.length - 1], m = prev ? mergeOverlap(prev, s, null) : null;
+    if (m) out[out.length - 1] = m; else out.push([s[0].slice(), s[1].slice()]);
+  }
+  return out;
+}
+// The legacy point-list form of simplifyWireList (graphic shapes still use it): drops repeats and
+// collinear points that keep going the same way.
 function simplify(pts) {
   const out = [];
   for (const p of pts) if (!out.length || !same(out[out.length - 1], p)) out.push(p);
-  for (let i = 1; i < out.length - 1;) {   // merge collinear runs that keep going the same way
+  for (let i = 1; i < out.length - 1;) {
     const a = out[i - 1], b = out[i], c = out[i + 1];
     const cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]), dot = (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]);
     if (Math.abs(cross) < 1e-6 && dot > 0) out.splice(i, 1); else i++;
   }
   return out;
 }
-function startWire(ctx, kind, p) { S.wire = { kind, pts: [p], cur: p, flip: false, legs: [] }; ctx.requestRender(); }
-function wireClick(ctx, p) {
-  const w = S.wire, last = w.pts[w.pts.length - 1];
-  if (same(last, p) && !w.legs.length) return;             // a click on the start point: the segment is still null, KiCad ignores it
-  if (same(last, p)) { finishWire(ctx); return; }          // click on the last point (or a double click) ends it
-  w.cur = p; const leg = legPoints(last, p, posture(w), w.flip); w.pts.push(...leg); w.legs.push(leg.length);
-  if (connectsAt(ctx.doc, p, w.kind)) finishWire(ctx);     // KiCad ends a wire on reaching a pin or another line
-  else ctx.requestRender();
+// SCH_LINE::MergeOverlap for two segments [a, b]: their union when collinear and overlapping or touching
+// (touching ones only when `isJunctionAt(point)` says no junction is there), else null.
+function mergeOverlap(A, B, isJunctionAt) {
+  const less = (p, q) => (Math.abs(p[0] - q[0]) <= 1e-6 ? p[1] < q[1] - 1e-6 : p[0] < q[0]);
+  const ord = (s) => (less(s[1], s[0]) ? [s[1], s[0]] : [s[0], s[1]]);
+  let [ls, le] = ord(B), [rs, re] = ord(A);
+  if (less(rs, ls)) { [ls, rs] = [rs, ls]; [le, re] = [re, le]; }
+  const os = rs, oe = re;
+  if (less(re, le)) { rs = ls; re = le; }
+  if (less(le, os)) return null;                                   // one ends before the other begins
+  if (same(ls, os) && same(le, oe)) return [ls.slice(), le.slice()];
+  let colinear;
+  if (Math.abs(ls[1] - le[1]) <= 1e-6 && Math.abs(os[1] - oe[1]) <= 1e-6) colinear = Math.abs(ls[1] - os[1]) <= 1e-6;
+  else if (Math.abs(ls[0] - le[0]) <= 1e-6 && Math.abs(os[0] - oe[0]) <= 1e-6) colinear = Math.abs(ls[0] - os[0]) <= 1e-6;
+  else {
+    const dx = le[0] - ls[0], dy = le[1] - ls[1];
+    colinear = Math.abs((os[1] - ls[1]) * dx - (os[0] - ls[0]) * dy) <= 1e-6 && Math.abs((oe[1] - ls[1]) * dx - (oe[0] - ls[0]) * dy) <= 1e-6;
+  }
+  if (!colinear) return null;
+  if (same(le, rs) && isJunctionAt && isJunctionAt(le)) return null;   // touching at a junction: kept apart
+  return [ls.slice(), re.slice()];
 }
-function undoLeg(ctx) {
-  const w = S.wire; if (!w) return;
-  if (!w.legs.length) { S.wire = null; ctx.requestRender(); return; }
-  w.pts.length -= w.legs.pop(); ctx.requestRender();
+
+// ---------------------------------------------------------------- JUNCTION_HELPERS::AnalyzePoint (eeschema/junction_helpers.cpp)
+const angleKey = (from, to) => Math.round(Math.atan2(to[1] - from[1], to[0] - from[0]) * 1800 / Math.PI);
+const BUS_TEXT = /\[.*\.\..*\]|\{.*\}/;
+/**
+ * What meets at p: { isJunction, hasDot, hasBusEntry, hasBusAtPoint, allows } — three or more distinct
+ * exit directions on the wire or the bus layer make a junction.  Collinear wires through the point are
+ * merged first (unless a dot is there, crossings are being broken or three stubs already meet), so two
+ * wires meeting end to end do not count as two exits.  `extra` adds lines that are not in the document
+ * (a wire being drawn: [{ kind, a, b }]), `skip` leaves items out (ids).
+ */
+function analyzePoint(doc, p, breakCrossings, extra, skip) {
+  const info = { isJunction: false, hasDot: false, hasBusEntry: false, hasBusAtPoint: false, multiWires: false, multiBuses: false, allows: false };
+  const lines = [], others = [];
+  const onLine = (a, b) => segDist(p, a, b) <= 1e-3;
+  for (const it of doc.items.values()) {
+    if (skip && skip.has(it.id)) continue;
+    if (it.kind === "wire" || it.kind === "bus") { for (const [a, b] of segs(it)) if (onLine(a, b)) lines.push({ layer: it.kind, a, b }); }
+    else if (it.kind === "junction") { if (same(atOf(it.node), p)) { info.hasDot = true; } }
+    else if (it.kind === "bus_entry") { if (connPoints(doc, it).some((q) => same(q, p))) { info.hasBusEntry = true; others.push(it); } }
+    else if (it.kind === "symbol" || it.kind === "sheet" || it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") others.push(it);
+  }
+  for (const e of extra || []) if ((e.kind === "wire" || e.kind === "bus") && !same(e.a, e.b) && onLine(e.a, e.b)) lines.push({ layer: e.kind, a: e.a, b: e.b });
+  const isEnd = (l) => same(l.a, p) || same(l.b, p);
+  const pre = { wire: new Set(), bus: new Set() };
+  for (const l of lines) if (!same(l.a, l.b) && isEnd(l)) pre[l.layer].add(angleKey(p, same(l.a, p) ? l.b : l.a));
+  const keepStub = pre.wire.size >= 3 || pre.bus.size >= 3;
+  if (!info.hasDot && !breakCrossings && !keepStub) {
+    for (let merged = true; merged;) {
+      merged = false;
+      for (let i = 0; i < lines.length && !merged; i++) for (let j = i + 1; j < lines.length; j++) {
+        if (lines[i].layer !== lines[j].layer) continue;
+        const m = mergeOverlap([lines[i].a, lines[i].b], [lines[j].a, lines[j].b], null);
+        if (m) { lines[i] = { layer: lines[i].layer, a: m[0], b: m[1] }; lines.splice(j, 1); merged = true; break; }
+      }
+    }
+  }
+  const exits = { wire: new Set(), bus: new Set() }, brk = { wire: false, bus: false }, mids = { wire: [], bus: [] };
+  let unique = 100000, entryBus = 0, busEnds = 0;
+  for (const l of lines) {
+    if (same(l.a, l.b)) continue;
+    if (isEnd(l)) { brk[l.layer] = true; exits[l.layer].add(angleKey(p, same(l.a, p) ? l.b : l.a)); if (l.layer === "bus") busEnds++; }
+    else { if (breakCrossings) brk[l.layer] = true; mids[l.layer].push(l); }
+    if (l.layer === "bus") info.hasBusAtPoint = true;
+  }
+  for (const it of others) {
+    if (it.kind === "bus_entry") { brk.bus = true; exits.bus.add(unique++); entryBus++; brk.wire = true; exits.wire.add(unique++); info.hasBusEntry = true; }
+    else if (it.kind === "symbol") { if (symbolPins(doc, it).some((q) => q.type !== "no_connect" && same([q.x, q.y], p))) { brk.wire = true; exits.wire.add(unique++); } }
+    else if (it.kind === "sheet") { if (kids(it.node, "pin").some((pin) => same(atOf(pin), p))) { brk.wire = true; exits.wire.add(unique++); } }
+    else if (same(atOf(it.node), p)) {
+      if (it.kind === "label" && BUS_TEXT.test(str(it.node[1]))) brk.bus = true; else brk.wire = true;
+    }
+  }
+  for (const layer of ["wire", "bus"]) if (brk[layer]) for (const l of mids[layer]) { exits[layer].add(angleKey(p, l.b)); exits[layer].add(angleKey(p, l.a)); }
+  if (info.hasBusEntry) { info.multiWires = exits.wire.size > 2 && exits.bus.size === 1; info.multiBuses = exits.bus.size - entryBus >= 3 && busEnds >= 1; }
+  info.isJunction = exits.wire.size >= 3 || exits.bus.size >= 3;
+  info.allows = info.isJunction && (!info.hasBusEntry || info.multiWires || info.multiBuses);
+  return info;
 }
+const isJunctionPoint = (doc, p) => analyzePoint(doc, p, false).isJunction;                                   // SCH_SCREEN::IsJunction
+const explicitJunctionNeeded = (doc, p, extra, skip) => { const i = analyzePoint(doc, p, false, extra, skip); return i.allows && !i.hasDot; };
+const explicitJunctionAllowed = (doc, p) => analyzePoint(doc, p, true).allows;
+// Every connection point of the items on the sheet (SCH_SCREEN::GetConnections).
+function screenConnections(doc) {
+  const out = [], seen = new Set();
+  for (const it of doc.items.values()) for (const p of connPoints(doc, it)) { const k = r4(p[0]) + "," + r4(p[1]); if (!seen.has(k)) { seen.add(k); out.push(p); } }
+  return out;
+}
+// JUNCTION_HELPERS::PreviewJunctions: where junction dots would appear if the preview lines were committed.
+function previewJunctions(doc, lines, skip) {
+  const extra = lines.filter((l) => !same(l.a, l.b)), pts = [], seen = new Set();
+  if (!extra.length) return [];
+  const conns = screenConnections(doc);
+  const push = (p) => { const k = r4(p[0]) + "," + r4(p[1]); if (!seen.has(k)) { seen.add(k); pts.push(p); } };
+  for (const l of extra) { push(l.a); push(l.b); for (const c of conns) if (segDist(c, l.a, l.b) <= 1e-3) push(c); }
+  return pts.filter((p) => analyzePoint(doc, p, false, extra, skip).allows);
+}
+
+// A dry-run edit of the sheet: changes are applied to the document as they are made (so the analysis sees
+// them) and restore() puts every touched item back, ready for ctx.commit to apply the change set itself.
+function editTxn(doc, IU) {
+  const saved = new Map(), out = new Map();
+  const keep = (id, obj) => { if (!saved.has(id)) saved.set(id, obj || null); };
+  return {
+    add(node) { const { item, change } = addNode(doc, node); keep(item.id, null); out.set(item.id, change); return item; },
+    modify(item, node) {
+      keep(item.id, item);
+      const prev = out.get(item.id); let c = modChange(doc, item, node);
+      if (prev && prev.kind === "ADDED") c = Object.assign({}, c, { kind: "ADDED" });
+      out.set(item.id, c); K.applyChange(doc, c, IU || 1e4); return doc.items.get(item.id);
+    },
+    remove(item) {
+      keep(item.id, item);
+      const prev = out.get(item.id);
+      if (prev && prev.kind === "ADDED") out.delete(item.id); else out.set(item.id, removeChange(item));
+      doc.items.delete(item.id);
+    },
+    restore() { for (const [id, obj] of saved) { if (obj) doc.items.set(id, obj); else doc.items.delete(id); } },
+    changes() { return Array.from(out.values()); },
+    has(id) { return out.has(id); },
+    isNew(id) { const c = out.get(id); return !!(c && c.kind === "ADDED"); },
+  };
+}
+const segOf = (it) => { const p = ptsOf(it.node); return p.length === 2 ? [p[0], p[1]] : null; };
+// AddJunction: the junction plus BreakSegments at the point (every wire and bus running through it splits).
+function txnAddJunction(t, doc, p) {
+  for (const kd of ["wire", "bus"]) for (const it of lineMidsAt(doc, p[0], p[1], kd)) {
+    const s = segOf(it); if (!s) continue;
+    const a = deep(it.node); setPts(a, [s[0], [r4(p[0]), r4(p[1])]]); t.modify(it, a);
+    const tail = lineNode(it.kind, p, s[1]), st = kid(it.node, "stroke"); if (st) replaceKid(tail, deep(st)); t.add(tail);
+  }
+  return t.add(junctionNode(p));
+}
+/**
+ * SCHEMATIC::CleanUp, limited to the lines `seed` names and the ones they reach: identical lines go,
+ * collinear overlapping or touching lines of a layer merge (not across a junction point), junctions that
+ * are no longer allowed at `points` go.  The web keeps the rest of the sheet as the user left it.
+ */
+function txnCleanUp(t, doc, seed, points) {
+  const live = new Set(seed);
+  for (const p of points || []) {
+    const j = junctionAt(doc, p[0], p[1]);
+    if (j && !t.has(j.id) && !explicitJunctionAllowed(doc, p)) t.remove(j);
+  }
+  for (let changed = true, guard = 0; changed && guard < 200; guard++) {
+    changed = false;
+    outer: for (const id of Array.from(live)) {
+      const A = doc.items.get(id); if (!A || !isNetLine(A.kind)) { live.delete(id); continue; }
+      const sa = segOf(A); if (!sa) continue;
+      if (same(sa[0], sa[1])) { t.remove(A); live.delete(id); changed = true; break; }
+      for (const B of Array.from(doc.items.values())) {
+        if (B === A || B.kind !== A.kind) continue;
+        const sb = segOf(B); if (!sb) continue;
+        if (Math.max(Math.min(sa[0][0], sa[1][0]), Math.min(sb[0][0], sb[1][0])) > Math.min(Math.max(sa[0][0], sa[1][0]), Math.max(sb[0][0], sb[1][0])) + 1e-6) continue;
+        if (Math.max(Math.min(sa[0][1], sa[1][1]), Math.min(sb[0][1], sb[1][1])) > Math.min(Math.max(sa[0][1], sa[1][1]), Math.max(sb[0][1], sb[1][1])) + 1e-6) continue;
+        const sameStroke = K.serialize(kid(A.node, "stroke") || []) === K.serialize(kid(B.node, "stroke") || []);
+        if (!sameStroke) continue;
+        // keep the line that was already on the sheet: the new one is the one that goes
+        const [keepIt, dropIt] = t.isNew(A.id) && !t.isNew(B.id) ? [B, A] : [A, B];
+        if ((same(sa[0], sb[0]) && same(sa[1], sb[1])) || (same(sa[0], sb[1]) && same(sa[1], sb[0]))) { t.remove(dropIt); live.delete(dropIt.id); live.add(keepIt.id); changed = true; break outer; }
+        const m = mergeOverlap(sa, sb, (q) => isJunctionPoint(doc, q) || !!junctionAt(doc, q[0], q[1]));
+        if (!m) continue;
+        const n = deep(keepIt.node); setPts(n, m); t.remove(dropIt); t.modify(keepIt, n);
+        live.delete(dropIt.id); live.add(keepIt.id); changed = true; break outer;
+      }
+    }
+  }
+  return live;
+}
+// SCH_EDIT_FRAME::TrimWire: a wire drawn across both pins of a two-pin symbol loses the part between them.
+function txnTrimWire(t, doc, a, b, only) {
+  if (same(a, b)) return false;
+  for (const it of Array.from(doc.items.values())) {
+    if (it.kind !== "wire" || (only && !only.has(it.id))) continue;
+    const s = segOf(it); if (!s) continue;
+    if (segDist(a, s[0], s[1]) > 1e-3 || segDist(b, s[0], s[1]) > 1e-3) continue;
+    if ((same(s[0], a) && same(s[1], b)) || (same(s[0], b) && same(s[1], a))) continue;   // a whole wire stays
+    const da = Math.hypot(a[0] - s[0][0], a[1] - s[0][1]), db = Math.hypot(b[0] - s[0][0], b[1] - s[0][1]);
+    const [near, far] = da <= db ? [a, b] : [b, a];
+    const st = kid(it.node, "stroke");
+    if (!same(s[0], near)) { const n = deep(it.node); setPts(n, [s[0], near]); t.modify(it, n); } else t.remove(it);
+    if (!same(far, s[1])) { const tail = lineNode("wire", far, s[1]); if (st) replaceKid(tail, deep(st)); t.add(tail); }
+    return true;
+  }
+  return false;
+}
+/**
+ * finishSegments: backtracks merge away, the segments are added, CleanUp merges them with the lines they
+ * continue, a wire across both pins of a two-pin symbol is trimmed, and every new end — plus every existing
+ * connection point lying on a new segment — gets the junction IsExplicitJunctionNeeded asks for.
+ */
 function finishWire(ctx) {
   const w = S.wire; S.wire = null; if (!w) return;
-  const pts = simplify(w.pts);
-  if (pts.length < 2) { S.unfold = null; ctx.requestRender(); return; }
-  const doc = ctx.doc, changes = []; let lastNode = null;
-  for (let i = 1; i < pts.length; i++) { lastNode = lineNode(w.kind, pts[i - 1], pts[i]); changes.push(addNode(doc, lastNode).change); }
-  changes.push(...junctionChanges(doc, w.pts, w.kind));
-  ctx.commit(changes, w.kind);
-  rememberPlaced(w.kind, lastNode);
-  if (S.unfold) {                              // the unfolded member label rides to the end of the wire (KiCad moves it with the cursor)
-    const u = S.unfold; S.unfold = null; const lb = doc.items.get(u.labelId), last = pts[pts.length - 1];
-    if (lb && !same(atOf(lb.node), last)) { const n = deep(lb.node); setAt(n, last[0], last[1]); ctx.commit([modChange(doc, lb, n)], "unfold bus"); }
+  const list = simplifyWireList(w.segs);
+  const unfold = S.unfold; S.unfold = null;
+  if (!list.length) { ctx.requestRender(); if (w.quitOnDraw) switchTool(ctx, "select"); return; }
+  const doc = ctx.doc, t = editTxn(doc, ctx.IU), conns = w.kind === "polyline" ? [] : screenConnections(doc), newEnds = [], added = [];
+  for (const s of list) {
+    newEnds.push(s[0], s[1]);
+    for (const c of conns) if (segDist(c, s[0], s[1]) <= 1e-3) newEnds.push(c);
+    added.push(t.add(lineNode(w.kind, s[0], s[1])).id);
+  }
+  try {
+    if (w.kind !== "polyline") {
+      const live = txnCleanUp(t, doc, added, []);
+      for (const it of Array.from(doc.items.values())) {
+        if (it.kind !== "symbol") continue;
+        const pts = connPoints(doc, it); if (pts.length > 2) continue;
+        for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) txnTrimWire(t, doc, pts[i], pts[j], live);
+      }
+      const seen = new Set();
+      for (const p of newEnds) {
+        const k = r4(p[0]) + "," + r4(p[1]); if (seen.has(k)) continue; seen.add(k);
+        if (explicitJunctionNeeded(doc, p)) txnAddJunction(t, doc, p);
+      }
+    }
+  } finally { t.restore(); }
+  const changes = t.changes();
+  ctx.commit(changes, w.kind === "bus" ? "Draw Buses" : w.kind === "polyline" ? "Draw Lines" : "Draw Wires");
+  // SaveCopyForRepeatItem( m_wires[0] ) + AddCopyForRepeatItem for the rest: Insert repeats the whole wire
+  S.lastPlaced = list.map((s) => ({ kind: w.kind, node: lineNode(w.kind, s[0], s[1]) }));
+  if (unfold) {                              // the unfolded member label rides to the end of the wire (KiCad moves it with the cursor)
+    const lb = doc.items.get(unfold.labelId), last = list[list.length - 1][1];
+    if (lb && !same(atOf(lb.node), last)) { const n = deep(lb.node); setAt(n, last[0], last[1]); ctx.commit([modChange(doc, lb, n)], "unfold bus", { amend: true }); }
+    const en = doc.items.get(unfold.entryId), lb2 = doc.items.get(unfold.labelId);
+    S.lastPlaced = [en, lb2].filter(Boolean).map((it) => ({ kind: it.kind, node: deep(it.node) })).concat(S.lastPlaced);
   }
   ctx.requestRender();
+  if (w.quitOnDraw) switchTool(ctx, "select");
 }
+// Esc while drawing: the segments go; a wire started from a pin by the selection tool also ends its tool.
+function cancelWire(ctx) { const w = S.wire; S.wire = null; S.unfold = null; ctx.requestRender(); if (w && w.quitOnDraw) switchTool(ctx, "select"); }
+// Tool changes made by this module itself (a carried duplicate rides into the place tool, a wire auto-started
+// from a pin goes back to select) are not the user activating another tool mid-operation.
+function switchTool(ctx, id) { S.internalSwitch = true; try { ctx.setTool(id); } finally { S.internalSwitch = false; } }
 
 // ---------------------------------------------------------------- carried item (ghost that follows the cursor)
 function startCarry(ctx, kind, node, mm) {
   S.carry = { kind, node, item: null, pos: null };
   placeCarry(ctx, mm || S.cursor || [ctx.doc.page[0] / 2, ctx.doc.page[1] / 2]);
 }
-function placeCarry(ctx, mm) {
+function placeCarry(ctx, mm, ev) {
   const c = S.carry; if (!c) return;
-  const gridOnly = c.kind === "symbol" || TEXT_KINDS.has(c.kind) || SHAPE_KINDS.has(c.kind) || c.kind === "text_box" || c.kind === "netclass_flag"
+  // labels snap to pins and wire ends like wires do (EE_GRID_HELPER::ResolveSnap); graphics and symbols to the grid
+  const gridOnly = c.kind === "symbol" || c.kind === "text" || SHAPE_KINDS.has(c.kind) || c.kind === "text_box"
     || c.kind === "image" || c.kind === "table" || c.kind === "bezier" || c.kind === "rule_area" || c.kind === "sheet";
-  const p = gridOnly ? ctx.snap([mm[0], mm[1]]).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire");
+  const noGrid = !!(ev && (ev.ctrlKey || ev.metaKey));
+  const p = gridOnly ? (noGrid ? [mm[0], mm[1]] : ctx.snap([mm[0], mm[1]])).map(r4) : snapConn(ctx, mm, c.kind === "bus" ? "bus" : "wire", ev);
   if (c.pos && same(c.pos, p)) return;
   const a = anchorOf(c.kind, c.node); shiftNode(c.kind, c.node, r4(p[0] - a[0]), r4(p[1] - a[1]));
   c.pos = p; c.item = ghost(ctx.doc, c.node); ctx.requestRender();
@@ -568,6 +910,35 @@ function dropCarry(ctx) {
   if (c.kind === "symbol" || c.kind === "sheet") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
   ctx.requestRender();
   return item;
+}
+/**
+ * SCH_DRAWING_TOOLS::SingleClickPlace's click for the junction, no-connect and bus-entry tools.  A click on an
+ * existing no-connect removes it (the flag toggles); a junction needs a place it can join
+ * (IsExplicitJunctionAllowed) and breaks the lines it lands on; a double click ends the tool.  The preview
+ * keeps its orientation for the next placement.
+ */
+function singleClickPlace(ctx, toolId, dbl) {
+  const c = S.carry; if (!c) return null;
+  const doc = ctx.doc, p = anchorOf(c.kind, c.node);
+  let existing = null;
+  for (const it of doc.items.values()) if (it.kind === c.kind && same(atOf(it.node), p)) { existing = it; break; }
+  let placed = null;
+  if (existing) {
+    if (c.kind === "no_connect") { ctx.commit([removeChange(existing)], "Remove No Connect Flag"); if (S.sel === existing.id) S.sel = null; }
+  } else if (c.kind === "junction") {
+    if (!explicitJunctionAllowed(doc, p)) { ctx.toast("Junction location contains no joinable wires and/or pins."); ctx.requestRender(); return null; }
+    const t = editTxn(doc, ctx.IU); try { placed = txnAddJunction(t, doc, p); } finally { t.restore(); }
+    ctx.commit(t.changes(), "Add Junction");
+  } else {
+    const r = addNode(doc, deep(c.node)); placed = r.item;
+    ctx.commit([r.change], c.kind === "no_connect" ? "Add No Connect Flag" : "Add Wire to Bus Entry");
+    S.lastPlaced = [{ kind: r.item.kind, node: deep(r.item.node) }];      // allowRepeat: no-connects and bus entries, not junctions
+  }
+  if (dbl) { S.carry = null; switchTool(ctx, "select"); return placed; }
+  const node = cloneNode({ kind: c.kind, node: c.node });
+  S.carry = { kind: c.kind, node, item: ghost(doc, node), pos: c.pos };
+  ctx.requestRender();
+  return placed;
 }
 // Create a label/text straight away at p (the inline prompt's Enter).
 function placeText(ctx, kind, text, p, rot) {
@@ -659,9 +1030,9 @@ function announceModes(ctx) {
 }
 function setLineMode(ctx, mode) {
   if (!LINE_MODES.includes(mode)) return S.lineMode;
-  S.lineMode = mode; announceModes(ctx);
+  const from = S.lineMode; S.lineMode = mode; announceModes(ctx);
   if (S.drag) { applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]); ctx.requestRender(); }
-  else if (S.wire) ctx.requestRender();
+  else if (S.wire) { wireModeChanged(ctx, from, mode); ctx.requestRender(); }
   return mode;
 }
 function cycleLineMode(ctx) { return setLineMode(ctx, LINE_MODES[(LINE_MODES.indexOf(S.lineMode) + 1) % LINE_MODES.length]); }
@@ -969,7 +1340,7 @@ function duplicateSelected(ctx) {
   const node = cloneNode(it); shiftNode(it.kind, node, 2.54, 2.54);
   S.carry = { kind: it.kind, node, item: ghost(ctx.doc, node), pos: anchorOf(it.kind, node) };
   S.sel = null; ctx.setSelected(null);
-  ctx.setTool("place");                         // onActivate sees the carry and skips the picker
+  switchTool(ctx, "place");                         // onActivate sees the carry and skips the picker
   ctx.requestRender();
   return true;
 }
@@ -1094,17 +1465,30 @@ function onUpCapture() {
   if (S.drag && S.drag.byPointer) endDrag(ctx, true);
 }
 function onKeyCapture(ev) {
-  const ctx = S.ctx; if (!ctx || !schActive() || ev.metaKey || ev.ctrlKey) return;
+  const ctx = S.ctx; if (!ctx || !schActive()) return;
   const tag = ev.target && ev.target.tagName; if (tag === "TEXTAREA" || (tag === "INPUT" && !/^(checkbox|radio|button|submit|reset|range|color)$/.test(ev.target.type))) return;
+  if (ev.target && ev.target.closest && ev.target.closest(".kd-overlay, [role='dialog'], [role='menu']")) return;
+  // keys that would otherwise reach the document's undo / redo or the selection's delete mid-operation
+  const ctrl = ev.ctrlKey || ev.metaKey, k = ev.key && ev.key.length === 1 ? ev.key.toUpperCase() : ev.key;
+  const combo = ctrl ? "Ctrl+" + (ev.shiftKey ? "Shift+" : "") + k : k === "Delete" ? "Del" : k;
+  if (S.wire && (combo === "Del" || combo === "Backspace" || combo === "Ctrl+Z" || combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z")) {
+    if (wireKey(ctx, combo)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+    return;
+  }
+  // TwoClickPlace / PlaceSymbol: undo with an item on the cursor cancels it
+  if (combo === "Ctrl+Z" && S.carry && busyMessage()) { cancelCarry(ctx); ev.stopImmediatePropagation(); ev.preventDefault(); return; }
+  if (ctrl) return;
   if (tag === "INPUT" && (ev.key === " " || ev.key === "Enter")) return;   // a ticked filter box keeps Space / Enter
   if (ev.key === "Escape") {
     let took = true;
-    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) { S.wire = null; S.unfold = null; ctx.requestRender(); } else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
+    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
     else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) setHighlight(ctx, null); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
-    ev.stopImmediatePropagation(); ev.preventDefault(); ctx.setTool("hlabel");
+    ev.stopImmediatePropagation(); ev.preventDefault();
+    const busy = busyMessage(); if (busy) { if (S.tool === "hlabel") syntheticClick(ctx); else ctx.toast(busy); return; }
+    ctx.setTool("hlabel");
     if (S.cursor) promptFor(ctx, "hierarchical_label", S.cursor, S.cursorClient);
   }
 }
@@ -1406,10 +1790,9 @@ function ghostSegs() {
   const out = [];
   const w = S.wire;
 
-  if (w && w.pts.length) {
+  if (w) {
     const width = w.kind === "bus" ? 0.3048 : 0.1524;
-    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w), w.flip));
-    for (let i = 1; i < pts.length; i++) out.push([pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], width]);
+    for (const sg of w.segs) if (!segNull(sg)) out.push([sg[0][0], sg[0][1], sg[1][0], sg[1][1], width]);
   }
   for (const seg of (S.drag && S.drag.preview) || []) {   // wires the drop will create
     const width = seg.kind === "bus" ? 0.3048 : 0.1524;
@@ -1432,6 +1815,14 @@ function ghostSegs() {
   return out;
 }
 
+// Junction dots in the junction colour (the preview of where a drop will add them), KiCad's default dot size.
+function drawJunctionDots(c, pts, px) {
+  if (!pts || !pts.length) return;
+  const r = Math.max(0.9144 / 2, 2 * px);
+  c.save(); c.fillStyle = K.SCH.junction || CLR.wire;
+  for (const p of pts) { c.beginPath(); c.arc(p[0], p[1], r, 0, Math.PI * 2); c.fill(); }
+  c.restore();
+}
 function drawOverlay(c, view, ctx) {
   S.ctx = ctx; installDom(ctx);
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
@@ -1455,11 +1846,12 @@ function drawOverlay(c, view, ctx) {
   }
   const w = S.wire;
   if (w) {
-    const pts = w.pts.concat(legPoints(w.pts[w.pts.length - 1], w.cur, posture(w), w.flip));
-    c.save(); c.strokeStyle = w.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(w.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round";
-    c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); c.stroke();
-    c.fillStyle = CLR.sel; const h = 3 * px; for (const p of w.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+    // the segments in KiCad's preview colours (wire / bus / notes), then the junction dots the drop would add
+    c.save(); c.strokeStyle = w.kind === "bus" ? CLR.bus : w.kind === "polyline" ? K.SCH.notes : CLR.wire; c.lineWidth = Math.max(w.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round";
+    if (w.kind === "polyline") c.setLineDash([1.27 * 0.5, 1.27 * 0.5]);
+    c.beginPath(); for (const sg of w.segs) if (!segNull(sg)) { c.moveTo(sg[0][0], sg[0][1]); c.lineTo(sg[1][0], sg[1][1]); } c.stroke();
     c.restore();
+    if (w.kind !== "polyline") drawJunctionDots(c, previewJunctions(doc, w.segs.map((sg) => ({ kind: w.kind, a: sg[0], b: sg[1] }))), px);
   }
   const d = S.draw;
   if (d) {
@@ -1505,10 +1897,36 @@ function drawOverlay(c, view, ctx) {
 }
 
 // ---------------------------------------------------------------- hooks (see app.js "editing tools")
+// What an operation in flight says when another tool is activated (KiCad refuses the activation and keeps going).
+function busyMessage() {
+  if (S.wire) return "Press <ESC> to cancel drawing.";
+  if (S.drag) return S.drag.mode === "break" ? "Press <ESC> to cancel break." : S.drag.mode === "slice" ? "Press <ESC> to cancel slice."
+    : S.dragMode === "move" ? "Press <ESC> to cancel move." : "Press <ESC> to cancel drag.";
+  if (S.draw && S.draw.shape === "sheet") return "Press <ESC> to cancel sheet creation.";
+  if (S.carry) {
+    const k = S.carry.kind;
+    if (k === "symbol") return "Press <ESC> to cancel symbol creation.";
+    if (k === "image") return "Press <ESC> to cancel image creation.";
+    if (TEXT_KINDS.has(k) || k === "netclass_flag" || k === "directive_label" || k === "text_box") return "Press <ESC> to cancel item creation.";
+  }
+  return null;
+}
+/** The app asks before it changes tool: true refuses (the infobar says how to cancel what is in flight). */
+function vetoTool(toolId, ctx) {
+  if (S.internalSwitch) return false;
+  const msg = busyMessage(); if (!msg) return false;
+  if (ctx && ctx.toast) ctx.toast(msg);
+  return true;
+}
+// The active tool's own hotkey while it is drawing counts as a click at the cursor (isSyntheticClick).
+function syntheticClick(ctx) {
+  if (!S.cursor) return false;
+  return onPointerDown({ button: 0, synthetic: true }, S.cursor, ctx);
+}
 function onActivate(toolId, ctx) {
   S.ctx = ctx; installDom(ctx); announceModes(ctx);
+  if (!S.internalSwitch && busyMessage()) { ctx.toast(busyMessage()); ctx.requestRender(); return; }   // refused: the operation keeps going
   S.tool = toolId;
-  if (S.wire) finishWire(ctx);                    // leaving the wire tool keeps what was drawn
   closePrompt(); S.pending = null; if (S.drag) endDrag(ctx, false);
   if (S.draw) S.draw = null;                      // an unfinished shape is dropped with its tool
   if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
@@ -1528,9 +1946,9 @@ function onPointerDown(ev, mm, ctx) {
   if (ev.button !== undefined && ev.button !== 0) return false;
   const t = toolOf(S.tool); if (!t) return false;
   S.cursor = mm; if (ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
-  if (t.kind === "wire" || t.kind === "bus") {
-    const p = snapConn(ctx, mm, t.kind);
-    if (!S.wire) startWire(ctx, t.kind, p); else wireClick(ctx, p);
+  if (t.kind === "wire" || t.kind === "bus" || t.kind === "polyline") {
+    const p = snapConn(ctx, mm, t.kind, ev);
+    if (!S.wire) { if (ev.detail !== 2) startWire(ctx, t.kind, p); } else wireClick(ctx, p, ev.detail === 2);
     return true;
   }
   if (TEXT_KINDS.has(t.kind)) {
@@ -1539,8 +1957,7 @@ function onPointerDown(ev, mm, ctx) {
   }
   if (t.id === "junction" || t.id === "noconnect" || t.id === "busentry") {
     if (!S.carry) onActivate(t.id, ctx);
-    placeCarry(ctx, mm); dropCarry(ctx);
-    onActivate(t.id, ctx);                       // the tool stays armed with a fresh ghost
+    placeCarry(ctx, mm, ev); singleClickPlace(ctx, t.id, ev.detail === 2);
     return true;
   }
   if (t.id === "place" || t.id === "power") {
@@ -1560,8 +1977,8 @@ function onPointerDown(ev, mm, ctx) {
 }
 function onPointerMove(ev, mm, ctx) {
   S.ctx = ctx; S.cursor = mm; if (ev && ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
-  if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind); if (!same(S.wire.cur, p)) { S.wire.cur = p; ctx.requestRender(); } return; }
-  if (S.carry) { placeCarry(ctx, mm); return; }
+  if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind, ev); if (!same(S.wire.cur, p)) { wireFollow(ctx, p); ctx.requestRender(); } return; }
+  if (S.carry) { placeCarry(ctx, mm, ev); return; }
   if (S.draw && !S.draw.await) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { S.draw.cur = p; ctx.requestRender(); } return; }
   if (S.tool === "highlight" || S.tool === "sheetpin") {   // what the click would pick: a net item / pin, or the sheet whose border is near
     let id = null;
@@ -1578,25 +1995,34 @@ function onPointerMove(ev, mm, ctx) {
   if (toolOf(S.tool)) ctx.requestRender();        // cursor marker
 }
 function onPointerUp() { /* clicks are handled on pointerdown, drags in the capture hooks */ }
+/**
+ * Keys while a wire is being drawn (doDrawSegments): '/' switches the posture, End / Enter / K finish,
+ * Backspace (undoLastSegment), Del (doDelete) and Ctrl+Z (undo) take back the last segment.  With nothing
+ * left to take back Ctrl+Z reaches the document's undo and the others do nothing; Ctrl+Y (redo) does nothing.
+ */
+function wireKey(ctx, combo) {
+  if (!S.wire) return false;
+  if (combo === "/") { switchPosture(ctx); return true; }
+  if (combo === "Enter" || combo === "End" || combo === "k" || combo === "K") { finishWire(ctx); return true; }   // ACTIONS::finishInteractive
+  if (combo === "Backspace" || combo === "Del") { undoSegment(ctx); return true; }
+  if (combo === "Ctrl+Z") return undoSegment(ctx);
+  if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z") return true;
+  return false;
+}
 function onKey(key, ev, ctx) {
   S.ctx = ctx; installDom(ctx);
   if (ctx.viewOnly) return false;
   const lower = key.length === 1 ? key.toLowerCase() : key;
   const armTool = (id, kind) => {
+    // mid-operation the tool's own hotkey is a click at the cursor; any other tool is refused (doDrawSegments)
+    const busy = busyMessage();
+    if (busy) { if (id === S.tool) syntheticClick(ctx); else ctx.toast(busy); return true; }
     ctx.setTool(id);
-    if (S.cursor && (kind === "wire" || kind === "bus")) startWire(ctx, kind, snapConn(ctx, S.cursor, kind));   // KiCad starts drawing under the cursor
+    if (S.cursor && (kind === "wire" || kind === "bus" || kind === "polyline")) startWire(ctx, kind, snapConn(ctx, S.cursor, kind));   // KiCad starts drawing under the cursor
     else if (S.cursor && TEXT_KINDS.has(kind)) promptFor(ctx, kind, S.cursor, S.cursorClient);
     return true;
   };
-  if (S.wire) {
-    if (key === "/") { S.wire.flip = !S.wire.flip; ctx.requestRender(); return true; }
-    if (key === "Enter" || key === "End" || lower === "k") {
-      const w = S.wire, last = w.pts[w.pts.length - 1];     // the leg up to the cursor is part of the wire (KiCad's finishSegments)
-      if (!same(last, w.cur)) w.pts.push(...legPoints(last, w.cur, posture(w), w.flip));
-      finishWire(ctx); return true;
-    }   // ACTIONS::finishInteractive is End
-    if (key === "Backspace") { undoLeg(ctx); return true; }
-  }
+  if (S.wire && wireKey(ctx, key === "Backspace" ? "Backspace" : key === "Delete" ? "Del" : key)) return true;
   if (S.draw && !S.draw.await) {
     if (key === "Enter" || key === "End") {
       const sh = S.draw.shape, n = S.draw.pts.length;
@@ -1614,7 +2040,7 @@ function onKey(key, ev, ctx) {
   case "j": case "J": return armTool("junction");
   case "q": case "Q": return armTool("noconnect");
   case "p": case "P": return armTool("power");
-  case "i": case "I": return armTool("lines");
+  case "i": case "I": return armTool("lines", "polyline");
   case "l": return armTool("label", "label");
   case "L": return armTool("glabel", "global_label");
   case "h": case "H": return armTool("hlabel", "hierarchical_label");   // KiCad's default for Add Hierarchical Label
@@ -1643,7 +2069,13 @@ function onKey(key, ev, ctx) {
 }
 function onDocChanged(ctx) {
   S.ctx = ctx; installDom(ctx);
-  S.wire = null; S.carry = null; S.drag = null; S.pending = null; S.sel = null; S.hover = null; S.draw = null; S.sheetJob = null; S.imageWait = false;
+  // An edit of the same sheet (ours or a peer's) leaves a wire, a shape or an item on the cursor alone, as an
+  // undo does on the desktop; a different sheet ends them.
+  const sameDoc = S.docRef === ctx.doc;
+  if (!sameDoc) { S.wire = null; S.carry = null; S.draw = null; }
+  else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
+  S.drag = null; S.pending = null; S.hover = null; S.sheetJob = sameDoc ? S.sheetJob : null; S.imageWait = false;
+  if (!sameDoc || !(S.sel && ctx.doc.items.has(S.sel))) S.sel = null;
   if (S.docRef !== ctx.doc) {                   // a different sheet (app.js also calls this after every commit, same doc): repeat memory, ERC markers and an unfold in progress belong to the old one
     S.docRef = ctx.doc; S.lastPlaced = null; S.unfold = null;
     if (S.markersDoc !== ctx.doc) { S.markers = []; S.markersDoc = null; }
@@ -1664,7 +2096,7 @@ S.markersDoc = null;
 S.lastPlaced = null;               // { kind, node } of the last item placed, for Insert
 S.repeatOffset = [0, 2.54];        // eeschema's default_repeat_offset (0 mil, 100 mil)
 S.repeatIncrement = 1;             // repeat_label_increment
-S.annotateAuto = false;            // toggleAnnotateAuto: pasted / repeated symbols get the next free number
+S.annotateAuto = true;             // annotation.automatic (KiCad's default on): pasted / repeated symbols get the next free number
 S.unfold = null;                   // { labelId } while a bus unfold's wire is being drawn
 S.docRef = null;
 
@@ -1785,7 +2217,8 @@ function pasteChanges(doc, parsed, at, opts) {
   const used = usedReferences(doc);
   // PASTE_MODE: "keep" (keepAnnotations), "remove" (every reference becomes R?), "unique" (the next free number for a
   // reference already in use, whatever the automatic-annotation setting); default: assignPastedRef's own rule
-  const mode = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null));
+  // SCH_EDITOR_CONTROL::Paste: UNIQUE_ANNOTATIONS when annotation is automatic (the default), else REMOVE_ANNOTATIONS
+  const mode = (opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null))) || (S.annotateAuto ? "unique" : "remove");
   for (const n of fresh) {
     if (n[0] !== "symbol" || mode === "keep") continue;
     if (mode === "remove") { const p = refField(n); if (p) setReference(n, unannotated(str(p[2]))); continue; }
@@ -1858,7 +2291,7 @@ function pasteSpecial(ctx, opts) {
 function duplicateSelection(ctx) {
   if (!editable(ctx)) return false;
   const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
-  if (items.length === 1 && items[0].kind !== "sheet") { if (ctx.selected && ctx.selected.id !== items[0].id) ctx.setSelected({ id: items[0].id }); S.sel = items[0].id; return duplicateSelected(ctx); }
+  // Duplicate goes through Paste like the desktop's (same reference rules), then the copy follows the cursor
   return pasteText(ctx, clipboardText(ctx.doc, items), { label: "duplicate" });
 }
 function copyAsText(ctx) {
@@ -1895,27 +2328,74 @@ function stepNetItem(ctx, dir) {
 function unselectAll(ctx) { setSelectionIds(ctx, []); return true; }
 
 // ---------------------------------------------------------------- repeat last item (Insert)
-function rememberPlaced(kind, node) { S.lastPlaced = { kind, node: deep(node) }; }
+// SaveCopyForRepeatItem: what Insert repeats is a list (a whole wire, an unfold's entry, label and wire);
+// junctions are never repeated.
+function rememberPlaced(kind, node) { if (kind === "junction") return; S.lastPlaced = [{ kind, node: deep(node) }]; }
 // common/increment.cpp IncrementString: the last run of digits steps, leading zeros kept; null below zero.
 function incrementText(text, delta) {
   const m = str(text).match(/^([\s\S]*?)(\d+)(\D*)$/); if (!m) return str(text);
   const n = parseInt(m[2], 10) + (delta === undefined ? 1 : delta); if (n < 0) return null;
   return m[1] + String(n).padStart(m[2].length, "0") + m[3];
 }
+// Junctions the new items need (SCH_SCREEN::GetNeededJunctions + AddJunction), inside a dry-run edit.
+function txnNeededJunctions(t, doc, items) {
+  const conns = screenConnections(doc), pts = [], seen = new Set();
+  const push = (p) => { const k = r4(p[0]) + "," + r4(p[1]); if (!seen.has(k)) { seen.add(k); pts.push(p); } };
+  for (const it of items) {
+    for (const p of connPoints(doc, it)) push(p);
+    if (isNetLine(it.kind)) for (const [a, b] of segs(it)) for (const c of conns) if (segDist(c, a, b) <= 1e-3) push(c);
+  }
+  for (const p of pts) if (explicitJunctionNeeded(doc, p)) txnAddJunction(t, doc, p);
+}
+// TrimOverLappingWires: a line running through exactly two connection points of a new (non-line) item is
+// cut between them (a symbol repeated onto a wire takes its place in it).
+function txnTrimOverlapping(t, doc, items) {
+  for (const it of items) {
+    if (isNetLine(it.kind) || LINE_KINDS.has(it.kind)) continue;
+    const pts = connPoints(doc, it); if (pts.length < 2) continue;
+    for (const line of Array.from(doc.items.values())) {
+      if (line.kind !== "wire") continue; const s = segOf(line); if (!s) continue;
+      const on = pts.filter((p) => segDist(p, s[0], s[1]) <= 1e-3);
+      if (on.length === 2) txnTrimWire(t, doc, on[0], on[1], new Set([line.id]));
+    }
+  }
+}
+/**
+ * SCH_EDIT_TOOL::RepeatDrawItem (Insert): every remembered item is duplicated; a label's number steps by
+ * repeat_label_increment (warning when it would go below zero), a symbol goes to the cursor, is re-annotated
+ * when annotation is automatic and then follows the cursor (SCH_ACTIONS::move), anything else is offset by
+ * default_repeat_offset.  Overlapped wires are trimmed, junctions added and the lines cleaned up in one
+ * "Repeat Item" commit; the new items become what the next Insert repeats.
+ */
 function repeatLast(ctx) {
   if (!editable(ctx)) return false;
-  const lp = S.lastPlaced; if (!lp) { ctx.toast("Nothing to repeat yet"); return false; }
-  const doc = ctx.doc, node = cloneNode({ kind: lp.kind, node: deep(lp.node) });
-  if (LABEL_KINDS.has(lp.kind) && lp.kind !== "netclass_flag" && lp.kind !== "directive_label") {
-    const t = incrementText(node[1], S.repeatIncrement); if (t === null) ctx.toast("Label value cannot go below zero"); else node[1] = t;
-  }
-  if (lp.kind === "symbol") { const p = snapCursor(ctx), a = anchorOf("symbol", node); shiftNode("symbol", node, r4(p[0] - a[0]), r4(p[1] - a[1])); assignPastedRef(doc, node, usedReferences(doc)); }
-  else shiftNode(lp.kind, node, S.repeatOffset[0], S.repeatOffset[1]);
-  const { item, change } = addNode(doc, node);
-  const changes = [change, ...junctionsForNew(doc, [item])];
-  ctx.commit(changes, "repeat");
-  S.lastPlaced = { kind: item.kind, node: deep(item.node) };
-  setSelectionIds(ctx, [item.id]);
+  const src = S.lastPlaced; if (!src || !src.length) return false;
+  const doc = ctx.doc, t = editTxn(doc, ctx.IU), used = usedReferences(doc), added = [];
+  let symbolId = null, warned = false;
+  try {
+    for (const lp of src) {
+      const node = cloneNode({ kind: lp.kind, node: deep(lp.node) });
+      if (LABEL_KINDS.has(lp.kind) && lp.kind !== "netclass_flag" && lp.kind !== "directive_label") {
+        const tx = incrementText(node[1], S.repeatIncrement);
+        if (tx === null) { if (!warned) ctx.toast("Label value cannot go below zero"); warned = true; } else node[1] = tx;
+      }
+      if (lp.kind === "symbol") {
+        const p = snapCursor(ctx), a = anchorOf("symbol", node); shiftNode("symbol", node, r4(p[0] - a[0]), r4(p[1] - a[1]));
+        if (S.annotateAuto) { const rf = refField(node); if (rf) setReference(node, unannotated(str(rf[2]))); assignPastedRef(doc, node, used); }
+      } else shiftNode(lp.kind, node, S.repeatOffset[0], S.repeatOffset[1]);
+      const it = t.add(node); added.push(it.id); if (lp.kind === "symbol" && !symbolId) symbolId = it.id;
+    }
+    const items = added.map((id) => doc.items.get(id)).filter(Boolean);
+    txnTrimOverlapping(t, doc, items);
+    txnNeededJunctions(t, doc, items);
+    txnCleanUp(t, doc, added.filter((id) => { const it = doc.items.get(id); return it && isNetLine(it.kind); }), []);
+  } finally { t.restore(); }
+  const changes = t.changes(); if (!changes.length) return false;
+  ctx.commit(changes, "Repeat Item");
+  const now = added.map((id) => doc.items.get(id)).filter(Boolean);
+  S.lastPlaced = now.map((it) => ({ kind: it.kind, node: deep(it.node) }));
+  setSelectionIds(ctx, now.map((it) => it.id));
+  if (symbolId) followPaste(ctx, [symbolId], cursorOf(ctx));            // the repeated symbol follows the cursor until the click
   return true;
 }
 function incrementSelection(ctx, delta) {
@@ -2271,7 +2751,7 @@ function placeNextUnit(ctx) {
   if (next > units) { ctx.toast("All units of " + it.ref + " are placed"); return false; }
   const node = cloneNode(it); replaceKid(node, ["unit", next]);
   S.carry = { kind: "symbol", node, item: ghost(ctx.doc, node), pos: anchorOf("symbol", node) };
-  S.sel = null; ctx.setSelected(null); ctx.setTool("place"); ctx.requestRender(); return true;
+  S.sel = null; ctx.setSelected(null); switchTool(ctx, "place"); ctx.requestRender(); return true;
 }
 function showDatasheet(ctx) {
   const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
@@ -2793,7 +3273,7 @@ function unfoldBus(ctx, bus, member, at) {
   let rot = 0; if (vertical) rot = end[0] < p[0] ? 180 : 0; else if (horizontal) rot = end[1] < p[1] ? 90 : 270;
   const entry = addNode(doc, busEntryNode(p, r4(dx), r4(dy))), label = addNode(doc, labelNode("label", member, end, rot));
   ctx.commit([entry.change, label.change], "unfold bus");
-  ctx.setTool("wire");
+  switchTool(ctx, "wire");
   startWire(ctx, "wire", end);
   S.unfold = { labelId: label.item.id, entryId: entry.item.id };
   return { entry: entry.item, label: label.item, start: end };
@@ -2884,7 +3364,7 @@ function runAction(id, ctx, opts) { const a = actions[id]; if (!a) return false;
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.sch = {
   id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
-  onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged, ghostSegs,
+  onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged, ghostSegs, vetoTool,
   // for tests and the props panel
   state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; }, setImagePicker(fn) { imagePickerImpl = fn; },
   // connected drag engine, shared with app.js's select tool (symbols and sheets; an array drags a multi-selection)
@@ -2901,7 +3381,8 @@ root.CollabTools.sch = {
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
     selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
     lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
-    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, legPoints, simplify, hitNonSymbol, textRect, pickNonSymbol,
+    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
+    analyzePoint, explicitJunctionNeeded, explicitJunctionAllowed, previewJunctions, editTxn, txnCleanUp, txnTrimWire, singleClickPlace, busyMessage, vetoTool, startWire, cancelWire, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool
     rectangleNode, circleNode, arcNode, polylineNode, textBoxNode, classLabelNode, placeClassLabel, isPowerSymbol, powerSymbols, pickSymbol,
