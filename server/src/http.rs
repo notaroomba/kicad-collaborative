@@ -310,7 +310,7 @@ pub async fn list_projects(
 
 const MAX_NAME_CHARS: usize = 120;
 
-fn checked_name(name: &str) -> AppResult<()> {
+pub(crate) fn checked_name(name: &str) -> AppResult<()> {
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(AppError::BadRequest(format!("name too long ({MAX_NAME_CHARS} characters max)")));
     }
@@ -1143,7 +1143,7 @@ pub struct BlankProjectRequest {
 }
 
 /// A name that is safe as the stem of the project's files.
-fn file_stem_for(name: &str) -> String {
+pub(crate) fn file_stem_for(name: &str) -> String {
     let stem: String = name
         .chars()
         .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' })

@@ -1,0 +1,84 @@
+{
+  "kicad": "10.0",
+  "templates": [
+    {
+      "id": "blinker",
+      "title": "555 LED blinker",
+      "summary": "The board from the home page: a USB-C powered 555 timer that blinks an LED about once a second.",
+      "detail": "A classic first circuit with everything a real board has: a connector, a timer chip, the resistors and capacitors that set its rate, a ground pour and mounting holes. The guided first project uses this board.",
+      "level": "Beginner",
+      "tags": [
+        "Timer",
+        "USB-C"
+      ],
+      "parts": 12,
+      "nets": 9,
+      "size": [
+        42,
+        27
+      ],
+      "layers": 2,
+      "stem": "blinker",
+      "guided": {
+        "open": 4
+      }
+    },
+    {
+      "id": "usb-c-3v3-regulator",
+      "title": "USB-C 3.3 V regulator",
+      "summary": "A USB-C power inlet, an AMS1117-3.3 linear regulator and a power LED, broken out to a three-pin header.",
+      "detail": "The supply most small boards start from: 5 V from any USB-C charger, regulated down to 3.3 V at up to 800 mA. Copy the regulator block into your own design, or swap the header for whatever you are powering.",
+      "level": "Beginner",
+      "tags": [
+        "Power",
+        "USB-C"
+      ],
+      "parts": 9,
+      "nets": 6,
+      "size": [
+        34,
+        22
+      ],
+      "layers": 2,
+      "stem": "usb-c-3v3-regulator"
+    },
+    {
+      "id": "i2c-sensor-breakout",
+      "title": "I2C temperature sensor breakout",
+      "summary": "An LM75B temperature sensor with its decoupling capacitor and bus pull-ups on a five-pin header.",
+      "detail": "The shape of nearly every sensor breakout: one chip, one capacitor, pull-ups on the bus, and a header. Replace the LM75B with the part you need and keep the rest. The address pins are tied low, so the sensor answers at 0x48.",
+      "level": "Beginner",
+      "tags": [
+        "Sensor",
+        "I2C"
+      ],
+      "parts": 6,
+      "nets": 5,
+      "size": [
+        26,
+        18
+      ],
+      "layers": 2,
+      "stem": "i2c-sensor-breakout"
+    },
+    {
+      "id": "attiny85-dev-board",
+      "title": "ATtiny85 development board",
+      "summary": "An ATtiny85 with a programming header, a reset button, an LED and two spare pins on a header.",
+      "detail": "A complete small microcontroller board: decoupling, reset with a pull-up and a button, the six-pin ISP header every AVR programmer plugs into, an LED on PB3 and a header for PB3, PB4 and power. A good first board to build and to grow.",
+      "level": "Intermediate",
+      "tags": [
+        "Microcontroller",
+        "AVR"
+      ],
+      "parts": 8,
+      "nets": 9,
+      "size": [
+        32,
+        24
+      ],
+      "layers": 2,
+      "stem": "attiny85-dev-board"
+    }
+  ]
+}

@@ -18,6 +18,7 @@ mod persist;
 mod plugins;
 mod registry;
 mod relay;
+mod templates;
 mod versions;
 mod ws;
 
@@ -280,6 +281,9 @@ async fn main() -> anyhow::Result<()> {
             get(http::get_project).patch(http::update_project).delete(http::delete_project),
         )
         .route("/api/projects/blank", post(http::create_blank_project))
+        .route("/api/templates", get(templates::list))
+        .route("/api/templates/{id}/{name}", get(templates::picture))
+        .route("/api/projects/from-template", post(templates::create))
         .route("/api/trash", get(http::list_trash))
         .route("/api/projects/{id}/undelete", post(http::undelete_project))
         .route("/api/projects/{id}/star", axum::routing::put(http::star_project).delete(http::unstar_project))
