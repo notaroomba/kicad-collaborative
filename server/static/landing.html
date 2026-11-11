@@ -9,7 +9,7 @@
 <meta property="og:description" content="KiCad with everyone on the same board. Shared cursors, live edits, comments and history, in the desktop app and in the browser.">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#001023">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23001023'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23C83434'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%234D7FC4'/%3E%3Cpath d='M11 11 L21 21' stroke='%23F2EDA1' stroke-width='2.5'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <script>document.documentElement.classList.add("js"); try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
@@ -56,14 +56,14 @@
          transition: border-color .15s, background-color .15s, transform .15s; }
   .btn:hover { border-color: var(--ink-3); text-decoration: none; }
   .btn:active { transform: translateY(1px); }
-  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
-  .btn.primary:hover { background: var(--copper-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent-2); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-2); }
   .btn.sm { padding: 6px 13px; font-size: 14px; }
   .btn svg { width: 17px; height: 17px; fill: currentColor; flex: none; }
 
   /* ---- section furniture: every section opens like a sheet reference ---- */
   .tag { display: flex; align-items: center; gap: 12px; font: 500 11.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
-  .tag b { color: var(--copper); font-weight: 500; }
+  .tag b { color: var(--accent); font-weight: 500; }
   .tag::after { content: ""; flex: 1; height: 1px; background: var(--line); }
   h2 { font-size: clamp(28px, 3.5vw, 44px); line-height: 1.08; letter-spacing: -.025em; font-weight: 600; text-wrap: balance; }
   .lead { color: var(--ink-2); font-size: clamp(16px, 1.35vw, 18.5px); line-height: 1.55; max-width: 62ch; text-wrap: pretty; }
@@ -72,12 +72,12 @@
   #make { scroll-margin-top: 0; }
 
   /* ---- hero ---- */
-  .hero { padding: clamp(36px, 6vw, 76px) 0 clamp(48px, 6vw, 80px); }
+  .hero { padding: clamp(24px, 3.4vw, 48px) 0 clamp(48px, 6vw, 80px); }
   .hero .eyebrow { font: 500 11.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .hero .eyebrow span + span::before { content: "/"; margin-right: 14px; color: var(--line-2); }
   .hero h1 { font-size: clamp(40px, 5.9vw, 80px); line-height: .98; letter-spacing: -.04em; font-weight: 600; margin: 0;
              text-wrap: balance; }
-  .hero h1 em { font-style: normal; color: var(--copper); }
+  .hero h1 em { font-style: normal; color: var(--accent); }
   .hero-row { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 28px clamp(32px, 4vw, 64px); align-items: end; margin-top: 22px; }
   .hero-side { display: grid; gap: 22px; padding-bottom: 8px; }
   .hero .acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -85,25 +85,47 @@
   .hero .also a { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
   .hero .also a:hover { color: var(--ink); }
 
-  .win { margin-top: clamp(32px, 4.5vw, 56px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #001023;
+  .win { margin-top: clamp(24px, 3vw, 40px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #001023;
          box-shadow: 0 1px 0 #ffffff14 inset, 0 30px 60px -28px #000a, 0 8px 18px -8px #0005; }
   /* The window leans back a little until it is scrolled into full view (index.ts sets --lean). */
   .js .win.rv, .js .win.rv.in { transition: opacity .8s cubic-bezier(.2, .7, .2, 1); transition-delay: calc(var(--i, 0) * 70ms); }
   .js .win.rv, .js .win.rv.in { transform: perspective(1800px) rotateX(calc(var(--lean, 0) * 7deg)) scale(calc(1 - var(--lean, 0) * .03)); transform-origin: 50% 0; will-change: transform; }
-  .win-bar, .win-status { display: flex; align-items: center; gap: 12px; background: var(--bench); color: var(--ink-2); font: 12px var(--mono); padding: 0 12px; }
-  .win-bar { height: 38px; border-bottom: 1px solid var(--line); }
+  .win { --fcu: #C83434; --bcu: #4D7FC4; }   /* KiCad's layer colours */
+  .win-bar, .win-status, .win-tools { display: flex; align-items: center; gap: 12px; background: var(--bench); color: var(--ink-2); font: 12px var(--mono); padding: 0 12px; }
+  .win-bar { height: 34px; border-bottom: 1px solid var(--line); }
   .win-bar b { font-weight: 500; color: var(--ink); }
-  .win-bar .layer { display: inline-flex; align-items: center; gap: 6px; }
-  .win-bar .layer::before { content: ""; width: 9px; height: 9px; background: #C83434; border-radius: 1px; }
-  .win-bar .sp, .win-status .sp { flex: 1; }
+  .win-bar .app { color: var(--ink-3); }
+  .win-bar .sp, .win-status .sp, .win-tools .sp { flex: 1; }
   .avs { display: flex; }
-  .avs i { width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff; font: 600 11px/24px var(--font); text-align: center;
-           font-style: normal; margin-left: -6px; box-shadow: 0 0 0 2px var(--bench); }
-  .win-status { height: 26px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-3); gap: 18px; white-space: nowrap; overflow: hidden; }
+  .avs i { min-width: 22px; height: 22px; border-radius: 11px; background: var(--c); color: #fff; font: 600 10.5px/22px var(--font); text-align: center;
+           font-style: normal; margin-left: -5px; box-shadow: 0 0 0 2px var(--bench); }
+  .avs .you { background: var(--panel); color: var(--ink-2); padding: 0 7px; box-shadow: 0 0 0 1px var(--line), 0 0 0 2px var(--bench); }
+  .win-tools { height: 36px; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+  .win-body { display: grid; grid-template-columns: minmax(0, 1fr) 36px; }
+  .win-side { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 5px 0; background: var(--bench); border-left: 1px solid var(--line); }
+  .tb { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; background: none; border: 1px solid transparent; border-radius: 2px; color: var(--ink-2); }
+  .tb:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 9%, transparent); }
+  .tb[aria-pressed="true"] { background: color-mix(in srgb, var(--blue) 22%, transparent); border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
+  .tb:disabled { opacity: .38; cursor: default; }
+  .tb img { width: 22px; height: 22px; }
+  .tb.text { width: auto; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 4px; font: 12px var(--font); }
+  .tb .id, :root[data-theme="dark"] .tb .il { display: none; }
+  :root[data-theme="dark"] .tb .id { display: block; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tb .il { display: none; } :root:not([data-theme="light"]) .tb .id { display: block; } }
+  .win-tools .sep { width: 1px; height: 20px; background: var(--line); margin: 0 5px; }
+  .layers { display: flex; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .layers button { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; background: var(--panel); border: 0; font: 12px var(--mono); color: var(--ink-2); }
+  .layers button + button { border-left: 1px solid var(--line); }
+  .layers button i { width: 10px; height: 10px; background: var(--c); border-radius: 1px; }
+  .layers button[aria-pressed="true"] { background: color-mix(in srgb, var(--blue) 20%, var(--panel)); color: var(--ink); }
+  .win-status { height: 24px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-3); gap: 18px; white-space: pre; overflow: hidden; }
+  .win-status .ok { color: var(--wire); }
   .live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
   .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--wire); box-shadow: 0 0 0 0 color-mix(in srgb, var(--wire) 60%, transparent); animation: ping 2.2s ease-out infinite; }
   @keyframes ping { 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
-  .win canvas { display: block; width: 100%; height: clamp(250px, min(58vh, 74vw), 620px); cursor: crosshair; touch-action: pan-y; }
+  .win canvas { display: block; width: 100%; height: clamp(280px, min(62vh, 74vw), 640px); touch-action: pan-y pinch-zoom; outline: none; }
+  .win canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .win[data-tool="route"] canvas, .win[data-tool="via"] canvas { cursor: crosshair; }
   .cap { margin-top: 12px; font: 12px var(--mono); color: var(--ink-3); }
 
   /* ---- the scroll story ---- */
@@ -114,11 +136,11 @@
                gap: clamp(24px, 4vw, 64px); align-items: center; padding-top: 58px; }
   .steps { list-style: none; margin: 0; padding: 0; display: grid; }
   .steps li { position: relative; padding: 15px 0 15px 22px; cursor: pointer; border-left: 2px solid var(--line); }
-  .steps li::before { content: ""; position: absolute; left: -2px; top: 0; width: 2px; height: 100%; background: var(--copper);
+  .steps li::before { content: ""; position: absolute; left: -2px; top: 0; width: 2px; height: 100%; background: var(--accent);
                       transform-origin: top; transform: scaleY(var(--p, 0)); }
   .steps li.done::before { transform: scaleY(1); }
   .steps .n { font: 500 11.5px var(--mono); letter-spacing: .1em; color: var(--ink-3); text-transform: uppercase; }
-  .steps li.on .n { color: var(--copper); }
+  .steps li.on .n { color: var(--accent); }
   .steps h3 { font-size: 21px; font-weight: 600; letter-spacing: -.015em; line-height: 1.25; margin-top: 3px; color: var(--ink-3); transition: color .3s; }
   .steps li.on h3, .steps li:hover h3 { color: var(--ink); }
   .steps .more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s cubic-bezier(.2, .7, .2, 1), opacity .4s; opacity: 0; }
@@ -164,10 +186,10 @@
   .bom-r .d > span { overflow: hidden; color: var(--ink-2); font-size: 15px; line-height: 1.5; display: block; }
   .bom-r .d > span::before { content: ""; display: block; height: 4px; }
   .bom-r[aria-selected="true"] .d { grid-template-rows: 1fr; opacity: 1; }
-  .bom-r[aria-selected="true"] .ref { color: var(--copper); }
-  .bom-r::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 100%; background: var(--copper); transform: scaleX(0); transform-origin: left; transition: transform .5s cubic-bezier(.2, .7, .2, 1); }
+  .bom-r[aria-selected="true"] .ref { color: var(--accent); }
+  .bom-r::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform .5s cubic-bezier(.2, .7, .2, 1); }
   .bom-r[aria-selected="true"]::after { transform: scaleX(1); }
-  .bom-r:hover b { color: var(--copper); }
+  .bom-r:hover b { color: var(--accent); }
   .bom-view { position: sticky; top: 84px; }
   .bom-view .shot { position: relative; aspect-ratio: 16 / 10; }
   .bom-view img { position: absolute; inset: 0; width: 100%; height: 100%; aspect-ratio: auto; opacity: 0; transform: scale(1.012); transition: opacity .45s, transform .7s cubic-bezier(.2, .7, .2, 1); }
@@ -228,11 +250,12 @@
     .steps li { border-left: 0; border-top: 2px solid var(--line); padding: 8px 0 0; display: contents; }
     .steps li::before { display: none; }
     .steps li .n { grid-row: 1; border-top: 2px solid var(--line); padding-top: 8px; }
-    .steps li.on .n, .steps li.done .n { border-top-color: var(--copper); }
+    .steps li.on .n, .steps li.done .n { border-top-color: var(--accent); }
     .steps li h3, .steps li .more { grid-column: 1 / -1; display: none; }
     .steps li h3 { grid-row: 2; } .steps li .more { grid-row: 3; }
     .steps li.on h3 { display: block; margin-top: 12px; }
     .steps li.on .more { display: block; opacity: 1; }
+    .win-status .hide-m { display: none; }
     .together-grid, .bom-grid, .how-grid { grid-template-columns: 1fr; }
     .bom-view { position: sticky; top: 58px; z-index: 2; order: -1; background: var(--paper); padding: 10px 0 6px; margin: 0 -4px; }
     .bom-view .cap { margin-top: 6px; }
@@ -249,7 +272,8 @@
   @media (max-width: 520px) {
     .wrap { width: calc(100% - 32px); }
     .brand span { display: none; }
-    .win-bar .layer, .win-status .hide-s { display: none; }
+    .win-status .hide-s, .win-bar .app, .tb.text span { display: none; }
+    .tb.text { padding: 0; width: 28px; justify-content: center; }
     .btn { padding: 10px 14px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -299,17 +323,38 @@
       </div>
     </div>
 
-    <div class="win rv" style="--i:4" id="hero">
+    <div class="win rv" style="--i:4" id="hero" data-tool="select" data-layer="F.Cu">
       <div class="win-bar">
-        <b>blinker.kicad_pcb</b><span class="layer">F.Cu</span>
+        <b>blinker.kicad_pcb</b><span class="app">PCB Editor</span>
         <span class="sp"></span>
         <span class="live">live</span>
-        <span class="avs" aria-label="Mara, Jun and Ada are in this file"><i style="--c:#A45BD6">M</i><i style="--c:#149C94">J</i><i style="--c:#D9822B">A</i></span>
+        <span class="avs" aria-label="Mara and Jun are in this file with you"><i style="--c:#A45BD6">M</i><i style="--c:#149C94">J</i><i class="you">You</i></span>
       </div>
-      <canvas aria-label="A circuit board being finished by three people at once: one moves an LED into place, one routes the last tracks, one leaves a comment."></canvas>
-      <div class="win-status"><span>3 people editing</span><span class="hide-s">555 blinker, 12 parts</span><span class="sp"></span><span data-xy>X --.--  Y --.--</span><span>mm</span><span class="hide-s">grid 0.25</span></div>
+      <div class="win-tools" role="toolbar" aria-label="Board editor">
+        <button type="button" class="tb" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23545454;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='m 10.692917,22 c -0.063,0 -0.125152,-9.16e-4 -0.18948,-0.0018 A 10.229771,9.8921921 0 0 1 3.2675531,18.943853 0.95053869,0.91917126 0 1 1 4.6338973,17.665656 8.4243054,8.1463063 0 0 0 16.741705,6.3362253 8.3960728,8.1190054 0 0 0 4.8465893,6.1295444 0.95071867,0.91934529 0 0 1 3.5283731,4.8045328 10.059049,9.7271043 0 0 1 10.872829,2.0037133 10.32669,9.9859126 0 0 1 20.998101,12.179816 10.325269,9.9845385 0 0 1 10.692917,22 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 8.6954,9.4573 A 0.993,0.993 0 0 1 8.3911,9.4102 L 2.6976,7.5895 A 1.0049,1.0049 0 0 1 2,6.6319 v -5.63 a 1.0019,1.0019 0 1 1 2.0038,0 v 4.896 L 9,7.4953 a 1.0051,1.0051 0 0 1 -0.3046,1.962 z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23DED3DD;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='m 10.692917,22 c -0.063,0 -0.125152,-9.16e-4 -0.18948,-0.0018 A 10.229771,9.8921921 0 0 1 3.2675531,18.943853 0.95053869,0.91917126 0 1 1 4.6338973,17.665656 8.4243054,8.1463063 0 0 0 16.741705,6.3362253 8.3960728,8.1190054 0 0 0 4.8465893,6.1295444 0.95071867,0.91934529 0 0 1 3.5283731,4.8045328 10.059049,9.7271043 0 0 1 10.872829,2.0037133 10.32669,9.9859126 0 0 1 20.998101,12.179816 10.325269,9.9845385 0 0 1 10.692917,22 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 8.6954,9.4573 A 0.993,0.993 0 0 1 8.3911,9.4102 L 2.6976,7.5895 A 1.0049,1.0049 0 0 1 2,6.6319 v -5.63 a 1.0019,1.0019 0 1 1 2.0038,0 v 4.896 L 9,7.4953 a 1.0051,1.0051 0 0 1 -0.3046,1.962 z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3C/svg%3E"></button>
+        <i class="sep"></i>
+        <button type="button" class="tb" data-act="zoom-in" title="Zoom in (+)" aria-label="Zoom in"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23545454;}.cls-2{fill:none;stroke:%23545454;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 9.9976493,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373763 v 0 A 8.9954858,8.9973549 0 0 1 9.9976493,18.999997 Z m 0,-16.2787305 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510385 7.2612755,7.2627843 0 0 0 9.9976493,2.7216076 Z' style='fill:%23545454;fill-opacity:1;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cline class='cls-2' x1='6.5' y1='10.018' x2='13.494992' y2='10.018' /%3E%3Cline class='cls-2' x1='10' y1='6.5200853' x2='10' y2='13.515091' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23DED3DD;}.cls-2{fill:none;stroke:%23DED3DD;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 9.9976493,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373763 v 0 A 8.9954858,8.9973549 0 0 1 9.9976493,18.999997 Z m 0,-16.2787305 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510385 7.2612755,7.2627843 0 0 0 9.9976493,2.7216076 Z' style='fill:%23DED3DD;fill-opacity:1;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cline class='cls-2' x1='6.5' y1='10.018' x2='13.494992' y2='10.018' /%3E%3Cline class='cls-2' x1='10' y1='6.5200853' x2='10' y2='13.515091' /%3E%3C/svg%3E"></button>
+        <button type="button" class="tb" data-act="zoom-out" title="Zoom out (-)" aria-label="Zoom out"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23545454;}.cls-2{fill:none;stroke:%23545454;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 9.9976493,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373763 v 0 A 8.9954858,8.9973549 0 0 1 9.9976493,18.999997 Z m 0,-16.2787305 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510385 7.2612755,7.2627843 0 0 0 9.9976493,2.7216076 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cline class='cls-2' x1='6.5' y1='10.018' x2='13.494992' y2='10.018' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23DED3DD;}.cls-2{fill:none;stroke:%23DED3DD;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 9.9976493,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373763 v 0 A 8.9954858,8.9973549 0 0 1 9.9976493,18.999997 Z m 0,-16.2787305 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510385 7.2612755,7.2627843 0 0 0 9.9976493,2.7216076 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cline class='cls-2' x1='6.5' y1='10.018' x2='13.494992' y2='10.018' /%3E%3C/svg%3E"></button>
+        <button type="button" class="tb" data-act="zoom-fit" title="Zoom to fit (Home)" aria-label="Zoom to fit"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23545454;}.cls-2{fill:%23b9b9b9;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cpath style='fill:%23909090;fill-opacity:1;stroke:%23909090;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1' d='M 6.5,5.5 H 11 L 13.5,8 V 8.5 12.454544 14.5 h -7 z' class='cls-2' /%3E%3Cpath class='cls-1' d='M 9.9976484,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373767 v 0 A 8.9954858,8.9973549 0 0 1 9.9976484,18.999997 Z m 0,-16.2787301 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510389 7.2612755,7.2627843 0 0 0 9.9976484,2.721608 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23DED3DD;}.cls-2{fill:%238f8f8f;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 21.941949,23.012172 A 1.071826,1.071826 0 0 1 21.181811,22.69715 l -6.176896,-6.176896 a 1.0927916,1.0927916 0 0 1 1.520275,-1.520382 l 6.177004,6.176896 a 1.075159,1.075159 0 0 1 -0.760245,1.835404 z' style='stroke-width:1' /%3E%3Cpath style='fill:%23d0d0d0;fill-opacity:1;stroke:%23d0d0d0;stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1' d='M 6.5,5.5 H 11 L 13.5,8 V 8.5 12.454544 14.5 h -7 z' class='cls-2' /%3E%3Cpath class='cls-1' d='M 9.9976484,18.999997 A 8.998129,8.9999987 0 1 1 16.362105,3.6373767 v 0 A 8.9954858,8.9973549 0 0 1 9.9976484,18.999997 Z m 0,-16.2787301 A 7.2800339,7.2815466 0 1 0 15.148695,4.8510389 7.2612755,7.2627843 0 0 0 9.9976484,2.721608 Z' style='stroke-width:1;stroke-miterlimit:4;stroke-dasharray:none' /%3E%3C/svg%3E"></button>
+        <i class="sep"></i>
+        <div class="layers" role="group" aria-label="Active layer">
+          <button type="button" data-layer-btn="F.Cu" aria-pressed="true" title="Front copper (PgUp)"><i style="--c:var(--fcu)"></i>F.Cu</button>
+          <button type="button" data-layer-btn="B.Cu" aria-pressed="false" title="Back copper (PgDn)"><i style="--c:var(--bcu)"></i>B.Cu</button>
+        </div>
+        <span class="sp"></span>
+        <button type="button" class="tb text" data-act="reset" title="Put the board back as it was" disabled><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:none;stroke:%231a81c4;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 2.95,16.43 A 10.2024,10.2024 0 0 0 21.5675,15.4465' /%3E%3Cpath class='cls-1' d='M 21.0361,7.65 A 10.1937,10.1937 0 0 0 2.0809,9.4958' /%3E%3Cpolyline class='cls-1' points='17.701 8.519 22.198 8.922 23.071 4.262' transform='translate(-1,-1)' /%3E%3Cpolyline class='cls-1' points='8.441 17.769 3.945 17.366 3.071 22.026' transform='translate(-1,-1)' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:none;stroke:%2342B8EB;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='M 2.95,16.43 A 10.2024,10.2024 0 0 0 21.5675,15.4465' /%3E%3Cpath class='cls-1' d='M 21.0361,7.65 A 10.1937,10.1937 0 0 0 2.0809,9.4958' /%3E%3Cpolyline class='cls-1' points='17.701 8.519 22.198 8.922 23.071 4.262' transform='translate(-1,-1)' /%3E%3Cpolyline class='cls-1' points='8.441 17.769 3.945 17.366 3.071 22.026' transform='translate(-1,-1)' /%3E%3C/svg%3E"><span>Start over</span></button>
+      </div>
+      <div class="win-body">
+        <canvas tabindex="0" aria-label="A small board editor. The board is a 555 LED blinker with four connections left unrouted. Drag a footprint to move it, or pick the route tool and click two pads to join them."></canvas>
+        <div class="win-side" role="toolbar" aria-label="Tools" aria-orientation="vertical">
+          <button type="button" class="tb" data-tool-btn="select" aria-pressed="true" title="Select and move (Esc)" aria-label="Select and move"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23545454;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='m 7,4 4.18e-4,13.636621 3.013224,-2.910219 c 0.40646,0.927255 1.002473,2.296662 1.523834,3.492113 a 1.5317443,1.5317443 0 0 0 2.031021,0.78694 v 0 a 1.5537557,1.5537557 0 0 0 0.792899,-2.03839 C 13.840175,15.77142 13.243405,14.399854 12.836027,13.469757 L 17,13.184675 Z' style='stroke-width:1' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23DED3DD;}%3C/style%3E%3C/defs%3E%3Cpath class='cls-1' d='m 7,4 4.18e-4,13.636621 3.013224,-2.910219 c 0.40646,0.927255 1.002473,2.296662 1.523834,3.492113 a 1.5317443,1.5317443 0 0 0 2.031021,0.78694 v 0 a 1.5537557,1.5537557 0 0 0 0.792899,-2.03839 C 13.840175,15.77142 13.243405,14.399854 12.836027,13.469757 L 17,13.184675 Z' style='stroke-width:1;fill:%23DED3DD;fill-opacity:1' /%3E%3C/svg%3E"></button>
+          <button type="button" class="tb" data-tool-btn="route" aria-pressed="false" title="Route tracks (X)" aria-label="Route tracks"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:none;stroke:%23545454;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath style='fill:none;stroke:%231a81c4;stroke-width:2px;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:1' transform='translate(-1,-1)' d='M 23,3 18.5,13 H 7.5 L 3,23' class='cls-1' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:none;stroke:%23DED3DD;stroke-linecap:round;stroke-linejoin:round;stroke-width:2px;}%3C/style%3E%3C/defs%3E%3Cpath style='fill:none;stroke:%2342B8EB;stroke-width:2px;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:1' transform='translate(-1,-1)' d='M 23,3 18.5,13 H 7.5 L 3,23' class='cls-1' /%3E%3C/svg%3E"></button>
+          <button type="button" class="tb" data-tool-btn="via" aria-pressed="false" title="Add via (V)" aria-label="Add via"><img class="il" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23f29100;}.cls-2{fill:%23b9b9b9;}%3C/style%3E%3C/defs%3E%3Ccircle class='cls-1' cx='12' cy='12' r='7' /%3E%3Ccircle class='cls-2' cx='12' cy='12' style='fill:%23ffffff;fill-opacity:1;stroke-width:1' r='3' /%3E%3C/svg%3E"><img class="id" alt="" width="22" height="22" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' data-name='Слой 1' viewBox='0 0 24 24' version='1.1'%3E%3Cdefs%3E%3Cstyle%3E.cls-1{fill:%23f29100;}.cls-2{fill:%238f8f8f;}%3C/style%3E%3C/defs%3E%3Ccircle class='cls-1' cx='12' cy='12' r='7' /%3E%3Ccircle class='cls-2' cx='12' cy='12' style='fill:%23e0e0e0;fill-opacity:1;stroke-width:1' r='3' /%3E%3C/svg%3E"></button>
+        </div>
+      </div>
+      <div class="win-status"><span class="hide-s" data-counts>Pads 42</span><span data-unrouted>Unrouted 4</span><span class="sp"></span><span class="hide-s" data-z>Z 1.00</span><span data-xy>X --.--  Y --.--</span><span class="hide-s">grid 0.25</span><span class="hide-s">mm</span><span class="hide-m" data-toolname>Select item(s)</span></div>
     </div>
-    <p class="cap">A scripted session, drawn live in your browser. Move your pointer over the board.</p>
+    <p class="cap">Try it: this is the web editor's renderer on a real .kicad_pcb, with four connections left for you. Drag a part, route a track (X), change layer and drop a via (V). Mara and Jun are scripted here; in a project they are your teammates.</p>
   </div>
 </section>
 

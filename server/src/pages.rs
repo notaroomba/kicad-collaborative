@@ -12,7 +12,7 @@ pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-pub(crate) const MARK: &str = r##"<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>"##;
+pub(crate) const MARK: &str = include_str!("../static/icon.svg");
 
 /// The whole theme: tokens, then the shared components (static/theme.css).  Every page uses it,
 /// linked (`/static/theme.css`) or inlined, so no page carries a palette of its own.
@@ -200,6 +200,11 @@ pub async fn landing_js_map() -> Response {
 }
 
 /// Product screenshots shown on the home page (static/landing/*.webp).
+/// The icon as a file, for browser tabs.
+pub async fn favicon() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")], MARK)
+}
+
 pub async fn landing_image(Path(name): Path<String>) -> Response {
     let bytes: &'static [u8] = match name.as_str() {
         "editor.webp" => include_bytes!("../static/landing/editor.webp"),
@@ -1143,5 +1148,13 @@ mod landing_tests {
         }
         assert!(html.contains("/auth/github/login?next=/"), "sign-in hands off to the projects home");
         assert!(html.contains("<html lang=\"en\">"), "the signed-in marker is added to this tag");
+        // The hero is the small editor: its three tools, the two layers, undo and start over.
+        for hook in ["data-tool-btn=\"select\"", "data-tool-btn=\"route\"", "data-tool-btn=\"via\"", "data-layer-btn=\"F.Cu\"", "data-layer-btn=\"B.Cu\"", "data-act=\"undo\"", "data-act=\"reset\""] {
+            assert!(html.contains(hook), "{hook}");
+        }
+        // The demo design it draws is real KiCad files, bundled into the page script.
+        assert!(include_str!("../web/landing/demo/blinker.kicad_sch").starts_with("(kicad_sch"));
+        assert!(include_str!("../web/landing/demo/blinker.kicad_pcb").starts_with("(kicad_pcb"));
+        assert!(html.contains("href=\"/favicon.svg\"") && super::MARK.starts_with("<svg"));
     }
 }

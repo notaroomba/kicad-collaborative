@@ -79,7 +79,7 @@ export function openHotkeyList(): void {
 
 const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
 const SOURCE = "https://github.com/notaroomba/kicad-collaborative";
-const LOGO = `<svg viewBox="0 0 32 32" width="64" height="64" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>`;
+const LOGO = `<img src="/favicon.svg" width="64" height="64" alt="">`;
 
 /** The text KiCad's "Copy Version Info" puts on the clipboard, for this client. */
 export function versionInfo(): string {

@@ -225,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/styleguide", get(pages::styleguide_page))
         .route("/static/dist/styleguide.js", get(pages::styleguide_js))
         .route("/welcome", get(pages::landing_page))
+        .route("/favicon.svg", get(pages::favicon))
         .route("/static/dist/landing.js", get(pages::landing_js))
         .route("/static/dist/landing.js.map", get(pages::landing_js_map))
         .route("/static/landing/{name}", get(pages::landing_image))
