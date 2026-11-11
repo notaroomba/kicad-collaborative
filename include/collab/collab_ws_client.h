@@ -29,8 +29,12 @@
 #include <kicommon.h>
 
 /**
- * WebSocket client for the collaboration server, built on libcurl's WebSocket
- * API (CONNECT_ONLY mode).
+ * WebSocket client for the collaboration server.
+ *
+ * Uses libcurl's WebSocket API where the linked libcurl has one.  Many do not
+ * (Apple's system libcurl, Ubuntu's up to at least 24.04), so otherwise it lets
+ * libcurl open the connection, TLS and proxies included, and speaks the WebSocket
+ * protocol (RFC 6455) over it itself.
  *
  * Owns one background thread that connects, pumps frames, and reconnects with
  * exponential backoff until Stop() is called.  All callbacks fire on the
@@ -50,8 +54,11 @@ public:
     COLLAB_WS_CLIENT();
     ~COLLAB_WS_CLIENT();
 
-    /// True if the linked libcurl was built with WebSocket support.
+    /// Always true: a libcurl without WebSocket support is covered by our own framing.
     static bool IsSupported();
+
+    /// True if the linked libcurl was built with WebSocket support.
+    static bool CurlHasWebSockets();
 
     /// Start the background thread against aWsUrl (ws:// or wss://).
     void Start( const std::string& aWsUrl, CALLBACKS aCallbacks );
@@ -68,6 +75,8 @@ private:
     void threadMain();
     /// One connect + pump cycle; returns when the connection dies or Stop().
     void runConnection();
+    /// The same over a plain libcurl connection, with our own handshake and framing.
+    void runOwnFraming();
 
     std::string             m_url;
     CALLBACKS               m_cb;

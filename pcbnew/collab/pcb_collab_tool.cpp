@@ -1575,7 +1575,15 @@ void PCB_COLLAB_TOOL::OnRequest( const wxString& aDocId, const wxString& aAction
                 : wxString::Format( _( "Refilling zones for %s" ), aFromName ) );
     }
 
-    m_toolMgr->PostAction( PCB_ACTIONS::zoneFillAll );
+    // Run it from the event loop, not from inside the network handler: the filler
+    // shows progress and pumps events.  (A posted action would wait for the next tool
+    // event, which on an idle editor may be minutes away.)
+    frame()->CallAfter(
+            [this]()
+            {
+                if( m_sync )
+                    m_toolMgr->RunAction( PCB_ACTIONS::zoneFillAll );
+            } );
 }
 
 

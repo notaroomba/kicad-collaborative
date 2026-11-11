@@ -1542,6 +1542,12 @@ void SCH_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     m_unacked.erase( it );
     m_journal.Ack( aClientOpId );
 
+    if( m_baseRefreshWanted && m_unacked.empty() && !m_frame->IsContentModified() )
+    {
+        m_baseRefreshWanted = false;
+        RefreshSyncBasesFromDisk();
+    }
+
     wxWakeUpIdle();
 }
 
@@ -1867,7 +1873,32 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
         flushBatch();
     }
 
-    writeSyncBase( aDocId );
+    // The base is what this copy's file and the server last agreed on.  The file on disk
+    // has now been reconciled: what it had that the server lacked was just pushed, and what
+    // the server had is in memory.  So the file as it stands on disk is the base.  Writing the
+    // merged board instead would be wrong whenever the user then closes without saving: the
+    // next merge would compare the old file with a newer base, read every collaborator's
+    // change as a local edit that undoes it, and push those "edits" back to everyone.
+    {
+        bool fromDisk = false;
+
+        if( m_pathByDocId.count( aDocId ) )
+        {
+            const wxString& rel = m_pathByDocId.at( aDocId );
+            wxFileName      onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
+                                    + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
+
+            if( onDisk.FileExists() )
+            {
+                COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                                         m_frame->Prj().GetProjectName(), rel );
+                fromDisk = true;
+            }
+        }
+
+        if( !fromDisk )
+            writeSyncBase( aDocId );
+    }
 
     if( kept || conflicts )
     {
@@ -1952,7 +1983,11 @@ void SCH_COLLAB_SYNC::RefreshSyncBasesFromDisk()
             }
         }
 
-        // Only a fully acknowledged save is the server's state.
+        // Only a fully acknowledged save is the server's state.  Otherwise take it once
+        // the last acknowledgement is in (OnAck), if nothing was edited again by then.
+        if( inFlight )
+            m_baseRefreshWanted = true;
+
         if( !inFlight )
         {
             COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),

@@ -1549,9 +1549,27 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
         flushBatch();
     }
 
-    // The board now holds the merged state, which the server holds too once
-    // our pushes are acknowledged: it is the base for the next merge.
-    writeSyncBase();
+    // The base is what this copy's file and the server last agreed on.  The file on disk
+    // has now been reconciled: what it had that the server lacked was just pushed, and what
+    // the server had is in memory.  So the file as it stands on disk is the base.  Writing the
+    // merged board instead would be wrong whenever the user then closes without saving: the
+    // next merge would compare the old file with a newer base, read every collaborator's
+    // change as a local edit that undoes it, and push those "edits" back to everyone.
+    {
+        wxString   rel = docRelPath();
+        wxFileName onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
+                           + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
+
+        if( !rel.IsEmpty() && onDisk.FileExists() )
+        {
+            COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                                     m_frame->Prj().GetProjectName(), rel );
+        }
+        else
+        {
+            writeSyncBase();
+        }
+    }
 
     if( kept || conflicts )
     {
@@ -1618,10 +1636,15 @@ wxString PCB_COLLAB_SYNC::docRelPath() const
 
 void PCB_COLLAB_SYNC::RefreshSyncBaseFromDisk()
 {
-    // Only a fully acknowledged save is the server's state.
+    // Only a fully acknowledged save is the server's state.  Otherwise take it once the
+    // last acknowledgement is in (OnAck), if the board has not been edited again by then.
     if( !m_unacked.empty() )
+    {
+        m_baseRefreshWanted = true;
         return;
+    }
 
+    m_baseRefreshWanted = false;
     COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
                                              m_frame->Prj().GetProjectName(), docRelPath() );
 }
@@ -1754,6 +1777,9 @@ void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     m_ownRecent[ aSeq ] = std::move( it->second.changes );
     m_unacked.erase( it );
     m_journal.Ack( aClientOpId );
+
+    if( m_baseRefreshWanted && m_unacked.empty() && !m_frame->IsContentModified() )
+        RefreshSyncBaseFromDisk();
 
     wxWakeUpIdle();
 }

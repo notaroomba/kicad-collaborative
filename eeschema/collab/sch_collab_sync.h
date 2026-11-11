@@ -376,6 +376,10 @@ private:
     ///< ignoring the sync base (a sheet of a known file that came back).
     std::set<wxString> m_takeServer;
 
+    /// A save happened while ops were still unacknowledged; refresh the sync base from
+    /// disk when the last one is in.
+    bool m_baseRefreshWanted = false;
+
     COLLAB_JOURNAL              m_journal;
 
     COLLAB_DOC_ADAPTER*         m_adapter = nullptr;

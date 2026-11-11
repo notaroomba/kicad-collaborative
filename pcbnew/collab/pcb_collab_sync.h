@@ -253,6 +253,10 @@ private:
     ///< The commit being captured is a zone fill: its zones ship whole, fill included.
     bool            m_capturingFill = false;
 
+    /// A save happened while ops were still unacknowledged; refresh the sync base from
+    /// disk when the last one is in.
+    bool m_baseRefreshWanted = false;
+
     ///< Library nicknames already handled by saveMissingLibraries this session.
     std::set<wxString> m_savedLibNicknames;
 

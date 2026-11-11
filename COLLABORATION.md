@@ -190,8 +190,9 @@ These are choices, not gaps.
   zones then keep their last fill until someone does.
 - **A zone edited by someone else needs a refill**, as it would after your own
   edit. Whoever refills shares the result with everyone.
-- **macOS builds need a WebSocket-capable libcurl** (Homebrew's, not Apple's
-  system one). The client tells you if it was built without one.
+- **Any libcurl works.** Where the system libcurl has no WebSocket support
+  (Apple's, Ubuntu's), the client speaks the protocol itself over a connection
+  libcurl opens.
 
 ## Testing hooks
 
