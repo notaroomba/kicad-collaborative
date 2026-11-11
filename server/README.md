@@ -231,6 +231,67 @@ with Claude that can read the open design and propose edits to it.
 | `ANTHROPIC_API_URL` | another endpoint (a gateway, or the test stand-in) |
 | `KICAD_LIBS_URL`, `KICAD_LIBS_REF` | where KiCad's libraries are read from (default `https://gitlab.com`, `master`); `scripts/kicad-libs-mirror.mjs` is a caching mirror for machines whose outbound traffic goes through a proxy |
 
+## MCP server (Claude and other MCP clients)
+
+`/mcp` is a Model Context Protocol endpoint, so Claude (Claude Code, the desktop app, claude.ai) can work on a
+person's online projects from outside the editor: list and open projects, read schematics and boards, look at
+them as pictures, run the checks, find parts, and make changes that everyone in the project sees live.
+
+Connecting (the same steps are on the site's **Connect Claude** page, `/connect`, with the address filled in):
+
+- **Claude Code**: `claude mcp add --transport http kicad https://<site>/mcp`, then `/mcp` inside Claude Code,
+  pick `kicad` and sign in.
+- **claude.ai and the desktop app**: Settings, Connectors, Add custom connector, paste `https://<site>/mcp`.
+- Anything else that speaks MCP over Streamable HTTP with OAuth works the same way. A script can skip OAuth and
+  send the session token the desktop app uses as `Authorization: Bearer <token>`.
+
+How it is built:
+
+- **Transport**: Streamable HTTP, stateless (`POST /mcp`; no server-to-client stream, so `GET` is 405). A
+  `tools/call` is answered as an event stream with keep-alives when the client accepts one, so a long autoroute
+  does not time out behind a proxy.
+- **Sign-in** (`src/oauth.rs`): the server is its own OAuth 2.1 authorization server, as the MCP specification
+  asks: protected resource metadata (RFC 9728), server metadata (RFC 8414), dynamic client registration
+  (RFC 7591, public clients), authorization code with PKCE S256, refresh tokens that rotate on every use (a
+  reused one revokes the connection), revocation (RFC 7009). The person signs in with GitHub as usual and sees a
+  consent page naming the app; **Let it make changes** can be unticked for a read-only connection. Tokens are
+  opaque, stored only as SHA-256 hashes, access tokens last an hour. `/connect` lists a person's connected apps
+  and disconnects them. Cookies are never accepted on `/mcp`.
+- **Tools** (`src/mcp.rs`, `web/mcp/`): the design tools are the in-app assistant's own (`web/ai/tools.json`,
+  `design.ts`, `proposals.ts`, `library.ts`), not a second implementation. They are written against the web
+  editor's document model, so the server runs them in a **headless editor**: a Node process per signed-in
+  person (`web/mcp/host.ts`, bundled to `static/dist/mcp-host.js` and embedded in the binary) that joins the
+  document over the ordinary collaboration WebSocket as a peer named "Name (App)", keeps it in step with
+  everyone's edits, and sends its own as ordinary ops. Nothing about a change made this way is special to the
+  desktop app or the web editor.
+- **The one deliberate difference from the assistant**: in the editor the assistant proposes and a person
+  accepts a card. Over MCP the person's own Claude app already asks before a tool runs, so `apply_changes`
+  applies at once (with `dry_run` to look first). Every call is recorded (`mcp_changes`) with what it takes to
+  reverse it, so `undo_changes` and `redo_changes` take a whole call back or put it back; both are refused when
+  somebody has edited the same items since, so nobody's newer work is overwritten.
+- **Pictures**: `render_view` draws the sheet or board from the editor's own geometry as SVG with stroke-font
+  text (`web/mcp/picture.ts`) and the server rasterises it (resvg), so the model can look at what it changed.
+
+| Tool | |
+|---|---|
+| `list_projects`, `get_project`, `create_project` | find, open and start projects |
+| `get_design_overview`, `list_components`, `get_component`, `list_nets`, `get_items`, `get_board_info`, `read_document` | read a design |
+| `run_checks` | ERC on a sheet, DRC on the board |
+| `render_view` | a PNG of a sheet, the board, an area or some components |
+| `find_parts`, `get_library_part`, `find_datasheets` | KiCad libraries, vendor parts, datasheet links |
+| `apply_changes` | every edit the assistant can make: symbols, wires, labels, fields, moves, `update_from_schematic`, `auto_place`, `set_rules`, `autoroute`, raw items |
+| `undo_changes`, `redo_changes`, `list_changes` | the record of what was changed through MCP |
+| `list_comments`, `add_comment`, `resolve_comment` | review comments pinned on the design |
+| `list_checkpoints`, `create_checkpoint` | named versions |
+| `get_design_guide` | the assistant's drawing, layout, routing and review standards, for the model to read |
+
+Prompts `review_design`, `tidy_schematic` and `design_board` appear as slash commands in clients that show them.
+
+| Variable | |
+|---|---|
+| `KC_NODE` | the `node` to run the headless editor with (default `node` on the PATH; Node 20 or newer). The Docker image includes it. Without Node the endpoint still answers, the project and change-list tools work, and the design tools say the editor is unavailable |
+| `MCP_MAX_HOSTS` | how many people's headless editors may run at once (default 24; the least recently used is stopped; each exits by itself after 15 idle minutes) |
+
 ## Running
 
 ```bash
@@ -306,6 +367,15 @@ token from `gh auth token`. Its bridge refuses writes to any other repository.
 `fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every
 design tool on a schematic and a board, proposal preview / accept / reject /
 stale, a second client seeing an accepted edit, undo, errors, own keys, access.
+`server/scripts/mcp-e2e.mjs` is the MCP endpoint end to end against a running
+server (with `node` on its PATH): discovery, client registration, the consent
+page, PKCE, refresh rotation and revocation; the protocol; a design drawn,
+placed, ruled and routed through the tools while a second collaboration client
+checks that each edit arrives live and attributed; undo, redo and an undo
+refused because someone edited the item since; comments, checkpoints, a
+read-only connection and a view-only project; and, with `SHOTS=dir`, a browser
+that has the sheet open while the edits come in.
+
 `server/scripts/parts-e2e.mjs` (API) and `parts-ui.mjs` (two people in
 Chromium) test vendor parts against `fake-vendors.mjs`, which replays answers
 recorded from LCSC, JLCPCB and EasyEDA (`tests/fixtures/vendor/`, refreshed

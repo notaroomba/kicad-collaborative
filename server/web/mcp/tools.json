@@ -1,0 +1,218 @@
+[
+  {
+    "name": "list_projects",
+    "title": "List projects",
+    "write": false,
+    "description": "The person's online KiCad projects: the ones they own and the ones shared with them, most recently changed first. Each has an id, a name, the person's role (editor or viewer), who owns it and how many documents it holds. Call this first to find the project to work on; every other tool takes the project's id or exact name.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Only projects whose name or description contains this text (case-insensitive)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_project",
+    "title": "Get project",
+    "write": false,
+    "description": "One project: its documents (schematic sheets and the board, by path, which is what the document parameter of the other tools takes), the person's role, the members it is shared with, and the address that opens it in the web editor.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name, as listed by list_projects." }
+      },
+      "required": ["project"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_project",
+    "title": "Create project",
+    "write": true,
+    "description": "Start a new, empty online project owned by the person: a project file, one schematic sheet and one board, named after the project. Returns its id and documents. Use it only when the person asks for a new project or design.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The project's name, for example \"usb-c-breakout\"." }
+      },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_design_guide",
+    "title": "Design guide",
+    "write": false,
+    "description": "House rules for working on a design here, written for you: how to draw a schematic that reads like a careful engineer's, how to take a design from a prompt to a routed board in stages, how to plan placement and routing for the engines, and how to review a design. Read the relevant topic once before you draw or rearrange a schematic, lay out or route a board, or write a review.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": { "type": "string", "enum": ["all", "schematic", "board", "routing", "review"], "description": "Which part to read; all when omitted." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "render_view",
+    "title": "Render image",
+    "write": false,
+    "description": "A picture of a schematic sheet or of the board as it is right now, drawn the way the editor draws it (KiCad's colours and stroke font). Use it to see layout, readability and placement that lists of coordinates do not show, and to check your own changes after applying them. Without area or refs it shows the whole sheet or board; a schematic sheet is large, so ask for the part you care about to be able to read values and pin names.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "document": { "type": "string", "description": "Document path as listed by get_project, or \"board\"." },
+        "area": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "The rectangle to show, [x0, y0, x1, y1] in millimetres." },
+        "refs": { "type": "array", "items": { "type": "string" }, "description": "Show these components and their surroundings instead of an area." },
+        "layers": { "type": "array", "items": { "type": "string" }, "description": "Board only: draw just these layers, for example [\"F.Cu\", \"Edge.Cuts\"]. Default: every layer the editor shows by default." },
+        "width_px": { "type": "integer", "minimum": 400, "maximum": 2000, "description": "Longest side of the image in pixels (default 1500)." }
+      },
+      "required": ["project", "document"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_document",
+    "title": "Read source",
+    "write": false,
+    "description": "A document as KiCad s-expression text, as it stands now: the file's header followed by every item. For reading exact syntax (to write an add_item edit that matches the file, or to inspect something no structured tool reports). Long documents come in parts; pass next_offset back as offset. Prefer list_components, list_nets and get_items for questions about the design, they are far shorter.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "document": { "type": "string", "description": "Document path as listed by get_project, or \"board\"." },
+        "offset": { "type": "integer", "minimum": 0, "description": "Character to start at (default 0)." },
+        "max_chars": { "type": "integer", "minimum": 1000, "maximum": 100000, "description": "How much to return (default 40000)." }
+      },
+      "required": ["project", "document"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_changes",
+    "title": "List changes",
+    "write": false,
+    "description": "The changes made to a project through this connection or the person's other connected apps, newest first: an id, the title, what each edit did, the document, when, and whether it has been undone. The id is what undo_changes and redo_changes take.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "document": { "type": "string", "description": "Only changes to this document." }
+      },
+      "required": ["project"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "undo_changes",
+    "title": "Undo a change",
+    "write": true,
+    "description": "Take back one apply_changes call: what it added is removed, what it removed comes back, what it moved or edited returns to how it was, and board rules it set are restored. Everyone in the document sees it happen. It is refused, with nothing changed, when somebody has edited one of the same items since, so nobody's newer work is overwritten. Undo the newest change first when undoing several.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "change_id": { "type": "integer", "description": "The change to undo, as returned by apply_changes or list_changes. Omit for the most recent change to the project that has not been undone." }
+      },
+      "required": ["project"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "redo_changes",
+    "title": "Redo a change",
+    "write": true,
+    "description": "Put back a change that undo_changes took away, exactly as it was applied (the same items with the same ids, and the board rules it set). Like an undo it is refused, with nothing changed, when somebody has edited one of the same items since.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "change_id": { "type": "integer", "description": "The undone change to put back, from list_changes. Omit for the change that was undone most recently." }
+      },
+      "required": ["project"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_comments",
+    "title": "List comments",
+    "write": false,
+    "description": "The review comments people have pinned on a schematic sheet or the board: each thread with its position in millimetres, author, text, replies and whether it is resolved. Resolved threads are left out unless include_resolved is true.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "document": { "type": "string", "description": "Document path as listed by get_project, or \"board\"." },
+        "include_resolved": { "type": "boolean" }
+      },
+      "required": ["project", "document"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "add_comment",
+    "title": "Add comment",
+    "write": true,
+    "description": "Pin a comment on a schematic sheet or the board, signed as the person, where everyone in the project sees it: on a component (ref) or at a point (x, y in millimetres). Or answer an existing thread with reply_to. Good for review findings the person wants left on the design; do not comment unless asked to.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "document": { "type": "string", "description": "Document path as listed by get_project, or \"board\"." },
+        "text": { "type": "string", "description": "The comment, up to 4000 characters." },
+        "ref": { "type": "string", "description": "Pin it on this component." },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "reply_to": { "type": "integer", "description": "The id of the thread to reply to, from list_comments." }
+      },
+      "required": ["project", "document", "text"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "resolve_comment",
+    "title": "Resolve comment",
+    "write": true,
+    "description": "Mark a comment thread resolved once what it asked for is done, or reopen it with resolved false.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "comment_id": { "type": "integer", "description": "The thread's id, from list_comments." },
+        "resolved": { "type": "boolean", "description": "Default true." }
+      },
+      "required": ["project", "comment_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_checkpoints",
+    "title": "List checkpoints",
+    "write": false,
+    "description": "The named checkpoints of a project (the versions people saved under a name), newest first, with the documents each covers.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." }
+      },
+      "required": ["project"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "create_checkpoint",
+    "title": "Create checkpoint",
+    "write": true,
+    "description": "Save a named checkpoint of the project, the way File > Save Checkpoint does in the editor, so the person can find this state in the project's history. A project linked to GitHub with checkpoint pushes turned on pushes it there as well.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": { "type": "string", "description": "Project id or exact name." },
+        "name": { "type": "string", "description": "A short name, for example \"Before rerouting the USB pair\"." }
+      },
+      "required": ["project", "name"],
+      "additionalProperties": false
+    }
+  }
+]

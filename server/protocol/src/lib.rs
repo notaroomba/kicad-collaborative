@@ -27,6 +27,10 @@ pub enum ClientMsg {
         link_token: Option<String>,
         #[serde(default)]
         client: Option<String>,
+        /// With `client: "mcp"`: the application acting for the person ("Claude Code"),
+        /// shown beside their name so peers can tell its edits from the person's own.
+        #[serde(default)]
+        agent: Option<String>,
     },
     join_doc {
         #[serde(rename = "docId")]

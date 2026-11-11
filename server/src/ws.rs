@@ -177,7 +177,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
             anyhow::bail!("bad hello");
         }
     };
-    let ClientMsg::hello { proto, token, client_id, link_token, client: client_kind } = hello else {
+    let ClientMsg::hello { proto, token, client_id, link_token, client: client_kind, agent } = hello else {
         reject(&out_tx, &writer, json!({ "type": "error", "code": "bad_message" })).await;
         anyhow::bail!("first message must be hello");
     };
@@ -233,13 +233,29 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
         Ok((n,)) => n as usize % PEER_COLORS.len(),
         Err(_) => state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len(),
     };
+    let is_agent = client_kind.as_deref() == Some("mcp");
     let peer = PeerInfo {
         client_id: client_id.clone(),
         user_id: user.id,
         login: user.login.clone(),
-        name: user.name.clone().unwrap_or_else(|| user.login.clone()),
+        name: {
+            let name = user.name.clone().unwrap_or_else(|| user.login.clone());
+            if is_agent {
+                // An application working for the person (the MCP endpoint's headless editor):
+                // peers see whose it is and that it is not the person's own hand.
+                let label: String = agent.as_deref().unwrap_or("").chars().filter(|c| !c.is_control()).take(40).collect();
+                let label = label.trim();
+                format!("{name} ({})", if label.is_empty() { "Claude" } else { label })
+            } else {
+                name
+            }
+        },
         color: PEER_COLORS[color_idx].to_string(),
-        kind: if client_kind.as_deref() == Some("web") { "web".into() } else { "desktop".into() },
+        kind: match client_kind.as_deref() {
+            Some("web") => "web".into(),
+            Some("mcp") => "mcp".into(),
+            _ => "desktop".into(),
+        },
     };
     let _ = out_tx.try_send(
         json!({
@@ -253,7 +269,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     // editor parses a document down to the items it draws, so a file written from it would be
     // missing the header, title block, instance data and embedded files.  See
     // doc_actor::maybe_request_snapshot.
-    let can_snapshot = client_kind.as_deref() != Some("web");
+    let can_snapshot = !matches!(client_kind.as_deref(), Some("web") | Some("mcp"));
 
     // --- Main loop ---
     let mut joined: HashMap<Uuid, JoinedDoc> = HashMap::new();

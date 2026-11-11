@@ -450,7 +450,8 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           for (const u of plan.updates) { touch(u.item, e.op); const c = modified(doc, u.item, u.node); c.padNets = u.padNets; changes.push(c); lines.push({ kind: "modify", text: `Update ${u.item.ref}: ${u.what}`, ids: [u.item.id] }); }
           if (!plan.adds.length && !plan.updates.length) throw new ToolError("the board already matches the schematic: every part is on it with the right nets" + (plan.extra.length ? `; on the board but not in the schematic: ${plan.extra.join(", ")}` : ""));
           details.push({ update_from_schematic: { added: plan.adds.map((a) => a.ref), updated: plan.updates.map((u) => u.item.ref), nets: plan.nets, not_in_schematic: plan.extra, problems: plan.problems,
-            note: plan.adds.length ? "New footprints are parked in rows beside the board; place them next (move edits, or give placements with this edit)." : undefined } });
+            note: !plan.adds.length ? undefined : plan.adds.every((a) => e.placements && typeof e.placements === "object" && e.placements[a.ref]) ? "New footprints are at the positions given in placements."
+              : "New footprints without a position in placements are parked in rows beside the board; place them next (move edits, or give placements with this edit)." } });
           break;
         }
         case "autoroute": {
@@ -558,7 +559,7 @@ export function staleReason(p: Proposal): string | null {
 const RULE_KEYS: [string, string][] = [["clearance", "clearance"], ["track_width", "track width"], ["via_diameter", "via diameter"], ["via_drill", "via drill"],
   ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"]];
 /** The rules of a set_rules edit written into a .kicad_pro: the net class's own values, and the board-wide minimums. */
-function writeRules(pro: any, r: Record<string, number | string>): void {
+export function writeRules(pro: any, r: Record<string, number | string>): void {
   const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } }; if (!Array.isArray(ns.classes)) ns.classes = [];
   const name = String(r.net_class || "Default"); let c = ns.classes.find((x: any) => x && x.name === name);
   if (!c) { c = { bus_width: 12, clearance: 0.2, diff_pair_gap: 0.25, diff_pair_via_gap: 0.25, diff_pair_width: 0.2, line_style: 0, microvia_diameter: 0.3, microvia_drill: 0.1, name,

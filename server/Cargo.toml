@@ -26,4 +26,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
-tower-http = { version = "0.6", features = ["trace", "limit", "compression-gzip", "compression-br"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "compression-gzip", "compression-br", "cors"] }
+serde_urlencoded = "0.7"
+resvg = { version = "0.45", default-features = false, features = ["raster-images"] }

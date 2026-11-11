@@ -89,7 +89,7 @@ const KIND_LOGIN: &str = "login";
 const KIND_DESKTOP: &str = "desktop";
 const KIND_ADOPT: &str = "adopt";
 
-async fn pending_put<T: Serialize>(state: &AppState, kind: &str, key: &str, value: &T) -> AppResult<()> {
+pub(crate) async fn pending_put<T: Serialize>(state: &AppState, kind: &str, key: &str, value: &T) -> AppResult<()> {
     // Expired rows are swept on the way in; nothing else ever needs to.
     sqlx::query("DELETE FROM auth_pending WHERE created < now() - make_interval(secs => $1)")
         .bind(PENDING_TTL_SECS)
@@ -108,7 +108,7 @@ async fn pending_put<T: Serialize>(state: &AppState, kind: &str, key: &str, valu
 }
 
 /// Look at an unexpired entry without consuming it.
-async fn pending_peek<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
+pub(crate) async fn pending_peek<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
     let row: Option<(serde_json::Value,)> = sqlx::query_as(
         "SELECT payload FROM auth_pending
          WHERE kind = $1 AND key = $2 AND created >= now() - make_interval(secs => $3)",
@@ -123,7 +123,7 @@ async fn pending_peek<T: serde::de::DeserializeOwned>(state: &AppState, kind: &s
 
 /// Consume an entry: exactly one request gets it, whichever replica it reaches.  An expired
 /// entry is removed and reported as absent.
-async fn pending_take<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
+pub(crate) async fn pending_take<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
     let row: Option<(serde_json::Value, bool)> = sqlx::query_as(
         "DELETE FROM auth_pending WHERE kind = $1 AND key = $2
          RETURNING payload, created >= now() - make_interval(secs => $3)",
@@ -241,7 +241,7 @@ fn request_origin(headers: &HeaderMap) -> Option<String> {
 /// A host the browser may sign in from: public_url itself, or one listed in
 /// ALLOWED_ORIGINS.  Guards the adopt redirect against handing a session to an
 /// arbitrary origin.
-fn is_allowed_origin(state: &AppState, origin: &str) -> bool {
+pub(crate) fn is_allowed_origin(state: &AppState, origin: &str) -> bool {
     let canon = state.cfg.public_url.trim_end_matches('/');
     origin == canon || state.cfg.allowed_origins.iter().any(|o| o == origin)
 }
@@ -370,7 +370,7 @@ fn sanitize_next(next: Option<&str>) -> String {
     }
 }
 
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {

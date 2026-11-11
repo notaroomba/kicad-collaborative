@@ -233,7 +233,8 @@ export async function boardInfo(): Promise<unknown> {
   }
   let unrouted = 0; for (const n of nl.nets.values()) unrouted += n.unconnected || 0;
   let layout: unknown; try { const R = W.PcbAutoRouter; if (R && R.evaluate) { const ev = R.evaluate(K(), P, doc, s, {}); layout = { ratsnest_mm: r3(ev.ratsnest), unrouted: ev.unrouted, vias: ev.vias, track_length_mm: r3(ev.trackLength), routed_nets: ev.routedNets, worst_detours: (ev.worstDetours || []).slice(0, 10) }; } } catch { /* engine not loaded */ }
-  return { document: path, size_mm: { width: st.width, height: st.height, area_mm2: st.area }, copper_layers: doc.copper.slice(), statistics: st, layout,
+  let outlined = false; for (const it of doc.items.values()) if (it.edge) { outlined = true; break; }
+  return { document: path, size_mm: outlined ? { width: st.width, height: st.height, area_mm2: st.area } : null, outline: outlined ? undefined : "No board outline is drawn on Edge.Cuts yet, so the board has no size.", copper_layers: doc.copper.slice(), statistics: st, layout,
     track_widths_in_use_mm: Object.fromEntries(Array.from(widths.entries()).sort((a, b) => a[0] - b[0]).map(([w, n]) => [String(w), n])),
     via_sizes_in_use_mm: Object.fromEntries(vias), nets: nl.nets.size, unrouted_connections: unrouted,
     design_rules: { clearance: s.clearance, edge_clearance: s.edgeClearance, min_track_width: s.minTrackWidth, min_via_diameter: s.minViaDiameter, min_via_drill: s.minViaDrill, net_classes: s.netclasses } };

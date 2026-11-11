@@ -8,6 +8,9 @@ mod http;
 mod lenient_json;
 mod merge;
 mod libs;
+mod mcp;
+mod mcp_host;
+mod oauth;
 mod pages;
 mod parts;
 mod persist;
@@ -94,6 +97,31 @@ impl AppState {
         }
         delivered
     }
+}
+
+/// The MCP endpoint and the OAuth endpoints its clients call themselves (mcp.rs, oauth.rs).
+/// They authenticate with a bearer token, never a cookie, so any origin may call them: a
+/// browser-based MCP client is as welcome as a native one.
+fn mcp_routes() -> Router<AppState> {
+    use axum::http::{header, Method};
+    use tower_http::cors::{Any, CorsLayer};
+    Router::new()
+        .route("/mcp", post(mcp::post).get(mcp::get).delete(mcp::delete))
+        .route("/.well-known/oauth-protected-resource", get(oauth::protected_resource))
+        .route("/.well-known/oauth-protected-resource/mcp", get(oauth::protected_resource))
+        .route("/.well-known/oauth-authorization-server", get(oauth::authorization_server))
+        .route("/.well-known/oauth-authorization-server/mcp", get(oauth::authorization_server))
+        .route("/.well-known/openid-configuration", get(oauth::authorization_server))
+        .route("/oauth/register", post(oauth::register))
+        .route("/oauth/token", post(oauth::token))
+        .route("/oauth/revoke", post(oauth::revoke))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+                .allow_headers(Any)
+                .expose_headers([header::WWW_AUTHENTICATE, header::HeaderName::from_static("mcp-session-id")]),
+        )
 }
 
 #[tokio::main]
@@ -353,6 +381,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/plugins/{identifier}/state", post(plugins::set_state))
         .route("/ws", get(ws::ws_handler))
         .merge(libs::routes())
+        // Claude over MCP: the consent page and the Connected apps list (oauth.rs)
+        .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
+        .route("/connect", get(oauth::connect_page))
+        .route("/api/mcp/grants", get(oauth::list_grants))
+        .route("/api/mcp/grants/{id}", delete(oauth::delete_grant))
+        .merge(mcp_routes())
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         // SVG previews are ~10x smaller compressed; pages benefit too.

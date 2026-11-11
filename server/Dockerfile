@@ -17,5 +17,7 @@ RUN cargo build --release && cp target/release/kicad-collab-server /srv-bin
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# node runs the headless editor behind the MCP endpoint (src/mcp_host.rs); same Debian release as the web stage
+COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /srv-bin /usr/local/bin/kicad-collab-server
 CMD ["kicad-collab-server"]
