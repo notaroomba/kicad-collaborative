@@ -1745,7 +1745,8 @@ function parseClipboard(text) {
 const refPrefix = (ref) => str(ref).replace(/\?$/, "").replace(/\d+$/, "");
 const unannotated = (ref) => refPrefix(ref) + "?";
 const refNumber = (ref) => { const m = str(ref).match(/(\d+)$/); return m ? +m[1] : -1; };
-function usedReferences(doc, skip) { const used = new Set(); for (const it of doc.items.values()) if (it.kind === "symbol" && it.ref && !(skip && skip.has(it.id))) used.add(it.ref); return used; }
+// The references in use: this sheet's, plus the ones the project's other sheets hold (S.otherRefs, kept by the editor)
+function usedReferences(doc, skip) { const used = new Set(S.otherRefs || []); for (const it of doc.items.values()) if (it.kind === "symbol" && it.ref && !(skip && skip.has(it.id))) used.add(it.ref); return used; }
 function refField(node) { return kids(node, "property").find((p) => str(p[1]) === "Reference") || null; }
 // Set a symbol node's reference designator, keeping its instance data in step.
 function setReference(node, ref) {

@@ -95,7 +95,7 @@ function instanceHome(doc: KDoc, h: SchHelpers): { project: string; path: string
 function carrySymbol(s: SymbolSession, sameReference: boolean): void {
   const { ctx, doc, sch, h } = schReady();
   const at = cursorMm();
-  const used: string[] = [];
+  const used: string[] = [...((sch.state as { otherRefs?: Set<string> }).otherRefs || [])];   // the other sheets' references are taken too
   for (const it of doc.items.values()) if (it.kind === "symbol" && it.ref) used.push(it.ref);
   if (!sameReference) s.reference = core.nextReference(core.symbolInfo(s.lib).reference, used, !!sch.state.annotateAuto);
   const home = instanceHome(doc, h);

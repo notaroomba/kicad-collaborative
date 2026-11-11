@@ -5,7 +5,7 @@
 import { E, isSch, requestRender, setToggle, store, toast, toolCtx } from "./editor";
 import { openAssignFootprints } from "./assign-footprints";
 import { KD } from "./dom";
-import { openAnnotate } from "./annotate";
+import { openAnnotate, refreshOtherRefs } from "./annotate";
 import { openErc } from "./erc";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
@@ -86,7 +86,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   // a newly opened document takes the preferences (grids, colours, display) and the project's schematic settings
   let lastDoc: unknown = null, lastPro: unknown = null, first = true;
   store.subscribe(() => {
-    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); }
+    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); void refreshOtherRefs(); }
     else if (E.kdoc && E.proSettings !== lastPro) { lastPro = E.proSettings; applyProjectSettings(); }   // the .kicad_pro arrives after the first sheet
   });
   onProjectChanged(applyProjectSettings);

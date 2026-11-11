@@ -28,6 +28,22 @@ export function usedRefs(doc: KDoc): string[] {
 const pageOf = (doc: KDoc, fallback: number): number => { const p = parseInt(String((doc as KDoc & { pageNumber?: string }).pageNumber || ""), 10); return p > 0 ? p : fallback; };
 const inverseOf = (doc: KDoc, ch: KChange[]): KChange[] => ch.map((c) => { const it = doc.items.get(c.id as string); return it ? KiCadCanvas.replaceChange(doc, it) : null; }).filter(Boolean) as KChange[];
 
+/**
+ * The references the project's other sheets use, kept on the schematic module (state.otherRefs) so that placing,
+ * pasting or repeating a symbol never takes a number another sheet already has.  Refreshed when a sheet opens and
+ * after an annotation; a sheet edited elsewhere since then is caught by the next refresh (and by ERC).
+ */
+let refreshing = 0;
+export async function refreshOtherRefs(): Promise<void> {
+  const S = (window as unknown as { CollabTools?: { sch?: { state: { otherRefs?: Set<string> } } } }).CollabTools?.sch; if (!S || !E.kdoc || E.kdoc.type !== "sch") return;
+  const mine = ++refreshing, set = new Set<string>();
+  for (const d of projectDocs().filter((x) => x.docType === "kicad_sch" && x.docId !== appState.docId)) {
+    try { for (const r of usedRefs(await readDoc(d.docId, "kicad_sch"))) set.add(r); } catch (e) { /* unreadable sheet: its references stay unknown */ }
+    if (mine !== refreshing) return;   // a newer refresh (another sheet opened) supersedes this one
+  }
+  S.state.otherRefs = set;
+}
+
 let api: DlgApi | null = null;   // the dialog this module opened last (KDialogs keeps one dialog at a time)
 let msgs: HTMLElement | null = null;
 const say = (text: string, bad = false) => { if (!msgs) return; msgs.append(h("div", { style: bad ? "color:var(--err)" : "" }, text)); msgs.scrollTop = msgs.scrollHeight; };
@@ -68,6 +84,7 @@ async function runAnnotate(): Promise<void> {
     }
   }
   say(total ? `Annotated ${total} symbol${total === 1 ? "" : "s"}${sheets > 1 ? ` on ${sheets} sheets` : ""}.` : "No symbols needed annotation.");
+  void refreshOtherRefs();
 }
 
 async function runClear(): Promise<void> {
