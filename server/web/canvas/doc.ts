@@ -72,7 +72,8 @@ export function parseDoc(text, docType) {
     if (k === "paper") { doc.page = paperSize(node); doc.paper = str(node[1]) || "A4"; doc.portrait = doc.page[1] > doc.page[0]; }
     else if (k === "title_block") { doc.titleBlock = titleBlockOf(node); continue; }
     else if (k === "sheet_instances") { const p = kid(node, "path"); const pg = p && kid(p, "page"); if (pg) doc.pageNumber = str(pg[1]) || "1"; continue; }
-    else if (k === "version") { doc.version = num(node[1], 0); continue; }   // echoed back on every fragment we send
+    else if (k === "version") { doc.version = num(node[1], 0); continue; }
+    else if (k === "uuid") { doc.uuid = str(node[1]); continue; }   // the sheet's own id: the root of its instance paths   // echoed back on every fragment we send
     else if (type === "pcb" && k === "layers") {
       // (0 "F.Cu" signal ["user name"])
       for (const l of node.slice(1)) if (isList(l)) { const name = str(l[1]), ltype = str(l[2]); doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== undefined ? str(l[3]) : "" }); if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name); }

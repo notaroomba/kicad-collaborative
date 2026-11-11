@@ -990,6 +990,7 @@ function powerSymbols(doc) { return Array.from(doc.lib.keys()).filter((n) => isP
 function pickSymbol(ctx, name) { closePicker(); startCarry(ctx, "symbol", symbolNode(ctx.doc, name, S.cursor || [0, 0], 0, ""), S.cursor); }
 function openPicker(ctx, client, opts) {
   if (!hasDom()) return; closePicker();
+  if (!opts && root.KiCadLibrary && root.KiCadLibrary.toolChooser) { root.KiCadLibrary.toolChooser(ctx, "place"); return; }   // KiCad's Choose Symbol dialog (web/editor/library.ts)
   opts = opts || {};
   const names = opts.names || Array.from(ctx.doc.lib.keys()).sort((a, b) => a.localeCompare(b));
   const box = el("div", PANEL_CSS + "width:260px;padding:6px;display:flex;flex-direction:column;gap:6px;");
@@ -1016,6 +1017,7 @@ function closePicker() { if (S.picker) { S.picker.remove(); S.picker = null; } }
 const NO_POWER = "This sheet's library has no power symbols yet — place one from the desktop first";
 // The power tool's picker: only power symbols; with none in the sheet library the tool stays armed and says so.
 function openPowerPicker(ctx, client) {
+  if (hasDom() && root.KiCadLibrary && root.KiCadLibrary.toolChooser) return root.KiCadLibrary.toolChooser(ctx, "power");   // Choose Power Symbol
   const names = powerSymbols(ctx.doc);
   if (!names.length) { ctx.toast(NO_POWER, 3500); return false; }
   openPicker(ctx, client, { title: "Place power symbol", names, empty: NO_POWER });
@@ -1491,7 +1493,7 @@ function onPointerDown(ev, mm, ctx) {
     return true;
   }
   if (t.id === "place" || t.id === "power") {
-    if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); }
+    if (S.carry) { placeCarry(ctx, mm); const placed = dropCarry(ctx); if (root.KiCadLibrary && root.KiCadLibrary.afterPlace) root.KiCadLibrary.afterPlace(ctx, placed, t.id); }
     else if (t.id === "place") openPicker(ctx, S.cursorClient);
     else openPowerPicker(ctx, S.cursorClient);
     return true;

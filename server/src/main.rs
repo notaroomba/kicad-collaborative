@@ -6,6 +6,7 @@ mod github;
 mod http;
 mod lenient_json;
 mod merge;
+mod libs;
 mod pages;
 mod parts;
 mod persist;
@@ -301,6 +302,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/plugins/{identifier}", axum::routing::put(plugins::install).delete(plugins::uninstall))
         .route("/api/plugins/{identifier}/state", post(plugins::set_state))
         .route("/ws", get(ws::ws_handler))
+        .merge(libs::routes())
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         // SVG previews are ~10x smaller compressed; pages benefit too.

@@ -35,6 +35,7 @@ import { closePopover, toast } from "./util";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
 import { applyView, fitView, requestRender, worldMm } from "./view";
 import { commitChanges, redoLast, setTool, toolCtx, undoLast } from "./tools";
+import { installLibrary } from "./library";
 import { clearSelection, drawSelection, hitOpts, nearestFootprint, renderProps } from "./selection";
 import { HANDLERS, dispatchAction } from "./actions";
 import { applyChanges, enterSheet, openDoc, snapMm } from "./doc";
@@ -325,6 +326,7 @@ document.addEventListener("keydown", (ev) => {
 
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();
+installLibrary();   // window.KiCadLibrary + the placeFootprint / library browser actions (editor/library.ts)
 
 
 // ---------- boot ----------
