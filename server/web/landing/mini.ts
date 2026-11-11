@@ -22,15 +22,16 @@ const OPEN = [20, 26, 27, 28];
 const PARTS = new Set(meta.parts.map((p) => p.id));
 const snap = (v: number, o: number): number => o + Math.round((v - o) / GRID) * GRID;
 
-/** A pointer path: [time, x, y] keys in board millimetres, eased between, looping. */
-type Key = [number, number, number];
-function along(keys: Key[], t: number): Pt {
-  const end = keys[keys.length - 1][0]; t = ((t % end) + end) % end;
-  for (let i = 1; i < keys.length; i++) if (t <= keys[i][0]) { const a = keys[i - 1], b = keys[i], k = ease(span(t, a[0], b[0])); return [lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
-  return [keys[0][1], keys[0][2]];
-}
-const MARA: Key[] = [[0, 9, 5], [3, 11.6, 13.2], [7, 11.6, 13.2], [9.5, 17.6, 8.2], [13, 18, 7.6], [16, 6, 19.5], [19, 6.5, 20], [22, 9, 5]];
-const JUN: Key[] = [[0, 39, 21], [2.5, 36.9, 13.4], [9, 36.9, 13.4], [11, 33.4, 9.2], [14.5, 33, 9.6], [17, 39.5, 17.5], [20, 39, 21]];
+/** What a scripted teammate does on their own, round and round: go to a part (`ref`) or a
+ *  point on the board ([x, y] from its corner, millimetres), click, and stay `dwell` seconds.
+ *  `hold` keeps the part selected while they stay, as someone looking it over would. */
+interface Stop { ref?: string; at?: Pt; dwell: number; hold?: boolean }
+const ROUNDS: Stop[][] = [
+  [{ ref: "R1", dwell: 3.4, hold: true }, { at: [14.75, 9], dwell: 1.1 }, { ref: "C1", dwell: 2.2, hold: true }, { at: [9.5, 13.25], dwell: 0.9 }, { ref: "R2", dwell: 2.6, hold: true }, { at: [6, 20], dwell: 1.8 }, { ref: "J1", dwell: 1.4 }],
+  [{ ref: "R4", dwell: 3.8, hold: true }, { at: [33.75, 15.25], dwell: 1 }, { ref: "C3", dwell: 2.4, hold: true }, { at: [39, 21], dwell: 2 }, { ref: "R3", dwell: 2.8, hold: true }, { at: [29.5, 13.25], dwell: 1.2 }],
+];
+/** Where one of them is on their round: moving from `from` to `to`, then staying until `until`. */
+interface Walk { i: number; from: Pt; to: Pt; t0: number; dur: number; until: number }
 /** A change the visitor made, kept so that it can be taken back: by them, or by a teammate. */
 type Edit = { kind: "move"; id: string; from: Pt } | { kind: "add"; ids: string[] } | { kind: "del"; item: any };
 /** One stretch of a teammate's pointer while they undo something. */
@@ -39,8 +40,6 @@ interface Job { who: number; steps: Step[]; i: number; t0: number; from: Pt; at:
 const CLICK = 0.11;                                 // the pause on a point before the click lands
 const IDLE = 2200, GAP = 900;                       // ms the visitor is left alone before, and between, undos
 const minJerk = (u: number): number => u <= 0 ? 0 : u >= 1 ? 1 : u * u * u * (10 - 15 * u + 6 * u * u);
-/** What each of them has selected, and when in their loop. */
-const HOLDS: [number, string, number, number][] = [[0, "R1", 3.2, 7], [1, "R4", 2.8, 9]];
 
 export function startMini(root: HTMLElement): void {
   const canvas = root.querySelector("canvas")!;
@@ -56,7 +55,7 @@ export function startMini(root: HTMLElement): void {
   let pan: { at: Pt; box: Box } | null = null;
   let route: { net: number; from: Pt; layer: Layer; made: string[] } | null = null;
   const edits: Edit[] = [];
-  let job: Job | null = null, back: { who: number; from: Pt; t0: number } | null = null;
+  let job: Job | null = null; const walks: (Walk | null)[] = [null, null];
   let mark: { id: string; who: number } | null = null, redo: { a: Pt; b: Pt; at: Pt; layer: Layer; w: number } | null = null;
   let lastAct = 0, nextJob = 0, stillTimer = 0, blocked: number | null = null;
   let base: HTMLCanvasElement | null = null, t0 = 0, serial = 0;
@@ -118,13 +117,40 @@ export function startMini(root: HTMLElement): void {
   // ------------------------------------------------------------------ teammates undoing
 
   /** Where a teammate's pointer is on their own loop, in board millimetres. */
-  const loopAt = (who: number, t: number): Pt => { const p = along(who ? JUN : MARA, t); return [BOARD.x + p[0], BOARD.y + p[1]]; };
+  const refId = (ref: string): string | undefined => meta.parts.find((p) => p.ref === ref)?.id;
+  /** Where a stop is now: the part where it stands at this moment, on the grid like everything else. */
+  function stopAt(st: Stop): Pt {
+    const it = st.ref ? doc.items.get(refId(st.ref) || "") : null;
+    if (it) { const p = posOf(it); return [snap(p[0], BOARD.x), snap(p[1], BOARD.y)]; }
+    const a = st.at || [0, 0]; return [BOARD.x + a[0], BOARD.y + a[1]];
+  }
+  /** The pointer of a teammate going about their round: KiCad-like, as in the story below.
+   *  A quick deliberate move (minimum jerk, slightly bowed) to the next thing, a beat, the
+   *  click, then stillness while they look at it. */
+  function walkAt(who: number, now: number): { at: Pt; held: string | null } {
+    const round = ROUNDS[who]; let w = walks[who];
+    if (!w) { const p = stopAt(round[0]); w = walks[who] = { i: 0, from: p, to: p, t0: now, dur: 0, until: now + (still ? 1e12 : 1200 + who * 900) }; }
+    if (!(job && job.who === who) && now >= w.until) {
+      const i = (w.i + 1) % round.length, to = stopAt(round[i]), dur = travel(w.to, to) * 1000;
+      w = walks[who] = { i, from: w.to, to, t0: now, dur, until: now + dur + (CLICK + round[i].dwell) * 1000 };
+    }
+    const u = w.dur ? (now - w.t0) / w.dur : 1, k = minJerk(u), dx = w.to[0] - w.from[0], dy = w.to[1] - w.from[1], d = Math.hypot(dx, dy) || 1;
+    const bow = Math.sin(Math.PI * k) * Math.min(1.6, d * 0.07) * (who ? -1 : 1);
+    const st = round[w.i], clicked = now >= w.t0 + w.dur + CLICK * 1000;
+    return { at: [w.from[0] + dx * k - (dy / d) * bow, w.from[1] + dy * k + (dx / d) * bow], held: st.hold && st.ref && clicked ? refId(st.ref) || null : null };
+  }
+  /** After undoing something a teammate picks their round up again from where they stand. */
+  function resume(who: number, from: Pt, now: number): void {
+    const w = walks[who]; if (!w) return;
+    const to = stopAt(ROUNDS[who][w.i]), dur = travel(from, to) * 1000;
+    walks[who] = { i: w.i, from, to, t0: now, dur, until: now + dur + (CLICK + ROUNDS[who][w.i].dwell) * 1000 };
+  }
   const travel = (a: Pt, b: Pt): number => clamp(0.35 + dist(a, b) / 28, 0.45, 1.1);
   /** One of the two, picked at random, sets off to take back the visitor's latest change the
    *  way a person would: over to it, press, and slowly back to where it was. */
-  function startJob(now: number, t: number): void {
+  function startJob(now: number): void {
     const e = edits.pop()!, who = Math.random() < 0.5 ? 0 : 1, steps: Step[] = [];
-    let at = back && back.who === who ? back.from : loopAt(who, t);
+    let at = walkAt(who, now).at;
     const from = at, go = (to: Pt): void => { steps.push({ dur: travel(at, to), to }); at = to; };
     let move: Job["move"] = null;
     if (e.kind === "move") {
@@ -161,7 +187,7 @@ export function startMini(root: HTMLElement): void {
     }
     if (!steps.length) return;
     steps.push({ dur: 0.25, to: at });
-    back = null; job = { who, steps, i: 0, t0: now, from, at: from, move };
+    job = { who, steps, i: 0, t0: now, from, at: from, move };
   }
   /** Moves the job along to `now`, running whatever its steps do on the way. */
   function runJob(now: number): void {
@@ -180,7 +206,7 @@ export function startMini(root: HTMLElement): void {
   }
   function endJob(now: number): void {
     if (!job) return;
-    back = { who: job.who, from: job.at, t0: now }; job = null; mark = null; redo = null; nextJob = now + GAP;
+    resume(job.who, job.at, now); job = null; mark = null; redo = null; nextJob = now + GAP;
   }
   /** The visitor took hold of what a teammate was carrying back: the teammate lets go. */
   function yieldTo(id: string): void {
@@ -260,7 +286,7 @@ export function startMini(root: HTMLElement): void {
   }
   function endRoute(): void { if (route) { remember(route.made); route = null; change(); } }
   function reset(): void {
-    doc = loadPcbOpen(); open(); edits.length = 0; job = null; back = null; mark = null; redo = null; clearTimeout(stillTimer); route = null; drag = null; selected = null; box = HOME.slice() as Box; tool = "select"; layer = "F.Cu";
+    doc = loadPcbOpen(); open(); edits.length = 0; job = null; walks[0] = walks[1] = null; mark = null; redo = null; clearTimeout(stillTimer); route = null; drag = null; selected = null; box = HOME.slice() as Box; tool = "select"; layer = "F.Cu";
     dirty = true; touched = false; sync(); stage.invalidate();
   }
   function zoom(k: number, about?: Pt): void {
@@ -332,9 +358,8 @@ export function startMini(root: HTMLElement): void {
     }
 
     // The scripted collaborators: a pointer each, and an outline on what they hold.
-    const t = still ? 5 : (now - t0) / 1000;
     if (!still) {
-      if (!job && edits.length && !drag && !route && !pan && now - lastAct > IDLE && now > nextJob) startJob(now, t);
+      if (!job && edits.length && !drag && !route && !pan && now - lastAct > IDLE && now > nextJob) startJob(now);
       runJob(now);
     }
     if (mark) {
@@ -348,17 +373,11 @@ export function startMini(root: HTMLElement): void {
       ctx.strokeStyle = LAYER_COLOR[redo.layer] || LAYER_COLOR["F.Cu"]; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1.5, redo.w * view.ppm); ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.globalAlpha = 1;
     }
-    [MARA, JUN].forEach((path, who) => {
-      const peer = PEERS[who], end = path[path.length - 1][0], tt = t % end;
-      let at: Pt = loopAt(who, t);
-      if (job && job.who === who) at = job.at;
-      else if (back && back.who === who) {
-        const k = minJerk((now - back.t0) / 900);
-        at = [lerp(back.from[0], at[0], k), lerp(back.from[1], at[1], k)]; if (k >= 1) back = null;
-      }
-      for (const [w, ref, a, b] of HOLDS) {
-        if (w !== who || tt < a || tt > b || (job && job.who === who) || (back && back.who === who)) continue;
-        const it = doc.items.get(meta.parts.find((p) => p.ref === ref)!.id); if (!it || !it.bbox) continue;
+    ROUNDS.forEach((_, who) => {
+      const peer = PEERS[who], w = walkAt(who, now), busy = !!job && job.who === who;
+      const at: Pt = busy ? job!.at : w.at;
+      const it = !busy && w.held ? doc.items.get(w.held) : null;
+      if (it && it.bbox) {
         const p0 = toPx(view!, it.bbox[0], it.bbox[1]), p1 = toPx(view!, it.bbox[2], it.bbox[3]);
         ctx.strokeStyle = peer.color; ctx.lineWidth = 1.5; ctx.strokeRect(p0[0] - 3, p0[1] - 3, p1[0] - p0[0] + 6, p1[1] - p0[1] + 6);
       }
