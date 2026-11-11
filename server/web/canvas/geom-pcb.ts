@@ -7,6 +7,7 @@ import { arcFrom3, atOf, bezierPts, dashOf, ellipsePts, effectsOf, fillOf, has, 
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
+import { code128, code39 } from "./barcode";
 // ---- board ----
 /**
  * Net code of a board item.  Files up to 2025 carry (net N) or (net N "name"); KiCad 10 names the net only —
@@ -91,6 +92,10 @@ export function buildPcbGeom(doc, item) {
     buildZoneGeom(doc, item, n);
   } else if (k === "gr_line" || k === "gr_rect" || k === "gr_circle" || k === "gr_arc" || k === "gr_poly" || k === "gr_curve" || k === "gr_ellipse" || k === "gr_ellipse_arc") {
     graphicGeom(item, n, k.replace("gr_", ""), (x, y) => [x, y], layerOf(n, "Dwgs.User"));
+  } else if (k === "point") {
+    pointGeom(item, n, (x, y) => [x, y]);
+  } else if (k === "barcode") {
+    barcodeGeom(item, n, (x, y) => [x, y], 0);
   } else if (k === "gr_text") {
     const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
   } else if (k === "gr_text_box") {
@@ -217,6 +222,67 @@ export function hatchLines(pts, slope, spacing, lineLen) {
     }
   }
   return out;
+}
+
+/** PCB_PAINTER::draw(PCB_POINT): an X of the point's size in LAYER_POINTS and a ring of half that in the layer colour. */
+export function pointGeom(item, n, tf) {
+  const at = kid(n, "at"); if (!at) return; const [x, y] = tf(num(at[1]), num(at[2]));
+  const sz = kid(n, "size"), size = (sz ? num(sz[1]) : 1) / 2, layer = layerOf(n, "F.SilkS"), z = pcbZ(layer) + 0.9, w = 0.01;
+  for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt" });
+  G(item, { t: "circle", x, y, r: size / 2, w, color: pcbColor(layer), layer, z });
+}
+export const POINT_COLOR = "#FF26E2";   // LAYER_POINTS (builtin_color_themes.h)
+
+/**
+ * PCB_BARCODE: the symbol scaled to (size w h) and centred on (at x y), its text under it (1 mm gap, text_height),
+ * the knockout box inflated by its margins (at least 10 % of the smaller side), all turned by the angle about the
+ * position.  Code 39 / Code 128 bars are encoded as Zint encodes them (barcode.ts); the 2D symbologies draw their
+ * finder patterns only.
+ */
+export function barcodeGeom(item, n, tf, frot) {
+  const at = kid(n, "at"); if (!at) return;
+  const [px, py] = tf(num(at[1]), num(at[2])); const rot = num(at[3]) + (frot || 0);
+  const sz = kid(n, "size"), W = sz ? num(sz[1]) : 5, H = sz ? num(sz[2], W) : 5; if (!(W > 0) || !(H > 0)) return;
+  const layer = layerOf(n, "F.SilkS"), color = pcbColor(layer), z = pcbZ(layer);
+  const text = str((kid(n, "text") || [])[1] || ""), th = num((kid(n, "text_height") || [])[1], 1.5);
+  const type = str((kid(n, "type") || [])[1] || "code39"), showText = !yesNo(n, "hide"), knockout = yesNo(n, "knockout");
+  const back = /^B\./.test(layer), mx = back ? -1 : 1;   // side-specific: mirrored on the back
+  const R = rotator(rot); const P = (x, y) => { const [dx, dy] = R(mx * x, y); return [px + dx, py + dy]; };
+  const rects = [];   // symbol modules, in the barcode's frame (centred)
+  if (type === "code39" || type === "code128") {
+    const bc = type === "code39" ? code39(text) : code128(text);
+    if (bc) for (const [a, b] of bc.bars) rects.push([-W / 2 + W * a / bc.modules, -H / 2, -W / 2 + W * b / bc.modules, H / 2]);
+  } else {
+    // QR / Micro QR: the 7-module finder squares in the corners; Data Matrix: its solid L and dotted clock edges
+    if (type === "datamatrix") {
+      const m = Math.min(W, H) / 14;
+      rects.push([-W / 2, -H / 2, -W / 2 + m, H / 2], [-W / 2, H / 2 - m, W / 2, H / 2]);
+      for (let x = -W / 2; x < W / 2 - m / 2; x += 2 * m) rects.push([x, -H / 2, x + m, -H / 2 + m]);
+      for (let y = H / 2 - m; y > -H / 2 + m / 2; y -= 2 * m) rects.push([W / 2 - m, y - m, W / 2, y]);
+    } else {
+      const k = type === "microqr" ? 11 : 21, mw = W / k, mh = H / k;
+      const finder = (x0, y0) => {
+        rects.push([x0, y0, x0 + 7 * mw, y0 + mh], [x0, y0 + 6 * mh, x0 + 7 * mw, y0 + 7 * mh], [x0, y0 + mh, x0 + mw, y0 + 6 * mh], [x0 + 6 * mw, y0 + mh, x0 + 7 * mw, y0 + 6 * mh]);
+        rects.push([x0 + 2 * mw, y0 + 2 * mh, x0 + 5 * mw, y0 + 5 * mh]);
+      };
+      finder(-W / 2, -H / 2);
+      if (type !== "microqr") { finder(W / 2 - 7 * mw, -H / 2); finder(-W / 2, H / 2 - 7 * mh); }
+    }
+  }
+  let y1 = H / 2;
+  const textY = H / 2 + 1;
+  if (showText && text) y1 = textY + th;
+  if (knockout) {
+    const minSide = Math.min(W, H), m = Math.max(Math.ceil(minSide * 0.1 / 0.1 - 1e-9) * 0.1, 0);
+    const mg = kid(n, "margins"), ml = Math.max(mg ? num(mg[1]) : 0, m), mt = Math.max(mg ? num(mg[2]) : 0, m);
+    G(item, { t: "poly", pts: [P(-W / 2 - ml, -H / 2 - mt), P(W / 2 + ml, -H / 2 - mt), P(W / 2 + ml, y1 + mt), P(-W / 2 - ml, y1 + mt)], close: true, w: 0, color, fill: color, layer, z, noStroke: true });
+  }
+  const ink = knockout ? PCB_BG : color;
+  for (const [x0, y0, x2, y2] of rects) G(item, { t: "poly", pts: [P(x0, y0), P(x2, y0), P(x2, y2), P(x0, y2)], close: true, w: 0, color: ink, fill: ink, layer, z: z + 0.01, noStroke: true });
+  if (showText && text) {
+    const [tx, ty] = P(0, textY);
+    textLines(item, tx, ty, text, th, ink, rot, ["center", "top"], layer, { pcb: true, z: z + 0.01, w: th * 0.15, mirror: back || undefined });
+  }
 }
 
 export function graphicGeom(item, g, shape, tf, layer, z) {
@@ -361,6 +427,10 @@ export function buildFootprintGeom(doc, item) {
     const g = n[j]; if (!isList(g)) continue; const gk = g[0];
     if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve" || gk === "fp_ellipse" || gk === "fp_ellipse_arc") {
       graphicGeom(item, g, gk.replace("fp_", ""), tf, layerOf(g, "F.SilkS"));
+    } else if (gk === "point") {
+      pointGeom(item, g, tf);
+    } else if (gk === "barcode") {
+      barcodeGeom(item, g, tf, frot);
     } else if (gk === "fp_text") {
       textAt(g, str(g[2]));
     } else if (gk === "fp_text_box") {

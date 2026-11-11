@@ -20,7 +20,7 @@ export const DEFAULT_PREFS: Prefs = {
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
   schColors: { theme: "default" },
-  pcbDisplay: { showPadNumbers: true, showNetNames: false, showPageLimits: true, highContrast: false },
+  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, highContrast: false },
   grids: {
     // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
     sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES },

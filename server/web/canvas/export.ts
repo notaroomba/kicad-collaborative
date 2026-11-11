@@ -2,10 +2,11 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH } from "./colors";
 import { bboxOf } from "./hit";
-import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, dashPattern, makeCanvas, render, tracePath } from "./render";
+import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, dashPattern, makeCanvas, render, textMode, tracePath } from "./render";
 import { isList, kid, quotedMask, str } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
+import { strokeLine, strokeOrigin } from "./stroke-font";
 // ---------------------------------------------------------------- export (File → Plot / Export)
 export const fmt = (v) => { const s = (+v).toFixed(4); return s.replace(/\.?0+$/, "") === "-0" ? "0" : s.replace(/\.?0+$/, "") || "0"; };
 
@@ -49,6 +50,7 @@ export function svgGeom(g, hairline, isPcb, bg) {
   const stroke = (w, color) => { const lw = sw(w); return ` stroke="${color || g.color}" stroke-width="${fmt(lw)}" stroke-linecap="${cap}"${dash(lw)}`; };
   if (t === "text") {
     if (!g.text) return "";
+    if (textMode() === "stroke") return svgStrokeText(g, hairline, bg, op);
     const size = g.size, base0 = g.v === "top" ? size : g.v === "bottom" ? 0 : size / 2;
     const tr = `translate(${fmt(g.x)} ${fmt(g.y)})` + (g.rot ? ` rotate(${fmt(-g.rot)})` : "") + (g.mirror ? " scale(-1 1)" : "");
     const anchor = g.h === "left" ? "start" : g.h === "right" ? "end" : "middle";
@@ -91,6 +93,35 @@ export function svgGeom(g, hairline, isPcb, bg) {
   const stroked = !g.noStroke && (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !g.fill)) || (t === "circle" && (g.w > 0 || !g.fill)) || (t === "pad" && !g.fill));
   if (t === "circle" && !g.pie) return `<circle cx="${fmt(g.x)}" cy="${fmt(g.y)}" r="${fmt(g.r)}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
   return `<path d="${p.d}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
+}
+
+/**
+ * A text geometry in KiCad's stroke font, as KiCad's SVG plotter writes it: the glyph strokes as one path with round
+ * caps and joins (the same layout, anchor fudges and markup as the canvas painter, drawStrokeText), the knockout box
+ * under it.  Coordinates are document millimetres.
+ */
+export function svgStrokeText(g, hairline, bg, op) {
+  const text = g.raw || g.text || "", size = g.size, sx = g.sizeX > 0 ? g.sizeX : size;
+  const pen = Math.max(g.w > 0 ? g.w : size / 8, hairline);
+  const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
+  const m0 = c * mx * sx, m1 = sn * mx * sx, m2 = -sn * size, m3 = c * size;
+  const lines = g.multiline && text.indexOf("\n") >= 0 ? text.split("\n") : [text];
+  const offs = lines.length > 1 ? lineOffsets(lines.length, g.v) : [0];
+  let d = "", pre = "", color = g.color;
+  for (let i = 0; i < lines.length; i++) {
+    const line = strokeLine(lines[i], !!g.italic); if (!line.strokes.length) continue;
+    const [ox, oy0] = strokeOrigin(line.width, g.h, g.v, pen / sx, pen / size); const oy = oy0 + offs[i] * TEXT_INTERLINE;
+    const X = (u, v) => g.x + m0 * (u + ox) + m2 * (v + oy), Y = (u, v) => g.y + m1 * (u + ox) + m3 * (v + oy);
+    if (g.knockout && i === 0) {
+      const m = Math.max(pen / 2, size / 9) / size, mxu = Math.max(pen / 2, size / 9) / sx;   // the inflated glyph cell, in unit space
+      const u0 = -mxu, u1 = line.width + mxu, v0 = -20 / 21 - m, v1 = 1 / 21 + m;
+      pre = `<path d="M${fmt(X(u0, v0))} ${fmt(Y(u0, v0))}L${fmt(X(u1, v0))} ${fmt(Y(u1, v0))}L${fmt(X(u1, v1))} ${fmt(Y(u1, v1))}L${fmt(X(u0, v1))} ${fmt(Y(u0, v1))}Z" fill="${g.color}"/>`;
+      color = bg;
+    }
+    for (const st of line.strokes) { d += `M${fmt(X(st[0], st[1]))} ${fmt(Y(st[0], st[1]))}`; for (let k = 2; k < st.length; k += 2) d += `L${fmt(X(st[k], st[k + 1]))} ${fmt(Y(st[k], st[k + 1]))}`; }
+  }
+  if (!d) return pre;
+  return `<g${op}>${pre}<path d="${d}" fill="none" stroke="${color}" stroke-width="${fmt(pen)}" stroke-linecap="round" stroke-linejoin="round"/></g>`;
 }
 
 /** The export area: opts.bbox, else the union of opts.ids, else the board bbox / the sheet page; margin in mm. */
