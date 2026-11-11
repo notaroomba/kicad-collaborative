@@ -50,6 +50,7 @@ export function pythonRuntime(): void {
     modal: (id: number) => new Promise<void>((ok) => modals.set(id, ok)),
     endModal(id: number) { const ok = modals.get(id); if (ok) { modals.delete(id); ok(); } },
     tick: () => new Promise<void>((ok) => setTimeout(ok, 0)),
+    sleep: (ms: number) => new Promise<void>((ok) => setTimeout(ok, Math.max(0, ms | 0))),
     later: (fn: any, ms: number) => setTimeout(() => promised(fn, []), Math.max(0, ms | 0)),
     copy: (_text: string) => undefined,
   };
@@ -69,6 +70,7 @@ export function pythonRuntime(): void {
       case "fab.drill": out = await kicad.fab.drill(a); break;
       case "fab.positions": out = await kicad.fab.positions(a); break;
       case "fab.bom": out = await kicad.fab.bom(a); break;
+      case "net.fetch": out = await kicad.net.fetch(a); break;
       case "view.select": out = await kicad.view.select(a); break;
       case "view.focus": out = await kicad.view.focus(a); break;
       case "ui.confirm": out = await kicad.ui.confirm(a); break;
@@ -103,9 +105,21 @@ export function pythonRuntime(): void {
     for (const name of Object.keys(shim.files)) { const dst = "/kicad/lib/" + name; py.FS.mkdirTree(dst.slice(0, dst.lastIndexOf("/"))); py.FS.writeFile(dst, shim.files[name]); }
     const files: Record<string, string> = {}; for (const name of kicad.resources.list()) files[name] = await kicad.resources.text(name);
     py.globals.set("_kc_files", py.toPy(files));
+    // Packages the plugin imports that the runtime carries (numpy, requests, KiCad's kipy, …) are fetched now, once.
+    try {
+      const lock = await (await fetch(base + "pyodide-lock.json")).text();
+      py.globals.set("_kc_lock", lock);
+      const need: string[] = JSON.parse(await py.runPythonAsync("import sys\nsys.path.insert(0, '/kicad/lib')\nimport kicad_web\nkicad_web.needed_packages(_kc_files, _kc_lock)"));
+      py.globals.delete("_kc_lock");
+      for (const name of need) {
+        kicad.ui.status("Loading " + name + "…").catch(() => undefined);
+        try { await py.loadPackage(name, { messageCallback: () => undefined, errorCallback: (t: string) => console.warn(t) }); }
+        catch (e) { console.warn("The Python package " + name + " could not be loaded: " + lastLine(e)); }
+      }
+    } catch (e) { console.warn("The plugin's Python packages could not be checked: " + lastLine(e)); }
     const info = JSON.parse(await py.runPythonAsync([
       "import sys",
-      "sys.path.insert(0, '/kicad/lib')",
+      "sys.path.insert(0, '/kicad/lib') if '/kicad/lib' not in sys.path else None",
       "import js, kicad_web",
       "from pyodide.ffi import run_sync",
       "def _kc_bridge(method, args):",

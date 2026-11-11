@@ -22,7 +22,7 @@ const APP = (): any => W.CollabApp;
 export interface LogLine { at: number; level: "log" | "warn" | "error" | "host"; text: string }
 export interface RunState { ready: boolean; failed: boolean; busy: string | null; registered: Record<string, string[]>; error?: string | null }
 /** How one of KiCad's official plugins fared against the web runtime (scripts/plugins-python.mjs). */
-export interface Compat { status: "works" | "partly" | "limited" | "unsupported"; note?: string }
+export interface Compat { status: "works" | "partly" | "limited" | "unsupported" | "untested"; note?: string }
 /** A plugin in KiCad's own repository. */
 export interface OfficialEntry { identifier: string; manifest: PluginManifest; details: string; size: number; compat: Compat | null }
 /** A plugin window the editor floats around the plugin's frame (a wx dialog of a Python plugin). */
@@ -428,9 +428,28 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
+  "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
   "storage.get": null, "storage.set": null, "storage.remove": null, "storage.keys": null,
 };
+
+/**
+ * One HTTP request for one of KiCad's official Python plugins.  The frame cannot open connections; the server carries
+ * the request, and only to the web addresses that plugin's own package names (src/pcm.rs decides, not this page).
+ */
+async function netFetch(p: InstalledPlugin, a: any): Promise<unknown> {
+  if (!isPython(p.manifest)) throw new ApiError("Network requests through the server are for KiCad's official Python plugins.", "permission_denied");
+  const url = String(a.url || ""); let host = ""; try { host = new URL(url).host; } catch { throw new ApiError("That is not a web address.", "invalid"); }
+  const method = String(a.method || "GET").toUpperCase();
+  log(p.identifier, "host", `Network: ${method} ${host}`);
+  const r = await fetch(`/api/plugins/pcm/${encodeURIComponent(p.identifier)}/fetch`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url, method, headers: Array.isArray(a.headers) ? a.headers.filter((h: unknown) => Array.isArray(h) && h.length === 2).map((h: unknown[]) => [String(h[0]), String(h[1])]) : [], body: typeof a.body === "string" ? a.body : "" }),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) { const msg = (j && (j.message || j.error)) || `the server answered ${r.status}`; log(p.identifier, "warn", `Network: ${host}: ${msg}`); return { error: String(msg) }; }
+  return j;
+}
 
 async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   const p = run.plugin; const name = p.manifest.name;
@@ -452,6 +471,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   }
   if (ns === "view") return views[fn](a);
   if (ns === "fab") return fab[fn](a);
+  if (ns === "net") return netFetch(p, a);
   if (ns === "storage") return storage(p.identifier, fn, a);
   if (ns === "files") return fn === "save" ? saveFile(p, a) : pickFile(p, a);
   switch (fn) {
@@ -570,7 +590,7 @@ export function pluginUiKey(id: string): string {
 async function busy<T>(id: string, what: string, fn: () => Promise<T>): Promise<T | undefined> {
   setRun(id, { busy: what });
   // An action may wait on a dialog for minutes, so there is no deadline; a plugin that is simply stuck is named once, with the way out.
-  const slow = window.setTimeout(() => { if (!S.prompt) { log(id, "warn", `${what} has been running for 20 seconds`); toast(`${find(id)?.manifest.name || "A plugin"} is still running “${what}”. Restart it from Manage Plugins if it is stuck.`, 6000); } }, 20000);
+  const slow = window.setTimeout(() => { if (!S.prompt && !S.window) { log(id, "warn", `${what} has been running for 20 seconds`); toast(`${find(id)?.manifest.name || "A plugin"} is still running “${what}”. Restart it from Manage Plugins if it is stuck.`, 6000); } }, 20000);
   try { return await fn(); }
   catch (e) { const msg = e instanceof Error ? e.message : String(e); log(id, "error", `${what}: ${msg}`); toast(`${find(id)?.manifest.name || "Plugin"}: ${msg}`, 5000); return undefined; }
   finally { clearTimeout(slow); if (S.running[id]) setRun(id, { busy: null }); }

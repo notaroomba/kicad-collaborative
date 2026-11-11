@@ -63,7 +63,7 @@ fn valid_path(p: &str) -> bool {
         && p.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b'/'))
 }
 
-const PERMISSIONS: &[&str] = &["design:read", "design:write", "view", "files:import", "files:export", "assistant"];
+const PERMISSIONS: &[&str] = &["design:read", "design:write", "view", "files:import", "files:export", "assistant", "network"];
 
 fn valid_permission(p: &str) -> bool {
     if let Some(host) = p.strip_prefix("network:") {
@@ -132,6 +132,10 @@ fn check(identifier: &str, manifest: &Value, files: &Map<String, Value>, granted
         }
         if !asked.contains(&p.as_str()) {
             return Err(bad(format!("\"{p}\" is not a permission this plugin asks for")));
+        }
+        // Network access exists only for KiCad's official Python plugins, towards the addresses their packages name (pcm.rs).
+        if p == "network" && !python {
+            return Err(bad("\"network\" is only available to KiCad's official Python plugins"));
         }
     }
     Ok(())

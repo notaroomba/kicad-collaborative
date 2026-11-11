@@ -81,6 +81,7 @@ that asks for more is shown again for consent.
 | `files:export` | exporters; `kicad.files.save()` |
 | `assistant` | `kicad.assistant.registerTool()` |
 | `network:host.example.com` | `fetch` to that host over https (one entry per host) |
+| `network` | KiCad's own Python plugins only: web requests carried by the server to the addresses the plugin's package names (see below) |
 
 No permission is needed for `kicad.ui`, `kicad.storage` or `kicad.resources`.
 
@@ -224,10 +225,41 @@ How it works:
   plugins that read the schematic work.
 - The interpreter starts the first time one of the plugin's commands is used in a project
   (two to five seconds), then stays for the session.
+- **Plugins for KiCad's IPC interface** (a `plugin.json` and the `kicad-python` package, `kipy`)
+  run the same way.  The real `kipy` is installed; the socket it talks through (`pynng.py`) is a
+  function call answered by `kicad_ipc.py`, which serves the API's commands from the open board:
+  reading and creating, changing and deleting items, commits (one undo step each), the selection,
+  nets and net classes, layers, the stackup, the title block, zone refill.  Each action of
+  `plugin.json` becomes an editor command that runs the entry script as a program.
+- **Python packages.**  `plugins/python/packages.json` lists the packages plugins ask for.
+  `scripts/build-python.mjs` (part of `npm run build`) downloads them into the runtime folder:
+  Pyodide's own builds (numpy, pillow, shapely, scipy, matplotlib, pandas and others) from Pyodide's
+  CDN, and pure Python wheels (protobuf, kicad-python, openpyxl) from PyPI at pinned versions with
+  their SHA-256.  A plugin's imports are scanned when it starts and only the packages it uses are
+  loaded.  A build that cannot reach Pyodide's CDN leaves the compiled packages out; plugins that
+  need them then say which module is missing.
+- **Programs and threads.**  A plugin that starts Python again (`subprocess` with
+  `sys.executable`) has that script run in the same interpreter.  Threads run in turn; a thread
+  that only waits and polls is parked.  Listening on a socket is refused.
+- **The network.**  A plugin frame cannot open connections.  A plugin from KiCad's repository
+  whose code talks to web services is offered the `network` permission, and the consent dialog
+  lists the addresses.  With it, the plugin's sockets (so `urllib`, `http.client`, `requests`) are
+  carried as HTTP requests by the server, `POST /api/plugins/pcm/{identifier}/fetch`, which:
+  takes the allowed addresses from the plugin's own package as published in KiCad's repository,
+  never from the browser; allows https on the standard port to public addresses only (the name is
+  resolved once and the connection pinned to that address); does not follow redirects; sends none
+  of the person's cookies; limits a request to 16 MB, an answer to 24 MB and a person to 240
+  requests a minute.  Every request is written to the plugin's log.
+  `KC_PLUGIN_NETWORK=off` turns this off for the whole server.
 
-What does not carry over, by nature of a browser: running other programs (`kicad-cli`, `git`),
-Python packages with native code that Pyodide does not ship, Qt user interfaces, and the network
-(a plugin frame cannot reach it).  A plugin that needs one of these says so in its log.
+What does not carry over, by nature of a browser: running other programs (`kicad-cli`, `git`,
+FreeCAD), Python packages with native code that Pyodide does not ship, and Qt user interfaces.
+A plugin that needs one of these says so in its log.
+
+The label beside each plugin in the manager is one of *works*, *partly works*, *limited*,
+*not supported* and *not tested yet* (it needs something this check could not load or reach).
+`plugins/python/compat-notes.json` holds the labels set by hand, for plugins whose commands run
+here but whose purpose needs a desktop program.
 
 The label beside each plugin in the manager comes from `scripts/plugins-python.mjs`, which loads
 every official package headless, runs each command it registers against a demo board with the
@@ -249,5 +281,8 @@ and covers the manager, every extension point, the collaborative path of a plugi
 sandbox. Its header says how to run it.
 
 `scripts/plugins-python-ui.mjs` does the same for Python plugins: it serves a PCM package of its
-own, installs it through the KiCad plugins tab and drives it with two people (start the server
-with `KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json`).
+own, installs it through the KiCad plugins tab and drives it with two people, then does the same
+with a plugin for the IPC interface and with requests to a web service of its own (start the
+server with `KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json KC_PLUGIN_NETWORK=test`;
+`test` lets an address on this machine stand in for one on the internet and is for tests only).
+`cargo test net_tests` covers which addresses the server will carry a request to.

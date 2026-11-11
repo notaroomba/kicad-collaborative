@@ -171,17 +171,22 @@ class DataViewListCtrl(Window):
             self._wx_cell(r, len(self._cols) - 1)
         return col
 
-    def AppendTextColumn(self, label="", mode=DATAVIEW_CELL_INERT, width=-1, align=0, flags=DATAVIEW_COL_RESIZABLE, **kw):
-        return self._wx_col(label, "text", kw.get("mode", mode), kw.get("width", width))
+    @staticmethod
+    def _wx_col_args(a, kw, mode):
+        """(mode, width) from wxPython's `label, mode, width, align, flags`, given by position or by name."""
+        return kw.get("mode", a[0] if len(a) > 0 else mode), kw.get("width", a[1] if len(a) > 1 else -1)
 
-    def AppendToggleColumn(self, label="", mode=DATAVIEW_CELL_ACTIVATABLE, width=-1, align=0, flags=DATAVIEW_COL_RESIZABLE, **kw):
-        return self._wx_col(label, "toggle", kw.get("mode", mode), kw.get("width", width))
+    def AppendTextColumn(self, label="", *a, **kw):
+        return self._wx_col(label, "text", *self._wx_col_args(a, kw, DATAVIEW_CELL_INERT))
 
-    def AppendProgressColumn(self, label="", mode=DATAVIEW_CELL_INERT, width=-1, align=0, flags=DATAVIEW_COL_RESIZABLE, **kw):
-        return self._wx_col(label, "progress", mode, kw.get("width", width))
+    def AppendToggleColumn(self, label="", *a, **kw):
+        return self._wx_col(label, "toggle", *self._wx_col_args(a, kw, DATAVIEW_CELL_ACTIVATABLE))
 
-    def AppendIconTextColumn(self, label="", mode=DATAVIEW_CELL_INERT, width=-1, align=0, flags=DATAVIEW_COL_RESIZABLE, **kw):
-        return self._wx_col(label, "text", kw.get("mode", mode), kw.get("width", width))
+    def AppendProgressColumn(self, label="", *a, **kw):
+        return self._wx_col(label, "progress", *self._wx_col_args(a, kw, DATAVIEW_CELL_INERT))
+
+    def AppendIconTextColumn(self, label="", *a, **kw):
+        return self._wx_col(label, "text", *self._wx_col_args(a, kw, DATAVIEW_CELL_INERT))
 
     AppendBitmapColumn = AppendDateColumn = AppendIconTextColumn
     PrependTextColumn = AppendTextColumn

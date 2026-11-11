@@ -47,6 +47,8 @@ export interface PluginManifest {
   assistant_tools?: PluginAssistantTool[];
   /** Other files of the plugin it reads at run time with kicad.resources.text(). */
   resources?: string[];
+  /** A KiCad Python plugin with the "network" permission: the web addresses its package names, the only ones the server carries its requests to. */
+  network?: { hosts?: string[] };
 }
 
 /** An installed plugin as the server stores it. */
@@ -74,8 +76,13 @@ export const isNetwork = (p: string) => p.startsWith("network:");
 export const hostsOf = (perms: string[]) => perms.filter(isNetwork).map((p) => p.slice(8));
 
 /** A permission as a person reads it. */
-export function describePermission(p: string): { title: string; detail: string; risk: "low" | "medium" | "high" } {
+export function describePermission(p: string, m?: PluginManifest | null): { title: string; detail: string; risk: "low" | "medium" | "high" } {
   if (isNetwork(p)) return { title: `Talk to ${p.slice(8)}`, detail: PERMISSIONS.network.detail, risk: "high" };
+  if (p === "network" && isPython(m)) {
+    const hosts = ((m && m.network && m.network.hosts) || []).filter((h) => typeof h === "string");
+    const named = hosts.length ? `: ${hosts.slice(0, 8).join(", ")}${hosts.length > 8 ? ` and ${hosts.length - 8} more` : ""}` : "";
+    return { title: "Talk to web services", detail: `Send requests through this server to the web addresses its own code names${named}. Combined with reading your designs, it could send them there.`, risk: "high" };
+  }
   return PERMISSIONS[p] || { title: p, detail: "", risk: "high" };
 }
 
@@ -101,6 +108,7 @@ export function validateManifest(m: any): string[] {
   if (!Array.isArray(perms) || perms.some((p: unknown) => typeof p !== "string")) bad.push("permissions must be a list of strings");
   else for (const p of perms as string[]) {
     if (isNetwork(p)) { if (!HOST_RE.test(p.slice(8))) bad.push(`"${p}": name a host, for example network:api.example.com`); }
+    else if (p === "network" && m.runtime && m.runtime.type === "kicad-python") { /* carried by the server to the addresses the package names */ }
     else if (p === "network" || !PERMISSIONS[p]) bad.push(p === "network" ? 'network access must name its hosts, for example "network:api.example.com"' : `unknown permission "${p}"`);
   }
   const has = (p: string) => Array.isArray(perms) && perms.includes(p);

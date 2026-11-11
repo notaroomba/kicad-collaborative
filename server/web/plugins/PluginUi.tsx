@@ -203,11 +203,11 @@ function PromptDialog({ pr }: { pr: PromptRequest }) {
 // ---------------------------------------------------------------- manager
 
 const RISK_LABEL = { low: "", medium: "", high: "sensitive" } as const;
-function Permissions({ perms, fresh }: { perms: string[]; fresh?: string[] }) {
+function Permissions({ perms, fresh, m }: { perms: string[]; fresh?: string[]; m?: PluginManifest }) {
   if (!perms.length) return <p className="plg-muted">Needs no permissions: it cannot read or change your designs.</p>;
   return (
     <ul className="plg-perms">
-      {perms.map((p) => { const d = describePermission(p); return (
+      {perms.map((p) => { const d = describePermission(p, m); return (
         <li key={p} className={cx(d.risk)} data-perm={p}>
           <span className="dot" /><div><b>{d.title}</b>{RISK_LABEL[d.risk] ? <span className="tag">{RISK_LABEL[d.risk]}</span> : null}{fresh && fresh.includes(p) ? <span className="tag new">new</span> : null}<p>{d.detail}</p></div>
         </li>
@@ -241,7 +241,7 @@ function ConsentSheet() {
       {c.source.startsWith("registry:") ? <p className="plg-warn" id="pluginUnreviewed">Community plugins are published by other people and are not reviewed. Install it only if you trust {c.source.slice(9)}, and read what it asks for below.</p> : null}
       <p>{m.description}</p>
       <h3>It will be able to</h3>
-      <Permissions perms={perms} fresh={c.update ? c.added : undefined} />
+      <Permissions perms={perms} fresh={c.update ? c.added : undefined} m={c.manifest} />
       <h3>It adds</h3>
       <Contributes m={m} />
       {isPython(m) ? <p className="plg-muted" id="pluginPythonNote">This is a KiCad desktop plugin, written in Python for the desktop's <code>pcbnew</code> and <code>wx</code> modules. Here it runs on a Python interpreter inside the sandbox, against this editor's version of those modules. Most of what such plugins do is covered; anything that needs a program on your computer, another Python package or the network is not, and the plugin's log says so when it happens.</p> : null}
@@ -292,7 +292,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
       {p.withdrawn ? <p className="plg-warn bad" id="pluginWithdrawn">The administrators took this plugin out of the community registry, and your copy was switched off. Their reason: {p.withdrawn} The copy is still yours: uninstall it, or switch it back on if you trust it.</p> : null}
       <p className="plg-muted">{m.identifier}{m.author ? ` · by ${m.author}` : ""}{scopesOf(m) ? ` · ${scopesOf(m)}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</p>
       <p>{m.description}</p>
-      <h3>Permissions you granted</h3><Permissions perms={p.granted} />
+      <h3>Permissions you granted</h3><Permissions perms={p.granted} m={p.manifest} />
       <h3>Adds</h3><Contributes m={m} actions={pyActs} />
       {python ? <p className="plg-muted" id="pluginPython">A KiCad Python plugin from {sourceLabel(p.source)}. Its interpreter starts the first time you use one of its commands in a project, which takes a few seconds; after that it stays ready.{run && run.error ? <><br /><span className="plg-err">It reported: {run.error}</span></> : null}</p> : null}
       {python || (p.source === "catalog" && !(s.project.id && s.project.canEdit)) ? null : (
@@ -330,14 +330,14 @@ function Detail({ p }: { p: InstalledPlugin }) {
   );
 }
 
-const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", limited: "Limited here", unsupported: "Does not run here yet" };
+const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", limited: "Limited here", unsupported: "Does not run here yet", untested: "Not tested yet" };
 /** KiCad's own repository: the plugins the desktop's Plugin and Content Manager lists, runnable here through the Python runtime. */
 function KicadTab() {
   const s = usePlugins((x) => x); const [q, setQ] = useState(""); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState<string | null>(null); const [all, setAll] = useState(false);
   useEffect(() => { void loadOfficial(); }, []);
   if (s.official === null) return <div className="plg-empty">Loading KiCad's repository…</div>;
   const have = (id: string) => s.installed.find((p) => p.identifier === id);
-  const rank = (e: OfficialEntry) => (!e.compat ? 2 : e.compat.status === "works" ? 0 : e.compat.status === "partly" ? 1 : e.compat.status === "limited" ? 3 : 4);
+  const rank = (e: OfficialEntry) => (!e.compat ? 2 : e.compat.status === "works" ? 0 : e.compat.status === "partly" ? 1 : e.compat.status === "untested" ? 2 : e.compat.status === "limited" ? 3 : 4);
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const usable = s.official.filter((e) => !e.compat || e.compat.status !== "unsupported").length;
   const list = s.official.filter((e) => (all || words.length || !e.compat || e.compat.status !== "unsupported") && words.every((w) => `${e.manifest.name} ${e.manifest.description} ${e.identifier} ${e.manifest.author || ""}`.toLowerCase().includes(w)))
@@ -379,7 +379,7 @@ function CatalogTab() {
         <div className="plg-card" key={m.identifier} data-plugin={m.identifier}>
           <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="grow" /><span className="plg-muted">{scopesOf(m)}</span></div>
           <p>{m.description}</p>
-          <div className="plg-row"><span className="plg-muted perms">{(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</span><span className="grow" />
+          <div className="plg-row"><span className="plg-muted perms">{(m.permissions || []).map((p) => describePermission(p, m).title).join(" · ") || "No permissions"}</span><span className="grow" />
             {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={m.identifier} onClick={() => install(c)}>{newer ? "Update…" : "Install…"}</button>}</div>
         </div>
       ); })}
@@ -414,7 +414,7 @@ function RegistryCard({ r, setErr }: { r: RegistryEntry; setErr: (e: string | nu
       <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">by {r.publisher}</span><span className="grow" /><span className="plg-muted">{scopesOf(m)}</span></div>
       <p>{m.description}</p>
       <p className="plg-muted plg-meta">{r.identifier} · {r.installs} install{r.installs === 1 ? "" : "s"}{when(r.updatedAt) ? ` · updated ${when(r.updatedAt)}` : ""}</p>
-      <div className="plg-row"><span className="plg-muted perms">{(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</span><span className="grow" />
+      <div className="plg-row"><span className="plg-muted perms">{(m.permissions || []).map((p) => describePermission(p, m).title).join(" · ") || "No permissions"}</span><span className="grow" />
         {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={r.identifier} disabled={busy} onClick={async () => { setBusy(true); setErr(await installFromRegistry(r.identifier)); setBusy(false); }}>{newer ? "Update…" : "Install…"}</button>}</div>
       <div className="plg-report">
         {sent ? <span className="plg-muted" data-reported={r.identifier}>Reported. The administrators will look at it.</span> : reporting ? (
@@ -450,7 +450,7 @@ function ModerationCard({ e }: { e: ModerationEntry }) {
   return (
     <div className="plg-card" data-plugin={e.identifier}>
       <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">by {e.publisher}</span><span className={cx("plg-status", e.status !== "listed" && "bad")}>{e.status}</span><span className="grow" /><span className="plg-muted">{e.installs} install{e.installs === 1 ? "" : "s"}</span></div>
-      <p className="plg-muted plg-meta">{e.identifier} · {(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</p>
+      <p className="plg-muted plg-meta">{e.identifier} · {(m.permissions || []).map((p) => describePermission(p, m).title).join(" · ") || "No permissions"}</p>
       {e.status !== "listed" && e.reason ? <p>Your reason: {e.reason}</p> : null}
       {e.reports.length ? <ul className="plg-reports">{e.reports.map((r, i) => <li key={i}><b>{r.reporter}</b> <span className="plg-muted">{when(r.at)}</span><br />{r.reason}</li>)}</ul> : null}
       {err ? <p className="plg-err">{err}</p> : null}
@@ -485,7 +485,7 @@ function ProjectCard({ r, canEdit, setErr }: { r: ProjectPlugin; canEdit: boolea
     <div className="plg-card" data-plugin={r.identifier}>
       <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">{r.origin === "catalog" ? "built in" : `by ${r.publisher || "unknown"}`}</span><span className="grow" /><span className="plg-muted">{scopesOf(m)}</span></div>
       <p>{m.description}</p>
-      <div className="plg-row"><span className="plg-muted perms">{r.addedBy ? `Recommended by ${r.addedBy} · ` : ""}{(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</span><span className="grow" />
+      <div className="plg-row"><span className="plg-muted perms">{r.addedBy ? `Recommended by ${r.addedBy} · ` : ""}{(m.permissions || []).map((p) => describePermission(p, m).title).join(" · ") || "No permissions"}</span><span className="grow" />
         {canEdit ? <button type="button" className="btn sm" data-unrecommend={r.identifier} onClick={async () => setErr(await recommend(r.identifier, r.origin, false))}>Stop recommending</button> : null}
         {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={r.identifier} onClick={() => setErr(installRecommended(r))}>{newer ? "Update…" : "Install…"}</button>}</div>
     </div>

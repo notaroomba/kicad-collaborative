@@ -388,6 +388,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/plugins/catalog", get(plugins::catalog))
         .route("/api/plugins/pcm", get(pcm::list))
         .route("/api/plugins/pcm/{identifier}", get(pcm::get))
+        .route("/api/plugins/pcm/{identifier}/fetch", post(pcm::net_fetch))
         .route("/api/plugins/{identifier}/files", get(plugins::plugin_files))
         .route("/static/pyodide/{file}", get(pcm::runtime))
         .route("/api/plugins/registry", get(plugins::registry_list))

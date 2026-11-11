@@ -29,6 +29,9 @@ def _kc():
 
 _missing = set()           # names a plugin used that this module only stands in for
 _headless_modal = None     # headless: callable(dialog) -> return code
+_headless_main = None      # headless: callable() run by App.MainLoop of a plugin that is its own program
+_process_mode = False      # the running plugin is its own program (KiCad's IPC kind): App.MainLoop blocks while its windows are open
+_in_mainloop = [0]
 _bridge = None             # set by the runtime: host calls (confirm, prompt, pick, status, toast)
 _after_event = None        # set by the runtime: called after each handler (commits board changes)
 
@@ -3907,11 +3910,30 @@ def FindWindowByName(name, parent=None):
     return None
 
 
+class _EditorGrid:
+    """The board editor's grid selector, for plugins that read the current grid from KiCad's toolbar."""
+
+    def _mm(self):
+        import pcbnew
+        return float(getattr(pcbnew._Host, "grid_mm", 0.25) or 0.25)
+
+    def GetStringSelection(self):
+        g = self._mm()
+        return f"{g:.4f} mm ({g / 0.0254:.2f} mils)"
+
+    GetValue = GetString = GetLabel = lambda self, *a: self.GetStringSelection()
+    GetSelection = lambda self: 0
+    GetCount = lambda self: 1
+    GetStrings = GetItems = lambda self: [self.GetStringSelection()]
+
+
 def FindWindowById(i, parent=None):
     for w in _top_windows:
         r = w.FindWindowById(i)
         if r is not None:
             return r
+    if int(i) == 6211:
+        return _EditorGrid()
     return None
 
 
@@ -3934,7 +3956,27 @@ class App(EvtHandler):
         return 0
 
     def MainLoop(self):
+        # A plugin KiCad loads into its own process returns at once: KiCad's loop is already
+        # running.  A plugin that is its own program lives in this call until its last window closes.
+        if not _process_mode:
+            return 0
+        _in_mainloop[0] += 1
+        try:
+            if not _DOM:
+                if _headless_main is not None:
+                    _headless_main()
+                return 0
+            while any(getattr(w, "_wx_visible", False) for w in _top_windows) and not self._wx_exit:
+                _wait(_kc().sleep(60))
+        finally:
+            _in_mainloop[0] -= 1
+            self._wx_exit = False
         return 0
+
+    _wx_exit = False
+
+    def ExitMainLoop(self):
+        self._wx_exit = True
 
     def GetTopWindow(self):
         return _pcb_frame
@@ -3945,7 +3987,7 @@ class App(EvtHandler):
     def GetAppName(self):
         return "pcbnew"
 
-    SetAppName = SetAppDisplayName = SetVendorName = SetExitOnFrameDelete = ExitMainLoop = Yield = lambda self, *a: None
+    SetAppName = SetAppDisplayName = SetVendorName = SetExitOnFrameDelete = Yield = lambda self, *a: None
     GetAppDisplayName = lambda self: "KiCad"
     IsMainLoopRunning = lambda self: True
     GetTraits = lambda self: None
@@ -4934,9 +4976,15 @@ def _stub_class(name):
     return cls
 
 
+_SUBMODULES = ("adv", "lib", "grid", "dataview", "xrc", "html", "html2", "aui", "richtext", "stc", "propgrid", "svg", "media", "glcanvas", "core", "ribbon")
+
+
 def __getattr__(name):
     if name.startswith("__"):
         raise AttributeError(name)
+    if name in _SUBMODULES:          # wxPython loads most of these with wx itself: `wx.adv.X` works without importing wx.adv
+        import importlib
+        return importlib.import_module("wx." + name)
     _missing.add(name)
     if name.startswith("EVT_"):
         b = _binder(name)

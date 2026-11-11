@@ -1,0 +1,14 @@
+{
+  "about": "Python packages the runtime for KiCad's own plugins can load when a plugin imports them. scripts/build-python.mjs downloads them into static/dist/pyodide and checks every file's SHA-256: 'pyodide' names packages of the Pyodide distribution (compiled for WebAssembly; their dependencies come along), 'pypi' names pure Python wheels taken from PyPI at a pinned version and hash.",
+  "pyodide": [
+    "numpy", "pillow", "shapely", "scipy", "matplotlib", "pandas", "pyyaml",
+    "requests", "certifi", "beautifulsoup4", "typing-extensions", "jsonschema", "svgwrite", "networkx", "packaging", "six"
+  ],
+  "pypi": [
+    { "name": "protobuf", "version": "5.29.6", "file": "protobuf-5.29.6-py3-none-any.whl", "sha256": "6b9edb641441b2da9fa8f428760fc136a49cf97a52076010cf22a2ff73438a86", "imports": ["google"], "depends": [] },
+    { "name": "kicad-python", "version": "0.8.0", "file": "kicad_python-0.8.0-py3-none-any.whl", "sha256": "3d43af4aa2515e88829a9d30e408b8ce89537431a802104ee2a50392f0deaa16", "imports": ["kipy"], "depends": ["protobuf"] },
+    { "name": "openpyxl", "version": "3.1.5", "file": "openpyxl-3.1.5-py2.py3-none-any.whl", "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", "imports": ["openpyxl"], "depends": ["et-xmlfile"] },
+    { "name": "et-xmlfile", "version": "2.0.0", "file": "et_xmlfile-2.0.0-py3-none-any.whl", "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", "imports": ["et_xmlfile"], "depends": [] },
+    { "name": "singledispatch", "version": "4.1.2", "file": "singledispatch-4.1.2-py3-none-any.whl", "sha256": "24802c4e743a252645c461e71abcaa95c3f678a96688e72bb0bf63e663018c7a", "imports": ["singledispatch"], "depends": [] }
+  ]
+}

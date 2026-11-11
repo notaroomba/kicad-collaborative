@@ -1,20 +1,21 @@
 {
  "ch.ethz.atuzlak.splitplane": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+  "status": "untested",
+  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.ahmedmikatonik.kisidian": {
   "status": "works"
  },
  "com.alsoknownasfoo.spinrender": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It renders the board with a 3D renderer on the computer (OpenGL), which a browser tab does not have."
  },
  "com.github.30350n.pcb2blender": {
   "status": "works"
  },
  "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet."
  },
  "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
   "status": "works"
@@ -29,20 +30,18 @@
   "status": "works"
  },
  "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: NameError: name 'GetHighlightColour' is not defined"
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.Huaqiu-Electronics.kicad-hqsearch-plugin": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: AttributeError: 'NoneType' object has no attribute 'json'"
+  "status": "partly",
+  "note": "It opens and prepares its work. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: it needs the Python module “certifi”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.Mage-Control-Systems-Ltd.NCCM": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.MitjaNemec.Archive3DModels": {
   "status": "works"
@@ -64,22 +63,20 @@
  },
  "com.github.SK-Electronics-Consulting.kicad-coil-generators": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet."
  },
  "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
   "status": "works"
  },
  "com.github.Steffen-W.KiCad-Parasitics": {
   "status": "unsupported",
-  "note": "It does not load: it needs the Python module “analysis_progress”, which the web editor does not have"
+  "note": "It runs the ngspice circuit simulator as a separate program."
  },
  "com.github.Steffen-W.impartGUI": {
-  "status": "unsupported",
-  "note": "It did not finish within the test's time limit."
+  "status": "works"
  },
  "com.github.SteveMayze.pcb2fritzing": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "works"
  },
  "com.github.TheJigsApp.kicad-parts-placer-pcm": {
   "status": "works"
@@ -88,24 +85,24 @@
   "status": "works"
  },
  "com.github.adamws.kicad-git": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It runs the git program on the project folder. The web editor keeps history itself: Save version and Branches."
  },
  "com.github.adamws.kicad-kbplacer": {
   "status": "works"
  },
  "com.github.adamws.kicad-via-patterns": {
-  "status": "unsupported",
-  "note": "It does not load: Running another program (plugins-python.mjs): there are no other programs in the browser"
+  "status": "works"
  },
  "com.github.aislerhq.PushForKiCad": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "works"
  },
  "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
   "status": "works"
  },
  "com.github.aivon-pcba.aivon-plug-in-for-kicad": {
-  "status": "works"
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.andresarmento.kicad2gcode": {
   "status": "works"
@@ -114,8 +111,7 @@
   "status": "works"
  },
  "com.github.bbenchoff.orthoroute": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.bennymeg.JLC-Plugin-for-KiCad": {
   "status": "works"
@@ -127,11 +123,12 @@
   "status": "works"
  },
  "com.github.cooked.kimotor": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+  "status": "untested",
+  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.danielboston38.prefab-gate": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It runs kicad-cli, a program of the desktop application."
  },
  "com.github.ducky64.SubLayout": {
   "status": "works"
@@ -141,31 +138,27 @@
  },
  "com.github.f-blaze.velatrace": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
  },
  "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
-  "status": "unsupported",
-  "note": "It did not finish within the test's time limit."
+  "status": "partly",
+  "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there."
  },
  "com.github.g200kg.kicad-gerberzipper2": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.gauravmm.hierarchicalpcb": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: ValueError: PosixPath('.') has an empty name"
+  "status": "works"
  },
  "com.github.gauravmm.kleplacement": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "The plugin is broken as published: it imports itself under a folder name it is not installed as, on the desktop too."
  },
  "com.github.heronitec-solutions.kicomlib": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “requests”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.jOaSbA.localize-dependencies": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.jOaSbA.via-stitching": {
   "status": "works"
@@ -174,8 +167,7 @@
   "status": "works"
  },
  "com.github.jarrettr.stretch": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “bs4”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.joelsa.kicad-hide-references-plugin": {
   "status": "works"
@@ -186,41 +178,38 @@
  },
  "com.github.kerstensrobin.kicad-breadboard": {
   "status": "unsupported",
-  "note": "It loads, but fails when run: Running another program (kicad-cli): there are no other programs in the browser"
+  "note": "It runs kicad-cli, a program of the desktop application."
  },
  "com.github.kicadlab.CopperFiller": {
-  "status": "unsupported",
-  "note": "It does not load: AttributeError: module 'wx' has no attribute 'adv'"
+  "status": "untested",
+  "note": "It needs the shapely package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.lou270.pinout-image-generator": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "It adds no board editor command."
  },
  "com.github.mey-26.kicad-layout-clone": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.mey-26.pcb-heatmap": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: it needs the Python module “numpy”, which the web editor does not have"
+  "status": "untested",
+  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.michaelgaylor.tracklayer": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "untested",
+  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.mitxela.kicad-round-tracks": {
   "status": "works"
  },
  "com.github.mrcpuddington.kobeestudio": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "works"
  },
  "com.github.officialdyray.projectinstances": {
   "status": "works"
  },
  "com.github.ozzysv.holefinder": {
-  "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "status": "works"
  },
  "com.github.ozzysv.viafence": {
   "status": "works"
@@ -229,19 +218,18 @@
   "status": "works"
  },
  "com.github.pcbway.PCBWay-Plug-in-for-Kicad": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.sagarHackeD.PlaceBySchKiCad": {
   "status": "works"
  },
  "com.github.sagarHackeD.SnapToGridKiCAD": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: AttributeError: 'NoneType' object has no attribute 'GetStringSelection'"
+  "status": "works"
  },
  "com.github.samuelcicuitstudio.traceforge-kicad": {
   "status": "unsupported",
-  "note": "It did not finish within the test's time limit."
+  "note": "It starts a second program that talks to KiCad over a local network port; neither exists in a browser."
  },
  "com.github.seigedigital.setholediameterpluginforkicad": {
   "status": "works"
@@ -260,20 +248,21 @@
  },
  "com.github.tobiglaser.KiPNG": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "It runs kicad-cli and the Cairo graphics library, programs of the desktop."
  },
  "com.github.ulikoehler.kicad-bulk-hide-silkscreen-designators": {
   "status": "works"
  },
  "com.github.usetraces.traces": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It needs the traces server running on the same computer."
  },
  "com.github.weirdgyn.viastitcher": {
   "status": "works"
  },
  "com.github.yaqwsx.kikit": {
   "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "note": "It is only a pointer to KiKit, a command line program that is installed separately on a computer."
  },
  "com.github.yuri-ncs.t-junction-teardrops": {
   "status": "works"
@@ -282,8 +271,8 @@
   "status": "works"
  },
  "com.github.z2labs.z2ems": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "limited",
+  "note": "Its windows open and the setup is saved. Simulating needs the Z2 EMS engine, a desktop program."
  },
  "com.github.z2labs.z2viacolino": {
   "status": "unsupported",
@@ -293,28 +282,27 @@
   "status": "works"
  },
  "com.gitlab.egloff-studio.z0-field-solver": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "works"
  },
  "com.gitlab.egloff-studio.z0-wavelab": {
-  "status": "unsupported",
-  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+  "status": "works"
  },
  "com.gitlab.mgyger.oktizer": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: AttributeError: 'PAD' object has no attribute 'SetOffset'"
+  "status": "works"
  },
  "com.gitlab.open-hardware-designs.kicad-ec-registration": {
   "status": "works"
  },
  "com.infernoembedded.vulcans-trials": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It runs a program that is bundled for the desktop."
  },
  "com.pcbtools.kinotes": {
   "status": "works"
  },
  "com.stenchill.kicad": {
-  "status": "works"
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "org.openscopeproject.InteractiveHtmlBom": {
   "status": "works"
@@ -323,14 +311,15 @@
   "status": "works"
  },
  "sierra.kicad.order": {
-  "status": "works"
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "vn.thanhduongvs.component-position": {
   "status": "unsupported",
-  "note": "It does not load: it needs the Python module “PySide6”, which the web editor does not have"
+  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
  },
  "vn.thanhduongvs.fanout-tool": {
   "status": "unsupported",
-  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
  }
 }

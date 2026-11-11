@@ -2948,6 +2948,48 @@ class PAD(BOARD_CONNECTED_ITEM):
         o = _kid(k, "offset") if k is not None else None
         return VECTOR2I(FromMM(_f(o[1])), FromMM(_f(o[2]))) if o is not None and len(o) > 2 else VECTOR2I(0, 0)
 
+    # ---- custom shapes: the polygons that, with the anchor, make up a custom pad
+
+    def DeletePrimitivesList(self, *_):
+        _drop_kid(self._node, "primitives")
+        self._touch()
+
+    def AddPrimitivePoly(self, *a):
+        """AddPrimitivePoly([layer,] points, thickness, filled): one polygon, in the pad's own coordinates."""
+        args = list(a[1:]) if (a and isinstance(a[0], int) and not isinstance(a[0], bool) and len(a) > 1 and not isinstance(a[1], (int, float))) else list(a)
+        pts = args[0]
+        if isinstance(pts, SHAPE_POLY_SET):
+            pts = [pts.Outline(0).CPoint(i) for i in range(pts.Outline(0).PointCount())] if pts.OutlineCount() else []
+        thickness = args[1] if len(args) > 1 else 0
+        filled = bool(args[2]) if len(args) > 2 else True
+        prim = _kid(self._node, "primitives")
+        if prim is None:
+            prim = [Sym("primitives")]
+            self._node.append(prim)
+        poly = [Sym("gr_poly"), [Sym("pts")] + [[Sym("xy"), _n(ToMM(VECTOR2I(p).x)), _n(ToMM(VECTOR2I(p).y))] for p in pts],
+                [Sym("width"), _n(ToMM(int(thickness)))], [Sym("fill"), Sym("yes" if filled else "no")]]
+        prim.append(poly)
+        self._touch()
+
+    def AddPrimitive(self, *a):
+        self.AddPrimitivePoly(*a)
+
+    def GetPrimitives(self):
+        prim = _kid(self._node, "primitives")
+        return [c for c in prim[1:] if isinstance(c, list)] if prim is not None else []
+
+    def SetOffset(self, *a):
+        o = VECTOR2I(*a)
+        k = _kid(self._node, "drill")
+        if k is None:
+            if not (o.x or o.y):
+                return
+            k = _set_kid(self._node, "drill", 0)
+        _drop_kid(k, "offset")
+        if o.x or o.y:
+            k.append([Sym("offset"), _n(ToMM(o.x)), _n(ToMM(o.y))])
+        self._touch()
+
     def GetLayerSet(self):
         k = _kid(self._node, "layers")
         cu = self._board._copper_layers() if self._board is not None else None
@@ -3358,7 +3400,16 @@ class FOOTPRINT(BOARD_ITEM):
         return self._field(str(name)) is not None
 
     def GetProperty(self, name):
-        return self.GetFieldText(name)
+        # KiCad 7 kept the schematic sheet a footprint came from as properties; later versions as their own entries.
+        f = self._field(str(name))
+        if f is not None:
+            return f.GetText()
+        low = str(name).lower()
+        if low in ("sheetfile", "sheetname"):
+            v = self._text_kid(low)
+            if v:
+                return v
+        raise KeyError(name)
 
     def SetField(self, name, text):
         f = self._field(str(name))
@@ -5153,8 +5204,13 @@ class PROJECT:
 
 # ----------------------------------------------------------------------------- the running editor
 
+ID_ON_GRID_SELECT = 6211       # the grid selector of the board editor's toolbar (wx.FindWindowById finds a stand-in)
+ID_ON_ZOOM_SELECT = 6210
+
+
 class _Host:
     """What the runtime (web/plugins/pyruntime.ts) sets before it calls a plugin."""
+    grid_mm = 0.25           # the editor's current grid
     board = None
     refresh = None           # called by Refresh(): pushes the changes so far to the editor
     focus = None

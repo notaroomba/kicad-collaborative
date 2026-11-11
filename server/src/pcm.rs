@@ -11,11 +11,20 @@
 //! names; nothing in a request chooses an address.  `KC_PCM_REPOSITORY` points it at another
 //! index (tests use a local one).
 //!
+//! Network access for an official plugin (`POST /api/plugins/pcm/{identifier}/fetch`): the
+//! sandbox cannot open connections, so a plugin the person granted "network" has its HTTP
+//! requests carried by this server.  The server decides where they may go, not the request:
+//! only to the web addresses the plugin's own package names (read from KiCad's repository
+//! here, never from the client), only over https, only to public addresses, with size and
+//! rate limits.  `KC_PLUGIN_NETWORK=off` turns it off.
+//!
 //! It also serves the Python runtime itself (`/static/pyodide/…`): the interpreter, its
 //! standard library and our shim modules, readable from the sandbox's opaque origin.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::sync::{Arc, OnceLock};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::extract::Path;
@@ -38,7 +47,8 @@ pub const MAX_PY_FILES: usize = 1500;
 pub const MAX_PY_BYTES: usize = 12 * 1024 * 1024;
 const MAX_ONE_FILE: usize = 3 * 1024 * 1024;
 
-/// The permissions a KiCad Python plugin is given: what `pcbnew` and `wx` need, and no network.
+/// The permissions every KiCad Python plugin is given: what `pcbnew` and `wx` need.  One that talks to
+/// web services is offered "network" as well (see `get`).
 pub const PY_PERMISSIONS: &[&str] = &["design:read", "design:write", "view", "files:import", "files:export"];
 
 /// How each official plugin fared against the web runtime (scripts/plugins-python.mjs).
@@ -241,10 +251,10 @@ fn unpack(zip_bytes: Vec<u8>) -> AppResult<Map<String, Value>> {
     Ok(files)
 }
 
-/// `GET /api/plugins/pcm/{identifier}` — download one official plugin and hand its manifest and files to the browser.
-pub async fn get(AuthUser(_user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+/// Download and unpack one official package: its repository entry, the version picked, its files.
+async fn load(identifier: &str) -> AppResult<(Value, Value, Map<String, Value>)> {
     let idx = index().await?;
-    let pkg = idx.iter().find(|p| p.get("identifier").and_then(Value::as_str) == Some(identifier.as_str())).ok_or_else(|| AppError::NotFound)?;
+    let pkg = idx.iter().find(|p| p.get("identifier").and_then(Value::as_str) == Some(identifier)).ok_or(AppError::NotFound)?;
     let version = pick_version(pkg).ok_or_else(|| bad("that plugin has no downloadable version"))?;
     let url = version.get("download_url").and_then(Value::as_str).unwrap_or("");
     let zip_bytes = fetch(url, MAX_ZIP_BYTES).await?;
@@ -254,8 +264,253 @@ pub async fn get(AuthUser(_user): AuthUser, Path(identifier): Path<String>) -> A
         }
     }
     let files = tokio::task::spawn_blocking(move || unpack(zip_bytes)).await.map_err(|_| bad("the package could not be unpacked"))??;
+    Ok((pkg.clone(), version.clone(), files))
+}
+
+/// `GET /api/plugins/pcm/{identifier}` — download one official plugin and hand its manifest and files to the browser.
+pub async fn get(AuthUser(_user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+    let (pkg, version, files) = load(&identifier).await?;
     let ver = version.get("version").and_then(Value::as_str).unwrap_or("");
-    Ok(Json(json!({ "manifest": manifest_of(pkg, version), "files": files, "source": format!("kicad:{ver}"), "compat": compat_of(&identifier) })))
+    let mut manifest = manifest_of(&pkg, &version);
+    // A plugin that talks to web services may ask for "network": requests to the addresses its own code names.
+    let hosts = remember_hosts(&identifier, &files);
+    if net_mode() != NetMode::Off && !hosts.is_empty() && uses_network(&files) {
+        let mut list: Vec<&String> = hosts.iter().collect();
+        list.sort();
+        if let Some(perms) = manifest.get_mut("permissions").and_then(Value::as_array_mut) {
+            perms.push(json!("network"));
+        }
+        manifest["network"] = json!({ "hosts": list });
+    }
+    Ok(Json(json!({ "manifest": manifest, "files": files, "source": format!("kicad:{ver}"), "compat": compat_of(&identifier) })))
+}
+
+// ---------------------------------------------------------------- network access for an official plugin
+
+const NET_MAX_REQUEST: usize = 16 * 1024 * 1024;
+const NET_MAX_RESPONSE: usize = 24 * 1024 * 1024;
+const NET_PER_MINUTE: usize = 240;
+const NET_MAX_HOSTS: usize = 200;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NetMode {
+    On,
+    Off,
+    /// Tests only: plain http and this machine's own addresses are allowed, so a test can stand in for a web service.
+    Test,
+}
+
+fn net_mode() -> NetMode {
+    match std::env::var("KC_PLUGIN_NETWORK").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "off" | "0" | "false" | "no" => NetMode::Off,
+        "test" => NetMode::Test,
+        _ => NetMode::On,
+    }
+}
+
+/// The part of a host name that identifies whose it is: `api.nextpcb.com` and `www.nextpcb.com` are both `nextpcb.com`.
+fn base_domain(host: &str) -> String {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    if h.parse::<IpAddr>().is_ok() {
+        return h;
+    }
+    let labels: Vec<&str> = h.split('.').collect();
+    if labels.len() <= 2 {
+        return h;
+    }
+    const SECOND: &[&str] = &["co", "com", "net", "org", "gov", "edu", "ac"];
+    let n = if labels[labels.len() - 1].len() == 2 && SECOND.contains(&labels[labels.len() - 2]) { 3 } else { 2 };
+    labels[labels.len() - n..].join(".")
+}
+
+/// The web addresses a package names in its own files, as base domains.
+fn hosts_in(files: &Map<String, Value>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for (path, body) in files {
+        let Some(text) = body.as_str() else { continue };
+        if !path.starts_with("plugins/") || text.starts_with("base64:") {
+            continue;
+        }
+        for marker in ["https://", "http://"] {
+            let mut rest = text;
+            while let Some(at) = rest.find(marker) {
+                rest = &rest[at + marker.len()..];
+                let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-')).unwrap_or(rest.len());
+                let host = rest[..end].trim_matches('.').to_ascii_lowercase();
+                let named = host.contains('.') && host.rsplit('.').next().is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()));
+                let local = net_mode() == NetMode::Test && host.parse::<Ipv4Addr>().is_ok();
+                if (named || local) && host.len() <= 253 && out.len() < NET_MAX_HOSTS {
+                    out.insert(base_domain(&host));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether the package's Python reaches for the network at all.
+fn uses_network(files: &Map<String, Value>) -> bool {
+    const MARKS: &[&str] = &["import requests", "from requests", "urllib.request", "urllib2", "http.client", "httplib", "import urllib3", "from urllib3", "import socket", "from socket", "aiohttp", "httpx"];
+    files.iter().any(|(path, body)| path.ends_with(".py") && body.as_str().is_some_and(|t| MARKS.iter().any(|m| t.contains(m))))
+}
+
+fn host_table() -> &'static Mutex<HashMap<String, Arc<HashSet<String>>>> {
+    static TABLE: OnceLock<Mutex<HashMap<String, Arc<HashSet<String>>>>> = OnceLock::new();
+    TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_hosts(identifier: &str, files: &Map<String, Value>) -> Arc<HashSet<String>> {
+    let hosts = Arc::new(hosts_in(files));
+    if let Ok(mut t) = host_table().lock() {
+        t.insert(identifier.to_string(), hosts.clone());
+    }
+    hosts
+}
+
+/// Where this official plugin may send requests: read from its package in KiCad's repository, not from the client.
+async fn allowed_hosts(identifier: &str) -> AppResult<Arc<HashSet<String>>> {
+    if let Some(h) = host_table().lock().ok().and_then(|t| t.get(identifier).cloned()) {
+        return Ok(h);
+    }
+    let (_, _, files) = load(identifier).await?;
+    Ok(remember_hosts(identifier, &files))
+}
+
+/// An address on the public internet: not this machine, not a private network, not a cloud metadata service.
+fn is_public(ip: IpAddr) -> bool {
+    fn v4(a: Ipv4Addr) -> bool {
+        let o = a.octets();
+        !(a.is_private() || a.is_loopback() || a.is_link_local() || a.is_broadcast() || a.is_unspecified() || a.is_documentation() || a.is_multicast()
+            || o[0] == 0
+            || (o[0] == 100 && (o[1] & 0xc0) == 64)        // carrier-grade NAT
+            || (o[0] == 192 && o[1] == 0 && o[2] == 0)     // protocol assignments
+            || (o[0] == 198 && (o[1] & 0xfe) == 18)        // benchmarking
+            || o[0] >= 240)
+    }
+    fn v6(a: Ipv6Addr) -> bool {
+        if let Some(m) = a.to_ipv4_mapped() {
+            return v4(m);
+        }
+        let s = a.segments();
+        if s[0] == 0x64 && s[1] == 0xff9b {
+            return v4(Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8)); // NAT64
+        }
+        !(a.is_loopback() || a.is_unspecified() || a.is_multicast()
+            || (s[0] & 0xfe00) == 0xfc00        // unique local
+            || (s[0] & 0xffc0) == 0xfe80        // link local
+            || (s[0] == 0x2001 && s[1] == 0xdb8) // documentation
+            || s[0] == 0)
+    }
+    match ip {
+        IpAddr::V4(a) => v4(a),
+        IpAddr::V6(a) => v6(a),
+    }
+}
+
+/// No more than NET_PER_MINUTE requests a minute for one person.
+fn within_rate(user: &str) -> bool {
+    static SEEN: OnceLock<Mutex<HashMap<String, (Instant, usize)>>> = OnceLock::new();
+    let Ok(mut seen) = SEEN.get_or_init(|| Mutex::new(HashMap::new())).lock() else { return true };
+    let now = Instant::now();
+    if seen.len() > 10_000 {
+        seen.retain(|_, (t, _)| now.duration_since(*t) < Duration::from_secs(60));
+    }
+    let e = seen.entry(user.to_string()).or_insert((now, 0));
+    if now.duration_since(e.0) >= Duration::from_secs(60) {
+        *e = (now, 0);
+    }
+    e.1 += 1;
+    e.1 <= NET_PER_MINUTE
+}
+
+#[derive(serde::Deserialize)]
+pub struct NetRequest {
+    url: String,
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+    /// base64
+    #[serde(default)]
+    body: String,
+}
+
+fn refuse(msg: impl Into<String>) -> AppError {
+    AppError::Api(StatusCode::FORBIDDEN, "plugin_network_refused", msg.into())
+}
+
+/// `POST /api/plugins/pcm/{identifier}/fetch` — carry one HTTP request for an official plugin.
+pub async fn net_fetch(AuthUser(user): AuthUser, Path(identifier): Path<String>, Json(req): Json<NetRequest>) -> AppResult<Json<Value>> {
+    let mode = net_mode();
+    if mode == NetMode::Off {
+        return Err(refuse("network access for plugins is turned off on this server"));
+    }
+    if !within_rate(&user.id.to_string()) {
+        return Err(AppError::Api(StatusCode::TOO_MANY_REQUESTS, "plugin_network_busy", "this plugin is sending requests faster than the server carries them; try again in a minute".into()));
+    }
+    let url = reqwest::Url::parse(&req.url).map_err(|_| bad("that is not a web address"))?;
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let secure = url.scheme() == "https";
+    if host.is_empty() || !(secure || (mode == NetMode::Test && url.scheme() == "http")) || !url.username().is_empty() || url.password().is_some() {
+        return Err(refuse("plugins can only reach https addresses"));
+    }
+    if mode != NetMode::Test && url.port().is_some_and(|p| p != 443) {
+        return Err(refuse("plugins can only reach the standard https port"));
+    }
+    let allowed = allowed_hosts(&identifier).await?;
+    if !allowed.contains(&base_domain(&host)) {
+        return Err(refuse(format!("{host} is not one of the web addresses this plugin names in its own code")));
+    }
+    let port = url.port_or_known_default().unwrap_or(443);
+    // Resolve the name here and connect to exactly that address, so the check and the connection agree.
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port)).await.map_err(|_| bad(format!("{host} could not be found")))?.collect();
+    let addr = addrs.into_iter().find(|a| mode == NetMode::Test || is_public(a.ip())).ok_or_else(|| refuse(format!("{host} is not an address on the public internet")))?;
+    let body = base64::engine::general_purpose::STANDARD.decode(req.body.as_bytes()).map_err(|_| bad("the request body is not base64"))?;
+    if body.len() > NET_MAX_REQUEST {
+        return Err(bad("that upload is larger than the server carries for a plugin (16 MB)"));
+    }
+    let method = reqwest::Method::from_bytes(if req.method.is_empty() { b"GET" } else { req.method.as_bytes() }).map_err(|_| bad("that is not an HTTP method"))?;
+    if method == reqwest::Method::CONNECT || method == reqwest::Method::TRACE {
+        return Err(refuse("that HTTP method is not carried"));
+    }
+    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(60)).user_agent("kicad-collab-plugin");
+    if host.parse::<IpAddr>().is_err() {
+        builder = builder.resolve(&host, addr);
+    }
+    let client = builder.build().map_err(|_| bad("the request could not be prepared"))?;
+    let mut out = client.request(method, url.clone());
+    const DROP: &[&str] = &["host", "content-length", "connection", "transfer-encoding", "accept-encoding", "upgrade", "te", "expect", "keep-alive", "proxy-authorization", "proxy-connection", "trailer"];
+    for (name, value) in req.headers.iter().take(100) {
+        let low = name.to_ascii_lowercase();
+        if DROP.contains(&low.as_str()) || low.starts_with("proxy-") || low.starts_with("x-forwarded-") {
+            continue;
+        }
+        if let (Ok(n), Ok(v)) = (reqwest::header::HeaderName::from_bytes(name.as_bytes()), reqwest::header::HeaderValue::from_str(value)) {
+            out = out.header(n, v);
+        }
+    }
+    out = out.header(reqwest::header::ACCEPT_ENCODING, "identity");
+    if !body.is_empty() {
+        out = out.body(body);
+    }
+    tracing::info!(user = %user.id, plugin = %identifier, host = %host, "plugin network request");
+    let mut resp = out.send().await.map_err(|e| bad(format!("{host} could not be reached{}", if e.is_timeout() { " in time" } else { "" })))?;
+    let status = resp.status();
+    let headers: Vec<Value> = resp.headers().iter().map(|(k, v)| json!([k.as_str(), String::from_utf8_lossy(v.as_bytes())])).collect();
+    let mut data: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|_| bad(format!("the answer from {host} was cut off")))? {
+        if data.len() + chunk.len() > NET_MAX_RESPONSE {
+            return Err(bad("that answer is larger than the server carries for a plugin (24 MB)"));
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(Json(json!({
+        "status": status.as_u16(),
+        "reason": status.canonical_reason().unwrap_or(""),
+        "headers": headers,
+        "body": base64::engine::general_purpose::STANDARD.encode(&data),
+        "url": url.as_str(),
+    })))
 }
 
 // ---------------------------------------------------------------- the Python runtime's files
@@ -284,11 +539,53 @@ pub async fn runtime(Path(file): Path<String>) -> Response {
         "pyodide.asm.wasm" => "application/wasm",
         "python_stdlib.zip" => "application/zip",
         "pyodide-lock.json" | "kicad-python.json" => "application/json; charset=utf-8",
+        // a package a plugin imports (numpy, requests, …): a wheel or archive the build put beside the interpreter
+        f if (f.ends_with(".whl") || f.ends_with(".zip")) && f.len() <= 160 && !f.starts_with('.') && f.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'+')) => "application/zip",
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let Some(dir) = runtime_dir() else { return (StatusCode::SERVICE_UNAVAILABLE, "the Python runtime is not built on this server (npm run build)").into_response() };
     let Ok(body) = tokio::fs::read(dir.join(&file)).await else { return StatusCode::NOT_FOUND.into_response() };
     // The shim changes with every build of ours; the interpreter only with its version.
-    let cache = if file == "kicad-python.json" { "no-cache" } else { "public, max-age=86400" };
+    let cache = if file == "kicad-python.json" || file == "pyodide-lock.json" { "no-cache" } else { "public, max-age=86400" };
     ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, cache), (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"), (header::HeaderName::from_static("cross-origin-resource-policy"), "cross-origin")], body).into_response()
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+
+    #[test]
+    fn base_domains() {
+        assert_eq!(base_domain("api.nextpcb.com"), "nextpcb.com");
+        assert_eq!(base_domain("WWW.PCBWay.com."), "pcbway.com");
+        assert_eq!(base_domain("a.b.example.co.uk"), "example.co.uk");
+        assert_eq!(base_domain("example.org"), "example.org");
+        assert_eq!(base_domain("10.0.0.1"), "10.0.0.1");
+    }
+
+    #[test]
+    fn only_public_addresses() {
+        for bad in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1", "224.0.0.1", "255.255.255.255", "198.18.0.1",
+                    "::1", "::", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "ff02::1"] {
+            assert!(!is_public(bad.parse().unwrap()), "{bad} must not be reachable");
+        }
+        for good in ["93.184.216.34", "8.8.8.8", "2606:4700:4700::1111", "::ffff:8.8.8.8"] {
+            assert!(is_public(good.parse().unwrap()), "{good} is public");
+        }
+    }
+
+    #[test]
+    fn hosts_come_from_the_package() {
+        let mut files = Map::new();
+        files.insert("plugins/api.py".into(), json!("URL = 'https://api.example-fab.com/v1/order'\nimport requests\nDOC = \"http://docs.example.org/x\"\nBAD = 'https://localhost/x'  # no dot\n"));
+        files.insert("plugins/logo.png".into(), json!("base64:aHR0cHM6Ly9ldmlsLmV4YW1wbGUuY29t"));
+        files.insert("resources/readme.md".into(), json!("https://elsewhere.example.net"));
+        let hosts = hosts_in(&files);
+        assert!(hosts.contains("example-fab.com") && hosts.contains("example.org"));
+        assert!(!hosts.contains("localhost") && !hosts.contains("example.net") && !hosts.iter().any(|h| h.contains("evil")));
+        assert!(uses_network(&files));
+        let mut quiet = Map::new();
+        quiet.insert("plugins/a.py".into(), json!("import pcbnew\n# see https://example.com\n"));
+        assert!(!uses_network(&quiet));
+    }
 }

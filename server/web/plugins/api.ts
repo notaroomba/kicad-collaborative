@@ -10,6 +10,7 @@
 import * as design from "../ai/design";
 import { ED, K, ToolError } from "../ai/design";
 import { added, buildProposal, modified, removed } from "../ai/proposals";
+import { appState } from "../store";
 
 export class ApiError extends Error { constructor(message: string, public code = "error") { super(message); } }
 
@@ -104,7 +105,8 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
       if (d.docId === open.docId || !/^kicad_(sch|pro)$/.test(d.docType) || files.some((f) => f.path === d.path) || budget <= 0) continue;
       try { const r = await fetch(`/api/docs/${encodeURIComponent(d.docId)}/content`); if (!r.ok) continue; const text = await r.text(); if (text.length > budget) continue; budget -= text.length; files.push({ path: d.path, text }); } catch { /* the plugin runs without it */ }
     }
-    return { path: open.path, project: st.project ? st.project.name : "", text: out.join("\n"), selection: ids, version: "10.0.0", files };
+    let grid = 0; try { grid = Number(appState().viewport.gridPitch) || 0; } catch { /* the grid is a convenience for plugins that snap to it */ }
+    return { path: open.path, project: st.project ? st.project.name : "", text: out.join("\n"), selection: ids, version: "10.0.0", files, grid };
   }),
   /** Items in full: unlike the assistant's get_items nothing is clipped, because a program reads this, not a model. */
   items: (a) => read(async () => {
