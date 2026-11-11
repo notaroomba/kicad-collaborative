@@ -89,13 +89,13 @@ export function undoLast() {
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
   const redo = e.changes.map((c) => { const it = E.kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) } : c); });
   applyChanges(e.inverse); sendOp(e.inverse);
-  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); publishUndo(); toast("Undo " + e.label);
+  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); publishUndo();   // pcbnew / eeschema say nothing on an undo
 }
 
 export function redoLast() {
   const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
   applyChanges(e.changes); sendOp(e.changes);
-  undoStack.push(e); publishUndo(); toast("Redo " + e.label);
+  undoStack.push(e); publishUndo();
 }
 
 /** The active module's tools and menu actions ({id: {label, key, run(ctx)}}), for the toolbar and the menus. */
