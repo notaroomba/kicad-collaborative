@@ -292,6 +292,10 @@ Chromium, desktop and phone sizes) test repository sync against
 `fake-github.mjs`, an in-memory stand-in for GitHub's OAuth and git database
 API, so no real repository is touched. `KICAD_FILES_DIR=.. cargo test --
 --ignored real_files` runs the merge over every KiCad file in the source tree.
+`REAL_REPO=owner/throwaway server/scripts/github-real.sh` runs the same flows
+against real github.com (push, pull, item merge, pull request, push on
+checkpoint, import, new branch) on a repository you can throw away, with a
+token from `gh auth token`. Its bridge refuses writes to any other repository.
 
 `server/scripts/ai-ui.mjs` drives the assistant in Chromium against
 `fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every
