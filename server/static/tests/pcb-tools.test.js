@@ -13,6 +13,8 @@ const zlib = require("node:zlib");
 require(path.join(__dirname, "..", "kicad-canvas.js"));
 require(path.join(__dirname, "..", "pcb-tools.js"));
 const K = globalThis.KiCadCanvas, P = globalThis.PcbTools, pcb = globalThis.CollabTools.pcb;
+// graphics go on the active layer (F.Cu when a board opens, and wherever a layer key leaves it); these tests draw on the front silkscreen
+test.beforeEach(() => { P.state.gfxLayer = "F.SilkS"; });
 const IU = 1e6;
 
 const FIXTURE = `(kicad_pcb (version 20260728) (generator "pcbnew")
@@ -603,7 +605,7 @@ test("module: aligned dimension takes two points and the offset; the node carrie
   const c = log.commits.at(-1); assert.equal(c.label, "dimension"); assert.equal(c.changes[0].typeName, "PCB_DIM_ALIGNED"); const id = c.changes[0].id;
   assert.deepEqual(withText(lastNode(log, "dimension")), ["dimension", ["type", "aligned"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 20, 10]], ["height", -3],
     ["format", ["prefix", ""], ["suffix", ""], ["units", 3], ["units_format", 0], ["precision", 4], ["suppress_zeroes", "yes"]],
-    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
+    ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["arrow_direction", "outward"], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
     ["gr_text", "10", ["at", 15, 5.9, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
   const it = doc.items.get(id); assert.equal(it.kind, "dimension"); assert.ok(it.geom.filter((g) => g.t === "line").length >= 7, "extension lines, crossbar and arrow barbs");
   assert.equal(P.state.draw, null); assert.equal(log.tool, "dimaligned");
@@ -634,7 +636,7 @@ test("module: orthogonal dimension (Ctrl+Shift+H) measures X or Y by where the t
   const node = withText(lastNode(log, "dimension"));
   assert.deepEqual(node.slice(4, 7), [["pts", ["xy", 10, 10], ["xy", 20, 14]], ["height", 10], ["orientation", 0]]);
   const gt = K.kid(node, "gr_text"); assert.equal(gt[1], "10"); assert.deepEqual(K.kid(gt, "at"), ["at", 15, 18.9, 0]);
-  assert.deepEqual(K.kid(node, "style"), ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]]);
+  assert.deepEqual(K.kid(node, "style"), ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["arrow_direction", "outward"], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]]);
   // vertical: the text stands up beside the crossbar
   pcb.onPointerDown(ev(), [30, 10], ctx); pcb.onPointerDown(ev(), [32, 30], ctx); pcb.onPointerMove(ev(), [40, 20], ctx); pcb.onPointerDown(ev(), [40, 20], ctx);
   const n2 = withText(lastNode(log, "dimension")); const t2 = K.kid(n2, "gr_text");
@@ -931,8 +933,8 @@ test("conversions, selection helpers, statistics and the small edits", () => {
   const all = [...fixture().items.keys()]; assert.ok(!P.filterIds(fixture(), all, { footprints: false }).includes("fp-1")); assert.deepEqual(P.filterIds(fixture(), all, { tracks: false, vias: false, graphics: false }), ["fp-1"]);
   const st = P.boardStatistics(fixture()); assert.equal(st.footprints.total, 1); assert.equal(st.pads.smd, 2); assert.equal(st.vias.through, 1); assert.equal(st.tracks.count, 5); tn(st.tracks.length, 21.242641 + Math.PI, 1e-4);
   const st2 = P.boardStatistics(K.parseDoc(DRC_BOARD, "kicad_pcb")); assert.deepEqual([st2.width, st2.height, st2.area, st2.drills], [60, 50, 3000, 1]);
-  const t = P.addedChange(doc2, P.textNode("j", 1, 1, "B.SilkS")).id; assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "right")[0]), "effects"), "justify"), ["justify", "right", "mirror"]);
-  assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "center")[0]), "effects"), "justify"), ["justify", "mirror"]);
+  const t = P.addedChange(doc2, P.textNode("j", 1, 1, "B.SilkS")).id; assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "right")[0]), "effects"), "justify"), ["justify", "right", "bottom", "mirror"]);
+  assert.deepEqual(K.kid(K.kid(node(P.justifyChanges(doc2, [t], "center")[0]), "effects"), "justify"), ["justify", "bottom", "mirror"]);
   const z1 = P.addedChange(doc2, P.zoneNode(doc2, [[0, 0], [1, 0], [1, 1]], "F.Cu", { code: -1, name: "GND" })).id;
   assert.deepEqual(K.kid(doc2.items.get(z1).node, "priority"), ["priority", 1], "the zone from the rectangle took 0, so the new one gets the next free priority");
   assert.deepEqual(K.kid(node(P.zonePriorityChanges(doc2, [z1], "raise")[0]), "priority"), ["priority", 2]); assert.equal(K.kid(node(P.zonePriorityChanges(doc2, [z1], "bottom")[0]), "priority"), null); assert.equal(P.zonePriorityChanges(doc2, [zn[0].id], "lower").length, 0);

@@ -39,7 +39,7 @@ test("the writer quotes what pcbnew quotes on nodes built by hand: layer, layers
   assert.equal(K.serialize(P.segmentNode(doc, [1, 2], [3, 4], 0.25, "F.Cu", null)), '(segment (start 1 2) (end 3 4) (width 0.25) (layer "F.Cu") (net ""))');
   assert.equal(K.serialize(P.viaNode(doc, 1, 2, 0.8, 0.4, { code: -1, name: "GND" }, ["F.Cu", "B.Cu"])), '(via (at 1 2) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "GND"))');
   assert.match(K.serialize(P.lineNode([0, 0], [1, 1], "Edge.Cuts")), /\(stroke \(width 0\.05\) \(type default\)\) \(layer "Edge\.Cuts"\)\)$/);
-  assert.match(K.serialize(P.textNode("abc", 1, 2, "B.SilkS")), /^\(gr_text "abc" \(at 1 2 0\) \(layer "B\.SilkS"\) \(effects \(font \(size 1 1\) \(thickness 0\.15\)\) \(justify mirror\)\)\)$/);
+  assert.match(K.serialize(P.textNode("abc", 1, 2, "B.SilkS")), /^\(gr_text "abc" \(at 1 2 0\) \(layer "B\.SilkS"\) \(uuid "[^"]+"\) \(effects \(font \(size [\d.]+ [\d.]+\) \(thickness [\d.]+\)\) \(justify left bottom mirror\)\)\)$/);
   assert.match(K.serialize(P.groupNode("pair", ["a", "b"])), /^\(group "pair" \(uuid "[^"]+"\) \(members "a" "b"\)\)$/);
   assert.equal(K.serialize(["layer", "F.SilkS", "knockout"]), '(layer "F.SilkS" knockout)');
   assert.equal(K.serialize(["property", "Reference", "R1"]), '(property "Reference" "R1")');

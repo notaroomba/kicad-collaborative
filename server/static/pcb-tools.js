@@ -34,7 +34,7 @@ const SNAP_MM = 0.5, HIT_MM = 0.2, DBL_MS = 400;
 const BOARD_VERSION = 20260728;
 
 const S = {
-  layer: "F.Cu", gfxLayer: "F.SilkS",
+  layer: "F.Cu", gfxLayer: "F.Cu",   // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
   sel: new Set(), route: null, drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
@@ -119,10 +119,10 @@ function circleNode(c, e, layer) { return ["gr_circle", ["center", r6(c[0]), r6(
 // PCB_IO_KICAD_SEXPR::format(PCB_SHAPE): start/mid/end, stroke, (fill only for closed shapes), layer, then the uuid
 function arcNode(a, m, b, layer) { return ["gr_arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["layer", layer]]; }
 function polyNode(pts, layer) { return ["gr_poly", ["pts", ...pts.map((p) => ["xy", r6(p[0]), r6(p[1])])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
+// DRAWING_TOOL::PlaceText: the layer class's size and thickness, left / bottom justified, mirrored on the back;
+// PCB_IO_KICAD_SEXPR::format(PCB_TEXT) writes the text, (at), (layer), (uuid) and then the effects.
 function textNode(text, x, y, layer) {
-  const eff = ["effects", ["font", ["size", 1, 1], ["thickness", 0.15]]];
-  if (/^B\./.test(layer)) eff.push(["justify", "mirror"]);   // back-side text reads mirrored, like KiCad's
-  return ["gr_text", text, ["at", r6(x), r6(y), 0], ["layer", layer], eff];
+  return ["gr_text", text, ["at", r6(x), r6(y), 0], ["layer", layer], ["uuid", K.newUuid()], effectsNode(layer, ["left", "bottom"])];
 }
 /** EDA_TEXT::Format for a new item on a layer: the class's size and thickness, a justification, mirrored on the back. */
 function effectsNode(layer, just) {
@@ -272,7 +272,7 @@ function dimensionNode(type, d, layer) {
     node.push(format);
   }
   const style = ["style", ["thickness", r6(gfxWidth(layer))], ["arrow_length", ARROW_LEN], ["text_position_mode", 0]];
-  if (type === "aligned" || type === "orthogonal") style.push(["extension_height", EXT_HEIGHT]);
+  if (type === "aligned" || type === "orthogonal") style.push(["arrow_direction", "outward"], ["extension_height", EXT_HEIGHT]);   // DIM_ARROW_DIRECTION::OUTWARD, always written
   if (type === "leader") style.push(["text_frame", 0]);
   style.push(["extension_offset", EXT_OFFSET]);
   if (type !== "leader") style.push(["keep_text_aligned", "yes"]);
@@ -600,7 +600,7 @@ function layerNames(doc) {
 }
 function gfxLayers(doc) {
   const names = Array.from(layerNames(doc)).filter((l) => !/\.Cu$/.test(l));
-  const out = ["Edge.Cuts", "F.SilkS", "B.SilkS", "Dwgs.User", "Cmts.User", "F.Fab", "B.Fab"];   // every board has these
+  const out = copperOf(doc).concat(["Edge.Cuts", "F.SilkS", "B.SilkS", "Dwgs.User", "Cmts.User", "F.Fab", "B.Fab"]);   // the copper stack, then what every board has
   for (const l of names) if (!out.includes(l)) out.push(l);
   return out;
 }
@@ -682,7 +682,7 @@ function placeVia(ctx, hv) {
 }
 function setLayer(ctx, layer) {
   if (S.route) { if (layer !== S.route.layer) routeVia(ctx, layer); return; }   // layer change mid-route goes through a via
-  S.layer = layer; sizesOf(ctx).setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+  S.layer = layer; S.gfxLayer = layer; sizesOf(ctx).setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
 }
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 function stepLayer(ctx, forward) {
