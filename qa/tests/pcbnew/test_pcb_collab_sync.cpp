@@ -568,7 +568,7 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
         PCB_IO_KICAD_SEXPR io;
 
         io.SetReporter( &reporter );
-        io.SaveBoard( tmp, m_authoring.get() );
+        io.SaveBoard( tmp, *m_authoring );
 
         wxFFile   file( tmp, wxS( "r" ) );
         wxString  content;
