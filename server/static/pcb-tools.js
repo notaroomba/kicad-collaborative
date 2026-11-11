@@ -1113,9 +1113,20 @@ const ALIGN = {
   centerX: { sort: (b) => (b[0] + b[2]) / 2, target: (b) => (b[0] + b[2]) / 2, move: (b, t) => [t - (b[0] + b[2]) / 2, 0] },
   centerY: { sort: (b) => (b[1] + b[3]) / 2, target: (b) => (b[1] + b[3]) / 2, move: (b, t) => [0, t - (b[1] + b[3]) / 2] },
 };
+/**
+ * align_distribute_tool.cpp getBoundingBox: a footprint by FOOTPRINT::GetBoundingBox( false ) — its pads and shapes
+ * without the texts (and pads by their copper, not their mask / paste openings) — anything else by its own box.
+ */
+function alignBox(it) {
+  if (it.kind !== "footprint" || !K.boardItemBox || !it.geom) return it.bbox;
+  const geom = it.geom.filter((g) => g.t !== "text" && !g.padNum && !g.padText && !(g.pad && /\.(Mask|Paste)$/.test(g.layer || "")));
+  const r = K.boardItemBox(Object.assign({}, it, { geom }), 1e6); if (!r) return it.bbox;
+  return [r[0] / 1e6, r[1] / 1e6, (r[0] + r[2]) / 1e6, (r[1] + r[3]) / 1e6];
+}
+const alignItems = (doc, ids) => ids.map((id) => doc.items.get(id)).filter((it) => it && it.bbox && it.kind !== "group").map((it) => ({ id: it.id, kind: it.kind, bbox: alignBox(it) }));
 function alignChanges(doc, ids, mode, cursor) {
   const A = ALIGN[mode]; if (!A) return [];
-  const items = ids.map((id) => doc.items.get(id)).filter((it) => it && it.bbox && it.kind !== "group"); if (items.length < 2) return [];
+  const items = alignItems(doc, ids); if (items.length < 2) return [];
   items.sort((p, q) => A.sort(p.bbox) - A.sort(q.bbox));
   const under = cursor && items.find((it) => cursor[0] >= it.bbox[0] && cursor[0] <= it.bbox[2] && cursor[1] >= it.bbox[1] && cursor[1] <= it.bbox[3]);
   const t = A.target((under || items[0]).bbox); const out = [];
@@ -1136,7 +1147,7 @@ function distributeDeltasPoints(pos) {
   return d;
 }
 function distributeChanges(doc, ids, axis, byCenters) {
-  const items = ids.map((id) => doc.items.get(id)).filter((it) => it && it.bbox && it.kind !== "group"); if (items.length < 3) return [];
+  const items = alignItems(doc, ids); if (items.length < 3) return [];
   const x = axis === "x"; const lo = (b) => x ? b[0] : b[1], hi = (b) => x ? b[2] : b[3], mid = (b) => (lo(b) + hi(b)) / 2;
   items.sort((p, q) => (byCenters ? mid(p.bbox) - mid(q.bbox) : lo(p.bbox) - lo(q.bbox)));
   const d = byCenters ? distributeDeltasPoints(items.map((it) => mid(it.bbox))) : distributeDeltasGaps(items.map((it) => [lo(it.bbox), hi(it.bbox)]));
@@ -2794,7 +2805,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, unfillChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, unfillChanges, alignBox, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the new board tools

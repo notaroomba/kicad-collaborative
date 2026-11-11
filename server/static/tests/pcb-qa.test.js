@@ -151,3 +151,15 @@ test("unfill (Ctrl+B) drops the filled areas and the filled mark, as ZONE::UnFil
   assert.equal(ch[0].id, "z1"); const out = ch[0].sexpr;
   assert.ok(!/filled_polygon/.test(out) && /\(fill \(thermal_gap 0\.5\)/.test(out), out);
 });
+
+test("align uses a footprint's box without its texts (FOOTPRINT::GetBoundingBox( false ))", () => {
+  const fp = (ref, x, y, ty) => `(footprint "L:F" (layer "F.Cu") (uuid "${ref}") (at ${x} ${y})
+    (property "Reference" "${ref}" (at 0 ${ty}) (layer "F.SilkS") (uuid "${ref}-r") (effects (font (size 1 1) (thickness 0.15))))
+    (fp_line (start -1 -1) (end 1 -1) (stroke (width 0.1) (type solid)) (layer "F.SilkS") (uuid "${ref}-l"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste") (uuid "${ref}-p")))`;
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") ${fp("A", 10, 10, -6)} ${fp("B", 20, 12, -1.5)})`, "kicad_pcb");
+  const a = P.alignBox(doc.items.get("A")), b = P.alignBox(doc.items.get("B"));
+  assert.ok(Math.abs(a[1] - (10 - 1.05)) < 1e-6, "top of A is its silk line, not its reference text: " + a);
+  assert.ok(Math.abs(b[1] - (12 - 1.05)) < 1e-6, String(b));
+  assert.ok(doc.items.get("A").bbox[1] < a[1] - 4, "the drawn box does include the text");
+});
