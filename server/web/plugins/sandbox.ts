@@ -17,7 +17,9 @@ import { hostsOf, type InstalledPlugin } from "./types";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface SandboxInit {
-  plugin: { identifier: string; name: string; version: string };
+  plugin: { identifier: string; name: string; version: string; pyodide?: string };
+  /** The entry script reports by itself when the plugin is ready (the Python runtime, which has an interpreter to start first). */
+  defer?: boolean;
   granted: string[];
   theme: { dark: boolean; vars: Record<string, string> };
   entry: string; entryName: string; html: string; resources: Record<string, string>;
@@ -48,9 +50,9 @@ export function sandboxRuntime(): void {
   W.addEventListener("unhandledrejection", (ev: PromiseRejectionEvent) => log("error", ["Unhandled promise rejection:", ev.reason]));
 
   const group = (prefix: string, names: string[]) => { const o: any = {}; for (const n of names) o[n] = (args?: any) => call(prefix + "." + n, args); return o; };
-  const reg = (kind: string) => (name: string, fn: (arg: any) => any) => {
+  const reg = (kind: string) => (name: string, fn: (arg: any) => any, meta?: any) => {
     if (typeof name !== "string" || typeof fn !== "function") throw new TypeError("register(name, handler)");
-    handlers[kind][name] = fn; post({ t: "registered", kind, name });
+    handlers[kind][name] = fn; post(meta && typeof meta === "object" ? { t: "registered", kind, name, meta } : { t: "registered", kind, name });
   };
   const kicad: any = {
     plugin: {}, editor: { scope: null, document: null, role: null, viewOnly: true },
@@ -59,9 +61,10 @@ export function sandboxRuntime(): void {
     importers: { register: reg("importer") },
     exporters: { register: reg("exporter") },
     assistant: { registerTool: reg("tool") },
-    design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "apply", "commit"]),
+    design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit"]),
     view: group("view", ["select", "highlight", "focus", "setMarkers", "clearMarkers", "openDocument"]),
-    ui: Object.assign(group("ui", ["prompt", "confirm", "showPanel", "hidePanel"]), {
+    fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom"]),
+    ui: Object.assign(group("ui", ["prompt", "confirm", "showPanel", "hidePanel", "showWindow", "hideWindow", "openLink"]), {
       toast: (text: any) => call("ui.toast", text && typeof text === "object" ? text : { text: String(text) }),
       status: (text: any) => call("ui.status", text && typeof text === "object" ? text : { text: text ? String(text) : "" }),
     }),
@@ -103,7 +106,8 @@ export function sandboxRuntime(): void {
     for (const m of queue.splice(0)) port.postMessage(m);
     const s = document.createElement("script");
     s.src = URL.createObjectURL(new Blob([init.entry + "\n//# sourceURL=plugin:///" + init.plugin.identifier + "/" + init.entryName], { type: "text/javascript" }));
-    s.onload = () => post({ t: "ready" });
+    kicad.plugin.loaded = (info: any) => post({ t: "ready", failed: !!(info && info.failed), error: info && info.error ? String(info.error) : undefined });
+    s.onload = () => { if (!init.defer) post({ t: "ready" }); };
     s.onerror = () => { log("error", ["The plugin's script could not be loaded."]); post({ t: "ready", failed: true }); };
     document.head.appendChild(s);
   };
@@ -137,11 +141,14 @@ th{font-weight:600;color:var(--ink-2);background:var(--bench);position:sticky;to
 const cspSource = (host: string) => `https://${host}`;
 
 /** The document the frame starts from: the policy, the base styles, the runtime.  No plugin text is spliced into it. */
-export function buildSrcdoc(granted: string[]): string {
-  const hosts = hostsOf(granted);
-  const net = hosts.length ? hosts.map(cspSource).join(" ") : "'none'";
+export function buildSrcdoc(granted: string[], python?: string): string {
+  const hosts = hostsOf(granted).map(cspSource);
+  // A Python plugin's frame may also load the interpreter: script and WebAssembly from our own
+  // /static/pyodide/ and nowhere else.  That folder holds public runtime files only.
+  if (python) hosts.push(python);
+  const net = hosts.length ? hosts.join(" ") : "'none'";
   const csp = [
-    "default-src 'none'", "script-src 'unsafe-inline' blob:", "style-src 'unsafe-inline'", "img-src data: blob:", "font-src data:",
+    "default-src 'none'", `script-src 'unsafe-inline' blob:${python ? ` 'wasm-unsafe-eval' ${python}` : ""}`, "style-src 'unsafe-inline'", "img-src data: blob:", "font-src data:",
     `connect-src ${net}`, "form-action 'none'", "base-uri 'none'", "frame-src 'none'", "worker-src blob:", "object-src 'none'", "media-src 'none'",
   ].join("; ");
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${BASE_CSS}</style>`
@@ -176,7 +183,7 @@ export function createSandbox(p: InstalledPlugin, parent: HTMLElement, init: San
     frame.dataset.started = "1";
     frame.contentWindow.postMessage(Object.assign({ t: "init" }, init), "*", [chan.port2]);
   });
-  frame.srcdoc = buildSrcdoc(p.granted);
+  frame.srcdoc = buildSrcdoc(p.granted, init.plugin.pyodide);
   parent.appendChild(frame);
   return {
     frame,

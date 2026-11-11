@@ -90,28 +90,38 @@ fn check(identifier: &str, manifest: &Value, files: &Map<String, Value>, granted
         return Err(bad("the manifest needs a name"));
     }
     let runtime = m.get("runtime").and_then(Value::as_object).ok_or_else(|| bad("the manifest needs a runtime"))?;
-    if runtime.get("type").and_then(Value::as_str) != Some("web") {
-        return Err(bad("only plugins with the \"web\" runtime are installed here; python and exec plugins belong to the desktop app"));
+    // "kicad-python" is one of KiCad's own Python plugins, run by the Python runtime in the same
+    // sandbox (pcm.rs): larger, many files, and no entry point of its own.
+    let python = is_python(manifest);
+    if !python && runtime.get("type").and_then(Value::as_str) != Some("web") {
+        return Err(bad("only plugins with the \"web\" or \"kicad-python\" runtime are installed here; exec plugins belong to the desktop app"));
     }
-    let entry = runtime.get("entrypoint").and_then(Value::as_str).ok_or_else(|| bad("runtime.entrypoint is required"))?;
     if serde_json::to_string(manifest).map(|s| s.len()).unwrap_or(usize::MAX) > MAX_MANIFEST_BYTES {
         return Err(bad("the manifest is too large"));
     }
-    if files.len() > MAX_FILES {
-        return Err(bad(format!("a plugin holds at most {MAX_FILES} files")));
+    let (max_files, max_bytes) = if python { (crate::pcm::MAX_PY_FILES, crate::pcm::MAX_PY_BYTES) } else { (MAX_FILES, MAX_FILE_BYTES) };
+    if files.len() > max_files {
+        return Err(bad(format!("a plugin holds at most {max_files} files")));
     }
     let mut total = 0usize;
     for (path, body) in files {
-        if !valid_path(path) {
+        if !(if python { crate::pcm::valid_py_path(path) } else { valid_path(path) }) {
             return Err(bad(format!("\"{path}\" is not an acceptable file name")));
         }
         total += body.as_str().ok_or_else(|| bad("plugin files are text"))?.len();
     }
-    if total > MAX_FILE_BYTES {
-        return Err(bad("the plugin is larger than 2 MB"));
+    if total > max_bytes {
+        return Err(bad(format!("the plugin is larger than {} MB", max_bytes / (1024 * 1024))));
     }
-    if !files.contains_key(entry) {
-        return Err(bad("the entry point named in the manifest is missing"));
+    if python {
+        if !files.keys().any(|k| k.starts_with("plugins/")) {
+            return Err(bad("a KiCad Python plugin keeps its code under plugins/"));
+        }
+    } else {
+        let entry = runtime.get("entrypoint").and_then(Value::as_str).ok_or_else(|| bad("runtime.entrypoint is required"))?;
+        if !files.contains_key(entry) {
+            return Err(bad("the entry point named in the manifest is missing"));
+        }
     }
     // What is granted can only be something the manifest asks for: a client cannot hand a
     // plugin more than its own description (and therefore the consent screen) showed.
@@ -127,11 +137,19 @@ fn check(identifier: &str, manifest: &Value, files: &Map<String, Value>, granted
     Ok(())
 }
 
+/// Whether a manifest is one of KiCad's Python plugins (run by the Python runtime, pcm.rs).
+pub fn is_python(manifest: &Value) -> bool {
+    manifest.pointer("/runtime/type").and_then(Value::as_str) == Some("kicad-python")
+}
+
 fn row_json(r: &sqlx::postgres::PgRow) -> Value {
+    // A Python plugin's files run to megabytes; they are fetched when it starts (`plugin_files`), not with every list.
+    let manifest = r.get::<Value, _>("manifest");
+    let files = if is_python(&manifest) { json!({}) } else { r.get::<Value, _>("files") };
     json!({
         "identifier": r.get::<String, _>("identifier"),
-        "manifest": r.get::<Value, _>("manifest"),
-        "files": r.get::<Value, _>("files"),
+        "manifest": manifest,
+        "files": files,
         "granted": r.get::<Value, _>("granted"),
         "enabled": r.get::<bool, _>("enabled"),
         "source": r.get::<String, _>("source"),
@@ -148,6 +166,12 @@ pub async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
         .fetch_all(&state.pool)
         .await?;
     Ok(Json(json!({ "plugins": rows.iter().map(row_json).collect::<Vec<_>>(), "admin": is_admin(&user.login) })))
+}
+
+/// `GET /api/plugins/{identifier}/files` — the files of one installed plugin.
+pub async fn plugin_files(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+    let files: Option<Value> = sqlx::query_scalar("SELECT files FROM plugins WHERE user_id = $1 AND identifier = $2").bind(user.id).bind(&identifier).fetch_optional(&state.pool).await?;
+    Ok(Json(json!({ "files": files.ok_or(AppError::NotFound)? })))
 }
 
 /// `GET /api/plugins/catalog` — the built-in plugins.  Public: it is the same for everyone.
@@ -331,6 +355,9 @@ pub async fn registry_publish(
     LenientJson(req): LenientJson<PublishRequest>,
 ) -> AppResult<Json<Value>> {
     check(&identifier, &req.manifest, &req.files, &[])?;
+    if is_python(&req.manifest) {
+        return Err(bad("KiCad's own Python plugins are installed from KiCad's repository; they are not republished here"));
+    }
     if identifier.starts_with(RESERVED_PREFIX) || catalog_entry(&identifier).is_some() {
         return Err(bad("that identifier belongs to the built-in catalog; publish under an identifier of your own"));
     }

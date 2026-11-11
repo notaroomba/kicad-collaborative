@@ -3,3 +3,4 @@ target
 node_modules
 libs-cache
 render-cache
+static/dist/pyodide

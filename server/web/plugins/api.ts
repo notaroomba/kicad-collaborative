@@ -13,6 +13,7 @@ import { added, buildProposal, modified, removed } from "../ai/proposals";
 
 export class ApiError extends Error { constructor(message: string, public code = "error") { super(message); } }
 
+const PCB = (): any => (window as any).PcbTools || null;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const MAX_CHANGES = 2000;
 
@@ -22,6 +23,37 @@ const liveDoc = () => { const ed = editor(); const open = design.openEntry(); if
 /** Run one of the assistant's read tools, turning its ToolError into the plugin's error. */
 async function read<T>(fn: () => T | Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) { if (e instanceof ToolError) throw new ApiError(e.message, "not_found"); throw e; }
+}
+
+// ---------------------------------------------------------------- the board file's header
+
+/**
+ * One header section of a board file ("setup", "general", …) as text, or "" when it has none.  The editor keeps a board's
+ * items, not its header, so this reads the section out of the file as last saved; it stops at the first item, so a large
+ * board costs no more than a small one.
+ */
+function headerSection(file: string, name: string): string {
+  const HEAD = new Set(["version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "net", "property", "host"]);
+  let i = file.indexOf("(kicad_pcb"); if (i < 0) return ""; i += 10;
+  for (;;) {
+    while (i < file.length && file[i] !== "(" && file[i] !== ")") i++;
+    if (i >= file.length || file[i] === ")") return "";
+    const start = i; let j = i + 1; while (j < file.length && /[A-Za-z0-9_.]/.test(file[j])) j++;
+    const head = file.slice(i + 1, j); if (!HEAD.has(head)) return "";
+    let depth = 0, quoted = false;
+    for (; i < file.length; i++) {
+      const ch = file[i];
+      if (quoted) { if (ch === "\\") i++; else if (ch === '"') quoted = false; }
+      else if (ch === '"') quoted = true;
+      else if (ch === "(") depth++;
+      else if (ch === ")" && --depth === 0) { i++; break; }
+    }
+    if (head === name) return file.slice(start, i);
+  }
+}
+/** The open board's file as the server last saved it ("" when it cannot be read). */
+async function savedBoardFile(docId: string): Promise<string> {
+  try { const r = await fetch(`/api/docs/${encodeURIComponent(docId)}/content`); return r.ok ? await r.text() : ""; } catch { return ""; }
 }
 
 // ---------------------------------------------------------------- reads
@@ -35,6 +67,45 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
   selection: () => read(() => design.getSelection()),
   runChecks: (a) => read(() => design.runChecks({ doc: a.doc })),
   boardInfo: () => read(() => design.boardInfo()),
+  /**
+   * The open board as one .kicad_pcb text, for a program that wants the file rather than a list (a KiCad Python plugin's
+   * pcbnew.GetBoard()).  The editor keeps items, not the file, so the header is written out from what it knows: the layer
+   * table, the thickness, the stackup, the origins, the title block and the net table.
+   */
+  board: () => read(async () => {
+    const { ed, doc, open } = liveDoc(); const k = K();
+    if (doc.type !== "pcb") throw new ApiError("The open document is a schematic; KiCad's Python plugins work on a board. Open the board first.", "not_board");
+    const q = (v: unknown) => '"' + String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+    const out: string[] = [`(kicad_pcb (version ${doc.version || 20241229}) (generator "pcbnew") (generator_version "10.0")`, `(general (thickness ${r3(doc.thickness || 1.6)}))`, `(paper ${q(doc.paper || "A4")}${doc.portrait ? " portrait" : ""})`];
+    const tb = doc.titleBlock || {}; const tbl: string[] = [];
+    for (const f of ["title", "date", "rev", "company"]) if (tb[f]) tbl.push(`(${f} ${q(tb[f])})`);
+    for (let i = 1; i <= 9; i++) if (tb["comment" + i]) tbl.push(`(comment ${i} ${q(tb["comment" + i])})`);
+    if (tbl.length) out.push(`(title_block ${tbl.join(" ")})`);
+    const layers: string[] = []; for (const [name, l] of doc.layers as Map<string, any>) layers.push(`(${l.id} ${q(name)} ${l.type || "user"}${l.userName ? " " + q(l.userName) : ""})`);
+    if (layers.length) out.push(`(layers ${layers.join(" ")})`);
+    // The setup section (mask and paste margins, plot settings, the stackup) is taken whole from the saved file; without one it is written from what the editor holds.
+    const saved = headerSection(await savedBoardFile(open.docId), "setup");
+    if (saved) out.push(saved);
+    else {
+      const setup: string[] = []; if (doc.stackup) setup.push(k.serialize(doc.stackup));
+      if (doc.auxOrigin && (doc.auxOrigin[0] || doc.auxOrigin[1])) setup.push(`(aux_axis_origin ${r3(doc.auxOrigin[0])} ${r3(doc.auxOrigin[1])})`);
+      if (doc.gridOrigin && (doc.gridOrigin[0] || doc.gridOrigin[1])) setup.push(`(grid_origin ${r3(doc.gridOrigin[0])} ${r3(doc.gridOrigin[1])})`);
+      out.push(`(setup ${setup.join(" ")})`);
+    }
+    for (const [code, name] of doc.nets as Map<number, string>) out.push(`(net ${code} ${q(name)})`);
+    for (const it of doc.items.values()) out.push(k.serialize(it.node));
+    out.push(")");
+    const ids: string[] = Array.from(ed.selection || []); if (!ids.length && ed.selected) ids.push(ed.selected.id);
+    const st = ed.api.state || {};
+    // The files a desktop plugin finds beside the board: the project file (net classes, design rules) and the schematics, as last saved.
+    const files: { path: string; text: string }[] = []; let budget = 6 * 1024 * 1024;
+    if (typeof ed.proSettings === "string" && ed.proSettings) files.push({ path: open.path.replace(/\.kicad_pcb$/, "") + ".kicad_pro", text: ed.proSettings });
+    for (const d of design.projectDocs().slice(0, 60)) {
+      if (d.docId === open.docId || !/^kicad_(sch|pro)$/.test(d.docType) || files.some((f) => f.path === d.path) || budget <= 0) continue;
+      try { const r = await fetch(`/api/docs/${encodeURIComponent(d.docId)}/content`); if (!r.ok) continue; const text = await r.text(); if (text.length > budget) continue; budget -= text.length; files.push({ path: d.path, text }); } catch { /* the plugin runs without it */ }
+    }
+    return { path: open.path, project: st.project ? st.project.name : "", text: out.join("\n"), selection: ids, version: "10.0.0", files };
+  }),
   /** Items in full: unlike the assistant's get_items nothing is clipped, because a program reads this, not a model. */
   items: (a) => read(async () => {
     const { doc, path } = await design.resolveDoc(a.doc); const k = K();
@@ -113,18 +184,41 @@ export const writes: Record<string, (a: any, label: string) => Promise<unknown>>
   /** Raw items: create from s-expressions, replace existing items by id, remove by id — one undo step. */
   commit: async (a, label) => {
     const { ed, doc } = mayWrite(); const k = K();
-    const create = Array.isArray(a.create) ? a.create : [], update = Array.isArray(a.update) ? a.update : [], remove = Array.isArray(a.remove) ? a.remove : [];
-    if (create.length + update.length + remove.length > MAX_CHANGES) throw new ApiError(`The limit is ${MAX_CHANGES} changes in one step.`, "too_large");
+    const create = Array.isArray(a.create) ? a.create : [], update = Array.isArray(a.update) ? a.update : [], remove = Array.isArray(a.remove) ? a.remove : [], transform = Array.isArray(a.transform) ? a.transform : [];
+    if (create.length + update.length + remove.length + transform.length > MAX_CHANGES) throw new ApiError(`The limit is ${MAX_CHANGES} changes in one step.`, "too_large");
     const changes: any[] = []; const touched = new Set<string>(); const created: string[] = [];
     const touch = (id: string, where: string) => { if (touched.has(id)) throw new ApiError(`${where}: item ${id} is changed twice in this commit`, "invalid"); touched.add(id); };
+    // A footprint placed by position rather than by text ({id, x, y, rotation, side}): the editor's own move, turn and flip,
+    // so pads, texts and graphics follow exactly as when a person does it.  It may come with an update of the same footprint.
+    const place = new Map<string, any>();
+    transform.forEach((t: any, i: number) => {
+      const where = `transform[${i}]`; const it = t && typeof t.id === "string" ? doc.items.get(t.id) : null;
+      if (!it) throw new ApiError(`${where}: there is no item with id ${t && t.id} on the open document`, "not_found");
+      if (doc.type !== "pcb" || it.kind !== "footprint") throw new ApiError(`${where}: only a footprint is placed this way`, "invalid");
+      for (const f of ["x", "y"]) if (typeof t[f] !== "number" || !isFinite(t[f]) || Math.abs(t[f]) > 1e5) throw new ApiError(`${where}: ${f} must be a number of millimetres`, "invalid");
+      if (t.rotation !== undefined && (typeof t.rotation !== "number" || !isFinite(t.rotation))) throw new ApiError(`${where}: rotation must be a number of degrees`, "invalid");
+      if (place.has(it.id)) throw new ApiError(`${where}: item ${it.id} is placed twice in this commit`, "invalid");
+      place.set(it.id, t);
+    });
+    const placed = (node: any): any => {
+      const t = place.get(k.uuidOf(node)); if (!t) return node; const P = PCB();
+      if (!P) throw new ApiError("The board tools are not loaded.", "not_ready");
+      const [ox, oy] = k.atOf(node);
+      if ((t.side === "back" || t.side === "front") && (t.side === "back") !== (k.str((k.kid(node, "layer") || [])[1]) === "B.Cu")) P.flipNode(node, ox, doc);
+      P.translateNode(node, t.x - ox, t.y - oy);
+      const cur = k.atOf(node)[2] || 0;
+      if (typeof t.rotation === "number" && t.rotation !== cur) P.rotateNode(node, t.x, t.y, t.rotation - cur);
+      return node;
+    };
     update.forEach((u: any, i: number) => {
       const where = `update[${i}]`; const it = u && typeof u.id === "string" ? doc.items.get(u.id) : null;
       if (!it) throw new ApiError(`${where}: there is no item with id ${u && u.id} on the open document`, "not_found");
       const node = parseItem(doc, u.sexpr, where);
       if (node[0] !== it.node[0]) throw new ApiError(`${where}: a ${it.node[0]} cannot become a ${node[0]}; remove it and create the new item`, "invalid");
       const uu = k.kid(node, "uuid"); if (uu) uu[1] = it.id; else node.push(["uuid", it.id]);   // an update keeps its identity whatever the text says
-      touch(it.id, where); changes.push(modified(doc, it, node));
+      touch(it.id, where); changes.push(modified(doc, it, placed(node)));
     });
+    for (const id of place.keys()) if (!touched.has(id)) { const it = doc.items.get(id); touch(id, "transform"); changes.push(modified(doc, it, placed(k.cloneNode(it.node)))); }
     remove.forEach((id: any, i: number) => {
       const it = typeof id === "string" ? doc.items.get(id) : null;
       if (!it) throw new ApiError(`remove[${i}]: there is no item with id ${id} on the open document`, "not_found");
@@ -138,8 +232,61 @@ export const writes: Record<string, (a: any, label: string) => Promise<unknown>>
       touched.add(id); const c = added(doc, node); changes.push(c); created.push(c.id);
     });
     commit(ed, changes, label);
-    return { created, updated: update.length, removed: remove.length };
+    return { created, updated: update.length, removed: remove.length, placed: place.size };
   },
+};
+
+// ---------------------------------------------------------------- fabrication outputs
+
+let fabLoading: Promise<any> | null = null;
+/** The editor's own Gerber, drill and placement writers (web/fab), fetched on first use. */
+function loadFab(): Promise<any> {
+  const W = window as any; if (W.KiCadFab && typeof W.KiCadFab.plotGerbers === "function") return Promise.resolve(W.KiCadFab);
+  if (fabLoading) return fabLoading;
+  fabLoading = new Promise<any>((ok, no) => {
+    const own = document.querySelector<HTMLScriptElement>('script[src*="/static/dist/editor.js"]'); const query = own ? (own.getAttribute("src") || "").split("?")[1] : "";
+    const el = document.createElement("script"); el.src = "/static/dist/fab.js" + (query ? "?" + query : "");
+    el.onload = () => (W.KiCadFab && typeof W.KiCadFab.plotGerbers === "function" ? ok(W.KiCadFab) : no(new ApiError("The fabrication writers did not load.", "not_ready")));
+    el.onerror = () => no(new ApiError("The fabrication writers could not be downloaded.", "not_ready"));
+    document.head.appendChild(el);
+  });
+  fabLoading.catch(() => { fabLoading = null; });
+  return fabLoading;
+}
+async function fabContext(): Promise<{ F: any; ctx: any }> {
+  const { doc, open } = liveDoc();
+  if (doc.type !== "pcb") throw new ApiError("Fabrication outputs are made from a board; the open document is a schematic.", "not_board");
+  const [F, file] = await Promise.all([loadFab(), savedBoardFile(open.docId)]);
+  return { F, ctx: { doc, setup: file || null, projectName: String(open.path).replace(/^.*\//, "").replace(/\.kicad_pcb$/, "") } };
+}
+const strs = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 80) : undefined);
+
+/**
+ * What KiCad's plot and drill classes write, from the editor's own writers and the board as it stands, so a plugin that
+ * prepares a manufacturer's order gets the same files File → Fabrication Outputs makes.
+ */
+export const fab: Record<string, (a: any) => Promise<unknown>> = {
+  layers: async () => { const { F, ctx } = await fabContext(); return { layers: F.plottableLayers(ctx.doc) }; },
+  gerbers: async (a) => {
+    const { F, ctx } = await fabContext(); const all: string[] = F.plottableLayers(ctx.doc); const want = strs(a.layers);
+    const r = F.plotGerbers(ctx, { layers: want ? want.filter((l) => all.includes(l)) : undefined, useProtelExtensions: !!a.useProtelExtensions, useGerberX2: a.useGerberX2 !== false, useAuxOrigin: !!a.useAuxOrigin,
+      precision: a.precision === 5 ? 5 : 6, plotReference: a.plotReference !== false, plotValue: a.plotValue !== false, subtractMaskFromSilk: !!a.subtractMaskFromSilk, commonLayers: strs(a.commonLayers),
+      sketchDnpOnFab: a.sketchDnpOnFab, hideDnpOnFab: a.hideDnpOnFab, crossoutDnpOnFab: a.crossoutDnpOnFab });
+    return { files: r.files.map((f: any) => ({ name: f.name, text: f.text, layer: f.layer })), warnings: r.warnings, missing: want ? want.filter((l) => !all.includes(l)) : [] };
+  },
+  drill: async (a) => {
+    const { F, ctx } = await fabContext(); const zeros = ["decimal", "suppress_leading", "suppress_trailing", "keep"].includes(a.zeros) ? a.zeros : "decimal";
+    const files = F.drillFiles(ctx, { metric: a.metric !== false, zeros, merge: !!a.merge, minimalHeader: !!a.minimalHeader, mirrorY: !!a.mirrorY, ovalMode: a.ovalMode === "g85" ? "g85" : "route", useAuxOrigin: !!a.useAuxOrigin,
+      extension: typeof a.extension === "string" && /^[A-Za-z0-9]{1,8}$/.test(a.extension) ? a.extension : undefined });
+    return { files: files.map((f: any) => ({ name: f.name, text: f.text, holes: f.holes, tools: f.tools })) };
+  },
+  positions: async (a) => {
+    const { F, ctx } = await fabContext(); const side = a.side === "front" || a.side === "back" ? a.side : "both";
+    const rows = F.positions(ctx, { side, smdOnly: !!a.smdOnly, excludeThroughHole: !!a.excludeThroughHole, excludeDnp: !!a.excludeDnp, useAuxOrigin: !!a.useAuxOrigin, negateBottomX: !!a.negateBottomX });
+    return { rows: rows.map((r: any) => ({ ref: r.ref, value: r.value, package: r.pkg, x: r.x, y: r.y, rotation: r.rot, side: r.side })), csv: F.placementCsv(rows),
+      ascii: F.placementAscii(rows, side, new Date().toISOString().slice(0, 19).replace("T", " "), "KiCad") };
+  },
+  bom: async (a) => { const { F, ctx } = await fabContext(); const lines = F.bom(ctx, { excludeDnp: !!a.excludeDnp }); return { csv: F.bomCsv(lines), lines: lines.length }; },
 };
 
 // ---------------------------------------------------------------- view

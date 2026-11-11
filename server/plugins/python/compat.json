@@ -1,0 +1,336 @@
+{
+ "ch.ethz.atuzlak.splitplane": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+ },
+ "com.ahmedmikatonik.kisidian": {
+  "status": "works"
+ },
+ "com.alsoknownasfoo.spinrender": {
+  "status": "works"
+ },
+ "com.github.30350n.pcb2blender": {
+  "status": "works"
+ },
+ "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
+  "status": "works"
+ },
+ "com.github.HaydenHu.Space-Filling-Curve": {
+  "status": "works"
+ },
+ "com.github.HaydenHu.kicad-text-postion-size": {
+  "status": "works"
+ },
+ "com.github.Huaqiu-Electronics.kicad-hqdfm-plugin": {
+  "status": "works"
+ },
+ "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: NameError: name 'GetHighlightColour' is not defined"
+ },
+ "com.github.Huaqiu-Electronics.kicad-hqsearch-plugin": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: AttributeError: 'NoneType' object has no attribute 'json'"
+ },
+ "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: it needs the Python module “certifi”, which the web editor does not have"
+ },
+ "com.github.Mage-Control-Systems-Ltd.NCCM": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.MitjaNemec.Archive3DModels": {
+  "status": "works"
+ },
+ "com.github.MitjaNemec.PlaceFootprints": {
+  "status": "works"
+ },
+ "com.github.MitjaNemec.ReplicateLayout": {
+  "status": "works"
+ },
+ "com.github.MitjaNemec.SaveRestoreLayout": {
+  "status": "works"
+ },
+ "com.github.MitjaNemec.SwapStubs": {
+  "status": "works"
+ },
+ "com.github.Murali8051.Lioncircuits-PCB-Toolkit": {
+  "status": "works"
+ },
+ "com.github.SK-Electronics-Consulting.kicad-coil-generators": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
+  "status": "works"
+ },
+ "com.github.Steffen-W.KiCad-Parasitics": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “analysis_progress”, which the web editor does not have"
+ },
+ "com.github.Steffen-W.impartGUI": {
+  "status": "unsupported",
+  "note": "It did not finish within the test's time limit."
+ },
+ "com.github.SteveMayze.pcb2fritzing": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.TheJigsApp.kicad-parts-placer-pcm": {
+  "status": "works"
+ },
+ "com.github.TheJigsApp.kicadtestpoints-pcm": {
+  "status": "works"
+ },
+ "com.github.adamws.kicad-git": {
+  "status": "works"
+ },
+ "com.github.adamws.kicad-kbplacer": {
+  "status": "works"
+ },
+ "com.github.adamws.kicad-via-patterns": {
+  "status": "unsupported",
+  "note": "It does not load: Running another program (plugins-python.mjs): there are no other programs in the browser"
+ },
+ "com.github.aislerhq.PushForKiCad": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
+  "status": "works"
+ },
+ "com.github.aivon-pcba.aivon-plug-in-for-kicad": {
+  "status": "works"
+ },
+ "com.github.andresarmento.kicad2gcode": {
+  "status": "works"
+ },
+ "com.github.asukiaaa.gerber-to-order": {
+  "status": "works"
+ },
+ "com.github.bbenchoff.orthoroute": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+ },
+ "com.github.bennymeg.JLC-Plugin-for-KiCad": {
+  "status": "works"
+ },
+ "com.github.black-ghost-off.autoled": {
+  "status": "works"
+ },
+ "com.github.cgrassin.kicad-pinout-generator": {
+  "status": "works"
+ },
+ "com.github.cooked.kimotor": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “numpy”, which the web editor does not have"
+ },
+ "com.github.danielboston38.prefab-gate": {
+  "status": "works"
+ },
+ "com.github.ducky64.SubLayout": {
+  "status": "works"
+ },
+ "com.github.easyw.kicad-action-tools": {
+  "status": "works"
+ },
+ "com.github.f-blaze.velatrace": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
+  "status": "unsupported",
+  "note": "It did not finish within the test's time limit."
+ },
+ "com.github.g200kg.kicad-gerberzipper2": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.gauravmm.hierarchicalpcb": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: ValueError: PosixPath('.') has an empty name"
+ },
+ "com.github.gauravmm.kleplacement": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.heronitec-solutions.kicomlib": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “requests”, which the web editor does not have"
+ },
+ "com.github.jOaSbA.localize-dependencies": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.jOaSbA.via-stitching": {
+  "status": "works"
+ },
+ "com.github.jacmie.PosOrient": {
+  "status": "works"
+ },
+ "com.github.jarrettr.stretch": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “bs4”, which the web editor does not have"
+ },
+ "com.github.joelsa.kicad-hide-references-plugin": {
+  "status": "works"
+ },
+ "com.github.jsreynaud.kicad-action-scripts": {
+  "status": "partly",
+  "note": "1 of its 2 commands run. Via Stitching Generator: SHAPE_POLY_SET.Inflate is not available in the web editor"
+ },
+ "com.github.kerstensrobin.kicad-breadboard": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: Running another program (kicad-cli): there are no other programs in the browser"
+ },
+ "com.github.kicadlab.CopperFiller": {
+  "status": "unsupported",
+  "note": "It does not load: AttributeError: module 'wx' has no attribute 'adv'"
+ },
+ "com.github.lou270.pinout-image-generator": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.mey-26.kicad-layout-clone": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.mey-26.pcb-heatmap": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: it needs the Python module “numpy”, which the web editor does not have"
+ },
+ "com.github.michaelgaylor.tracklayer": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.mitxela.kicad-round-tracks": {
+  "status": "works"
+ },
+ "com.github.mrcpuddington.kobeestudio": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.officialdyray.projectinstances": {
+  "status": "works"
+ },
+ "com.github.ozzysv.holefinder": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ },
+ "com.github.ozzysv.viafence": {
+  "status": "works"
+ },
+ "com.github.pcbway.PCBWay-Fabrication-Toolkit-for-KiCad": {
+  "status": "works"
+ },
+ "com.github.pcbway.PCBWay-Plug-in-for-Kicad": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.sagarHackeD.PlaceBySchKiCad": {
+  "status": "works"
+ },
+ "com.github.sagarHackeD.SnapToGridKiCAD": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: AttributeError: 'NoneType' object has no attribute 'GetStringSelection'"
+ },
+ "com.github.samuelcicuitstudio.traceforge-kicad": {
+  "status": "unsupported",
+  "note": "It did not finish within the test's time limit."
+ },
+ "com.github.seigedigital.setholediameterpluginforkicad": {
+  "status": "works"
+ },
+ "com.github.sijah.center-silk-ref": {
+  "status": "works"
+ },
+ "com.github.sparkfun.SparkFunKiCadCAMmer": {
+  "status": "works"
+ },
+ "com.github.sparkfun.SparkFunKiCadPanelizer": {
+  "status": "works"
+ },
+ "com.github.tnaegele.kicad-cut-tracks-at-line": {
+  "status": "works"
+ },
+ "com.github.tobiglaser.KiPNG": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.ulikoehler.kicad-bulk-hide-silkscreen-designators": {
+  "status": "works"
+ },
+ "com.github.usetraces.traces": {
+  "status": "works"
+ },
+ "com.github.weirdgyn.viastitcher": {
+  "status": "works"
+ },
+ "com.github.yaqwsx.kikit": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.yuri-ncs.t-junction-teardrops": {
+  "status": "works"
+ },
+ "com.github.z2labs.eagle-exhumer": {
+  "status": "works"
+ },
+ "com.github.z2labs.z2ems": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.github.z2labs.z2viacolino": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: NameError: name 'e' is not defined"
+ },
+ "com.gitlab.dennevi.Board2Pdf": {
+  "status": "works"
+ },
+ "com.gitlab.egloff-studio.z0-field-solver": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.gitlab.egloff-studio.z0-wavelab": {
+  "status": "unsupported",
+  "note": "It adds no board editor command: it is a footprint wizard, a library, or a plugin for KiCad's IPC interface, which the web editor does not have yet."
+ },
+ "com.gitlab.mgyger.oktizer": {
+  "status": "unsupported",
+  "note": "It loads, but fails when run: AttributeError: 'PAD' object has no attribute 'SetOffset'"
+ },
+ "com.gitlab.open-hardware-designs.kicad-ec-registration": {
+  "status": "works"
+ },
+ "com.infernoembedded.vulcans-trials": {
+  "status": "works"
+ },
+ "com.pcbtools.kinotes": {
+  "status": "works"
+ },
+ "com.stenchill.kicad": {
+  "status": "works"
+ },
+ "org.openscopeproject.InteractiveHtmlBom": {
+  "status": "works"
+ },
+ "org.openscopeproject.TransformIt": {
+  "status": "works"
+ },
+ "sierra.kicad.order": {
+  "status": "works"
+ },
+ "vn.thanhduongvs.component-position": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “PySide6”, which the web editor does not have"
+ },
+ "vn.thanhduongvs.fanout-tool": {
+  "status": "unsupported",
+  "note": "It does not load: it needs the Python module “kipy”, which the web editor does not have"
+ }
+}

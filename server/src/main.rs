@@ -13,6 +13,7 @@ mod mcp;
 mod mcp_host;
 mod oauth;
 mod pages;
+mod pcm;
 mod parts;
 mod persist;
 mod plugins;
@@ -385,6 +386,10 @@ async fn main() -> anyhow::Result<()> {
         // web editor plugins (the per-account store and the built-in catalog)
         .route("/api/plugins", get(plugins::list))
         .route("/api/plugins/catalog", get(plugins::catalog))
+        .route("/api/plugins/pcm", get(pcm::list))
+        .route("/api/plugins/pcm/{identifier}", get(pcm::get))
+        .route("/api/plugins/{identifier}/files", get(plugins::plugin_files))
+        .route("/static/pyodide/{file}", get(pcm::runtime))
         .route("/api/plugins/registry", get(plugins::registry_list))
         .route("/api/plugins/moderation", get(plugins::moderation_list))
         .route("/api/plugins/registry/{identifier}/report", post(plugins::registry_report))

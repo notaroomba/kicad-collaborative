@@ -196,8 +196,58 @@ host, which is why the consent screen marks the pair. A plugin's script shares t
 thread on browsers that do not put sandboxed frames in their own process, so a plugin stuck in a
 loop can stall the tab there. WebRTC is not covered by the frame's policy.
 
+## KiCad's own Python plugins
+
+The plugins in KiCad's Plugin and Content Manager are Python programs written for the desktop's
+`pcbnew` and `wx` modules.  The web editor runs them as they are: the Plugin Manager's
+**KiCad plugins** tab lists KiCad's repository, and installing one stores the package with your
+account like any other plugin.
+
+How it works:
+
+- A Python plugin is an ordinary sandboxed web plugin whose manifest says
+  `"runtime": { "type": "kicad-python" }`.  Its entry script (`web/plugins/pyruntime.ts`) starts
+  CPython compiled to WebAssembly (Pyodide) inside the plugin's frame and gives it this editor's
+  `pcbnew`, `wx` and `FootprintWizardBase` modules (`plugins/python/`).  It has exactly the reach
+  any web plugin has: the `kicad` API, checked against the permissions the person granted.
+- `pcbnew.GetBoard()` is the open board.  What the plugin changes is sent as one collaborative
+  edit when it finishes (or calls `pcbnew.Refresh()`): one undo step, seen by everyone.
+  Footprints moved, turned or flipped go through the editor's own transforms.
+- `wx` windows are HTML inside the frame, floated by the editor as a KiCad dialog.
+  `ShowModal()` blocks as on the desktop.  Message boxes, file pickers and progress dialogs are
+  drawn by the editor.
+- `PLOT_CONTROLLER` (Gerber), `EXCELLON_WRITER`, `PLACE_FILE_EXPORTER` and `IPC356D_WRITER` use
+  the editor's fabrication writers (`kicad.fab.*`), so a manufacturer's plugin produces the files
+  File → Fabrication Outputs makes.  Files a plugin writes beside the board are handed to the
+  person as a download (a zip when there are several).
+- The project file and the schematics are beside the board, so net classes, design rules and
+  plugins that read the schematic work.
+- The interpreter starts the first time one of the plugin's commands is used in a project
+  (two to five seconds), then stays for the session.
+
+What does not carry over, by nature of a browser: running other programs (`kicad-cli`, `git`),
+Python packages with native code that Pyodide does not ship, Qt user interfaces, and the network
+(a plugin frame cannot reach it).  A plugin that needs one of these says so in its log.
+
+The label beside each plugin in the manager comes from `scripts/plugins-python.mjs`, which loads
+every official package headless, runs each command it registers against a demo board with the
+main button of its dialog pressed, and writes `plugins/python/compat.json`:
+
+```sh
+PCM_SRC=<folder of unpacked PCM packages> COMPAT=plugins/python/compat.json node scripts/plugins-python.mjs
+node scripts/plugins-python.mjs --one <package folder>      # one package, as JSON
+```
+
+The server reads the repository at `https://repository.kicad.org/repository.json`
+(`KC_PCM_REPOSITORY` points it elsewhere; `scripts/pcm-fixture.mjs` serves a local copy), checks
+each download against its SHA-256 and keeps packages within 1500 files and 12 MB.
+
 ## Testing
 
 `server/scripts/plugins-ui.mjs` drives the real editor in Chromium with two people in one project
 and covers the manager, every extension point, the collaborative path of a plugin edit and the
 sandbox. Its header says how to run it.
+
+`scripts/plugins-python-ui.mjs` does the same for Python plugins: it serves a PCM package of its
+own, installs it through the KiCad plugins tab and drives it with two people (start the server
+with `KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json`).

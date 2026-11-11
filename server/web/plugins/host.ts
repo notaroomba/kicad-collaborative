@@ -8,9 +8,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useSyncExternalStore } from "react";
-import { ApiError, editorState, reads, selectionSummary, views, writes } from "./api";
+import { ApiError, editorState, fab, reads, selectionSummary, views, writes } from "./api";
+import { pythonRuntime } from "./pyruntime";
 import { createSandbox, type Sandbox } from "./sandbox";
-import { inScope, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
+import { inScope, isPython, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
 
 const W = window as any;
 const ED = (): any => W.CollabEditor;
@@ -19,7 +20,13 @@ const APP = (): any => W.CollabApp;
 // ---------------------------------------------------------------- state
 
 export interface LogLine { at: number; level: "log" | "warn" | "error" | "host"; text: string }
-export interface RunState { ready: boolean; failed: boolean; busy: string | null; registered: Record<string, string[]> }
+export interface RunState { ready: boolean; failed: boolean; busy: string | null; registered: Record<string, string[]>; error?: string | null }
+/** How one of KiCad's official plugins fared against the web runtime (scripts/plugins-python.mjs). */
+export interface Compat { status: "works" | "partly" | "limited" | "unsupported"; note?: string }
+/** A plugin in KiCad's own repository. */
+export interface OfficialEntry { identifier: string; manifest: PluginManifest; details: string; size: number; compat: Compat | null }
+/** A plugin window the editor floats around the plugin's frame (a wx dialog of a Python plugin). */
+export interface PluginWindowState { plugin: string; pluginName: string; title: string; width: number; height: number; modal: boolean }
 export interface PromptField { name: string; label: string; type?: "text" | "number" | "select" | "checkbox" | "textarea" | "file"; default?: unknown; options?: Array<string | { value: string; label: string }>; accept?: string[]; as?: "text" | "bytes"; placeholder?: string; min?: number; max?: number; step?: number }
 export interface PromptRequest { id: number; plugin: string; pluginName: string; kind: "form" | "confirm"; title: string; message?: string; fields: PromptField[]; okLabel?: string; resolve: (v: any) => void }
 export interface Consent { manifest: PluginManifest; files: Record<string, string>; source: string; update: boolean; added: string[] }
@@ -43,10 +50,15 @@ export interface PluginState {
   admin: boolean; moderation: ModerationEntry[] | null;
   /** What the open project recommends, and whether this person may change that. */
   project: { id: string | null; plugins: ProjectPlugin[]; canEdit: boolean; dismissed: string };
-  manager: { open: boolean; tab: "installed" | "catalog" | "project" | "develop" | "moderation"; selected: string | null };
+  manager: { open: boolean; tab: "installed" | "catalog" | "kicad" | "project" | "develop" | "moderation"; selected: string | null };
   panel: { open: boolean; active: string | null; width: number };
   prompt: PromptRequest | null; consent: Consent | null;
   editor: string | null;
+  /** KiCad's repository as last fetched, and why it could not be if it could not. */
+  official: OfficialEntry[] | null; officialError: string | null;
+  /** The actions each Python plugin registered when it last ran (a Python plugin names its actions at run time, not in a manifest). */
+  pyActions: Record<string, PluginAction[]>;
+  window: PluginWindowState | null;
 }
 
 const ls = { get(k: string) { try { return localStorage.getItem(k); } catch { return null; } }, set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* no storage */ } }, del(k: string) { try { localStorage.removeItem(k); } catch { /* no storage */ } } };
@@ -57,7 +69,7 @@ let S: PluginState = {
   registry: null, registryQuery: "", published: {}, admin: false, moderation: null, project: { id: null, plugins: [], canEdit: false, dismissed: "" },
   manager: { open: false, tab: "installed", selected: null },
   panel: (() => { try { const j = JSON.parse(ls.get(LS_PANEL) || "{}"); return { open: !!j.open, active: typeof j.active === "string" ? j.active : null, width: Math.min(640, Math.max(240, Number(j.width) || 320)) }; } catch { return { open: false, active: null, width: 320 }; } })(),
-  prompt: null, consent: null, editor: null,
+  prompt: null, consent: null, editor: null, official: null, officialError: null, pyActions: {}, window: null,
 };
 const subs = new Set<() => void>();
 function set(patch: Partial<PluginState>) { S = Object.assign({}, S, patch); for (const fn of Array.from(subs)) fn(); }
@@ -90,7 +102,7 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 export async function refresh(): Promise<void> {
   const me = APP() ? APP().getState().me : null;
   if (!me) { set({ loaded: true, signedIn: false, installed: [], admin: false, moderation: null, error: null }); syncRunning(); return; }
-  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); }
+  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); loadPyActions(); }
   catch (e) { set({ loaded: true, signedIn: true, error: e instanceof Error ? e.message : String(e) }); }
   syncRunning();
 }
@@ -193,6 +205,20 @@ export function installRecommended(r: ProjectPlugin): string | null {
   return requestInstall(r.manifest, r.files, r.origin === "catalog" ? "catalog" : `registry:${r.publisher || "unknown"}`);
 }
 
+// ---- KiCad's own plugins
+
+export async function loadOfficial(force = false): Promise<void> {
+  if (S.official && !force) return;
+  try { const j = await api("/api/plugins/pcm"); set({ official: j.plugins || [], officialError: null }); }
+  catch (e) { set({ official: S.official || [], officialError: msg(e) }); }
+}
+/** Download one of KiCad's plugins (the server fetches and unpacks it) and put it in front of the person on the consent sheet. */
+export async function installOfficial(identifier: string): Promise<string | null> {
+  if (!S.signedIn) return "Sign in to install plugins.";
+  try { const j = await api(`/api/plugins/pcm/${encodeURIComponent(identifier)}`); return requestInstall(j.manifest, j.files || {}, String(j.source || "kicad")); }
+  catch (e) { return msg(e); }
+}
+
 /** Ask the person before anything is stored: what the plugin is and every permission it wants. */
 export function requestInstall(manifest: PluginManifest, files: Record<string, string>, source: string): string | null {
   const bad = validateManifest(manifest).concat(validateManifest(manifest).length ? [] : validateFiles(manifest, files));
@@ -204,7 +230,7 @@ export function requestInstall(manifest: PluginManifest, files: Record<string, s
 export const cancelInstall = () => set({ consent: null });
 export async function confirmInstall(): Promise<string | null> {
   const c = S.consent; if (!c) return null;
-  const keep: Record<string, string> = {}; for (const f of manifestFiles(c.manifest)) keep[f] = c.files[f];
+  const keep: Record<string, string> = {}; for (const f of manifestFiles(c.manifest, c.files)) keep[f] = c.files[f];
   try {
     await api(`/api/plugins/${encodeURIComponent(c.manifest.identifier)}`, { method: "PUT", body: JSON.stringify({ manifest: c.manifest, files: keep, granted: c.manifest.permissions || [], source: c.source }) });
   } catch (e) { return e instanceof Error ? e.message : String(e); }
@@ -219,7 +245,7 @@ export async function setEnabled(id: string, enabled: boolean): Promise<void> {
 }
 export async function uninstall(id: string): Promise<void> {
   try { await api(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" }); } catch (e) { set({ error: e instanceof Error ? e.message : String(e) }); }
-  stop(id); storageClear(id);
+  stop(id); storageClear(id); forgetPyActions(id);
   const logs = Object.assign({}, S.logs); delete logs[id];
   set({ logs, manager: Object.assign({}, S.manager, { selected: S.manager.selected === id ? null : S.manager.selected }) });
   await refresh();
@@ -252,7 +278,7 @@ export async function readLocalFiles(list: File[]): Promise<{ manifest: PluginMa
 
 // ---------------------------------------------------------------- running
 
-interface Run { plugin: InstalledPlugin; key: string; sandbox: Sandbox; pending: Map<number, { ok: (v: any) => void; no: (e: Error) => void; timer: number }>; seq: number; commits: number[] }
+interface Run { plugin: InstalledPlugin; key: string; sandbox: Sandbox; pending: Map<number, { ok: (v: any) => void; no: (e: Error) => void; timer: number }>; seq: number; commits: number[]; actions?: PluginAction[] }
 const runs = new Map<string, Run>();
 let frameHost: HTMLElement | null = null;
 const keyOf = (p: InstalledPlugin) => `${p.updatedAt || ""}|${p.granted.join(",")}`;
@@ -268,10 +294,33 @@ function themeNow() {
 /** The dock gives the host the element the frames live in; they stay mounted there, shown or not. */
 export function setFrameHost(el: HTMLElement | null) { frameHost = el; if (el) syncRunning(); }
 
+// ---- Python plugins: started when first needed, because each one carries an interpreter
+
+const LS_PY = "kc.plugins.py.";
+const pyActive = new Set<string>(), pyStarting = new Set<string>(), pyFailed = new Set<string>();
+/** The actions a Python plugin registered the last time this copy of it ran, or null when it has not run yet. */
+function cachedPyActions(p: InstalledPlugin): PluginAction[] | null {
+  try { const j = JSON.parse(ls.get(LS_PY + p.identifier) || "null"); return j && j.key === keyOf(p) && Array.isArray(j.actions) ? j.actions : null; } catch { return null; }
+}
+function rememberPyActions(p: InstalledPlugin, actions: PluginAction[]) {
+  ls.set(LS_PY + p.identifier, JSON.stringify({ key: keyOf(p), actions }));
+  set({ pyActions: Object.assign({}, S.pyActions, { [p.identifier]: actions }) });
+}
+function forgetPyActions(id: string) { ls.del(LS_PY + id); pyActive.delete(id); pyFailed.delete(id); const next = Object.assign({}, S.pyActions); delete next[id]; set({ pyActions: next }); }
+/** Bring what is remembered about the installed Python plugins into the state the menus read. */
+function loadPyActions() {
+  const next: Record<string, PluginAction[]> = {};
+  for (const p of S.installed) if (isPython(p.manifest)) { const c = S.running[p.identifier] ? S.pyActions[p.identifier] : cachedPyActions(p); if (c) next[p.identifier] = c; }
+  set({ pyActions: next });
+}
+/** The actions of a plugin: the manifest's, or for a Python plugin the ones it registered. */
+export const actionsOf = (p: InstalledPlugin, s: PluginState = S): PluginAction[] => (isPython(p.manifest) ? s.pyActions[p.identifier] || [] : p.manifest.actions || []);
+
 function wanted(): InstalledPlugin[] {
   const app = APP(); const st = app ? app.getState() : null;
   if (!frameHost || !st || st.view !== "editor" || !st.project || !st.me) return [];
-  return S.installed.filter((p) => p.enabled);
+  // A Python plugin whose actions are known waits for the first click on one of them; one that has never run starts once, to find out what it offers.
+  return S.installed.filter((p) => p.enabled && (!isPython(p.manifest) || (!pyFailed.has(p.identifier) && (pyActive.has(p.identifier) || !S.pyActions[p.identifier]))));
 }
 function syncRunning() {
   const want = new Map(wanted().map((p) => [p.identifier, p]));
@@ -279,8 +328,26 @@ function syncRunning() {
   for (const p of want.values()) if (!runs.has(p.identifier)) start(p);
   showFrames();
 }
+async function startPython(p: InstalledPlugin) {
+  const id = p.identifier; if (pyStarting.has(id)) return; pyStarting.add(id);
+  setRun(id, { ready: false, failed: false, busy: null, registered: {}, error: null });
+  log(id, "host", `Starting ${p.manifest.name} ${p.manifest.version || ""} (Python)`.trim());
+  let files: Record<string, string>;
+  try { files = (await api(`/api/plugins/${encodeURIComponent(id)}/files`)).files || {}; }
+  catch (e) { pyStarting.delete(id); pyFailed.add(id); log(id, "error", `Its files could not be fetched: ${e instanceof Error ? e.message : String(e)}`); setRun(id, { ready: true, failed: true }); return; }
+  pyStarting.delete(id);
+  if (!frameHost || runs.has(id) || !wanted().some((w) => w.identifier === id && keyOf(w) === keyOf(p))) { setRun(id, null); return; }
+  const run: Run = { plugin: p, key: keyOf(p), sandbox: null as unknown as Sandbox, pending: new Map(), seq: 0, commits: [], actions: [] };
+  runs.set(id, run);
+  run.sandbox = createSandbox(p, frameHost, {
+    plugin: { identifier: id, name: p.manifest.name, version: p.manifest.version || "", pyodide: `${location.origin}/static/pyodide/` }, granted: p.granted.slice(), theme: themeNow(),
+    entry: `(${pythonRuntime.toString()})();`, entryName: "kicad-python.js", html: "", resources: files, defer: true,
+    editor: editorState(has(p, "design:read")),
+  }, (msg) => onMessage(run, msg));
+}
 function start(p: InstalledPlugin) {
   if (!frameHost) return;
+  if (isPython(p.manifest)) { void startPython(p); return; }
   const m = p.manifest; const entryName = m.runtime.entrypoint || "main.js";
   const resources: Record<string, string> = {}; for (const r of m.resources || []) if (typeof p.files[r] === "string") resources[r] = p.files[r];
   const run: Run = { plugin: p, key: keyOf(p), sandbox: null as unknown as Sandbox, pending: new Map(), seq: 0, commits: [] };
@@ -296,19 +363,30 @@ export function stop(id: string) {
   const run = runs.get(id); if (!run) return;
   for (const w of run.pending.values()) { clearTimeout(w.timer); w.no(new Error("the plugin was stopped")); }
   run.sandbox.destroy(); runs.delete(id); setRun(id, null);
+  if (S.window && S.window.plugin === id) set({ window: null });
   if (S.prompt && S.prompt.plugin === id) { S.prompt.resolve(null); set({ prompt: null }); }
   log(id, "host", "Stopped");
 }
-export function restart(id: string) { stop(id); syncRunning(); }
+export function restart(id: string) { stop(id); pyFailed.delete(id); if (find(id) && isPython(find(id)!.manifest)) pyActive.add(id); syncRunning(); }
 
 function onMessage(run: Run, m: any) {
   const id = run.plugin.identifier; if (!m || typeof m !== "object" || runs.get(id) !== run) return;
   switch (m.t) {
-    case "ready": setRun(id, { ready: true, failed: !!m.failed }); if (!m.failed) log(id, "host", "Ready"); break;
+    case "ready":
+      setRun(id, { ready: true, failed: !!m.failed, error: typeof m.error === "string" ? m.error.slice(0, 600) : null });
+      if (!m.failed) log(id, "host", "Ready");
+      if (run.actions) { if (m.failed) pyFailed.add(id); else rememberPyActions(run.plugin, run.actions); }
+      break;
     case "log": log(id, m.level === "error" ? "error" : m.level === "warn" ? "warn" : "log", String(m.text || "")); break;
     case "registered": {
       if (typeof m.kind !== "string" || typeof m.name !== "string" || !["action", "importer", "exporter", "tool"].includes(m.kind)) break;
-      const reg = Object.assign({}, (S.running[id] || { registered: {} }).registered); reg[m.kind] = Array.from(new Set((reg[m.kind] || []).concat(m.name.slice(0, 80)))); setRun(id, { registered: reg }); break;
+      const reg = Object.assign({}, (S.running[id] || { registered: {} }).registered); reg[m.kind] = Array.from(new Set((reg[m.kind] || []).concat(m.name.slice(0, 80)))); setRun(id, { registered: reg });
+      // A Python plugin says what its actions are called as it registers them; that is the only description there is.
+      if (run.actions && m.kind === "action" && m.meta && typeof m.meta === "object" && /^py\d{1,3}$/.test(m.name) && run.actions.length < 60 && !run.actions.some((a) => a.identifier === m.name)) {
+        const icon = typeof m.meta.icon === "string" && /^data:image\/(png|jpeg|gif|svg\+xml|bmp|x-icon);base64,[A-Za-z0-9+/=]+$/.test(m.meta.icon) && m.meta.icon.length < 120000 ? m.meta.icon : undefined;
+        run.actions.push({ identifier: m.name, name: String(m.meta.name || "Action").slice(0, 120), description: String(m.meta.description || "").slice(0, 400), scopes: ["pcb"], "show-button": !!m.meta.button, iconUrl: icon });
+      }
+      break;
     }
     case "done": { const w = run.pending.get(m.id); if (!w) break; run.pending.delete(m.id); clearTimeout(w.timer); if (m.error) w.no(new Error(String(m.error).slice(0, 2000))); else w.ok(m.value); break; }
     case "call": {
@@ -334,8 +412,8 @@ function invoke(run: Run, kind: string, name: string, arg: unknown, timeout: num
 function emit(name: string, data: unknown, need?: string) { for (const run of runs.values()) if (!need || has(run.plugin, need)) run.sandbox.send({ t: "event", name, data }); }
 
 /** Wait for a just-started plugin to finish loading (its handlers are registered as its script runs). */
-async function whenReady(id: string): Promise<Run> {
-  for (let i = 0; i < 100; i++) { const run = runs.get(id); const st = S.running[id]; if (!run) break; if (st && st.ready) { if (st.failed) throw new Error("the plugin failed to load; see its log"); return run; } await new Promise((r) => setTimeout(r, 50)); }
+async function whenReady(id: string, tries = 100): Promise<Run> {
+  for (let i = 0; i < tries; i++) { const run = runs.get(id); const st = S.running[id]; if (!run && !pyStarting.has(id)) break; if (run && st && st.ready) { if (st.failed) throw new Error("the plugin failed to load; see its log"); return run; } await new Promise((r) => setTimeout(r, 50)); }
   const p = find(id);
   throw new Error(!p ? "that plugin is not installed" : !p.enabled ? `${p.manifest.name} is disabled` : `${p.manifest.name} is not running`);
 }
@@ -345,11 +423,12 @@ async function whenReady(id: string): Promise<Run> {
 /** The permission each method needs; null means any running plugin may call it. */
 const NEEDS: Record<string, string | null> = {
   "design.overview": "design:read", "design.documents": "design:read", "design.components": "design:read", "design.component": "design:read", "design.nets": "design:read",
-  "design.items": "design:read", "design.selection": "design:read", "design.runChecks": "design:read", "design.boardInfo": "design:read",
+  "design.items": "design:read", "design.selection": "design:read", "design.runChecks": "design:read", "design.boardInfo": "design:read", "design.board": "design:read",
   "design.apply": "design:write", "design.commit": "design:write",
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
-  "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null,
+  "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
+  "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
   "storage.get": null, "storage.set": null, "storage.remove": null, "storage.keys": null,
 };
 
@@ -372,6 +451,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
     return out;
   }
   if (ns === "view") return views[fn](a);
+  if (ns === "fab") return fab[fn](a);
   if (ns === "storage") return storage(p.identifier, fn, a);
   if (ns === "files") return fn === "save" ? saveFile(p, a) : pickFile(p, a);
   switch (fn) {
@@ -379,6 +459,21 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
     case "status": try { APP() && ED().api.toolCtx().setStatus(a.text ? `${name}: ${String(a.text).slice(0, 120)}` : ""); } catch { /* no editor */ } return null;
     case "showPanel": if (!p.manifest.panel) throw new ApiError(`${name} declares no panel in plugin.json`, "invalid"); showPanel(p.identifier); return null;
     case "hidePanel": if (S.panel.active === p.identifier) setPanel({ open: false }); return null;
+    case "showWindow": {
+      if (S.window && S.window.plugin !== p.identifier) throw new ApiError("Another plugin window is already open.", "busy");
+      const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
+      set({ window: { plugin: p.identifier, pluginName: name, title: String(a.title || name).slice(0, 120), width: num(a.width, 240, 1200, 460), height: num(a.height, 60, 900, 260), modal: a.modal !== false } });
+      showFrames(); return null;
+    }
+    case "hideWindow": if (S.window && S.window.plugin === p.identifier) { set({ window: null }); showFrames(); } return null;
+    case "openLink": {
+      // A plugin cannot open pages itself (its frame has no popups); the person is shown where it wants to go, and the editor opens it if they agree.
+      let url: URL; try { url = new URL(String(a.url || "")); } catch { throw new ApiError("openLink needs a web address.", "invalid"); }
+      if (url.protocol !== "https:" && url.protocol !== "http:") throw new ApiError("Only web addresses can be opened.", "invalid");
+      const yes = await ask(p, { kind: "confirm", title: "Open a web page?", message: `${name} wants to open this page in a new tab:\n\n${url.href.slice(0, 600)}`, fields: [], okLabel: "Open" });
+      if (yes) window.open(url.href, "_blank", "noopener,noreferrer");
+      return !!yes;
+    }
     case "confirm": return ask(p, { kind: "confirm", title: String(a.title || name).slice(0, 120), message: String(a.message || "").slice(0, 2000), fields: [], okLabel: a.okLabel ? String(a.okLabel).slice(0, 40) : undefined }).then((v) => !!v);
     case "prompt": return ask(p, { kind: "form", title: String(a.title || name).slice(0, 120), message: a.message ? String(a.message).slice(0, 2000) : undefined, fields: cleanFields(a.fields).filter((f) => f.type !== "file" || has(p, "files:import")), okLabel: a.okLabel ? String(a.okLabel).slice(0, 40) : undefined });
     default: return null;
@@ -443,7 +538,7 @@ export const uiIdOf = (kind: "plugin" | "plugin-import" | "plugin-export", plugi
 
 export function actionsFor(s: PluginState, editor: string | null): ActionContribution[] {
   const out: ActionContribution[] = [];
-  for (const p of s.installed) if (p.enabled) for (const a of p.manifest.actions || []) if (inScope(a.scopes, editor)) out.push({ plugin: p.identifier, pluginName: p.manifest.name, id: a.identifier, uiId: uiIdOf("plugin", p.identifier, a.identifier), name: a.name, description: a.description || "", action: a });
+  for (const p of s.installed) if (p.enabled) for (const a of actionsOf(p, s)) if (inScope(a.scopes, editor)) out.push({ plugin: p.identifier, pluginName: p.manifest.name, id: a.identifier, uiId: uiIdOf("plugin", p.identifier, a.identifier), name: a.name, description: a.description || "", action: a });
   return out;
 }
 function porters(s: PluginState, editor: string | null, key: "importers" | "exporters"): Contribution[] {
@@ -464,12 +559,12 @@ export function pluginUiLabel(id: string): string | null {
   if (id === "pluginPanels") return "Plugin Panels";
   const m = id.match(/^(plugin|plugin-import|plugin-export):([^:]+):(.+)$/); if (!m) return null;
   const p = find(m[2]); if (!p) return null;
-  const list: Array<{ identifier: string; name: string }> = (m[1] === "plugin" ? p.manifest.actions : m[1] === "plugin-import" ? p.manifest.importers : p.manifest.exporters) || [];
+  const list: Array<{ identifier: string; name: string }> = (m[1] === "plugin" ? actionsOf(p) : m[1] === "plugin-import" ? p.manifest.importers : p.manifest.exporters) || [];
   const hit = list.find((x) => x.identifier === m[3]); return hit ? hit.name : null;
 }
 export function pluginUiKey(id: string): string {
   const m = id.match(/^plugin:([^:]+):(.+)$/); if (!m) return "";
-  const a = (find(m[1])?.manifest.actions || []).find((x) => x.identifier === m[2]); return (a && a.key) || "";
+  const pl = find(m[1]); const a = (pl ? actionsOf(pl) : []).find((x) => x.identifier === m[2]); return (a && a.key) || "";
 }
 
 async function busy<T>(id: string, what: string, fn: () => Promise<T>): Promise<T | undefined> {
@@ -482,8 +577,10 @@ async function busy<T>(id: string, what: string, fn: () => Promise<T>): Promise<
 }
 
 export async function runAction(plugin: string, action: string): Promise<void> {
-  const p = find(plugin); const a = p && (p.manifest.actions || []).find((x) => x.identifier === action); if (!p || !a) return;
-  await busy(plugin, a.name, async () => { const run = await whenReady(plugin); await invoke(run, "action", action, { editor: editorState(has(p, "design:read")) }, 0); });
+  const p = find(plugin); const a = p && actionsOf(p).find((x) => x.identifier === action); if (!p || !a) return;
+  const python = isPython(p.manifest);
+  if (python) { pyActive.add(plugin); pyFailed.delete(plugin); syncRunning(); }      // the interpreter starts on the first click, and stays for the next
+  await busy(plugin, a.name, async () => { const run = await whenReady(plugin, python ? 1800 : 100); await invoke(run, "action", action, { editor: editorState(has(p, "design:read")) }, 0); });
 }
 export async function runExporter(plugin: string, id: string): Promise<void> {
   const p = find(plugin); const x = p && (p.manifest.exporters || []).find((e) => e.identifier === id); if (!p || !x) return;
@@ -523,7 +620,15 @@ export const setPanelWidth = (w: number) => setPanel({ width: Math.min(640, Math
 function showFrames() {
   const editor = S.editor; const open = S.panel.open ? panelsFor(S, editor) : [];
   const active = open.find((p) => p.plugin === S.panel.active) || open[0] || null;
-  for (const [id, run] of runs) run.sandbox.frame.hidden = !active || active.plugin !== id;
+  const win = S.window ? S.window.plugin : null;
+  for (const [id, run] of runs) { const f = run.sandbox.frame; f.hidden = id !== win && (!active || active.plugin !== id); f.classList.toggle("plg-windowed", id === win); }
+}
+/** The person closed a plugin window: the plugin is told (a wx dialog gets its close event) and takes the window down itself. */
+export function closeWindow() {
+  const w = S.window; if (!w) return; const run = runs.get(w.plugin);
+  if (run) run.sandbox.send({ t: "event", name: "window-closed", data: {} });
+  // A plugin that does not answer (still busy, or stuck) does not get to keep a window over the editor.
+  window.setTimeout(() => { if (S.window === w) { set({ window: null }); showFrames(); } }, run ? 1500 : 0);
 }
 export function openManager(tab?: PluginState["manager"]["tab"]) {
   set({ manager: Object.assign({}, S.manager, { open: true, tab: tab || S.manager.tab }) });
@@ -595,5 +700,5 @@ export function initPlugins(): void {
   }, true);
 
   // The assistant (web/ai/client.ts) reaches plugin tools through this object; tests use it too.
-  W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, refresh, loadProject };
+  W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, runAction, refresh, loadProject };
 }

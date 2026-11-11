@@ -8,6 +8,8 @@ COPY web ./web
 COPY scripts ./scripts
 # the headless editor (web/mcp) bundles the editor's schematic and board tool modules
 COPY static/sch-tools.js static/pcb-tools.js ./static/
+# the Python runtime for KiCad's own plugins packs its pcbnew and wx modules (plugins/python) beside the interpreter
+COPY plugins/python ./plugins/python
 RUN npm run check && npm run build
 
 FROM rust:1-slim-bookworm AS build
@@ -22,4 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # node runs the headless editor behind the MCP endpoint (src/mcp_host.rs); same Debian release as the web stage
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /srv-bin /usr/local/bin/kicad-collab-server
+# served as /static/pyodide/*; too large to compile into the binary (src/pcm.rs runtime_dir)
+COPY --from=web /web/static/dist/pyodide /usr/local/share/kicad-collab/pyodide
 CMD ["kicad-collab-server"]

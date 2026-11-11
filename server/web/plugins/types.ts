@@ -29,6 +29,8 @@ export interface PluginAction {
   key?: string;
   /** Which menu lists it: "tools" (Tools → External Plugins, the default), "inspect", "edit" or "place". */
   menu?: string;
+  /** A Python plugin's own toolbar icon, as a data: URL (its icon_file_name). */
+  iconUrl?: string;
 }
 export interface PluginPanel { name: string; scopes?: Scope[]; html?: string; width?: number }
 export interface PluginPorter { identifier: string; name: string; description?: string; scopes?: Scope[]; extensions?: string[] }
@@ -36,7 +38,7 @@ export interface PluginAssistantTool { name: string; description: string; input_
 
 export interface PluginManifest {
   identifier: string; name: string; description: string; version?: string; author?: string; homepage?: string; license?: string;
-  runtime: { type: string; entrypoint?: string };
+  runtime: { type: string; entrypoint?: string; api?: string };
   permissions?: string[];
   actions?: PluginAction[];
   panel?: PluginPanel;
@@ -63,6 +65,11 @@ const PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,120}$/;
 const SCOPES = new Set(["pcb", "schematic"]);
 export const MAX_FILES = 40, MAX_BYTES = 2 * 1024 * 1024;
 
+/** One of KiCad's own Python plugins (installed from KiCad's repository, run by the Python runtime in the sandbox). */
+export const isPython = (m: { runtime?: { type?: string } } | null | undefined): boolean => !!m && !!m.runtime && m.runtime.type === "kicad-python";
+export const PY_MAX_FILES = 1500, PY_MAX_BYTES = 12 * 1024 * 1024;
+const pyPath = (p: unknown): p is string => typeof p === "string" && p.length > 0 && p.length <= 240 && !p.startsWith("/") && !p.includes("..") && !p.includes("//") && !p.includes("\\") && !/[\u0000-\u001f]/.test(p);
+
 export const isNetwork = (p: string) => p.startsWith("network:");
 export const hostsOf = (perms: string[]) => perms.filter(isNetwork).map((p) => p.slice(8));
 
@@ -87,6 +94,7 @@ export function validateManifest(m: any): string[] {
   if (!str(m.name, 200)) bad.push("name is required (200 characters at most)");
   if (typeof m.description !== "string" || m.description.length > 500) bad.push("description is required (500 characters at most)");
   if (!m.runtime || typeof m.runtime !== "object") bad.push("runtime is required");
+  else if (m.runtime.type === "kicad-python") { /* its code is the package's plugins/ folder; nothing more to name */ }
   else if (m.runtime.type !== "web") bad.push(m.runtime.type === "python" || m.runtime.type === "exec" ? `this is a desktop plugin (runtime "${m.runtime.type}"): install it in the desktop app's Plugin and Content Manager` : 'runtime.type must be "web"');
   else if (!safePath(m.runtime.entrypoint) || !/\.js$/.test(m.runtime.entrypoint)) bad.push("runtime.entrypoint must name the plugin's .js file");
   const perms = m.permissions === undefined ? [] : m.permissions;
@@ -130,7 +138,8 @@ export function validateManifest(m: any): string[] {
 }
 
 /** Every file a manifest refers to, entry point first. */
-export function manifestFiles(m: PluginManifest): string[] {
+export function manifestFiles(m: PluginManifest, files?: Record<string, string>): string[] {
+  if (isPython(m)) return Object.keys(files || {});
   const out = [m.runtime.entrypoint || "main.js"];
   if (m.panel && m.panel.html) out.push(m.panel.html);
   for (const r of m.resources || []) out.push(r);
@@ -139,6 +148,13 @@ export function manifestFiles(m: PluginManifest): string[] {
 
 export function validateFiles(m: PluginManifest, files: Record<string, string>): string[] {
   const bad: string[] = []; const names = Object.keys(files);
+  if (isPython(m)) {
+    if (names.length > PY_MAX_FILES) bad.push(`a plugin holds at most ${PY_MAX_FILES} files`);
+    let size = 0; for (const n of names) { if (!pyPath(n)) bad.push(`"${n}" is not an acceptable file name`); size += files[n].length; }
+    if (size > PY_MAX_BYTES) bad.push("the plugin is larger than 12 MB");
+    if (!names.some((n) => n.startsWith("plugins/"))) bad.push("a KiCad Python plugin keeps its code under plugins/");
+    return bad;
+  }
   if (names.length > MAX_FILES) bad.push(`a plugin holds at most ${MAX_FILES} files`);
   let total = 0; for (const n of names) { if (!safePath(n)) bad.push(`"${n}" is not an acceptable file name`); total += files[n].length; }
   if (total > MAX_BYTES) bad.push("the plugin is larger than 2 MB");

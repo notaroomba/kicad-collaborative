@@ -6,12 +6,12 @@ import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { cx } from "../util";
 import {
-  actionsFor, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
-  installFromRegistry, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
+  actionsFor, actionsOf, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, closeWindow, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
+  installFromRegistry, installOfficial, loadOfficial, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
   recommendedPending, requestInstall, restart, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, unpublish, usePlugins,
-  type CatalogEntry, type ModerationEntry, type ProjectPlugin, type PromptField, type PromptRequest, type RegistryEntry,
+  type CatalogEntry, type Compat, type ModerationEntry, type OfficialEntry, type PluginWindowState, type ProjectPlugin, type PromptField, type PromptRequest, type RegistryEntry,
 } from "./host";
-import { describePermission, type InstalledPlugin, type PluginManifest } from "./types";
+import { describePermission, isPython, type InstalledPlugin, type PluginAction, type PluginManifest } from "./types";
 
 const PUZZLE = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.5a2 2 0 014 0V6h4v4h1.5a2 2 0 010 4H17v5h-4.2v-1.2a1.8 1.8 0 00-3.6 0V19H5v-4.5h1.3a2 2 0 000-4H5V6h4z" /></svg>;
 
@@ -57,7 +57,7 @@ export function usePluginBarEntries(): { key: string; node: ReactNode; menu?: { 
     const run = s.running[a.plugin]; const working = !!run && run.busy === a.name; const icon = a.action.icon ? safeSvg(a.action.icon) : "";
     return { key: a.uiId, menu: { id: a.uiId, label: a.name, glyph: icon || undefined }, node: (
       <button type="button" className={cx("plg-tb-btn", working && "busy")} data-uiact={a.uiId} title={`${a.name}${a.action.key ? `  (${a.action.key})` : ""}\n${a.description}\n— plugin: ${a.pluginName}`} onClick={() => runPluginUi(a.uiId)}>
-        {icon ? <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} /> : PUZZLE}
+        {a.action.iconUrl ? <img src={a.action.iconUrl} alt="" draggable={false} /> : icon ? <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} /> : PUZZLE}
       </button>
     ) };
   })];
@@ -96,10 +96,10 @@ export function PluginDock() {
     const up = () => { setDrag(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
   };
-  const run = active ? s.running[active.plugin] : undefined;
+  const run = active ? s.running[active.plugin] : undefined; const windowed = view === "editor" && !!s.window;
   // The frames stay mounted (and their plugins running) while the dock is closed: only its size goes.
   return (
-    <aside id="dockPlugins" className={cx(!shown && "closed", drag && "drag")} style={shown ? { width: s.panel.width } : undefined} onKeyDown={(e) => e.stopPropagation()}>
+    <aside id="dockPlugins" className={cx(!shown && "closed", drag && "drag", windowed && "windowed")} style={shown ? { width: s.panel.width } : undefined} onKeyDown={(e) => e.stopPropagation()}>
       <div className={cx("plg-grip", drag && "on")} onPointerDown={startDrag} />
       <div className="plg-head">
         <div className="plg-tabs">
@@ -112,6 +112,44 @@ export function PluginDock() {
       {active && !run ? <div className="plg-note">This plugin is not running.</div> : null}
       <div className="plg-frames" id="pluginFrames" ref={host} />
     </aside>
+  );
+}
+
+// ---------------------------------------------------------------- a plugin's own window
+
+/**
+ * The frame of a plugin that opened a window (a KiCad Python plugin's wx dialog), floated as a KiCad dialog.  The editor
+ * draws the title bar and the border; the plugin's sandboxed frame is laid exactly over the body, so what is inside is
+ * still the plugin's and still boxed in.
+ */
+export function PluginWindow() {
+  const w = usePlugins((x) => x.window); const view = useApp((st) => st.view);
+  return w && view === "editor" ? <WindowDialog w={w} key={w.plugin} /> : null;
+}
+function WindowDialog({ w }: { w: PluginWindowState }) {
+  const body = useRef<HTMLDivElement>(null); const [off, setOff] = useState({ x: 0, y: 0 }); const [drag, setDrag] = useState(false);
+  const busy = usePlugins((x) => { const r = x.running[w.plugin]; return !!r && !r.ready; });
+  useLayoutEffect(() => {
+    const el = body.current; if (!el) return; const root = document.documentElement;
+    const place = () => { const r = el.getBoundingClientRect(); root.style.setProperty("--plg-win-x", `${Math.round(r.left)}px`); root.style.setProperty("--plg-win-y", `${Math.round(r.top)}px`); root.style.setProperty("--plg-win-w", `${Math.round(r.width)}px`); root.style.setProperty("--plg-win-h", `${Math.round(r.height)}px`); };
+    place(); const ro = new ResizeObserver(place); ro.observe(el); window.addEventListener("resize", place);
+    return () => { ro.disconnect(); window.removeEventListener("resize", place); };
+  }, [off.x, off.y, w.width, w.height]);
+  useEffect(() => { document.body.classList.toggle("plg-win-drag", drag); return () => document.body.classList.remove("plg-win-drag"); }, [drag]);
+  const startDrag = (ev: React.PointerEvent) => {
+    if ((ev.target as HTMLElement).closest(".kd-x")) return;
+    ev.preventDefault(); setDrag(true); const x0 = ev.clientX - off.x, y0 = ev.clientY - off.y;
+    const move = (e: PointerEvent) => setOff({ x: Math.max(-window.innerWidth / 2 + 80, Math.min(window.innerWidth / 2 - 80, e.clientX - x0)), y: Math.max(-window.innerHeight / 2 + 40, Math.min(window.innerHeight / 2 - 40, e.clientY - y0)) });
+    const up = () => { setDrag(false); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+  return (
+    <div className={cx("kd-overlay plg-winlay", !w.modal && "modeless")} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") closeWindow(); }}>
+      <div className="kd-dialog plg-window" role="dialog" aria-modal={w.modal} id="pluginWindow" tabIndex={-1} style={{ transform: `translate(${off.x}px, ${off.y}px)` }}>
+        <div className="kd-title" onPointerDown={startDrag}><span>{w.title}</span><span className="plg-from">plugin: {w.pluginName}</span><span className="kd-x" title="Close (Esc)" onClick={() => closeWindow()}>×</span></div>
+        <div className="plg-winbody" ref={body} style={{ minWidth: w.width, height: w.height }}>{busy ? <span className="plg-muted">Starting…</span> : null}</div>
+      </div>
+    </div>
   );
 }
 
@@ -177,8 +215,13 @@ function Permissions({ perms, fresh }: { perms: string[]; fresh?: string[] }) {
     </ul>
   );
 }
-function Contributes({ m }: { m: PluginManifest }) {
+function Contributes({ m, actions }: { m: PluginManifest; actions?: PluginAction[] }) {
   const rows: string[] = [];
+  if (isPython(m)) {
+    if (!actions || !actions.length) return <p className="plg-muted">Board editor commands under Tools → External Plugins. A Python plugin names them when it first runs.</p>;
+    for (const a of actions) rows.push(`Command: ${a.name}`);
+    return <ul className="plg-adds">{rows.map((r) => <li key={r}>{r}</li>)}</ul>;
+  }
   for (const a of m.actions || []) rows.push(`Command: ${a.name}${a.key ? ` (${a.key})` : ""}`);
   if (m.panel) rows.push(`Panel: ${m.panel.name}`);
   for (const i of m.importers || []) rows.push(`Import: ${i.name}`);
@@ -186,7 +229,7 @@ function Contributes({ m }: { m: PluginManifest }) {
   for (const t of m.assistant_tools || []) rows.push(`Assistant tool: ${t.name}`);
   return rows.length ? <ul className="plg-adds">{rows.map((r) => <li key={r}>{r}</li>)}</ul> : null;
 }
-const scopesOf = (m: PluginManifest) => { const all = new Set<string>(); for (const a of [...(m.actions || []), ...(m.importers || []), ...(m.exporters || [])]) for (const s of a.scopes || ["pcb", "schematic"]) all.add(s); if (m.panel) for (const s of m.panel.scopes || ["pcb", "schematic"]) all.add(s); return Array.from(all).sort().map((s) => (s === "pcb" ? "PCB" : "Schematic")).join(" · "); };
+const scopesOf = (m: PluginManifest) => { if (isPython(m)) return "PCB"; const all = new Set<string>(); for (const a of [...(m.actions || []), ...(m.importers || []), ...(m.exporters || [])]) for (const s of a.scopes || ["pcb", "schematic"]) all.add(s); if (m.panel) for (const s of m.panel.scopes || ["pcb", "schematic"]) all.add(s); return Array.from(all).sort().map((s) => (s === "pcb" ? "PCB" : "Schematic")).join(" · "); };
 
 function ConsentSheet() {
   const c = usePlugins((x) => x.consent); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
@@ -201,6 +244,7 @@ function ConsentSheet() {
       <Permissions perms={perms} fresh={c.update ? c.added : undefined} />
       <h3>It adds</h3>
       <Contributes m={m} />
+      {isPython(m) ? <p className="plg-muted" id="pluginPythonNote">This is a KiCad desktop plugin, written in Python for the desktop's <code>pcbnew</code> and <code>wx</code> modules. Here it runs on a Python interpreter inside the sandbox, against this editor's version of those modules. Most of what such plugins do is covered; anything that needs a program on your computer, another Python package or the network is not, and the plugin's log says so when it happens.</p> : null}
       <p className="plg-muted">Plugins are other people's code. It runs sandboxed in your browser only, with nothing beyond the permissions above, and only while it is enabled. Your collaborators do not run it; they see what it changes as your edits.</p>
       {err ? <p className="plg-err">{err}</p> : null}
       <div className="plg-row end"><button type="button" className="btn" onClick={() => cancelInstall()}>Cancel</button>
@@ -209,7 +253,7 @@ function ConsentSheet() {
   );
 }
 
-const sourceLabel = (source: string) => (source === "catalog" ? "the built-in catalog" : source === "local" ? "files on your computer" : source.startsWith("registry:") ? `the community registry, published by ${source.slice(9)}` : source);
+const sourceLabel = (source: string) => (source === "catalog" ? "the built-in catalog" : source.startsWith("kicad") ? `KiCad's plugin repository${source.length > 6 ? `, version ${source.slice(6)}` : ""}` : source === "local" ? "files on your computer" : source.startsWith("registry:") ? `the community registry, published by ${source.slice(9)}` : source);
 
 function InstalledTab() {
   const s = usePlugins((x) => x); const sel = s.installed.find((p) => p.identifier === s.manager.selected) || s.installed[0] || null;
@@ -235,7 +279,8 @@ function Detail({ p }: { p: InstalledPlugin }) {
   useLayoutEffect(() => { const el = logEl.current; if (el) el.scrollTop = el.scrollHeight; }, [lines.length]);
   const s = usePlugins((x) => x); const me = useApp((st) => st.me); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const pub = s.published[p.identifier]; const known = p.identifier in s.published; const origin = originOf(p, s);
-  useEffect(() => { if (p.source !== "catalog") void lookupPublished(p.identifier); }, [p.identifier, p.source]);
+  const python = isPython(m); const pyActs = actionsOf(p, s);
+  useEffect(() => { if (p.source !== "catalog" && !python) void lookupPublished(p.identifier); }, [p.identifier, p.source, python]);
   const mine = !!pub && !!me && pub.publisher === me.login; const recommended = s.project.plugins.some((r) => r.identifier === p.identifier);
   const act = async (fn: () => Promise<string | null>) => { setBusy(true); setErr(await fn()); setBusy(false); };
   return (
@@ -248,8 +293,9 @@ function Detail({ p }: { p: InstalledPlugin }) {
       <p className="plg-muted">{m.identifier}{m.author ? ` · by ${m.author}` : ""}{scopesOf(m) ? ` · ${scopesOf(m)}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</p>
       <p>{m.description}</p>
       <h3>Permissions you granted</h3><Permissions perms={p.granted} />
-      <h3>Adds</h3><Contributes m={m} />
-      {p.source === "catalog" && !(s.project.id && s.project.canEdit) ? null : (
+      <h3>Adds</h3><Contributes m={m} actions={pyActs} />
+      {python ? <p className="plg-muted" id="pluginPython">A KiCad Python plugin from {sourceLabel(p.source)}. Its interpreter starts the first time you use one of its commands in a project, which takes a few seconds; after that it stays ready.{run && run.error ? <><br /><span className="plg-err">It reported: {run.error}</span></> : null}</p> : null}
+      {python || (p.source === "catalog" && !(s.project.id && s.project.canEdit)) ? null : (
         <>
           <h3>Sharing</h3>
           <div className="plg-share" id="pluginShare">
@@ -273,13 +319,48 @@ function Detail({ p }: { p: InstalledPlugin }) {
           </div>
         </>
       )}
-      <h3>Log <span className={cx("plg-status", run && run.failed && "bad", run && run.ready && !run.failed && "run")}>{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? "not running (open a project)" : "disabled"}</span></h3>
+      <h3>Log <span className={cx("plg-status", run && run.failed && "bad", run && run.ready && !run.failed && "run")}>{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? (python && pyActs.length ? "starts when you use it" : "not running (open a project)") : "disabled"}</span></h3>
       <div className="plg-log" id="pluginLog" ref={logEl}>{lines.length ? lines.map((l, i) => <div key={i} className={l.level}><time>{new Date(l.at).toLocaleTimeString()}</time>{l.text}</div>) : <div className="plg-muted">Nothing logged yet. A plugin's console output appears here.</div>}</div>
       <div className="plg-row end">
         <button type="button" className="btn sm" onClick={() => clearLog(p.identifier)}>Clear log</button>
         <button type="button" className="btn sm" disabled={!p.enabled} onClick={() => restart(p.identifier)}>Restart</button>
         <button type="button" className="btn sm danger" id="pluginUninstall" onClick={() => { if (confirm(`Uninstall ${m.name}? Its stored settings are removed too.`)) void uninstall(p.identifier); }}>Uninstall</button>
       </div>
+    </div>
+  );
+}
+
+const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", limited: "Limited here", unsupported: "Does not run here yet" };
+/** KiCad's own repository: the plugins the desktop's Plugin and Content Manager lists, runnable here through the Python runtime. */
+function KicadTab() {
+  const s = usePlugins((x) => x); const [q, setQ] = useState(""); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState<string | null>(null); const [all, setAll] = useState(false);
+  useEffect(() => { void loadOfficial(); }, []);
+  if (s.official === null) return <div className="plg-empty">Loading KiCad's repository…</div>;
+  const have = (id: string) => s.installed.find((p) => p.identifier === id);
+  const rank = (e: OfficialEntry) => (!e.compat ? 2 : e.compat.status === "works" ? 0 : e.compat.status === "partly" ? 1 : e.compat.status === "limited" ? 3 : 4);
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const usable = s.official.filter((e) => !e.compat || e.compat.status !== "unsupported").length;
+  const list = s.official.filter((e) => (all || words.length || !e.compat || e.compat.status !== "unsupported") && words.every((w) => `${e.manifest.name} ${e.manifest.description} ${e.identifier} ${e.manifest.author || ""}`.toLowerCase().includes(w)))
+    .sort((a, b) => rank(a) - rank(b) || a.manifest.name.localeCompare(b.manifest.name));
+  const install = async (e: OfficialEntry) => { setBusy(e.identifier); setErr(null); setErr(await installOfficial(e.identifier)); setBusy(null); };
+  return (
+    <div className="plg-catalog" id="pluginKicad">
+      <p className="plg-muted">The plugins in KiCad's own Plugin and Content Manager. They are Python programs written for the desktop; here each runs on a Python interpreter in the plugin sandbox, on your board, with its dialogs drawn in the editor. Each label comes from a test run: the plugin was loaded and every command it adds was run on a demo board, with the main button of its dialog pressed.</p>
+      <div className="plg-row"><input type="search" id="pluginKicadSearch" className="plg-search" placeholder={`Search ${s.official.length} plugins`} value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="plg-check"><input type="checkbox" id="pluginKicadAll" checked={all} onChange={(e) => setAll(e.target.checked)} /> Show the {s.official.length - usable} that do not run here</label></div>
+      {s.officialError ? <p className="plg-err" id="pluginKicadErr">KiCad's repository could not be read: {s.officialError} <button type="button" className="btn sm" onClick={() => void loadOfficial(true)}>Try again</button></p> : null}
+      {err ? <p className="plg-err" id="pluginKicadInstallErr">{err}</p> : null}
+      {!list.length && !s.officialError ? <div className="plg-empty">Nothing matches.</div> : null}
+      {list.map((e) => { const m = e.manifest; const cur = have(m.identifier); const newer = cur && (cur.manifest.version || "") !== (m.version || ""); const c = e.compat; return (
+        <div className="plg-card" key={e.identifier} data-plugin={e.identifier}>
+          <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span>{m.author ? <span className="plg-muted">by {m.author}</span> : null}<span className="grow" />
+            {c ? <span className={cx("plg-compat", c.status)} title={c.note || ""}>{COMPAT_LABEL[c.status] || c.status}</span> : <span className="plg-compat" title="Newer than this editor's test run">Not tested yet</span>}</div>
+          <p>{m.description}</p>
+          {c && c.note && c.status !== "works" ? <p className="plg-muted">{c.note}</p> : null}
+          <div className="plg-row"><span className="plg-muted perms">{e.identifier}{e.size ? ` · ${e.size >= 1048576 ? `${(e.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(e.size / 1024))} kB`}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</span><span className="grow" />
+            {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={e.identifier} disabled={busy !== null} onClick={() => void install(e)}>{busy === e.identifier ? "Downloading…" : newer ? "Update…" : "Install…"}</button>}</div>
+        </div>
+      ); })}
     </div>
   );
 }
@@ -445,7 +526,7 @@ export function PluginManager() {
   const recs = usePlugins((x) => (x.project.id ? x.project.plugins.length : -1));
   const admin = usePlugins((x) => x.admin); const waiting = usePlugins((x) => (x.moderation || []).filter((e) => e.status === "listed").length);
   if (!mgr.open) return null;
-  const tabs: [typeof mgr.tab, string][] = [["installed", `Installed${n ? ` (${n})` : ""}`], ["catalog", "Catalog"], ...(recs >= 0 ? [["project", `This project${recs ? ` (${recs})` : ""}`] as [typeof mgr.tab, string]] : []), ["develop", "Install from file or URL"], ...(admin ? [["moderation", `Moderation${waiting ? ` (${waiting})` : ""}`] as [typeof mgr.tab, string]] : [])];
+  const tabs: [typeof mgr.tab, string][] = [["installed", `Installed${n ? ` (${n})` : ""}`], ["catalog", "Catalog"], ["kicad", "KiCad plugins"], ...(recs >= 0 ? [["project", `This project${recs ? ` (${recs})` : ""}`] as [typeof mgr.tab, string]] : []), ["develop", "Install from file or URL"], ...(admin ? [["moderation", `Moderation${waiting ? ` (${waiting})` : ""}`] as [typeof mgr.tab, string]] : [])];
   return (
     <div className="kd-overlay plg-overlay" onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") { if (consent) cancelInstall(); else closeManager(); } }} onPointerDown={(e) => { if (e.target === e.currentTarget) closeManager(); }}>
       <div className={cx("kd-dialog plg-manager", consent && "consenting")} role="dialog" aria-modal="true" id="pluginManager" tabIndex={-1}>
@@ -455,7 +536,7 @@ export function PluginManager() {
             <div className="plg-mtabs">{tabs.map(([id, label]) => <button type="button" key={id} className={cx(mgr.tab === id && "on")} data-tab={id} onClick={() => setManager({ tab: id })}>{label}</button>)}</div>
             <div className="kd-body">
               {error ? <p className="plg-err">{error}</p> : null}
-              {mgr.tab === "installed" ? <InstalledTab /> : mgr.tab === "catalog" ? <CatalogTab /> : mgr.tab === "project" ? <ProjectTab /> : mgr.tab === "moderation" && admin ? <ModerationTab /> : <DevelopTab />}
+              {mgr.tab === "installed" ? <InstalledTab /> : mgr.tab === "catalog" ? <CatalogTab /> : mgr.tab === "kicad" ? <KicadTab /> : mgr.tab === "project" ? <ProjectTab /> : mgr.tab === "moderation" && admin ? <ModerationTab /> : <DevelopTab />}
             </div>
           </>
         )}
@@ -465,7 +546,7 @@ export function PluginManager() {
 }
 
 /** The dialogs sit at page level (not in the editor), so the home view can open the manager too. */
-export function PluginDialogs() { return <><PluginPrompt /><PluginManager /><RecommendBar /></>; }
+export function PluginDialogs() { return <><PluginWindow /><PluginPrompt /><PluginManager /><RecommendBar /></>; }
 
 /**
  * The notice that the open project recommends plugins this person does not have — KiCad's
