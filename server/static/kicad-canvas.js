@@ -3603,6 +3603,7 @@
         const o = setupOrigins(node);
         doc.auxOrigin = o.aux;
         doc.gridOrigin = o.grid;
+        doc.stackup = kid(node, "stackup") || null;
         continue;
       } else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
       else addItem(doc, node);

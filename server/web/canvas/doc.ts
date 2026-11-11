@@ -80,7 +80,7 @@ export function parseDoc(text, docType) {
     }
     else if (k === "general") { const t = kid(node, "thickness"); if (t && type === "pcb") doc.thickness = num(t[1], 1.6); continue; }   // board thickness: the 3D viewer's extrusion
     else if (k === "net") { if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2])); continue; }   // (net 3 "GND"): the board's net table
-    else if (type === "pcb" && k === "setup") { const o = setupOrigins(node); doc.auxOrigin = o.aux; doc.gridOrigin = o.grid; continue; }   // the drill / place and grid origins
+    else if (type === "pcb" && k === "setup") { const o = setupOrigins(node); doc.auxOrigin = o.aux; doc.gridOrigin = o.grid; doc.stackup = kid(node, "stackup") || null; continue; }   // the physical stackup is kept for impedance work   // the drill / place and grid origins
     else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
     else addItem(doc, node);
   }

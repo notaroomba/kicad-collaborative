@@ -4,6 +4,7 @@
 import { buildClass, DX, DY, fillPoly, Grid, Obstacle, pickGrid, pointGap, Pt, RuleClass, Shape, stamp, stampClass, viaFits } from "./grid";
 import { costOf, dirOf, Features, featuresOf, Node, probe, ProbeResult, Terminal, Win } from "./probe";
 import { TRAINED, Weights } from "./weights";
+import { stackupOf, traceOn, usualImpedance, widthFor, z0, zdiff } from "./impedance";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** A supply net by its name: ground, a rail voltage, or one of the usual rail names. */
@@ -17,6 +18,13 @@ export interface RouteOptions {
   pitch?: number;                // force the grid pitch, mm
   weights?: Partial<Weights>;
   powerWidth?: number;           // track width for supply nets (GND, +3V3, VBUS …) that have no class of their own; 0 keeps the class width.  Default: twice the class width, 0.3 to 0.5 mm
+  impedance?: boolean;           // size tracks for the impedance their nets call for (a plan's impedance, else by name: USB 90 Ω, HDMI/Ethernet 100 Ω, antenna feeds 50 Ω); default true
+  matchLengths?: boolean;        // lengthen the shorter members of a matched group with serpentines; default true
+  match?: { nets: string[]; tolerance?: number; length?: number }[];   // nets to bring to one length (the longest, or the length given), within the tolerance in mm (default 0.25)
+  skewTolerance?: number;        // the most the two tracks of a pair may differ in length, mm; default 0.1
+  maxAmplitude?: number;         // how far a serpentine may swing off its track, mm; default 3
+  pairs?: boolean;               // route differential pairs (D+/D-, _P/_N, DP/DM …) side by side at a constant gap; default true
+  pairGap?: number;              // the gap between a pair's tracks in mm; default the nets' clearance
   fewerVias?: boolean;           // after routing, lay each route that changes layer again without (or with fewer) vias where the finished board leaves room; default true
   timeMs?: number;               // stop starting new connections after this long
   zones?: boolean;               // let a route end in the net's own copper zone; default true
@@ -30,6 +38,7 @@ export type Box = [number, number, number, number];   // x0, y0, x1, y1 in mm
 export interface NetPlan {
   layers?: string[];             // copper layers the net should run on
   width?: number;                // track width in mm (never below the board's minimum)
+  impedance?: number;            // ohms: single-ended, or differential when the net is one of a pair
   allowVias?: boolean; maxVias?: number;
   avoid?: Box[];                 // areas this net stays out of
   priority?: number;             // higher routes earlier (after `order`)
@@ -43,18 +52,29 @@ export interface ConnReport {
 export interface Anchor { p: Pt; layers: number[]; shape: Shape | null; cluster: number; grp?: number; narrow?: number; axis?: Pt }
 export interface Conn {
   id: number; net: string; cls: RuleClass; a: Anchor; b: Anchor; len: number;
-  nodes: Node[] | null; shapes: Obstacle[]; viaCells: number[]; landed: number; rips: number; feat: Features | null; stubs: [Pt, Pt, number][]; zoneEnd: boolean; ends?: [Anchor, Anchor]; stitch?: boolean; moot?: boolean;
+  nodes: Node[] | null; shapes: Obstacle[]; viaCells: number[]; landed: number; rips: number; feat: Features | null; stubs: [Pt, Pt, number][]; zoneEnd: boolean; ends?: [Anchor, Anchor]; stitch?: boolean; moot?: boolean; pair?: boolean;
   why?: string;
 }
 export interface RouteItem { kind: "segment" | "via"; node: any; net: any; netName: string; conn: number }
 export interface RouteResult {
   items: RouteItem[]; total: number; routed: number; failed: { net: string; a: Pt; b: Pt }[];
-  segments: number; vias: number; length: number; ms: number; passes: number; zoneEnds: number; zoneCovered: number;
+  segments: number; vias: number; length: number; ms: number; passes: number; zoneEnds: number; zoneCovered: number; pairs?: PairReport[]; impedance?: ImpedanceReport[]; matched?: MatchReport[];
   grid: { pitch: number; w: number; h: number; layers: string[] }; nets: number;
   connections: ConnReport[];
 }
 export interface Progress { done: number; total: number; routed: number; pass: number; net: string }
 
+export interface ImpedanceReport { nets: string[]; target: number; differential: boolean; layer: string; model: string; width: number | null; gap?: number; achieved?: number; applied: boolean; note?: string }
+export interface MatchReport { group: string; target: number; tolerance: number; members: { nets: string[]; before: number; length: number; matched: boolean; note?: string }[] }
+export interface PairReport { p: string; n: string; coupled: boolean; layer?: string; width?: number; gap?: number; lengthP?: number; lengthN?: number; skew?: number; reason?: string }
+/** The two nets of a differential pair, by name: D+/D-, X_P/X_N, DP/DM, TXP/TXN. */
+export function pairName(net: string): { base: string; pol: 1 | -1 } | null {
+  const m = /^(.*?)(\+|-|_P|_N|DP|DM|P|N)(\)?)$/.exec(net); if (!m || !m[1] || isSupply(net) || /(^|[\/_(])V$/i.test(m[1])) return null;
+  const t = m[2]; if ((t === "P" || t === "N") && !/[A-Z0-9]$/.test(m[1])) return null;
+  return { base: m[1] + (t.length === 2 && t[0] === "D" ? "D" : "") + "~" + m[3], pol: t === "+" || t === "_P" || t === "DP" || t === "P" ? 1 : -1 };
+}
+interface Pair { p: NetInfo; n: NetInfo; cp: Conn; cn: Conn; swap: boolean; laid?: { c: Pt[]; l: number; w: number; d: number; clr: number; sgn: number; lead: Lead[] } }
+interface Lead { e: Pt; s: number }   // each track first leaves its pad straight, this far, before it turns in to its partner
 interface Guide { allowed: boolean[] | null; allowVias: boolean; maxVias: number; avoid: [number, number, number, number][]; rank: number; priority: number }
 interface Found { res: ProbeResult; owner: Map<number, number>; flip: boolean; esc?: (Pt | undefined)[] }
 interface NetInfo { key: string; obj: any; cls: RuleClass; conns: Conn[]; clusters: number; zoneCells: Node[] | null; zoneCluster: number; guide: Guide; anchors?: Anchor[]; pour?: { mask: (Uint8Array | null)[]; width: number; clr: number } }
@@ -149,6 +169,7 @@ export class Router {
 
     // ---- what to connect: per net, a spanning tree over its islands of copper
     const want = this.opts.nets ? new Set(this.opts.nets) : null; const useZones = this.opts.zones !== false;
+    this.sizeForImpedance(Array.from(nl.nets.values() as Iterable<any>).map((n: any) => n.key).filter((k: string) => k && (!want || want.has(k))));
     for (const net of nl.nets.values()) {
       if (!net.key || (want && !want.has(net.key))) continue;
       const clusters: Anchor[][] = [];
@@ -177,7 +198,7 @@ export class Router {
           this.zoneCovered += covered.length - 1; clusters.length = 0; clusters.push(merged, ...rest); zoneCluster = 0;
           zoneCells = [];
           pour = { mask: copper.map(() => null), width: Math.max(...mine.map((z) => z.minW)), clr: Math.max(P.netClearance(s, net.key), s.minClearance || 0, ...mine.map((z) => z.clr)) };
-          for (const z of mine) { const t = cellsIn(z.polys); for (const l of z.layers) if (routable[l]) { const m = pour.mask[l] || (pour.mask[l] = new Uint8Array(W * H)); for (let i = 0; i < t.length; i++) if (t[i]) { m[i] = 1; zoneCells.push({ ix: i % W, iy: (i / W) | 0, l }); } } }
+          for (const z of mine) { const t = cellsIn(z.polys); for (const l of z.layers) { const m = pour.mask[l] || (pour.mask[l] = new Uint8Array(W * H)); for (let i = 0; i < t.length; i++) if (t[i]) { m[i] = 1; zoneCells.push({ ix: i % W, iy: (i / W) | 0, l }); } } }
         }
       }
       if (clusters.length < 2 && !pour) continue;
@@ -203,7 +224,8 @@ export class Router {
   /** The rule class a net routes with (its netclass's track width, clearance and via), built on first use. */
   classFor(netKey: string, cap = Infinity, want = 0): RuleClass {
     const { P, s, G } = this; const nc = P.netclassOf(s, netKey); const plan = (this.opts.netOpts || {})[netKey]; const pw = plan && +plan.width! > 0 ? +plan.width! : 0;
-    let width = Math.max(pw || Math.max(nc.track_width !== undefined ? nc.track_width : s.trackWidth, want), s.minTrackWidth || 0);
+    const zw = pw ? 0 : (this.zWidth.get(netKey) || 0);   // a plan's own width stands; else the width its impedance asks for
+    let width = Math.max(pw || zw || Math.max(nc.track_width !== undefined ? nc.track_width : s.trackWidth, want), s.minTrackWidth || 0);
     // A fine-pitch pad only has room for so wide a track between its neighbours: a connection that ends on one
     // runs as wide as that room allows, as people neck tracks down at such pads.
     if (cap < width) width = Math.max(s.minTrackWidth || 0.1, 0.1, Math.floor(cap * 100 + 1e-6) / 100);
@@ -309,6 +331,264 @@ export class Router {
     const add = (o: Obstacle) => { const bb = full(o.shape); const e = { o, bb }; for (let y = Math.floor(bb[1] / B); y <= Math.floor(bb[3] / B); y++) for (let x = Math.floor(bb[0] / B); x <= Math.floor(bb[2] / B); x++) { const k = x + "," + y; let l = idx.get(k); if (!l) idx.set(k, l = []); l.push(e); } };
     for (const list of G.obstacles.values()) for (const o of list) { if (o.shape.t === "path" && o.shape.pts.length > 2) { for (let i = 0; i + 1 < o.shape.pts.length; i++) add({ net: o.net, layers: o.layers, clr: o.clr, edge: o.edge, shape: { t: "seg", a: o.shape.pts[i], b: o.shape.pts[i + 1], r: o.shape.r || 0 } }); } else add(o); }
   }
+  zWidth = new Map<string, number>(); zGap = new Map<string, number>(); zReports: ImpedanceReport[] = [];
+  /** Work out, before anything is laid, the width (and for pairs the gap) each impedance-controlled net needs on
+   *  this stackup.  A geometry the board cannot reasonably carry is reported and left at the class width. */
+  private sizeForImpedance(keys: string[]): void {
+    if (this.opts.impedance === false) return; const { K, P, s, doc, G } = this; const stack = stackupOf(K, doc);
+    const outer = G.layers.find((_, l) => G.routable[l]) || G.layers[0]; const tr = traceOn(stack, outer); if (!tr) return;
+    const model = `${tr.kind} on ${tr.layer} over ${tr.reference.join(" and ")}, ${+tr.h.toFixed(3)} mm of εr ${+tr.er.toFixed(2)}${stack.assumed ? " (stackup assumed: the board carries none)" : ""}`;
+    const planned = (k: string) => +(((this.opts.netOpts || {})[k] || {}).impedance || 0);
+    const by = new Map<string, { key: string }[]>(); const single: { key: string }[] = [];
+    for (const key of keys) { const net = { key }; const k = pairName(net.key); if (k) { const e = by.get(k.base) || []; by.set(k.base, e); e.push(net); } else single.push(net); }
+    const minW = Math.max(s.minTrackWidth || 0, 0.09); const r2 = (v: number) => Math.round(v * 100) / 100;
+    for (const e of by.values()) {
+      if (e.length !== 2) { single.push(...e); continue; }
+      const target = planned(e[0].key) || planned(e[1].key) || usualImpedance(e[0].key, true); if (!target) continue;
+      const clr = Math.max(P.netClearance(s, e[0].key), P.netClearance(s, e[1].key), s.minClearance || 0); const cw = this.classFor(e[0].key).width;
+      // the tightest gap first (the strongest coupling), then wider ones, until the width is one the board can carry
+      let pick: { w: number; g: number } | null = null, first: number | null = null;
+      for (const g of [Math.max(clr, this.opts.pairGap || 0), clr * 1.5, clr * 2, clr * 3]) { const w = widthFor(tr, target, g); if (w !== null && first === null) first = w; if (w !== null && w >= minW && w <= Math.max(0.6, cw * 3)) { pick = { w: r2(w), g: r2(g) }; break; } }
+      const rep: ImpedanceReport = { nets: e.map((n) => n.key), target, differential: true, layer: tr.layer, model, width: pick ? pick.w : first !== null ? r2(first) : null, gap: pick ? pick.g : r2(clr), applied: !!pick };
+      if (pick) { for (const n of e) { this.zWidth.set(n.key, pick.w); this.zGap.set(n.key, pick.g); } rep.achieved = Math.round(zdiff(tr, pick.w, pick.g)); }
+      else rep.note = first !== null ? `${target} Ω needs ${r2(first)} mm tracks on this stackup, more than the board can carry: routed at the class width (${Math.round(zdiff(tr, cw, clr))} Ω). A thinner dielectric under the layer (a 4-layer build) brings the width down.` : `no track width gives ${target} Ω on this stackup`;
+      this.zReports.push(rep);
+    }
+    for (const net of single) {
+      const target = planned(net.key) || usualImpedance(net.key, false); if (!target) continue; const cw = this.classFor(net.key).width; const w = widthFor(tr, target);
+      const ok = w !== null && w >= minW && w <= Math.max(1.2, cw * 5);
+      const rep: ImpedanceReport = { nets: [net.key], target, differential: false, layer: tr.layer, model, width: w !== null ? r2(w) : null, applied: ok };
+      if (ok) { this.zWidth.set(net.key, r2(w!)); rep.achieved = Math.round(z0(tr, r2(w!))); }
+      else rep.note = w !== null ? `${target} Ω needs a ${r2(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} Ω). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target} Ω on this stackup`;
+      this.zReports.push(rep);
+    }
+  }
+  pairList: Pair[] | null = null; pairReports = new Map<string, PairReport>();
+  /** The connections of paired nets that start side by side and end side by side: those run as a pair. */
+  private findPairs(): Pair[] {
+    const by = new Map<string, { p?: NetInfo; n?: NetInfo }>(); const out: Pair[] = [];
+    for (const net of this.nets) { const k = pairName(net.key); if (!k) continue; const e = by.get(k.base) || {}; by.set(k.base, e); if (k.pol > 0) e.p = net; else e.n = net; }
+    const d = (a: Anchor, b: Anchor) => Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]); const NEAR = 3;
+    for (const e of by.values()) {
+      if (!e.p || !e.n) continue; const used = new Set<Conn>();
+      for (const cp of e.p.conns) {
+        if (cp.len < 2) continue; let best: [number, Conn, boolean] | null = null;
+        for (const cn of e.n.conns) {
+          if (used.has(cn)) continue; const st = d(cp.a, cn.a) + d(cp.b, cn.b), sw = d(cp.a, cn.b) + d(cp.b, cn.a); const swap = sw < st;
+          const [x, y] = swap ? [d(cp.a, cn.b), d(cp.b, cn.a)] : [d(cp.a, cn.a), d(cp.b, cn.b)]; if (x > NEAR || y > NEAR || x < 1e-3 || y < 1e-3) continue;
+          if (!best || x + y < best[0]) best = [x + y, cn, swap];
+        }
+        if (best) { used.add(best[1]); out.push({ p: e.p, n: e.n, cp, cn: best[1], swap: best[2] }); }
+      }
+    }
+    return out;
+  }
+  /** A differential pair is laid as one: a single wide route down the middle between the two starts and the two
+   *  ends, split into two tracks a constant gap apart, each fanned to its own pad.  Every piece is checked exactly;
+   *  when the pair cannot be laid this way its nets are routed like any other, and the report says so. */
+  layPairs(): void {
+    if (this.opts.pairs === false) return; if (!this.pairList) this.pairList = this.findPairs();
+    for (const pr of this.pairList) {
+      if (pr.cp.nodes || pr.cn.nodes) continue; const key = pr.cp.id + "/" + pr.cn.id;
+      const why = this.layPair(pr); if (why) this.pairReports.set(key, { p: pr.p.key, n: pr.n.key, coupled: false, reason: why });
+    }
+  }
+  /** The two tracks of a pair from its centre line: each a constant distance to one side, mitred at the turns, and
+   *  fanned to its own pads at the ends — checked exactly against each other and against everything around.
+   *  Returns the two polylines, or why they cannot be. */
+  private pairTracks(pr: Pair, c: Pt[], l: number, w: number, d: number, clr: number, sgn: number, lead: Lead[]): { tp: Pt[]; tn: Pt[] } | string {
+    const P = this.P, { cp, cn } = pr; const Pa = cp.a, Pb = cp.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
+    const dir = (i: number): Pt => { const x = c[i + 1][0] - c[i][0], y = c[i + 1][1] - c[i][1], h = Math.hypot(x, y); return [x / h, y / h]; };
+    const off = (sg: number): Pt[] | null => {
+      const out: Pt[] = [];
+      for (let i = 0; i < c.length; i++) {
+        const u0 = i > 0 ? dir(i - 1) : dir(0), u1 = i < c.length - 1 ? dir(i) : dir(c.length - 2); const n0: Pt = [-u0[1], u0[0]], n1: Pt = [-u1[1], u1[0]]; const k = 1 + n0[0] * n1[0] + n0[1] * n1[1]; if (k < 0.2) return null;
+        out.push([r6(c[i][0] + sg * d * (n0[0] + n1[0]) / k), r6(c[i][1] + sg * d * (n0[1] + n1[1]) / k)]);
+      }
+      for (let i = 0; i + 1 < out.length; i++) { const u = dir(i); if ((out[i + 1][0] - out[i][0]) * u[0] + (out[i + 1][1] - out[i][1]) * u[1] < 0.02) return null; }   // a piece too short to carry the turn
+      return out;
+    };
+    const segs = (t: Pt[]) => { const o: Shape[] = []; for (let i = 0; i + 1 < t.length; i++) if (Math.hypot(t[i + 1][0] - t[i][0], t[i + 1][1] - t[i][1]) > 1e-4) o.push({ t: "seg", a: t[i], b: t[i + 1], r: w / 2 } as Shape); return o; };
+    const op = off(sgn), on = off(-sgn); if (!op || !on) return "a turn is too tight for the pair";
+    const out = (a: Anchor, ld: Lead): Pt => [r6(a.p[0] + ld.e[0] * ld.s), r6(a.p[1] + ld.e[1] * ld.s)];
+    const tp = [Pa.p, out(Pa, lead[0]), ...op, out(Pb, lead[1]), Pb.p], tn = [Na.p, out(Na, lead[0]), ...on, out(Nb, lead[1]), Nb.p]; const sp = segs(tp), sn = segs(tn);
+    if (sp.some((a) => sn.some((b) => P.shapeGap(a, b) < clr - 1e-4))) return "the fan-out to the pads brings the two tracks too close";
+    this.cur = Object.assign({}, cp); this.curSoft = false;
+    if (!sp.every((sh) => this.clearOf(sh, l, pr.p.key, cp.cls.clr)) || !sn.every((sh) => this.clearOf(sh, l, pr.n.key, cn.cls.clr))) return "a piece of the pair would not keep its clearance";
+    return { tp, tn };
+  }
+  private layPair(pr: Pair): string {
+    const G = this.G, P = this.P, { cp, cn } = pr; const w = Math.min(cp.cls.width, cn.cls.width), clr = Math.max(cp.cls.clr, cn.cls.clr); const gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0), d = (w + gap) / 2;
+    const Pa = cp.a, Pb = cp.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
+    const layers = G.layers.map((_, l) => l).filter((l) => G.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
+    if (!layers.length) return "its pads are not all on one layer";
+    const key = `pair/${w}/${gap}/${clr}`; let wide = G.classes.get(key);
+    if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
+    const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
+    // Each end gathers the pair a little way off its pads, square to the line between them, on either side of it.
+    const gather = (a: Anchor, b: Anchor, toward: Anchor): { g: Anchor; e: Pt; q: Pt; s: number }[] => {
+      const mx = (a.p[0] + b.p[0]) / 2, my = (a.p[1] + b.p[1]) / 2; let ex = -(a.p[1] - b.p[1]), ey = a.p[0] - b.p[0]; const h = Math.hypot(ex, ey); ex /= h; ey /= h;
+      // each track runs straight off its pad to just past the pad's end, turns in at 45° until the two are side by side (q), and from there they go on together to the gathering point
+      const s1 = Math.max(half(a), half(b)) + clr * 0.7, jog = Math.max(0, h / 2 - d);
+      // straight out first; then a little to either side, where something stands right in front of the pads
+      const out: { g: Anchor; e: Pt; q: Pt; s: number }[] = [];
+      const fwd = (toward.p[0] - mx) * ex + (toward.p[1] - my) * ey >= 0 ? 1 : -1;   // first the side that faces the other end
+      for (const sh of [0, 0.4, -0.4, 0.8, -0.8]) for (const sg of [fwd, -fwd]) { const tq = s1 + jog + Math.abs(sh) + 0.05, t = tq + 2 * d + 0.1 + G.g; const ox = mx - ey * sh, oy = my + ex * sh; const p: Pt = [r6(ox + ex * t * sg), r6(oy + ey * t * sg)]; out.push({ g: { p, layers, shape: { t: "circle", x: p[0], y: p[1], r: G.g * 1.5 } as Shape, cluster: 0 }, e: [ex * sg, ey * sg] as Pt, q: [r6(ox + ex * tq * sg), r6(oy + ey * tq * sg)] as Pt, s: s1 }); }
+      return out;
+    };
+    let why = "there is no room for the two tracks side by side";
+    this.lift(pr.p, 1, wide); this.lift(pr.n, 1, wide); let laid: { l: number; nodes: Node[]; feat: Features; tp: Pt[]; tn: Pt[] } | null = null;
+    // the pair leaves a gathering point away from its pads, never back over them
+    const wall = (m: Uint16Array, at: { g: Anchor; e: Pt }, sign: number) => {
+      const R = Math.max(1.5, Math.hypot(Pa.p[0] - Na.p[0], Pa.p[1] - Na.p[1])), n = Math.ceil(R / G.g), cx = Math.round((at.g.p[0] - G.ox) / G.g), cy = Math.round((at.g.p[1] - G.oy) / G.g);
+      for (let dy = -n; dy <= n; dy++) for (let dx = -n; dx <= n; dx++) { const ix = cx + dx, iy = cy + dy; if (ix < 0 || iy < 0 || ix >= G.W || iy >= G.H) continue; if ((dx * at.e[0] + dy * at.e[1]) * G.g < -G.g * 0.6) m[iy * G.W + ix] += sign; }
+    };
+    try {
+      this.cur = Object.assign({}, cp, { cls: wide }); this.curSoft = false;
+      let tries = 0;
+      search: for (const l of layers) for (const ga of gather(Pa, Na, Pb)) for (const gb of gather(Pb, Nb, Pa)) {
+        this.cur = Object.assign({}, cp, { cls: wide }); this.curSoft = false;
+        const rt = G.routable.map((_, i) => i === l); const src = this.access(ga.g, wide.full, rt), tgt = this.access(gb.g, wide.full, rt); if ((this.opts as any).debugPairs) console.log("combo", pr.p.key, JSON.stringify(ga.g.p), JSON.stringify(gb.g.p), !!src, !!tgt); if (!src || !tgt) continue;
+        wall(wide.full[l], ga, 1); wall(wide.full[l], gb, 1); let res: ProbeResult | null = null;
+        try { if (!wide.full[l][src.iy * G.W + src.ix] && !wide.full[l][tgt.iy * G.W + tgt.ix]) res = probe({ G, maps: wide.full, vmaps: wide.vfull, src, tgt, term: [], win: { x0: 0, y0: 0, x1: G.W - 1, y1: G.H - 1 }, pref: this.pref, W: this.W, allowVias: false, maxSteps: 6e6, routable: rt }); }
+        finally { wall(wide.full[l], ga, -1); wall(wide.full[l], gb, -1); }
+        if ((this.opts as any).debugPairs) console.log("  probe", !!res);
+        if (!res) continue; if (++tries > 12) break search;
+        const nodes = this.mitre(simplify(res.nodes), wide.full); let c: Pt[] = []; for (const n of nodes) { const q = this.mm(n); if (!c.length || Math.hypot(q[0] - c[c.length - 1][0], q[1] - c[c.length - 1][1]) > 1e-6) c.push(q); }
+        if (c.length < 2) continue;
+        if (Math.hypot(c[0][0] - ga.g.p[0], c[0][1] - ga.g.p[1]) > Math.hypot(c[c.length - 1][0] - ga.g.p[0], c[c.length - 1][1] - ga.g.p[1])) c = c.slice().reverse();
+        c = [ga.q, ...c, gb.q];
+        for (const sgn of [1, -1]) {   // which track is whose: the way round in which the two fans do not cross
+          const lead: Lead[] = [{ e: ga.e, s: ga.s }, { e: gb.e, s: gb.s }];
+          const r = this.pairTracks(pr, c, l, w, d, clr, sgn, lead); if (typeof r === "string") { why = r; continue; }
+          const tp = r.tp, tn = r.tn; pr.laid = { c, l, w, d, clr, sgn, lead };
+          laid = { l, nodes, feat: res.feat, tp, tn }; break search;
+        }
+      }
+    } finally { this.lift(pr.n, -1, wide); this.lift(pr.p, -1, wide); }
+    if (!laid) return why;
+    const put = (c: Conn, t: Pt[]) => {
+      c.shapes = []; for (let i = 0; i + 1 < t.length; i++) if (Math.hypot(t[i + 1][0] - t[i][0], t[i + 1][1] - t[i][1]) > 1e-4) c.shapes.push({ net: c.net, layers: [laid!.l], shape: { t: "seg", a: t[i], b: t[i + 1], r: w / 2 } as Shape, clr: c.cls.clr });
+      c.nodes = laid!.nodes; c.viaCells = []; c.stubs = []; c.feat = laid!.feat; c.landed = -1; c.zoneEnd = false; c.pair = true; c.rips = 99; c.why = undefined; this.place(c, 1);
+      let len = 0; for (let i = 0; i + 1 < t.length; i++) len += Math.hypot(t[i + 1][0] - t[i][0], t[i + 1][1] - t[i][1]); return len;
+    };
+    const lp = put(cp, laid.tp), ln = put(cn, laid.tn);
+    this.pairReports.set(cp.id + "/" + cn.id, { p: pr.p.key, n: pr.n.key, coupled: true, layer: G.layers[laid.l], width: w, gap: +gap.toFixed(4), lengthP: +lp.toFixed(3), lengthN: +ln.toFixed(3), skew: +Math.abs(lp - ln).toFixed(3) });
+    return "";
+  }
+  // ------------------------------------------------------------------ length matching
+  matchReports: MatchReport[] = [];
+  /** A run of n serpentine humps on the piece a→b, swinging A to one side: square humps S wide and S apart with
+   *  chamfered corners.  Each adds 2A − 2.343·ch to the length. */
+  private humps(a: Pt, b: Pt, n: number, A: number, S: number, ch: number, side: number): Pt[] {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, nx = -uy * side, ny = ux * side;
+    const at = (x: number, y: number): Pt => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)]; const out: Pt[] = [a]; const s0 = (L - (2 * n - 1) * S) / 2;
+    for (let k = 0; k < n; k++) { const x = s0 + 2 * k * S; out.push(at(x - ch, 0), at(x, ch), at(x, A - ch), at(x + ch, A), at(x + S - ch, A), at(x + S, A - ch), at(x + S, ch), at(x + S + ch, 0)); }
+    out.push(b); return out;
+  }
+  /** For the last fraction of a millimetre: n shallow bumps with 45° flanks, each a high and r long on top.  Each
+   *  adds 0.828·a. */
+  private bumps(a: Pt, b: Pt, n: number, h: number, r: number, side: number): Pt[] {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, nx = -uy * side, ny = ux * side;
+    const at = (x: number, y: number): Pt => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)]; const out: Pt[] = [a]; const one = 2 * h + r, s0 = (L - n * one - (n - 1) * r) / 2;
+    for (let k = 0; k < n; k++) { const x = s0 + k * (one + r); out.push(at(x, 0), at(x + h, h), at(x + h + r, h), at(x + one, 0)); }
+    out.push(b); return out;
+  }
+  /** The serpentines to try on a straight piece L long for `left` mm more: deep square humps first, then more and
+   *  shallower ones, and shallow bumps when what is missing is less than the smallest hump adds. */
+  private meanders(a: Pt, b: Pt, L: number, left: number, tol: number, g: { S: number; ch: number; Amin: number; Amax: number; m: number; hmin: number }): { pts: Pt[]; gain: number }[] {
+    const out: { pts: Pt[]; gain: number }[] = []; const kk = 2.343 * g.ch; const nmax = Math.floor(((L - 2 * g.m) / g.S + 1) / 2);
+    for (const cap of [g.Amax, g.Amax / 2, g.Amax / 4, g.Amax / 8, g.Amin]) {
+      if (cap < g.Amin - 1e-9 || nmax < 1) continue;
+      let n = Math.min(nmax, Math.max(1, Math.ceil(left / (2 * cap - kk)))); let A = Math.min(cap, (left / n + kk) / 2);
+      if (A < g.Amin) { A = g.Amin; if (n * (2 * A - kk) > left + tol) n = Math.floor((left + tol) / (2 * A - kk)); if (n < 1) continue; }
+      for (const side of [1, -1]) out.push({ pts: this.humps(a, b, n, A, g.S, g.ch, side), gain: n * (2 * A - kk) });
+    }
+    if (left < 2 * g.Amin - kk + tol) for (const n of [1, 2, 3]) {
+      const h = left / (0.8284 * n), r = Math.max(g.hmin * 2, 0.2); if (h < g.hmin || h > g.Amax || n * (2 * h + r) + (n - 1) * r + 2 * g.m > L) continue;
+      for (const side of [1, -1]) out.push({ pts: this.bumps(a, b, n, h, r, side), gain: left });
+    }
+    return out;
+  }
+  private static lenOf(c: Conn): number { let len = 0; for (const o of c.shapes) { const sh = o.shape as any; if (sh.t === "seg") len += Math.hypot(sh.a[0] - sh.b[0], sh.a[1] - sh.b[1]); } return len; }
+  /** Lengthen one track by `extra` with serpentines on its longest straight pieces; returns what is still missing. */
+  private extend(c: Conn, extra: number, tol: number): number {
+    const w = c.cls.width, clr = c.cls.clr, Amax = this.opts.maxAmplitude || 3; const ch = Math.max(0.1, w / 2), S = Math.max(w + 2 * clr, 3 * w, 2 * ch + 0.1), Amin = 2 * ch + 0.05, m = ch + 0.1;
+    let left = extra;
+    for (let round = 0; round < 6 && left > tol; round++) {
+      const cand = c.shapes.map((o, i) => ({ o, i, L: (o.shape as any).t === "seg" ? Math.hypot((o.shape as any).a[0] - (o.shape as any).b[0], (o.shape as any).a[1] - (o.shape as any).b[1]) : 0 })).filter((x) => x.L >= S + 2 * m).sort((x, y) => y.L - x.L);
+      let done = false;
+      for (const { o, i, L } of cand) {
+        const sh = o.shape as any;
+        for (const cand2 of this.meanders(sh.a, sh.b, L, left, tol, { S, ch, Amin, Amax, m, hmin: Math.max(0.1, w / 2) })) {
+          const pts = cand2.pts; const add: Obstacle[] = []; for (let k = 0; k + 1 < pts.length; k++) add.push({ net: c.net, layers: o.layers, shape: { t: "seg", a: pts[k], b: pts[k + 1], r: sh.r } as Shape, clr: o.clr });
+          this.place(c, -1); const keep = c.shapes; c.shapes = []; this.cur = c; this.curSoft = false;
+          const ok = add.every((x) => this.clearOf(x.shape, o.layers[0], c.net, clr));
+          c.shapes = ok ? keep.slice(0, i).concat(add, keep.slice(i + 1)) : keep; this.place(c, 1);
+          if (ok) { left -= cand2.gain; c.pair = true; done = true; break; }
+        }
+        if (done) break;
+      }
+      if (!done) break;
+    }
+    return left;
+  }
+  /** Lengthen a coupled pair: the serpentine is put on its centre line, so the two tracks swing together. */
+  private extendPair(pr: Pair, extra: number, tol: number): number {
+    const Ld = pr.laid!; const { cp, cn } = pr; const w = Ld.w, d = Ld.d, Wt = 2 * d + w, Amax = this.opts.maxAmplitude || 3;
+    const ch = Math.max(0.15, 0.6 * d + 0.06), S = Math.max(Wt + 2 * Ld.clr, 2 * ch + d + 0.1), Amin = 2 * ch + d + 0.05, m = ch + d + 0.1; let left = extra;
+    const total = () => (Router.lenOf(cp) + Router.lenOf(cn)) / 2;
+    for (let round = 0; round < 6 && left > tol; round++) {
+      const c = Ld.c; const cand: { i: number; L: number }[] = []; for (let i = 1; i + 2 < c.length; i++) { const L = Math.hypot(c[i + 1][0] - c[i][0], c[i + 1][1] - c[i][1]); if (L >= S + 2 * m) cand.push({ i, L }); }
+      cand.sort((x, y) => y.L - x.L); let done = false;
+      for (const { i, L } of cand) {
+        for (const cand2 of this.meanders(c[i], c[i + 1], L, left, tol, { S, ch, Amin, Amax, m, hmin: 0.6 * d + 0.06 })) {
+          const c2 = c.slice(0, i).concat(cand2.pts, c.slice(i + 2)); const before = total();
+          this.place(cp, -1); this.place(cn, -1); const kp = cp.shapes, kn = cn.shapes; cp.shapes = []; cn.shapes = [];
+          const r = this.pairTracks(pr, c2, Ld.l, w, d, Ld.clr, Ld.sgn, Ld.lead);
+          if (typeof r === "string") { cp.shapes = kp; cn.shapes = kn; this.place(cp, 1); this.place(cn, 1); continue; }
+          const set = (cc: Conn, t: Pt[]) => { for (let k = 0; k + 1 < t.length; k++) if (Math.hypot(t[k + 1][0] - t[k][0], t[k + 1][1] - t[k][1]) > 1e-4) cc.shapes.push({ net: cc.net, layers: [Ld.l], shape: { t: "seg", a: t[k], b: t[k + 1], r: w / 2 } as Shape, clr: cc.cls.clr }); this.place(cc, 1); };
+          set(cp, r.tp); set(cn, r.tn); Ld.c = c2; left -= total() - before; done = true; break;
+        }
+        if (done) break;
+      }
+      if (!done) break;
+    }
+    return left;
+  }
+  /** Bring the members of each matched group to one length, then take out what skew is left inside each pair. */
+  tune(): void {
+    const tolOf = (t?: number) => t !== undefined && t > 0 ? t : 0.25; const pairs = (this.pairList || []).filter((pr) => pr.cp.pair && pr.cn.pair && pr.laid && pr.cp.nodes && pr.cn.nodes);
+    interface Member { nets: string[]; pr?: Pair; conns: Conn[] }
+    const lenM = (mb: Member) => mb.pr ? (Router.lenOf(mb.pr.cp) + Router.lenOf(mb.pr.cn)) / 2 : mb.conns.reduce((a, c) => a + (c.nodes ? Router.lenOf(c) : 0), 0);
+    const groups: { name: string; members: Member[]; tol: number; length?: number }[] = [];
+    for (const g of this.opts.match || []) {
+      const members: Member[] = []; const taken = new Set<string>();
+      for (const pr of pairs) if (g.nets.includes(pr.p.key) && g.nets.includes(pr.n.key)) { members.push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] }); taken.add(pr.p.key); taken.add(pr.n.key); }
+      for (const k of g.nets) if (!taken.has(k)) { const net = this.nets.find((n) => n.key === k); if (net && net.conns.some((c) => c.nodes)) members.push({ nets: [k], conns: net.conns.filter((c) => c.nodes) }); }
+      if (members.length) groups.push({ name: g.nets.join(", "), members, tol: tolOf(g.tolerance), length: g.length });
+    }
+    // the lanes of one bus (HDMI_D0…D2 and the clock, ETH_TX and ETH_RX): pairs that share the name in front of the lane
+    const planned = new Set((this.opts.match || []).flatMap((g) => g.nets)); const bus = new Map<string, Member[]>();
+    for (const pr of pairs) { if (planned.has(pr.p.key)) continue; const k = pairName(pr.p.key)!.base.replace(/~.*$/, "").replace(/[_\-]?(D|TX|RX|TD|RD|CLK|CK|LANE|L|MDI|DATA|TMDS)?_?\d*$/i, "").replace(/[_\-]+$/, ""); if (!k || /^\/?$/.test(k)) continue; const e = bus.get(k) || []; bus.set(k, e); e.push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] }); }
+    for (const [k, members] of bus) if (members.length > 1) groups.push({ name: k, members, tol: 0.25 });
+    for (const g of groups) {
+      const before = g.members.map(lenM); const target = g.length && g.length > 0 ? g.length : Math.max(...before);
+      const rep: MatchReport = { group: g.name, target: +target.toFixed(3), tolerance: g.tol, members: [] }; this.matchReports.push(rep);
+      g.members.forEach((mb, i) => {
+        const need = target - before[i]; let left = need;
+        if (need > g.tol) left = mb.pr ? this.extendPair(mb.pr, need, g.tol / 2) : this.extend(mb.conns.slice().sort((a, b) => Router.lenOf(b) - Router.lenOf(a))[0], need, g.tol / 2);
+        const now = lenM(mb); const ok = Math.abs(target - now) <= g.tol + 1e-6;
+        rep.members.push({ nets: mb.nets, before: +before[i].toFixed(3), length: +now.toFixed(3), matched: ok, note: ok ? undefined : need < 0 ? "longer than the length asked for" : `no room for ${left.toFixed(2)} mm more of serpentine beside its track` });
+      });
+    }
+    const skewTol = this.opts.skewTolerance !== undefined ? this.opts.skewTolerance : 0.1;
+    for (const pr of pairs) {
+      const lp = Router.lenOf(pr.cp), ln = Router.lenOf(pr.cn); if (Math.abs(lp - ln) > skewTol) this.extend(lp < ln ? pr.cp : pr.cn, Math.abs(lp - ln), skewTol / 2);
+      const rep = this.pairReports.get(pr.cp.id + "/" + pr.cn.id); if (rep) { rep.lengthP = +Router.lenOf(pr.cp).toFixed(3); rep.lengthN = +Router.lenOf(pr.cn).toFixed(3); rep.skew = +Math.abs(rep.lengthP - rep.lengthN).toFixed(3); }
+    }
+    this.oidx = null;
+  }
   private viaCap = Infinity;
   private cur: Conn | null = null; private curSoft = false; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
   /** Exact: does a piece of track keep its clearance to the board's copper, holes and edges, and to this run's routes? */
@@ -334,7 +614,7 @@ export class Router {
     return parent.map((_, i) => find(i));
   }
   private cellsOf(conn: Conn, out: Node[], owner: Map<number, number>): void {
-    const G = this.G, nodes = conn.nodes!;
+    const G = this.G, nodes = conn.nodes!; if (conn.pair) return;   // a pair's tracks run beside these cells, and nothing tees into a pair
     for (let i = 0; i + 1 < nodes.length; i++) {
       const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue;
       const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy);
@@ -374,7 +654,8 @@ export class Router {
       const maxVias = Math.min(gd.maxVias - used, this.viaCap);
       const src = this.access(A, maps, rt), tgt = this.access(B, maps, rt); if (!src) return null;
       let term = tb; let zoneSet: Set<number> | null = null;
-      if (zoneAt(B.cluster)) { zoneSet = new Set(); term = tb.slice(); for (const z of net.zoneCells!) if (rt[z.l] && !maps[z.l][z.iy * G.W + z.ix]) { term.push(z); zoneSet.add(z.l * G.W * G.H + z.iy * G.W + z.ix); } }
+      if (zoneAt(B.cluster)) { zoneSet = new Set(); term = tb.slice(); let own = false; for (const z of net.zoneCells!) if (!maps[z.l][z.iy * G.W + z.ix]) { if (!rt[z.l]) { if (!own) { rt = rt.slice(); own = true; } rt[z.l] = true; }   // a plane layer takes no tracks, but a via may drop into the net's own pour on it
+        term.push(z); zoneSet.add(z.l * G.W * G.H + z.iy * G.W + z.ix); } }
       if (!tgt && !term.length) return null;
       const x0 = Math.min(src.ix, tgt ? tgt.ix : src.ix), x1 = Math.max(src.ix, tgt ? tgt.ix : src.ix), y0 = Math.min(src.iy, tgt ? tgt.iy : src.iy), y1 = Math.max(src.iy, tgt ? tgt.iy : src.iy);
       const span = Math.max(x1 - x0, y1 - y0);
@@ -440,7 +721,7 @@ export class Router {
   /** Take a laid route (and every route that joined it mid-track) off the board again. */
   rip(conn: Conn, out: Conn[] = []): Conn[] {
     if (!conn.nodes) return out;
-    this.place(conn, -1); conn.nodes = null; conn.shapes = []; conn.viaCells = []; conn.stubs = []; out.push(conn);
+    this.place(conn, -1); conn.nodes = null; conn.shapes = []; conn.viaCells = []; conn.stubs = []; conn.pair = false; out.push(conn);
     if (conn.ends) { conn.a = conn.ends[0]; conn.b = conn.ends[1]; conn.ends = undefined; }
     for (const c of this.conns) if (c.nodes && c.landed === conn.id) this.rip(c, out);
     return out;
@@ -486,12 +767,13 @@ export class Router {
     // inside it.  Everything else follows, shortest first.
     const tier = (c: Conn) => c.len < 3 ? 0 : Math.min(c.a.narrow || Infinity, c.b.narrow || Infinity) <= 0.35 ? 1 : 2;
     const order = conns.slice().sort((a, b) => cmp(gOf.get(a.net)!.rank, gOf.get(b.net)!.rank) || gOf.get(b.net)!.priority - gOf.get(a.net)!.priority || tier(a) - tier(b) || (tier(a) === 1 ? b.len - a.len : a.len - b.len) || (a.net < b.net ? -1 : a.net > b.net ? 1 : a.id - b.id));
-    let best: { score: number; snap: (Pick<Conn, "cls" | "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">)[] } | null = null; let failedLast = new Set<number>(); let pass = 0;
+    let best: { score: number; snap: (Pick<Conn, "cls" | "pair" | "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">)[] } | null = null; let failedLast = new Set<number>(); let pass = 0;
     const RC = (this.opts as any).connRips || 4, RB = (this.opts as any).blockerRips || 3;
     const timeUp = () => this.stopped || (!!this.opts.timeMs && Date.now() - t0 > this.opts.timeMs);
     for (; pass < passes; pass++) {
       for (const c of conns) if (c.nodes) this.rip(c);
       for (const c of conns) c.rips = 0;
+      this.layPairs();
       const queue = pass === 0 ? order.slice() : order.filter((c) => failedLast.has(c.id)).concat(order.filter((c) => !failedLast.has(c.id)));
       const failed = new Set<number>(); let done = 0;
       while (queue.length) {
@@ -518,7 +800,7 @@ export class Router {
       }
       const routed = conns.filter((x) => x.nodes); const cost = routed.reduce((s, c) => s + costOf(c.feat!, this.W), 0);
       const score = routed.length * 1e6 - cost;
-      if (!best || score > best.score) best = { score, snap: conns.map((c) => ({ cls: c.cls, nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd })) };
+      if (!best || score > best.score) best = { score, snap: conns.map((c) => ({ cls: c.cls, pair: c.pair, nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd })) };
       failedLast = failed;
       if (!failed.size || timeUp()) { pass++; break; }
     }
@@ -532,6 +814,7 @@ export class Router {
     if (this.opts.fewerVias !== false && !this.stopped) this.fewerVias(timeUp);
     this.widen();
     if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);   // what the last two steps moved may have cut a pour again
+    if (this.opts.matchLengths !== false && !this.stopped) this.tune();
     this.validate();
     if (this.opts.explain !== false) this.explain();
     this.ms = Date.now() - t0; this.passes = pass;
@@ -551,7 +834,7 @@ export class Router {
     // a route laid in this attempt is never taken out again
     const force = (c: Conn, depth: number, keep: Set<Conn>): boolean => {
       if (lay(c)) { keep.add(c); return true; } if (depth <= 0 || timeUp()) return false;
-      const soft = this.find(c, true); if (!soft) return false; const bl = this.blockers(c, soft.res); if (!bl.length || bl.length > 12 || bl.some((b) => keep.has(b))) return false;
+      const soft = this.find(c, true); if (!soft) return false; const bl = this.blockers(c, soft.res); if (!bl.length || bl.length > 12 || bl.some((b) => keep.has(b) || b.pair)) return false;
       const ripped: Conn[] = []; for (const b of bl) this.rip(b, ripped); if (ripped.some((r) => keep.has(r))) return false;
       if (this.fits(c, soft.res)) this.commit(c, soft); else if (!lay(c)) return false; keep.add(c);
       ripped.sort((a, b) => a.len - b.len); for (const r of ripped) if (!r.nodes && !force(r, depth - 1, keep)) return false;
@@ -634,7 +917,7 @@ export class Router {
     for (const a of anchors) { const r = find(a.grp || 0); count.set(r, (count.get(r) || 0) + 1); }
     let main = -1; for (const [r, n] of count) if (hasPiece.has(r) && (main < 0 || n > count.get(main)!)) main = r;
     if (main < 0) return null;
-    const cells: Node[] = []; for (let l = 0; l < label.length; l++) { const lab = label[l]; if (!lab || !G.routable[l]) continue; for (let i = 0; i < W * H; i++) if (lab[i] && find(ng + lab[i]) === main) cells.push({ ix: i % W, iy: (i / W) | 0, l }); }
+    const cells: Node[] = []; for (let l = 0; l < label.length; l++) { const lab = label[l]; if (!lab) continue; for (let i = 0; i < W * H; i++) if (lab[i] && find(ng + lab[i]) === main) cells.push({ ix: i % W, iy: (i / W) | 0, l }); }
     return { root: (g) => find(g), main, cells, connRoot: (c) => node.has(c) ? find(node.get(c)!) : -1 };
   }
   /** Tracks cut a pour into pieces.  Whatever the pour was counted on to join but that ends up in a cut-off piece is
@@ -747,8 +1030,7 @@ export class Router {
       if (c.moot && !c.nodes) continue;
       const ea = c.ends ? c.ends[0] : c.a, eb = c.ends ? c.ends[1] : c.b; const rep: ConnReport = { net: c.net, from: end(ea.p), to: end(eb.p), routed: !!c.nodes, length: 0, vias: 0, bends: 0, layers: [], detourRatio: 0 }; connections.push(rep);
       if (!c.nodes) { failed.push({ net: c.net, a: ea.p, b: eb.p }); Object.assign(rep, this.reports.get(c.id) || {}); continue; }
-      { let len = 0; const ls = new Set<number>(); for (const [a, b, l] of c.stubs) { len += Math.hypot(a[0] - b[0], a[1] - b[1]); ls.add(l); }
-        for (let i = 0; i + 1 < c.nodes.length; i++) { const a = c.nodes[i], b = c.nodes[i + 1]; if (a.l === b.l) { len += Math.hypot(b.ix - a.ix, b.iy - a.iy) * G.g; ls.add(a.l); } }
+      { let len = 0; const ls = new Set<number>(); for (const o of c.shapes) { const sh = o.shape as any; if (sh.t === "seg") { len += Math.hypot(sh.a[0] - sh.b[0], sh.a[1] - sh.b[1]); ls.add(o.layers[0]); } }
         rep.length = +len.toFixed(3); rep.vias = c.viaCells.length; rep.bends = c.feat ? c.feat.b45 + c.feat.b90 : 0; rep.layers = Array.from(ls).sort().map((l) => G.layers[l]); rep.detourRatio = c.len > 1e-6 ? +(len / c.len).toFixed(2) : 1; }
       const net = this.netOf(c.net).obj; if (c.zoneEnd) zoneEnds++;
       const seg = (a: Pt, b: Pt, l: number, w: number) => { if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6) return; items.push({ kind: "segment", node: P.segmentNode(doc, a, b, w, G.layers[l], net), net, netName: c.net, conn: c.id }); segments++; length += Math.hypot(a[0] - b[0], a[1] - b[1]); };
@@ -757,7 +1039,7 @@ export class Router {
     }
     const total = this.conns.filter((c) => c.nodes || !c.moot).length;
     return { items, total, routed: total - failed.length, failed, segments, vias, length, ms, passes, zoneEnds, zoneCovered: this.zoneCovered,
-      grid: { pitch: G.g, w: G.W, h: G.H, layers: G.layers.filter((_, i) => G.routable[i]) }, nets: this.nets.length, connections };
+      grid: { pitch: G.g, w: G.W, h: G.H, layers: G.layers.filter((_, i) => G.routable[i]) }, nets: this.nets.length, connections, pairs: Array.from(this.pairReports.values()), impedance: this.zReports, matched: this.matchReports };
   }
 }
 

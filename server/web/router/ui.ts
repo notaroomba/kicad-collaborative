@@ -9,7 +9,7 @@ const root = globalThis as any;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const CHUNK = 600;   // changes per commit: keeps one edit message well under the server's size limit
 
-export interface AutorouteSummary { total: number; routed: number; failed: { net: string; a: [number, number]; b: [number, number] }[]; segments: number; vias: number; length: number; ms: number; zoneEnds: number; zoneCovered: number; dropped: number; cancelled: boolean; ids: string[]; refillAsked?: boolean }
+export interface AutorouteSummary { total: number; routed: number; failed: { net: string; a: [number, number]; b: [number, number] }[]; segments: number; vias: number; length: number; ms: number; zoneEnds: number; zoneCovered: number; dropped: number; cancelled: boolean; ids: string[]; pairs?: any[]; impedance?: any[]; matched?: any[]; refillAsked?: boolean }
 interface Running { router: Router; cancelled: boolean; done: boolean }
 let running: Running | null = null;
 
@@ -57,7 +57,7 @@ export async function autoroute(ctx: any, opts: RouteOptions = {}, ui?: { progre
   let refill = false;
   if (changes.length) { let zones = false; for (const it of doc.items.values()) if (it.kind === "zone" && !K.kid(it.node, "keepout")) { zones = true; break; } if (zones && ctx.requestDesktop) { try { refill = !!ctx.requestDesktop("fill_zones"); } catch (e) { refill = false; } } }
   (empty as any).refillAsked = refill;
-  return { refillAsked: refill, total: res.total, routed: res.routed, failed: res.failed, segments: res.segments, vias: res.vias, length: res.length, ms: res.ms, zoneEnds: res.zoneEnds, zoneCovered: res.zoneCovered, dropped, cancelled: false, ids };
+  return { refillAsked: refill, total: res.total, routed: res.routed, failed: res.failed, segments: res.segments, vias: res.vias, length: res.length, ms: res.ms, zoneEnds: res.zoneEnds, zoneCovered: res.zoneCovered, dropped, cancelled: false, ids, pairs: res.pairs || [], impedance: res.impedance || [], matched: res.matched || [] };
 }
 
 /** One line for the status toast. */
@@ -66,6 +66,10 @@ export function summaryText(s: AutorouteSummary): string {
   if (!s.total) return "Autoroute: nothing to route — every connection in scope is already made";
   let t = `Autoroute: ${s.routed} of ${plural(s.total, "connection")} routed, ${plural(s.segments, "track segment")}, ${plural(s.vias, "via")}`;
   if (s.failed.length) t += ` — ${s.failed.length} left unrouted`;
+  const pairs = s.pairs || [], zs = s.impedance || [], ms = s.matched || [];
+  if (pairs.length) { const c = pairs.filter((p: any) => p.coupled).length; t += `. ${c} of ${plural(pairs.length, "differential pair")} coupled`; }
+  if (zs.length) { const a = zs.filter((z: any) => z.applied).length; t += `. Impedance: ${a} of ${plural(zs.length, "net group")} sized from the stackup${a < zs.length ? " (the rest need a width this board cannot carry)" : ""}`; }
+  if (ms.length) { const all = ms.reduce((n: number, g: any) => n + g.members.length, 0), ok = ms.reduce((n: number, g: any) => n + g.members.filter((m: any) => m.matched).length, 0); t += `. Length matching: ${ok} of ${all} within tolerance`; }
   return t;
 }
 

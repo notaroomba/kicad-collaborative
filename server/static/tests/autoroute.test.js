@@ -254,3 +254,74 @@ test("after routing a board with zones, the desktop app is asked to refill them"
   const withZone = await run([smd(100, 50, "A"), smd(115, 58, "A"), zone]); assert.deepEqual(withZone.asked, ["fill_zones"]); assert.equal(withZone.s.refillAsked, true);
   const without = await run([smd(100, 50, "A"), smd(115, 58, "A")]); assert.deepEqual(without.asked, []); assert.equal(without.s.refillAsked, false);
 });
+
+const pad = (x, y, net, w = 0.3, h = 0.8) => `(footprint "T:S" (layer "F.Cu") (uuid "fp-${++n}") (at ${x} ${y})
+    (pad "1" smd rect (at 0 0) (size ${w} ${h}) (layers "F.Cu" "F.Mask") (net "${net}") (uuid "pad-${n}")))`;
+const widthOf = (i) => K.num(K.kid(i.node, "width")[1]);
+test("a differential pair runs side by side at a constant gap, and each track ends on its own pad", () => {
+  assert.deepEqual(R.pairName("USB_D+"), { base: "USB_D~", pol: 1 }); assert.equal(R.pairName("USB_D-").base, "USB_D~");
+  assert.equal(R.pairName("Net-(U1-USB_DP)").base, R.pairName("Net-(U1-USB_DM)").base); assert.equal(R.pairName("HDMI_D2_P").base, R.pairName("HDMI_D2_N").base);
+  assert.equal(R.pairName("+3V3"), null); assert.equal(R.pairName("V+"), null); assert.equal(R.pairName("GPIO4"), null);
+  const doc = board(pad(100, 50, "D+"), pad(100.6, 50, "D-"), pad(120, 62, "D+"), pad(120.6, 62, "D-"), smd(105, 60, "S"), smd(118, 48, "S"));
+  const res = R.route(K, P, doc, null); assert.equal(res.routed, 3);
+  assert.equal(res.pairs.length, 1); const pr = res.pairs[0]; assert.equal(pr.coupled, true, pr.reason); assert.equal(pr.gap, 0.2); assert.ok(pr.skew < 1, "the two tracks are nearly the same length: " + pr.skew);
+  assert.equal(res.items.filter((i) => i.kind === "via" && /^D/.test(i.netName)).length, 0, "a pair stays on one layer");
+  apply(doc, res); assert.deepEqual(errors(doc, null), []); assert.equal(P.ratsnest(doc).length, 0);
+  // along the run the two tracks are exactly one gap apart
+  const seg = (i) => ({ t: "seg", a: K.kid(i.node, "start").slice(1, 3), b: K.kid(i.node, "end").slice(1, 3), r: widthOf(i) / 2 });
+  const dp = res.items.filter((i) => i.netName === "D+" && i.kind === "segment").map(seg), dn = res.items.filter((i) => i.netName === "D-" && i.kind === "segment").map(seg);
+  let close = 0, total = 0; for (const a of dp) { const len = Math.hypot(a.a[0] - a.b[0], a.a[1] - a.b[1]); total += len; if (dn.some((b) => Math.abs(P.shapeGap(a, b) - 0.2) < 1e-3)) close += len; }
+  assert.ok(close / total > 0.8, "most of the pair is coupled: " + (close / total).toFixed(2));
+  const off = R.route(K, P, board(pad(100, 50, "D+"), pad(100.6, 50, "D-"), pad(120, 62, "D+"), pad(120.6, 62, "D-")), null, { pairs: false }); assert.equal(off.pairs.length, 0); assert.equal(off.routed, 2);
+});
+
+const netLen = (res, net) => res.items.filter((i) => i.kind === "segment" && i.netName === net).reduce((a, i) => { const s = K.kid(i.node, "start"), e = K.kid(i.node, "end"); return a + Math.hypot(s[1] - e[1], s[2] - e[2]); }, 0);
+test("nets that are to match are brought to one length with serpentines, within the tolerance and the rules", () => {
+  const make = () => board(smd(100, 45, "A0"), smd(125, 45, "A0"), smd(100, 52, "A1"), smd(118, 52, "A1"), smd(100, 59, "A2"), smd(112, 59, "A2"));
+  const plain = R.route(K, P, make(), null); assert.ok(netLen(plain, "A0") - netLen(plain, "A2") > 10);
+  const doc = make(); const res = R.route(K, P, doc, null, { match: [{ nets: ["A0", "A1", "A2"], tolerance: 0.2 }] });
+  assert.equal(res.routed, 3); const g = res.matched[0]; assert.equal(g.members.length, 3); assert.ok(g.members.every((m) => m.matched), JSON.stringify(g));
+  const L = ["A0", "A1", "A2"].map((k) => netLen(res, k)); assert.ok(Math.max(...L) - Math.min(...L) <= 0.4, "lengths " + L.map((v) => v.toFixed(2)).join(" "));
+  assert.ok(Math.abs(L[0] - netLen(plain, "A0")) < 1e-6, "the longest is left as it was");
+  apply(doc, res); assert.deepEqual(errors(doc, null), []); assert.equal(P.ratsnest(doc).length, 0);
+  // no room: a wall close on both sides of the short net leaves nowhere to swing
+  const tight = board(smd(100, 45, "A0"), smd(125, 45, "A0"), smd(100, 59, "A2"), smd(112, 59, "A2"),
+    `(segment (start 101.5 58.2) (end 110.5 58.2) (width 0.2) (layer "F.Cu") (net "W") (uuid "w1"))`, `(segment (start 101.5 59.8) (end 110.5 59.8) (width 0.2) (layer "F.Cu") (net "W") (uuid "w2"))`);
+  const r2 = R.route(K, P, tight, null, { match: [{ nets: ["A0", "A2"] }] }); const m2 = r2.matched[0].members.find((m) => m.nets[0] === "A2");
+  apply(tight, r2); assert.deepEqual(errors(tight, null), [], "whatever was added keeps the rules"); assert.equal(typeof m2.matched, "boolean");
+});
+
+test("the pairs of one bus are matched to each other, and each pair's own skew is taken out", () => {
+  const lane = (i, x0, x1, y0, y1) => [pad(x0, y0 + i * 2, `HDMI_D${i}_P`), pad(x0, y0 + i * 2 + 0.6, `HDMI_D${i}_N`), pad(x1, y1 + i * 2, `HDMI_D${i}_P`), pad(x1, y1 + i * 2 + 0.6, `HDMI_D${i}_N`)];
+  const rot = (s) => s.replace(/\(size 0.3 0.8\)/g, "(size 0.8 0.3)");
+  const doc = board(...lane(0, 100, 124, 46, 46).map(rot), ...lane(1, 100, 118, 46, 46).map(rot), ...lane(2, 100, 112, 46, 46).map(rot));
+  const res = R.route(K, P, doc, null, { impedance: false }); assert.equal(res.routed, 6);
+  assert.equal(res.pairs.filter((p) => p.coupled).length, 3, JSON.stringify(res.pairs));
+  assert.equal(res.matched.length, 1); assert.equal(res.matched[0].group, "HDMI"); assert.ok(res.matched[0].members.every((m) => m.matched), JSON.stringify(res.matched[0]));
+  for (const p of res.pairs) assert.ok(p.skew <= 0.1 + 1e-6, `${p.p} skew ${p.skew}`);
+  const L = [0, 1, 2].map((i) => (netLen(res, `HDMI_D${i}_P`) + netLen(res, `HDMI_D${i}_N`)) / 2); assert.ok(Math.max(...L) - Math.min(...L) <= 0.5, "pair lengths " + L.map((v) => v.toFixed(2)).join(" "));
+  apply(doc, res); assert.deepEqual(errors(doc, null), []); assert.equal(P.ratsnest(doc).length, 0);
+});
+
+test("tracks are sized for impedance from the board's stackup, and the router says so when the board cannot carry it", () => {
+  const Z = R.impedance; const thin = { kind: "microstrip", h: 0.2, b: 0.2, t: 0.035, er: 4.4, layer: "F.Cu", reference: ["In1.Cu"] }, thick = Object.assign({}, thin, { h: 1.53, b: 1.53, er: 4.5 });
+  assert.ok(Math.abs(Z.widthFor(thin, 50) - 0.35) < 0.03, "50 Ω over 0.2 mm of FR4 is about 0.35 mm"); assert.ok(Math.abs(Z.widthFor(thick, 50) - 2.9) < 0.2, "and about 2.9 mm on a 1.6 mm two-layer board");
+  assert.ok(Z.zdiff(thin, 0.2, 0.15) < 2 * Z.z0(thin, 0.2), "coupling lowers a pair's impedance"); assert.ok(Z.z0(thin, 0.2) > Z.z0(thin, 0.4), "a wider track is a lower impedance");
+  assert.equal(Z.usualImpedance("USB_D+", true), 90); assert.equal(Z.usualImpedance("HDMI_D0_P", true), 100); assert.equal(Z.usualImpedance("ANT", false), 50); assert.equal(Z.usualImpedance("GPIO4", false), 0);
+  const four = (body) => K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" power) (6 "In2.Cu" power) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) (layer "dielectric 1" (type "prepreg") (thickness 0.2) (epsilon_r 4.4)) (layer "In1.Cu" (type "copper") (thickness 0.0175)) (layer "dielectric 2" (type "core") (thickness 1.1) (epsilon_r 4.6)) (layer "In2.Cu" (type "copper") (thickness 0.0175)) (layer "dielectric 3" (type "prepreg") (thickness 0.2) (epsilon_r 4.4)) (layer "B.Cu" (type "copper") (thickness 0.035))))
+  (gr_rect (start 90 40) (end 130 70) (stroke (width 0.05) (type default)) (fill no) (layer "Edge.Cuts") (uuid "edge"))\n${body}\n)`, "kicad_pcb");
+  const st = Z.stackupOf(K, four("")); assert.equal(st.assumed, false); const tr = Z.traceOn(st, "F.Cu"); assert.equal(tr.kind, "microstrip"); assert.ok(Math.abs(tr.h - 0.2) < 1e-9); assert.deepEqual(tr.reference, ["In1.Cu"]);
+  assert.equal(Z.traceOn(st, "In1.Cu").kind, "stripline");
+  const doc = four([smd(100, 50, "ANT"), smd(120, 50, "ANT"), smd(100, 60, "SIG"), smd(120, 60, "SIG")].join("\n")); const res = R.route(K, P, doc, null);
+  const z = res.impedance.find((r) => r.nets[0] === "ANT"); assert.equal(z.applied, true); assert.equal(z.target, 50); assert.ok(Math.abs(z.width - 0.35) < 0.03); assert.ok(Math.abs(z.achieved - 50) <= 1);
+  for (const i of res.items) if (i.kind === "segment") assert.equal(widthOf(i), i.netName === "ANT" ? z.width : 0.2);
+  apply(doc, res); assert.deepEqual(errors(doc, null), []);
+  // a two-layer board: 50 Ω would take a track nearly 3 mm wide, so the class width stays and the report explains
+  const two = board(smd(100, 50, "ANT"), smd(120, 50, "ANT")); assert.equal(Z.stackupOf(K, two).assumed, true); const r2 = R.route(K, P, two, null);
+  assert.equal(r2.impedance[0].applied, false); assert.match(r2.impedance[0].note, /needs a 2\.\d+ mm track/); assert.ok(r2.items.every((i) => widthOf(i) === 0.2));
+  // a plan can ask for an impedance by net, and switching the feature off leaves widths alone
+  const r3 = R.route(K, P, four([smd(100, 50, "X"), smd(120, 50, "X")].join("\n")), null, { netOpts: { X: { impedance: 75 } } }); assert.equal(r3.impedance[0].target, 75); assert.ok(r3.items.every((i) => widthOf(i) < 0.2 || widthOf(i) === r3.impedance[0].width));
+  const r4 = R.route(K, P, four([smd(100, 50, "ANT"), smd(120, 50, "ANT")].join("\n")), null, { impedance: false }); assert.equal(r4.impedance.length, 0); assert.ok(r4.items.every((i) => widthOf(i) === 0.2));
+});

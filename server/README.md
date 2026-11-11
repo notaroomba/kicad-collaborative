@@ -348,6 +348,45 @@ edits: one undo step, sent to everyone in the session.
 - Other tools can call `PcbAutoRouter.autoroute(ctx, { nets, layers, allowVias, passes, timeMs })` (commits and
   resolves with a summary) or `PcbAutoRouter.route(K, PcbTools, doc, settings, opts)` (pure, returns item nodes).
 
+### After the search: pours, vias, supply widths
+
+Once every connection has been tried, a few passes work on the finished board (all checked with exact geometry):
+
+- **Pours** (`stitch`): a copper pour is cut into pieces by the other nets' tracks. The router models the fill
+  (zone clearance and minimum width), finds which pads and vias sit in a piece cut off from the main body, takes
+  out routes that ended in a dead piece, and joins each cut-off group to the main body with a track of its own.
+  A via may drop into the net's pour on a plane layer. `opts.stitch: false` turns it off.
+- **Fewer vias** (`fewerVias`): a via costs twice what the fitted weights say, and each route that changes layer
+  is laid again on the finished board without vias (then with fewer) where that does not send it a long way round.
+- **Supply widths** (`powerWidth`): GND, rails and `VBUS`-style nets without a class or plan width of their own are
+  widened piece by piece wherever the clearances leave room, necked down at tight pads. `0` keeps the class width.
+- Board Setup's minimum clearance and hole clearance are floors for every net.
+
+### Differential pairs, impedance and length matching
+
+- **Pairs** (`pairs`): nets named as a pair (`D+`/`D-`, `_P`/`_N`, `DP`/`DM`, `TXP`/`TXN`) whose connections start
+  and end side by side are laid as one: a single wide route down the middle, split into two tracks a constant gap
+  apart, each led straight off its pad and turned in to its partner. A pair stays on one layer and nothing tees
+  into it. When the geometry does not allow it (a part right in front of the pads, pads on different layers) the
+  two nets are routed singly and `result.pairs[]` says why.
+- **Impedance** (`impedance`, `netOpts[net].impedance`): `web/router/impedance.ts` reads the board's physical
+  stackup (or assumes the usual build for the layer count) and computes the track width, and for pairs the gap,
+  that present the target: 90 Ω for USB pairs, 100 Ω for HDMI, Ethernet, LVDS and MIPI pairs, 50 Ω for nets named
+  as antenna or RF feeds, or whatever a plan asks for. Microstrip (Hammerstad, Wheeler) on outer layers, IPC-2141
+  stripline inside, IPC edge-coupling for pairs. A width the board cannot reasonably carry (50 Ω on a 1.6 mm
+  two-layer board is 2.8 mm) is not applied; `result.impedance[]` gives the width that would be needed and why.
+  The models are closed-form: within a few percent of a field solver, not a substitute for the fab's calculator.
+- **Length matching** (`matchLengths`, `match: [{ nets, tolerance, length }]`, `skewTolerance`, `maxAmplitude`):
+  the pairs of one bus (`HDMI_D0…D2` and the clock, `ETH_TX`/`ETH_RX`) and any group a plan names are brought to
+  the longest member's length (or a given one) with serpentines on their longest straight runs: deep square humps
+  first, more and shallower ones where there is less room, shallow 45° bumps for the last fraction. A pair's
+  serpentine is put on its centre line so both tracks swing together; skew left inside a pair is taken out with
+  a bump on the shorter track. `result.matched[]` lists each member before and after, and says when there was no
+  room.
+- `node scripts/hs-bench.mjs outDir` routes four small boards from nothing (HDMI lanes with ground pins between P
+  and N, Ethernet pairs to through-hole pins, a Bluetooth antenna feed on four and on two layers) and prints
+  completion, rule errors, pairs, widths and lengths.
+
 ### Planning and judging from outside (the assistant)
 
 The engine does the geometry and keeps the rules; what to route first, on which layers and how wide can come from a
