@@ -2121,6 +2121,8 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
   const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; const zones = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it.kind === "zone"); if (!zones.length) { ctx.toast("No zone selected"); return true; }
   return openForm({ title: "Duplicate Zone", fields: [{ k: "layer", label: "Layer", type: "select", value: zoneLayers(zones[0].node)[0] || "F.Cu", options: copperOf(ctx.doc) }], apply: (v) => { const out = []; for (const z of zones) { const node = clone(z.node); const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); for (const fp of K.kids(node, "filled_polygon")) node.splice(node.indexOf(fp), 1); const l = K.kid(node, "layer"), ls = K.kid(node, "layers"); if (l) l[1] = v.layer; else if (ls) ls.splice(1, ls.length - 1, v.layer); out.push(addedChange(ctx.doc, node, netOf(node))); } commitSel(ctx, out, "duplicate zone"); } });
 });
+// The autorouter is its own bundle (web/router → dist/autoroute.js); this is its entry in the Route menu.
+act("autoroute", "Autoroute…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.open) { ctx.toast("The autorouter is not loaded"); return true; } return r.open(ctx); }, { menu: "Route" });
 Object.freeze(ACTIONS);
 
 // ---------------------------------------------------------------- DOM: select-mode picking, stolen keys, layer chip, text prompt

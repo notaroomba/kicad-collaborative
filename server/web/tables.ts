@@ -60,7 +60,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   ],
 };
 /** The menus that take a module's `actions` map (a module action names one of these in `menu`, default Edit). */
-export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
+export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect", "Route"];
 
 /** The project manager's bar (home view): the same entries the old markup carried. */
 export const HOME_MENUS: [string, MenuEntry[]][] = [

@@ -176,6 +176,11 @@ pub async fn parts_js_map() -> Response {
 }
 
 pub async fn editor_js() -> Response { js_response(include_str!("../static/dist/editor.js")) }
+// The board autorouter (server/web/router, built by `npm run build:router`).
+pub async fn autoroute_js() -> Response { js_response(include_str!("../static/dist/autoroute.js")) }
+pub async fn autoroute_js_map() -> Response {
+    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/autoroute.js.map")).into_response()
+}
 pub async fn editor_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/editor.js.map")).into_response()
 }

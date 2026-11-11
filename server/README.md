@@ -250,3 +250,25 @@ the real join → op → ack → broadcast flow and checks sharing, role enforce
 presence, idempotent resubmission and version history. It creates and deletes
 test users, so point it at a **local server and a throwaway database only** —
 usage is in the file header.
+
+## Board autorouter
+
+`web/router/` (bundled to `static/dist/autoroute.js`) is the web editor's **Route ▸ Autoroute…**. It only runs when
+someone asks for it, never moves or removes what is on the board, and commits its tracks and vias as ordinary
+edits: one undo step, sent to everyone in the session.
+
+- **Search**: a line-probe router (Mikami–Tabuchi line search on eight directions and all copper layers), not a
+  maze or A* search. Both ends shoot straight rays; each level adds one corner or via; where rays from the two
+  ends meet there is a candidate route with the fewest corners, and a cost picks among the candidates.
+- **Rules**: track width, clearance and via size come from each net's class; other nets' copper, unplated holes,
+  the board edge and keep-out rule areas are obstacles. Every result is checked again with exact geometry before
+  it is returned, and anything that would break a rule is dropped and reported as unrouted.
+- **Heuristics**: grid aligned to the pads, shortest connections first, rip-up and retry, whole-board retries with
+  the failed connections first, joining a net's own track mid-way, plated holes as free layer changes, short
+  via drops into the net's copper zone.
+- **Weights**: `web/router/weights.ts` holds the cost weights and the list of boards they were fitted on.
+  `node scripts/router-train.mjs boards.json --write` refits them from hand-routed boards;
+  `node scripts/router-bench.mjs board.kicad_pcb…` strips boards and routes them again as a benchmark.
+- Tests: `node static/tests/autoroute.test.js`; two browsers in one board: `node scripts/autoroute-ui.mjs`.
+- Other tools can call `PcbAutoRouter.autoroute(ctx, { nets, layers, allowVias, passes, timeMs })` (commits and
+  resolves with a summary) or `PcbAutoRouter.route(K, PcbTools, doc, settings, opts)` (pure, returns item nodes).
