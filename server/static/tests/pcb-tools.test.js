@@ -1343,3 +1343,15 @@ test("selection modifiers as SELECTION_TOOL::setModifiersState: Shift adds, Ctrl
   pcb.onSelectDown(ev({ ctrlKey: true, shiftKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel], ["s-1"], "Ctrl+Shift+click removes");
   pcb.onSelectDown(ev({ ctrlKey: true, shiftKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel], ["s-1"], "and never adds");
 });
+
+test("item descriptions as pcbnew's GetItemDescription (Clarify Selection rows)", () => {
+  const doc = fixture();
+  assert.equal(P.itemDescription(doc, "s-1", "mm"), "Track [GND] on F.Cu, length 5.0000 mm");
+  assert.equal(P.itemDescription(doc, "v-1", "mm"), "Via [GND] on F.Cu - B.Cu");
+  assert.equal(P.itemDescription(doc, "fp-1", "mm"), "Footprint R1");
+  assert.equal(P.itemDescription(doc, "fp-1#1", "mm"), "Pad 2 [/SIG] of R1 on F.Cu");
+  assert.equal(P.itemDescription(doc, "g-1", "mm"), "Segment on Edge.Cuts");
+  assert.ok(/^Track \(arc\) \[GND\] on F\.Cu, length /.test(P.itemDescription(doc, "a-1", "mm")));
+  const named = K.parseDoc(FIXTURE.replace('(2 "B.Cu" signal)', '(2 "B.Cu" signal "bottom_layer")'), "kicad_pcb");
+  assert.equal(P.itemDescription(named, "v-1", "mm"), "Via [GND] on F.Cu - bottom_layer", "the board's layer names");
+});

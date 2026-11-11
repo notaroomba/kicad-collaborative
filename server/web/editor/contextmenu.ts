@@ -185,21 +185,52 @@ function rows(list: Resolved[], c: MenuCtx): CtxItem[] {
 }
 function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : rows(items, c); }
 
-/** "Symbol R1 (10k)", "Wire", "Track on F.Cu": how KiCad names an item in a disambiguation menu. */
-function describe(it: KItem): string {
+/** "Symbol R1 (10k)", "Wire", "Track [VCC] on B.Cu, length 0.6400 mm": how KiCad names an item in a disambiguation menu. */
+function describe(it: KItem | string): string {
+  const P = (window as unknown as { PcbTools?: { itemDescription?: (d: KDoc, id: string, u: string) => string } }).PcbTools;
+  if (!isSch() && P && P.itemDescription && E.kdoc) { const t = P.itemDescription(E.kdoc as KDoc, typeof it === "string" ? it : it.id, E.units); if (t) return t; }
+  if (typeof it === "string") return it;
   const names = (CollabTools.props && CollabTools.props.KIND_NAMES) || {};
   const kind = names[it.kind] || it.kind.replace(/^gr_/, "").replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase());
   const what = it.ref ? `${it.ref}${it.value ? ` (${it.value})` : ""}` : it.name || (it.kind.includes("label") || it.kind === "text" || it.kind === "gr_text" ? KiCadCanvas.str(it.node[1]) : "");
   const layer = it.docType === "pcb" && it.layer ? ` on ${it.layer}` : "";
   return `${kind}${what ? " " + what : ""}${layer}`;
 }
+/**
+ * The candidates under the cursor, as ids: on a board a pad under the cursor is its own candidate
+ * ("footprintId#padIndex", ahead of its footprint), as PCB_SELECTION_TOOL's collector lists PCB_PAD_T.
+ */
+function candidatesAt(mm: Mm): string[] {
+  const hits = hitsAt(mm); const ids = hits.map((it) => it.id);
+  if (isSch() || !E.kdoc) return ids;
+  let pad: { item?: KItem; index?: number } | null = null;
+  try { pad = (KiCadCanvas.padAt as (d: KDoc, x: number, y: number) => { item?: KItem; index?: number } | null)(E.kdoc as KDoc, mm[0], mm[1]); } catch { pad = null; }
+  const f = store.get().filter as Record<string, boolean>;
+  if (pad && pad.item && pad.index !== undefined && f.pads !== false) { const i = ids.indexOf(pad.item.id); const key = `${pad.item.id}#${pad.index}`; if (i >= 0) ids.splice(i, 0, key); else ids.unshift(key); }
+  return ids;
+}
+/** Select one candidate: a pad key goes to the board module's pad selection. */
+function selectCandidate(id: string): void {
+  const hash = id.indexOf("#");
+  if (hash > 0 && !isSch()) { const ps = pcbState() as unknown as { padSel?: string | null } | null; if (ps) ps.padSel = id; requestRender(); return; }
+  selectItemId(id);
+}
+/**
+ * GuessSelectionCandidates, in short: a footprint gives way to a pad, track, via or drawing of its own under the
+ * cursor, so only real overlaps (stacked tracks, a via on a track, two pads) stay ambiguous.
+ */
+function ambiguousAt(mm: Mm): string[] {
+  const ids = candidatesAt(mm); if (isSch() || !E.kdoc) return ids;
+  const others = ids.filter((id) => { const it = (E.kdoc as KDoc).items.get(id); return !(it && it.kind === "footprint"); });
+  return others.length ? others : ids;
+}
 /** KiCad's "Clarify Selection" list: offered when the click could have meant more than one item. */
 function clarifyRows(mm: Mm): CtxItem | null {
-  const hits = hitsAt(mm).slice(0, 12); if (hits.length < 2) return null;
-  const sel = new Set(selectionIds());
-  return { label: "Clarify Selection", icon: "cursor", sub: hits.map((it): CtxItem => ({
-    label: describe(it), check: true, checked: sel.has(it.id), hover: it.id,
-    run: runRow(() => { clearAllSelection(false); selectItemId(it.id); selectionChanged(); if (anchor) show(anchor.x, anchor.y, anchor.mm, false); }),
+  const ids = candidatesAt(mm).slice(0, 12); if (ids.length < 2) return null;
+  const sel = new Set(selectionIds()); const ps = pcbState() as unknown as { padSel?: string | null } | null;
+  return { label: "Clarify Selection", icon: "cursor", sub: ids.map((id): CtxItem => ({
+    label: describe(id), check: true, checked: sel.has(id) || (!!ps && ps.padSel === id), hover: id.includes("#") ? id.slice(0, id.indexOf("#")) : id,
+    run: runRow(() => { clearAllSelection(false); selectCandidate(id); selectionChanged(); if (anchor) show(anchor.x, anchor.y, anchor.mm, false); }),
   })) };
 }
 
@@ -211,14 +242,19 @@ function clarifyRows(mm: Mm): CtxItem | null {
 export function openClarifyMenu(ev: { clientX: number; clientY: number }): boolean {
   if (!E.kdoc || state.view !== "editor" || (E.tool !== "select" && E.tool !== "highlight") || interactionBusy()) return false;
   const mm = worldMm(ev); E.lastCursorMm = mm;
-  const hits = hitsAt(mm).slice(0, 100); if (hits.length < 2) return false;
+  const ids = candidatesAt(mm).slice(0, 100); if (ids.length < 2) return false;
+  clarifyPopup(ev, ids, null); return true;
+}
+/** SELECTION_TOOL::doSelectionMenu: numbered rows, then Select All; `then` runs after a pick (the context menu). */
+function clarifyPopup(ev: { clientX: number; clientY: number }, ids: string[], then: (() => void) | null): void {
   runners = new Map(); anchor = null;
-  const pick = (ids: string[]): void => { clearAllSelection(false); for (const id of ids) selectItemId(id); selectionChanged(); };
-  const items: CtxItem[] = hits.map((it, i): CtxItem => ({ label: describe(it), key: i < 9 ? String(i + 1) : undefined, hover: it.id, run: runRow(() => pick([it.id])) }));
-  items.push({ sep: true }, { label: "Select All", key: "A", run: runRow(() => pick(hits.map((it) => it.id))) });
+  const hoverOf = (id: string) => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id);
+  const pick = (list: string[]): void => { clearAllSelection(false); for (const id of list) selectCandidate(id); selectionChanged(); if (then) then(); };
+  const items: CtxItem[] = ids.map((id, i): CtxItem => ({ label: describe(id), key: i < 9 ? String(i + 1) : undefined, hover: hoverOf(id), run: runRow(() => pick([id])) }));
+  items.push({ sep: true }, { label: "Select All", key: "A", run: runRow(() => pick(ids.filter((id) => !id.includes("#")))) });
   E.contextMenuOpen = true; E.hoverId = null; stage.classList.remove("over-sel");
   store.set({ contextMenu: { id: ++menuId, x: ev.clientX, y: ev.clientY, items } });
-  requestRender(); return true;
+  requestRender();
 }
 
 /**
@@ -239,6 +275,29 @@ function reviewRows(mm: Mm, c: MenuCtx): CtxItem[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- long-press disambiguation
+// PCB_SELECTION_TOOL's m_disambiguateTimer: a left press held still for m_DisambiguationMenuDelay (500 ms) over more
+// than one candidate opens the Clarify Selection popup; moving or releasing first cancels it.
+let lpTimer = 0, lpAt: { x: number; y: number } | null = null;
+export function startLongPress(ev: PointerEvent): void {
+  cancelLongPress();
+  if (ev.button !== 0 || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || isSch() || E.tool !== "select" || !E.kdoc) return;
+  lpAt = { x: ev.clientX, y: ev.clientY };
+  const at = lpAt;
+  lpTimer = window.setTimeout(() => {
+    lpTimer = 0; if (!lpAt || lpAt !== at) return;
+    const g = E.drag as { moved?: boolean } | null; if (g && g.moved) return;
+    const ps = pcbState() as unknown as { drag?: { moved?: boolean } | null; move?: unknown; pending?: unknown } | null;
+    if (ps && ((ps.drag && ps.drag.moved) || ps.move)) return;
+    if (candidatesAt(worldMm({ clientX: at.x, clientY: at.y } as PointerEvent)).length < 2) return;
+    // the press becomes the disambiguation: whatever it started (a box, a pending drag) is dropped
+    E.boxSel = null; if (g) E.drag = null; if (ps) ps.pending = null; E.fdrag = null;
+    openClarifyMenu({ clientX: at.x, clientY: at.y });
+  }, 500);
+}
+export function moveLongPress(ev: PointerEvent): void { if (lpAt && Math.hypot(ev.clientX - lpAt.x, ev.clientY - lpAt.y) > 4) cancelLongPress(); }
+export function cancelLongPress(): void { if (lpTimer) window.clearTimeout(lpTimer); lpTimer = 0; lpAt = null; }
 
 // ---------------------------------------------------------------- open / close
 function show(x: number, y: number, mm: Mm, clarify: boolean): void {
@@ -271,7 +330,14 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
     if (E.selField) {
       const hit = pickAt(mm);
       if (!(hit && hit.field && hit.field.id === E.selField.id && hit.field.name === E.selField.name)) selectAt(mm);
-    } else if (!selectionIds().length) selectAt(mm);
+    } else if (!selectionIds().length && !(pcbState() as unknown as { padSel?: string | null } | null)?.padSel) {
+      // PCB_SELECTION_TOOL::selectPoint on a right-click with nothing selected: more than one candidate left after the
+      // heuristics opens the stand-alone Clarify Selection popup, and the context menu follows the pick
+      const amb = isSch() ? [] : ambiguousAt(mm);
+      if (amb.length > 1) { clarifyPopup(ev, amb.slice(0, 100), () => show(ev.clientX, ev.clientY, mm, false)); return; }
+      if (amb.length === 1 && amb[0].includes("#")) { clearAllSelection(false); selectCandidate(amb[0]); selectionChanged(); }
+      else if (amb.length || isSch()) selectAt(mm);
+    }
     else {
       const b = selectionBox(), g = Math.max(E.gridPitch || 0, 0.5);
       const outside = !b || mm[0] < b[0] - g || mm[0] > b[2] + g || mm[1] < b[1] - g || mm[1] > b[3] + g;

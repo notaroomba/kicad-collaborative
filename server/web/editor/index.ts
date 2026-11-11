@@ -22,7 +22,7 @@ import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
-import { openClarifyMenu, openContextMenu } from "./contextmenu";
+import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
 import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
@@ -132,6 +132,12 @@ stage.addEventListener("dblclick", (ev) => {
   const other = hitAny([x, y]); const it = other && E.kdoc.items.get(other.id);
   if (it) KDialogs.openItem(ctx, it);
 });
+
+// a press held still over overlapping items opens Clarify Selection (m_disambiguateTimer)
+window.addEventListener("pointerdown", (ev) => { if (ev.target instanceof Element && stage.contains(ev.target) && !ev.target.closest("#cmtPanel")) startLongPress(ev); else cancelLongPress(); }, true);
+window.addEventListener("pointermove", (ev) => moveLongPress(ev), true);
+window.addEventListener("pointerup", () => cancelLongPress(), true);
+window.addEventListener("pointercancel", () => cancelLongPress(), true);
 
 // Alt+click: KiCad's Clarify Selection popup when more than one item is under the cursor (window capture, ahead of the
 // tool modules' own stage listeners)

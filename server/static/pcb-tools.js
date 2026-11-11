@@ -2840,6 +2840,50 @@ function routedLength(doc, id) {
   }
   return len;
 }
+/** EDA_SHAPE::getFriendlyName */
+const SHAPE_NAMES = { line: "Segment", rect: "Rectangle", circle: "Circle", arc: "Arc", poly: "Polygon", curve: "Curve" };
+/** BOARD_CONNECTED_ITEM::GetNetnameMsg */
+const netnameMsg = (net) => (net && net.name ? `[${unescapeName(net.name)}]` : "[<no net>]");
+/**
+ * How pcbnew names an item in the Clarify Selection popup and elsewhere (GetItemDescription): "Track [VCC] on B.Cu,
+ * length 0.6400 mm", "Via [GND] on F.Cu - B.Cu", "PTH pad 2 [VCC] of R10", "Footprint R10", "Zone [GND] on F.Cu, priority 0".
+ * `id` may name a pad as "footprintId#padIndex".
+ */
+function itemDescription(doc, id, units) {
+  const V = (v) => msgValue(v, units), L = (l) => boardLayerName(doc, l);
+  const hash = String(id).indexOf("#"), it = doc.items.get(hash > 0 ? String(id).slice(0, hash) : id); if (!it) return "";
+  const n = it.node;
+  if (hash > 0 && it.kind === "footprint") {
+    const p = padsOf(it)[+String(id).slice(hash + 1)]; if (!p) return "";
+    const ref = it.ref || "";
+    if (p.type === "np_thru_hole") return `NPTH pad of ${ref}`;
+    const num = p.number ? p.number + " " : "";
+    if (p.type === "smd" || p.type === "connect") return `Pad ${num}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
+    return `PTH pad ${num}${netnameMsg(p.net)} of ${ref}`;
+  }
+  if (it.kind === "segment" || it.kind === "arc") {
+    const a = pt(n, "start"), b = pt(n, "end"); let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+    if (it.kind === "arc") { const m = pt(n, "mid"); const arc = a && m && b && K.arcFrom3(a, m, b); if (arc) len = arcLength(arc); }
+    return `${it.kind === "arc" ? "Track (arc)" : "Track"} ${netnameMsg(netOf(n))} on ${L(layerOf(n))}, length ${V(len)}`;
+  }
+  if (it.kind === "via") {
+    const ls = K.kid(n, "layers"); const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
+    const kind = n.includes("micro") ? "Micro via" : n.includes("blind") ? "Blind via" : n.includes("buried") ? "Buried via" : "Via";
+    return `${kind} ${netnameMsg(netOf(n))} on ${L(pair[0] || "F.Cu")} - ${L(pair[pair.length - 1] || "B.Cu")}`;
+  }
+  if (it.kind === "footprint") return `Footprint ${it.ref || "<no reference designator>"}`;
+  if (it.kind === "zone") {
+    const names = zoneLayers(n).map(L); const keep = K.kid(n, "keepout"); const nm = K.kid(n, "name"); const zn = nm ? K.str(nm[1]) : "";
+    const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
+    if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
+    const pr = K.kid(n, "priority"); const prio = pr ? K.num(pr[1]) : 0;
+    return zn ? `Zone '${zn}' ${netnameMsg(netOf(n))} ${ld}, priority ${prio}` : `Zone ${netnameMsg(netOf(n))} ${ld}, priority ${prio}`;
+  }
+  if (it.kind === "gr_text") { const t = K.str(n[1]); return `PCB text '${t.length > 36 ? t.slice(0, 33) + "..." : t}' on ${L(layerOf(n))}`; }
+  const m = /^gr_(line|rect|circle|arc|poly|curve)$/.exec(it.kind);
+  if (m) { const layer = layerOf(n); return /\.Cu$/.test(layer) ? `${SHAPE_NAMES[m[1]]} ${netnameMsg(netOf(n))} on ${L(layer)}` : `${SHAPE_NAMES[m[1]]} on ${L(layer)}`; }
+  return "";
+}
 const PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
 const PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
 /**
@@ -2949,7 +2993,7 @@ function msgPanelInfo(doc, ids, opts) {
       return out;
     }
     if (it && /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) {   // PCB_SHAPE::GetMsgPanelInfo (EDA_SHAPE::ShapeGetMsgPanelInfo)
-      const n = it.node, kind = it.kind.slice(3); const SHAPE = { line: "Line", rect: "Rectangle", circle: "Circle", arc: "Arc", poly: "Polygon", curve: "Bezier Curve" };
+      const n = it.node, kind = it.kind.slice(3); const SHAPE = SHAPE_NAMES;
       add("Type", "Drawing"); if (isLocked(n)) add("Status", "Locked");
       add("Shape", SHAPE[kind]);
       const a = pt(n, "start"), b = pt(n, "end"), c = pt(n, "center");
@@ -3926,7 +3970,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
-  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, dynamicRatsnest, selMode, connectedCopperIds,
+  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };
