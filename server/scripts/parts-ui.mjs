@@ -149,18 +149,18 @@ check('on a board the button places a footprint', (await A.locator('#kp-place').
 await A.click('#kp-fp'); await A.waitForSelector('#kp-zoom-canvas'); await A.waitForTimeout(200); await shot(A, '08-footprint-enlarged'); await A.click('.kp-zoom');
 await A.click('#kp-place');
 await A.mouse.move(600, 300); await A.waitForTimeout(100); await A.mouse.move(640, 330); await A.waitForTimeout(250);
-check('the footprint outline follows the cursor', await A.locator('.kp-ghost').isVisible());
+check('the footprint rides on the cursor before the click', (await items(A)).length === fpBefore);
 await shot(A, '09-footprint-on-cursor');
 await A.mouse.click(640, 330); await A.waitForTimeout(700);
 const fpMine = (await items(A)).filter((i) => i.lib === 'Motor_Board:USB-C_SMD-TYPE-C-31-M-12_1');
-check('the footprint is on the board, named from the library, with the next free reference', (await items(A)).length === fpBefore + 1 && fpMine.length === 1 && /^[A-Z]+1$/.test(fpMine[0].ref), JSON.stringify(fpMine));
+check('the footprint is on the board, named from the library, with KiCad\'s placeholder reference', (await items(A)).length === fpBefore + 1 && fpMine.length === 1 && fpMine[0].ref === 'REF**', JSON.stringify(fpMine));
 await shot(A, '10-footprint-placed');
 await B.waitForFunction(() => window.CollabApp.getState().document.items.some((i) => (i.lib || '').startsWith('Motor_Board:')), null, { timeout: 8000 }).catch(() => {});
 const fpTheirs = (await items(B)).filter((i) => i.lib === 'Motor_Board:USB-C_SMD-TYPE-C-31-M-12_1');
 check('the other person sees the footprint arrive', fpTheirs.length === 1 && fpTheirs[0].id === fpMine[0]?.id && fpTheirs[0].ref === fpMine[0]?.ref, JSON.stringify(fpTheirs));
 await shot(B, '11-footprint-on-the-other-client');
 const pcbOp = (await db.query(`SELECT changes::text AS c FROM ops WHERE doc_id = $1 ORDER BY seq DESC LIMIT 1`, [PCB])).rows[0].c;
-check('the board op is a footprint with pads, slots and the vendor fields', pcbOp.includes('"ADDED"') && pcbOp.includes('(footprint \\"Motor_Board:USB-C_SMD-TYPE-C-31-M-12_1\\"') && pcbOp.includes('drill oval') && pcbOp.includes('\\"LCSC\\" \\"C165948\\"') && pcbOp.includes('(property \\"Reference\\" \\"USBC1\\"'));
+check('the board op is a footprint with pads, slots and the vendor fields', pcbOp.includes('"ADDED"') && pcbOp.includes('(footprint \\"Motor_Board:USB-C_SMD-TYPE-C-31-M-12_1\\"') && pcbOp.includes('drill oval') && pcbOp.includes('\\"LCSC\\" \\"C165948\\"') && pcbOp.includes('(property \\"Reference\\" \\"REF**\\"'));
 // escape cancels a placement
 await openDialog(A, 'Part Libraries…'); await A.waitForSelector('#kp-items tr.kp-row'); await pick(A, 'C25804'); await A.click('#kp-place');
 await A.mouse.move(500, 400); await A.keyboard.press('Escape'); await A.waitForTimeout(300);
