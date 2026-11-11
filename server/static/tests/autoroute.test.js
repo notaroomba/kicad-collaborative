@@ -225,3 +225,16 @@ test("the Auto Place command commits the moves once as ordinary edits; view-only
   const ro = R.autoplace(Object.assign({}, ctx, { viewOnly: true }), {}); assert.equal(ro.moved, 0); assert.equal(commits.length, 1);
   assert.ok(P.ACTIONS.autoplace && P.ACTIONS.autoroute, "both commands are in the editor's action table");
 });
+
+test("fine-pitch pads: tracks neck down and leave the pads off the grid, within the rules", () => {
+  // eight 0.25 mm pads at 0.4 mm pitch whose rows fall between the rows of the 0.1 mm grid, each to a test pad
+  const nets = ["N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8"];
+  const chip = `(footprint "T:QFN" (layer "F.Cu") (uuid "fp-qfn") (at 100 50)
+    ${nets.map((nm, i) => `(pad "${i + 1}" smd roundrect (at 0 ${(i * 0.4 + 0.05).toFixed(2)}) (size 0.825 0.25) (roundrect_rratio 0.25) (layers "F.Cu" "F.Mask") (net "${nm}") (uuid "q-${i}"))`).join("\n    ")})`;
+  const doc = board(chip, ...nets.map((nm, i) => smd(106 + (i % 2) * 3, 44 + i * 2.2, nm)));
+  const settings = P.designSettings({ net_settings: { classes: [{ name: "Default", clearance: 0.15, track_width: 0.25, via_diameter: 0.6, via_drill: 0.3 }] }, rules: { min_track_width: 0.1 } });
+  const res = R.route(K, P, doc, settings, { pitch: 0.1 });
+  assert.equal(res.routed, 8, JSON.stringify(res.connections.filter((c) => !c.routed).map((c) => [c.net, c.reason, c.detail])));
+  for (const i of segs(res)) assert.equal(K.num(K.kid(i.node, "width")[1]), 0.15, "narrower than the class's 0.25 mm at these pads");
+  apply(doc, res); assert.deepEqual(errors(doc, settings), []); assert.equal(P.ratsnest(doc).length, 0);
+});

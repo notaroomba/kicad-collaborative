@@ -326,3 +326,7 @@ plan — the assistant's model, or a person. Everything here is pure (nothing is
 or the selected ones, committed as one undo step like any other edit. `scripts/place-bench.mjs` forgets a finished
 board's placement and tracks, places and routes it again and compares with the hand layout;
 `scripts/autoplace-ui.mjs` is the two-browser test.
+
+Fine-pitch parts: a connection that ends on a surface pad narrower than its class's track runs narrower (pad width
+less 0.1 mm, never below the board minimum), and where a pad's row falls between grid rows the track leaves the pad
+straight along its axis off the grid and joins the grid outside, each piece checked exactly.

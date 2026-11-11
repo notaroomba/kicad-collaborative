@@ -36,7 +36,7 @@ export interface ConnReport {
   routed: boolean; length: number; vias: number; bends: number; layers: string[]; detourRatio: number;
   reason?: "blocked" | "no-room" | "rule" | "budget"; detail?: string; blockedBy?: { nets: string[]; items: string[] };
 }
-export interface Anchor { p: Pt; layers: number[]; shape: Shape | null; cluster: number }
+export interface Anchor { p: Pt; layers: number[]; shape: Shape | null; cluster: number; narrow?: number; axis?: Pt }
 export interface Conn {
   id: number; net: string; cls: RuleClass; a: Anchor; b: Anchor; len: number;
   nodes: Node[] | null; shapes: Obstacle[]; viaCells: number[]; landed: number; rips: number; feat: Features | null; stubs: [Pt, Pt, number][]; zoneEnd: boolean;
@@ -52,6 +52,7 @@ export interface RouteResult {
 export interface Progress { done: number; total: number; routed: number; pass: number; net: string }
 
 interface Guide { allowed: boolean[] | null; allowVias: boolean; maxVias: number; avoid: [number, number, number, number][]; rank: number; priority: number }
+interface Found { res: ProbeResult; owner: Map<number, number>; flip: boolean; esc?: (Pt | undefined)[] }
 interface NetInfo { key: string; obj: any; cls: RuleClass; conns: Conn[]; clusters: number; zoneCells: Node[] | null; zoneCluster: number; guide: Guide }
 
 const r6 = (v: number) => { const x = +(+v).toFixed(6); return x === 0 ? 0 : x; };
@@ -154,7 +155,7 @@ export class Router {
           for (const p of c.anchors) {
             const ix = Math.round((p[0] - G.ox) / G.g), iy = Math.round((p[1] - G.oy) / G.g);
             if (ix < 0 || iy < 0 || ix >= W || iy >= H || (G.outside && G.outside[iy * W + ix])) continue;   // off the board: nothing to route to
-            anchors.push({ p: [p[0], p[1]], layers, shape: c.kind === "pad" || c.kind === "via" ? c.shape : { t: "circle", x: p[0], y: p[1], r: (c.width || 0.2) / 2 }, cluster: 0 });
+            anchors.push({ p: [p[0], p[1]], layers, shape: c.kind === "pad" || c.kind === "via" ? c.shape : { t: "circle", x: p[0], y: p[1], r: (c.width || 0.2) / 2 }, cluster: 0, narrow: c.kind === "pad" && c.pad.type === "smd" ? Math.min(c.pad.w, c.pad.h) : undefined, axis: c.kind === "pad" && c.pad.type === "smd" ? padAxis(c.pad) : undefined });
           }
         }
         if (anchors.length) clusters.push(anchors);
@@ -185,7 +186,7 @@ export class Router {
       for (let n = 1; n < clusters.length; n++) {
         let j = -1; for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i]![0] < bestTo[j]![0])) j = i;
         inTree[j] = true; const e = bestTo[j]!;
-        const conn: Conn = { id: this.conns.length, net: net.key, cls, a: e[2], b: e[1], len: e[0], nodes: null, shapes: [], viaCells: [], landed: -1, rips: 0, feat: null, stubs: [], zoneEnd: false };
+        const conn: Conn = { id: this.conns.length, net: net.key, cls: this.classFor(net.key, Math.min(e[1].narrow || Infinity, e[2].narrow || Infinity)), a: e[2], b: e[1], len: e[0], nodes: null, shapes: [], viaCells: [], landed: -1, rips: 0, feat: null, stubs: [], zoneEnd: false };
         this.conns.push(conn); info.conns.push(conn); update(j);
       }
       this.nets.push(info);
@@ -193,9 +194,12 @@ export class Router {
   }
 
   /** The rule class a net routes with (its netclass's track width, clearance and via), built on first use. */
-  classFor(netKey: string): RuleClass {
+  classFor(netKey: string, narrow = Infinity): RuleClass {
     const { P, s, G } = this; const nc = P.netclassOf(s, netKey); const plan = (this.opts.netOpts || {})[netKey]; const pw = plan && +plan.width! > 0 ? +plan.width! : 0;
-    const width = Math.max(pw || (nc.track_width !== undefined ? nc.track_width : s.trackWidth), s.minTrackWidth || 0);
+    let width = Math.max(pw || (nc.track_width !== undefined ? nc.track_width : s.trackWidth), s.minTrackWidth || 0);
+    // A fine-pitch pad cannot take a track as wide as itself and still keep its neighbours' clearance on a grid:
+    // a connection that ends on one runs narrower, as people neck tracks down at such pads.
+    if (narrow < width + 0.1) width = Math.max(s.minTrackWidth || 0.1, Math.min(width, +(narrow - 0.1).toFixed(3)), 0.1);
     const clr = P.netClearance(s, netKey); const viaD = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
     const viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
     const key = `${width}/${clr}/${viaD}/${viaDrill}`; return G.classes.get(key) || buildClass(G, key, width, clr, viaD, viaDrill);
@@ -224,8 +228,8 @@ export class Router {
 
   // ------------------------------------------------------------------ lifting a net's own copper out of its map
   private netOf(key: string): NetInfo { return this.nets.find((n) => n.key === key)!; }
-  lift(net: NetInfo, sign: number): void {
-    const G = this.G, c = net.cls;
+  lift(net: NetInfo, sign: number, c: RuleClass = net.cls): void {
+    const G = this.G;
     for (const o of G.obstacles.get(net.key) || []) {
       stampClass(G, c, o, -sign, true);
       if (o.thru) {   // a plated hole: a pad or via through every layer
@@ -254,7 +258,44 @@ export class Router {
       const free = layers.filter((l) => !maps[l][iy * G.W + ix]); if (!free.length) continue;
       bd = d; best = { ix, iy, layers: free };
     }
-    return best;
+    return best || this.escape(a, maps, layers);
+  }
+  /**
+   * A pad with no legal track centre on the grid (a fine-pitch pad whose row falls between grid rows): leave it
+   * straight along its own axis, off the grid, to the first point from which a grid cell is reached — both pieces
+   * checked exactly against everything around.
+   */
+  private escape(a: Anchor, maps: Uint16Array[], layers: number[]): Terminal | null {
+    if (!a.axis || !this.cur) return null; const G = this.G, w = this.cur.cls.width, net = this.cur.net, clr = this.cur.cls.clr;
+    for (let t = G.g; t <= 3; t += G.g / 2) for (const sgn of [1, -1]) {
+      const q: Pt = [r6(a.p[0] + a.axis[0] * t * sgn), r6(a.p[1] + a.axis[1] * t * sgn)]; const ix = Math.round((q[0] - G.ox) / G.g), iy = Math.round((q[1] - G.oy) / G.g);
+      if (ix < 0 || iy < 0 || ix >= G.W || iy >= G.H) continue; const free = layers.filter((l) => !maps[l][iy * G.W + ix]); if (!free.length) continue;
+      const c: Pt = [r6(G.ox + ix * G.g), r6(G.oy + iy * G.g)];
+      const ok = free.filter((l) => this.clearOf({ t: "seg", a: a.p, b: q, r: w / 2 }, l, net, clr) && this.clearOf({ t: "seg", a: q, b: c, r: w / 2 }, l, net, clr));
+      if (ok.length) return { ix, iy, layers: ok, esc: q };
+    }
+    return null;
+  }
+  private cur: Conn | null = null; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
+  /** Exact: does a piece of track keep its clearance to the board's copper, holes and edges, and to this run's routes? */
+  private clearOf(shape: Shape, layer: number, net: string, clr: number): boolean {
+    const G = this.G, P = this.P, B = 2; const bbOf = (s: Shape): number[] => s.t === "circle" ? [s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r] : s.t === "seg" ? [Math.min(s.a[0], s.b[0]) - s.r, Math.min(s.a[1], s.b[1]) - s.r, Math.max(s.a[0], s.b[0]) + s.r, Math.max(s.a[1], s.b[1]) + s.r] : null as any;
+    if (!this.oidx) {
+      const idx = this.oidx = new Map(); const full = (s: Shape): number[] => { const b = bbOf(s); if (b) return b; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; const pts: Pt[] = s.pts || [[s.x - Math.hypot(s.w, s.h) / 2, s.y - Math.hypot(s.w, s.h) / 2], [s.x + Math.hypot(s.w, s.h) / 2, s.y + Math.hypot(s.w, s.h) / 2]]; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } const o = s.r || 0; return [x0 - o, y0 - o, x1 + o, y1 + o]; };
+      const add = (o: Obstacle) => { const bb = full(o.shape); const e = { o, bb }; for (let y = Math.floor(bb[1] / B); y <= Math.floor(bb[3] / B); y++) for (let x = Math.floor(bb[0] / B); x <= Math.floor(bb[2] / B); x++) { const k = x + "," + y; let l = idx.get(k); if (!l) idx.set(k, l = []); l.push(e); } };
+      for (const list of G.obstacles.values()) for (const o of list) { if (o.shape.t === "path" && o.shape.pts.length > 2) { for (let i = 0; i + 1 < o.shape.pts.length; i++) add({ net: o.net, layers: o.layers, clr: o.clr, edge: o.edge, shape: { t: "seg", a: o.shape.pts[i], b: o.shape.pts[i + 1], r: o.shape.r || 0 } }); } else add(o); }
+    }
+    const bb = bbOf(shape); const m = Math.max(clr, this.s.clearance, G.edgeClr) + 0.3; const seen = new Set<any>();
+    for (let y = Math.floor((bb[1] - m) / B); y <= Math.floor((bb[3] + m) / B); y++) for (let x = Math.floor((bb[0] - m) / B); x <= Math.floor((bb[2] + m) / B); x++) for (const e of this.oidx.get(x + "," + y) || []) {
+      if (seen.has(e)) continue; seen.add(e); if (e.o.net && e.o.net === net) continue; if (!e.o.layers.includes(layer)) continue;
+      const need = (e.o.edge ? G.edgeClr : Math.max(e.o.clr, clr)) + 1e-3; if (e.bb[0] > bb[2] + need || e.bb[2] < bb[0] - need || e.bb[1] > bb[3] + need || e.bb[3] < bb[1] - need) continue;
+      if (P.shapeGap(e.o.shape, shape) < need) return false;
+    }
+    for (const c of this.conns) {
+      if (!c.nodes || c.net === net) continue; const need = Math.max(c.cls.clr, clr) + 1e-3;
+      for (const o of c.shapes) { if (!o.layers.includes(layer)) continue; const ob = bbOf(o.shape); if (ob[0] > bb[2] + need || ob[2] < bb[0] - need || ob[1] > bb[3] + need || ob[3] < bb[1] - need) continue; if (P.shapeGap(o.shape, shape) < need) return false; }
+    }
+    return true;
   }
   /** Islands of a net joined by the routes laid so far. */
   private components(net: NetInfo): number[] {
@@ -273,8 +314,8 @@ export class Router {
 
   // ------------------------------------------------------------------ one connection
   /** Search a route for the connection in the given maps (the net's own copper is lifted while it runs). */
-  find(conn: Conn, soft: boolean, collect?: Features[]): { res: ProbeResult; owner: Map<number, number>; flip: boolean } | null {
-    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1);
+  find(conn: Conn, soft: boolean, collect?: Features[]): Found | null {
+    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1, conn.cls); this.cur = conn;
     try {
       const maps = soft ? conn.cls.fixed : conn.cls.full, vmaps = soft ? conn.cls.vfixed : conn.cls.vfull;
       const comp = this.components(net); const owner = new Map<number, number>();
@@ -310,12 +351,12 @@ export class Router {
         if (res) {
           res.nodes = this.mitre(simplify(res.nodes), maps);
           if (res.onTerm) { const e = res.nodes[res.nodes.length - 1]; const k = e.l * G.W * G.H + e.iy * G.W + e.ix; if (zoneSet && zoneSet.has(k) && !owner.has(k)) (res as any).zoneEnd = true; }
-          return { res, owner, flip };
+          return { res, owner, flip, esc: [src.esc, tgt ? tgt.esc : undefined] };
         }
         if (win.x0 === 0 && win.y0 === 0 && win.x1 === G.W - 1 && win.y1 === G.H - 1) break;
       }
       return null;
-    } finally { this.lift(net, -1); }
+    } finally { this.lift(net, -1, conn.cls); }
   }
   /** Chamfer the 90° corners the search was forced into, as far as the neighbouring copper allows. */
   private mitre(nodes: Node[], maps: Uint16Array[]): Node[] {
@@ -342,21 +383,22 @@ export class Router {
     return simplify(out);
   }
   /** Lay a found route: its copper becomes an obstacle for every other net. */
-  commit(conn: Conn, found: { res: ProbeResult; owner: Map<number, number>; flip: boolean }): void {
+  commit(conn: Conn, found: Found): void {
     const G = this.G, { res, flip } = found; const nodes = res.nodes; const w = conn.cls.width; const all = G.layers.map((_, i) => i);
     const shapes: Obstacle[] = [], viaCells: number[] = []; const clr = conn.cls.clr; const net = this.netOf(conn.net);
     // thru cells are only known while the net is lifted
-    this.lift(net, 1);
+    this.lift(net, 1, conn.cls);
     for (let i = 0; i + 1 < nodes.length; i++) {
       const a = nodes[i], b = nodes[i + 1];
       if (a.l !== b.l) { const gi = a.iy * G.W + a.ix; if (!G.thru[gi] && !viaCells.includes(gi)) { viaCells.push(gi); const p = this.mm(a); shapes.push({ net: conn.net, layers: all, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr }); } }
       else shapes.push({ net: conn.net, layers: [a.l], shape: { t: "seg", a: this.mm(a), b: this.mm(b), r: w / 2 }, clr });
     }
-    this.lift(net, -1);
+    this.lift(net, -1, conn.cls);
     conn.nodes = nodes; conn.shapes = shapes; conn.viaCells = viaCells; conn.stubs = []; conn.feat = featuresOf(G, nodes, this.pref); conn.zoneEnd = !!(res as any).zoneEnd;
     const A = flip ? conn.b : conn.a, B = flip ? conn.a : conn.b; const first = nodes[0], last = nodes[nodes.length - 1];
-    const stub = (anchor: Anchor, n: Node) => { const p = this.mm(n); if (Math.hypot(p[0] - anchor.p[0], p[1] - anchor.p[1]) > 1e-4) { conn.stubs.push([anchor.p, p, n.l]); conn.shapes.push({ net: conn.net, layers: [n.l], shape: { t: "seg", a: anchor.p, b: p, r: w / 2 }, clr }); } };
-    stub(A, first); if (!res.onTerm) stub(B, last);
+    const piece = (from: Pt, to: Pt, l: number) => { if (Math.hypot(to[0] - from[0], to[1] - from[1]) > 1e-4) { conn.stubs.push([from, to, l]); conn.shapes.push({ net: conn.net, layers: [l], shape: { t: "seg", a: from, b: to, r: w / 2 }, clr }); } };
+    const stub = (anchor: Anchor, n: Node, esc?: Pt) => { const p = this.mm(n); if (esc) { piece(anchor.p, esc, n.l); piece(esc, p, n.l); } else piece(anchor.p, p, n.l); };
+    const esc = found.esc || []; stub(A, first, esc[0]); if (!res.onTerm) stub(B, last, esc[1]);
     conn.landed = -1;
     if (res.onTerm) { const o = found.owner.get(last.l * G.W * G.H + last.iy * G.W + last.ix); if (o !== undefined) conn.landed = o; }
     this.place(conn, 1);
@@ -387,7 +429,7 @@ export class Router {
   }
   /** Is every cell of a route free in the full map (after its blockers were ripped)? */
   private fits(conn: Conn, res: ProbeResult): boolean {
-    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1);
+    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1, conn.cls);
     try {
       const maps = conn.cls.full, nodes = res.nodes;
       for (let i = 0; i + 1 < nodes.length; i++) {
@@ -397,7 +439,7 @@ export class Router {
         for (let k = 0; k <= n; k++) if (maps[a.l][(a.iy + sy * k) * G.W + a.ix + sx * k]) return false;
       }
       return true;
-    } finally { this.lift(net, -1); }
+    } finally { this.lift(net, -1, conn.cls); }
   }
 
   // ------------------------------------------------------------------ the run
@@ -487,7 +529,7 @@ export class Router {
       if (c.why === "budget") { rep.reason = "budget"; rep.detail = "the run stopped before this connection was tried"; continue; }
       if (c.why === "rule") { rep.reason = "rule"; const o = this.ruleHit.get(c.id); rep.blockedBy = { nets: o ? [o] : [], items: [] }; rep.detail = "the route found did not keep its clearance in the exact check"; continue; }
       const net = this.netOf(c.net); let ends: boolean[] = []; const gd = net.guide;
-      this.lift(net, 1); try { ends = [c.a, c.b].map((e) => !!this.access(e, c.cls.fixed)); } finally { this.lift(net, -1); }
+      this.lift(net, 1, c.cls); this.cur = c; try { ends = [c.a, c.b].map((e) => !!this.access(e, c.cls.fixed)); } finally { this.lift(net, -1, c.cls); }
       const soft = this.find(c, true);
       if (!soft) { rep.reason = "no-room"; rep.detail = !ends[0] || !ends[1] ? `no free way out of ${this.padName(!ends[0] ? c.a.p : c.b.p)}` : "no path past the copper, holes, keep-outs and edges already on the board" + (gd.allowed || gd.avoid.length || gd.maxVias < Infinity || !gd.allowVias ? " within the plan's limits for this net" : ""); continue; }
       const bl = this.blockers(c, soft.res); rep.reason = "blocked"; rep.blockedBy = { nets: Array.from(new Set(bl.map((b) => b.net))), items: [] };
@@ -522,6 +564,11 @@ export class Router {
 export function refOf(K: any, node: any): string {
   const p = K.kids(node, "property").find((q: any) => K.str(q[1]) === "Reference"); if (p) return K.str(p[2]);
   const t = K.kids(node, "fp_text").find((q: any) => K.str(q[1]) === "reference"); return t ? K.str(t[2]) : "";
+}
+/** The direction a pad's long side runs in, on the board. */
+function padAxis(pad: any): Pt {
+  const r = (pad.rot || 0) * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); const lx = pad.w >= pad.h ? 1 : 0, ly = pad.w >= pad.h ? 0 : 1;
+  return [lx * c + ly * s, -lx * s + ly * c];
 }
 function pointInPolyPts(pts: Pt[], p: Pt): boolean {
   let inside = false;
