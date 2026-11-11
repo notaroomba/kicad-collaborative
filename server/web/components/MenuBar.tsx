@@ -98,7 +98,7 @@ const isCheckable = (id: string) => MENU_CHECKS.has(id);
 
 // ---------------------------------------------------------------- panels
 const PANEL = "dd fixed min-w-[230px] bg-panel border border-line rounded-md p-1 z-50 shadow-panel overflow-y-auto overflow-x-hidden";
-const ROW = "mi flex items-center w-full text-left bg-transparent border-0 py-[5px] pl-1.5 pr-2.5 rounded-xs text-ink no-underline hover:no-underline cursor-default whitespace-nowrap";
+const ROW = "mi flex items-center w-full text-left border-0 py-[5px] pl-1.5 pr-2.5 rounded-xs text-ink no-underline hover:no-underline cursor-default whitespace-nowrap";
 const KBD = "ml-6 text-xs font-mono font-normal leading-[normal] text-ink-3";
 
 interface PanelProps {
@@ -150,7 +150,7 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
           const icon = SUBMENU_ICONS[n.title];
           return (
             <div key={"sub" + n.title} data-idx={i} data-sub={n.title} role="menuitem" aria-haspopup="true" aria-expanded={openIdx === i}
-              className={cx(ROW, "sub", active && "bg-accent text-white")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
+              className={cx(ROW, "sub", active ? "bg-accent text-white" : "bg-transparent")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
               <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{icon ? <KIcon name={icon} size={16} /> : null}</span>
               <span className="flex-1">{n.title}</span><span className="ml-6 text-2xs opacity-70">▶</span>
               {openIdx === i ? <Panel nodes={n.nodes} depth={depth + 1} anchor={rectOf(i)} parentPanel={ownRect} sel={sel} open={open} c={c} onHover={onHover} onEnterPanel={onEnterPanel} onRun={onRun} onOpenSub={onOpenSub} /> : null}
@@ -168,7 +168,8 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
             <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-white")}>{k}</kbd> : null}
           </>
         );
-        const cls = cx(ROW, active && !off && "bg-accent text-white", why && "desk opacity-50", off && "off opacity-40", on && "on");
+        // (bg-transparent only when not highlighted: in the stylesheet it comes after bg-accent and would win)
+        const cls = cx(ROW, active && !off ? "bg-accent text-white" : "bg-transparent", why && "desk opacity-50", off && "off opacity-40", on && "on");
         if (LINKS[id]) return <a className={cls} key={id + i} href={LINKS[id]} target="_blank" rel="noreferrer" role="menuitem" data-idx={i} data-uiact={id} onMouseMove={() => onHover(depth, i)} onClick={(ev) => { ev.preventDefault(); onRun(n, ev.currentTarget); }}>{body}</a>;
         return (
           <button type="button" className={cls} key={id + i} role={checkable ? "menuitemcheckbox" : "menuitem"} aria-checked={checkable ? on : undefined} aria-disabled={off ? true : undefined}
@@ -359,7 +360,7 @@ export function MenuBar() {
           return (
             <div className={cx("menu relative flex-none", isOpen && "open")} data-menu={m.title.toLowerCase()} data-menu-idx={i} key={m.title}>
               <button type="button" role="menuitem" aria-haspopup="true" aria-expanded={isOpen} tabIndex={-1}
-                className={cx("bg-transparent border-0 py-1 px-2.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", (isOpen || focus === i) && "bg-paper shadow-[inset_0_0_0_1px_var(--line)]")}
+                className={cx("border-0 py-1 px-2.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", (isOpen || focus === i) ? "bg-paper shadow-[inset_0_0_0_1px_var(--line)]" : "bg-transparent")}
                 onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (isOpen) close(); else openMenu(i); }}
                 onMouseEnter={() => { if (st && !isOpen) openMenu(i); else if (focus !== null && !st) setFocus(i); }}>
                 {showKeys && at >= 0 ? <>{m.title.slice(0, at)}<u>{m.title.charAt(at)}</u>{m.title.slice(at + 1)}</> : m.title}
