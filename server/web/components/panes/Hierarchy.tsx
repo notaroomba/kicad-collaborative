@@ -1,30 +1,48 @@
-// Hierarchy.tsx — the schematic hierarchy: the root sheet first, then every other sheet file.
-import { dispatch, useApp } from "../../store";
+// Hierarchy.tsx — the schematic Hierarchy navigator (eeschema/widgets/hierarchy_pane.cpp): the tree of
+// sheets, each "name (page N)", the sheet on screen highlighted.  A click opens the sheet; the right-click
+// menu is KiCad's: Edit Page Number, Rename, Expand All, Collapse All.
+import { useState } from "react";
+import type { HierNode } from "../../panels-api";
+import { useApp } from "../../store";
 import { cx } from "../../util";
+import { ContextMenu, Twist, pdispatch, useContextMenu, usePanels, type MenuItem } from "./widgets";
 
-// The pane body (the `.kbody` contract): scrolls, 6px/8px padding, sheet-coloured, 12px type.
-const BODY = "kbody ktree overflow-auto min-h-0 flex-auto px-2 py-1.5 bg-paper text-sm";
-// A tree row: flex, centred, 6px gap, 2px/4px padding, 2px radius, panel hover, sel fill when `.cur`; the left
-// padding indents child sheets (18px) under the root (4px).  `node` / `ktree` stay as plain hooks.
-const NODE = "node flex items-center gap-1.5 py-0.5 pr-1 rounded-xs cursor-pointer whitespace-nowrap hover:bg-panel cur:bg-sel";
+// The pane body (the `.kbody` contract): scrolls, sheet-coloured, 12px type.
+const BODY = "kbody ktree overflow-auto min-h-0 flex-auto py-1 bg-paper text-sm";
+const NODE = "node flex items-center h-[20px] pr-1.5 cursor-default whitespace-nowrap hover:bg-panel cur:bg-sel cur:font-semibold";
+
+function allPaths(n: HierNode, out: string[] = []): string[] { if (n.children.length) out.push(n.path); for (const c of n.children) allPaths(c, out); return out; }
 
 export function HierarchyPane() {
-  const docs = useApp((s) => s.document.docs);
-  const rootId = useApp((s) => s.document.rootDocId);
-  const curId = useApp((s) => s.document.docId);
-  const projectName = useApp((s) => (s.project ? s.project.name : ""));
-  const sch = docs.filter((d) => d.docType === "kicad_sch").sort((a, b) => (a.docId === rootId ? -1 : b.docId === rootId ? 1 : a.path.localeCompare(b.path)));
+  const root = usePanels((s) => s.hierarchy.root);
+  const viewOnly = useApp((s) => s.viewOnly);
+  const [closed, setClosed] = useState<Set<string>>(() => new Set());
+  const menu = useContextMenu();
+  const toggle = (p: string) => { const n = new Set(closed); if (n.has(p)) n.delete(p); else n.add(p); setClosed(n); };
+  const items = (n: HierNode): MenuItem[] => [
+    { label: "Edit Page Number", run: () => pdispatch({ t: "hierPage", path: n.path }), disabled: viewOnly || !n.sheetId },
+    { label: "Rename", run: () => pdispatch({ t: "hierRename", path: n.path }), disabled: viewOnly || !n.sheetId },
+    "-",
+    { label: "Expand All", run: () => setClosed(new Set()) },
+    { label: "Collapse All", run: () => setClosed(new Set(root ? allPaths(root) : [])) },
+  ];
+  const row = (n: HierNode, depth: number): JSX.Element => {
+    const open = !closed.has(n.path);
+    return (
+      <div key={n.path}>
+        <div className={cx(NODE, n.current && "cur", !n.docId && "text-ink-3")} style={{ paddingLeft: 4 + depth * 14 }} data-doc={n.docId || undefined} data-path={n.path} title={n.file}
+          onClick={() => pdispatch({ t: "hierOpen", path: n.path })} onContextMenu={(ev) => menu.open(ev, items(n))}>
+          <Twist open={open} leaf={!n.children.length} onToggle={() => toggle(n.path)} />
+          <span>{n.name}{n.page ? ` (page ${n.page})` : ""}</span>
+        </div>
+        {open ? n.children.map((c) => row(c, depth + 1)) : null}
+      </div>
+    );
+  };
   return (
     <div className={BODY} id="hier">
-      {sch.length ? sch.map((d) => {
-        const root = d.docId === rootId;
-        return (
-          <div key={d.docId} className={cx(NODE, root ? "pl-1" : "pl-[18px]", d.docId === curId && "cur")} data-doc={d.docId} title={d.path}
-            onClick={() => { if (d.docId !== curId) dispatch({ type: "openDoc", docId: d.docId }); }}>
-            {root ? "▾ " : "· "}{root ? (projectName || "Root") : d.path.split("/").pop()!.replace(/\.kicad_sch$/, "")}{root ? "" : <> <span className="muted">(page)</span></>}
-          </div>
-        );
-      }) : <p className="note">No schematic sheets in this project.</p>}
+      {root ? row(root, 0) : <p className="note px-2">No schematic sheets in this project.</p>}
+      <ContextMenu at={menu.at} onClose={menu.close} />
     </div>
   );
 }

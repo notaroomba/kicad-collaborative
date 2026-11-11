@@ -40,7 +40,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
     ["File", ["save", "-", "share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "findAndReplace", "-", "deleteTool"]],
-    ["View", [["Panels", ["showProperties", "showHierarchy", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance", "showAssistant"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
+    ["View", [["Panels", ["showProperties", "showHierarchy", "showNetNavigator", "showSearch", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance", "showAssistant"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
     ["Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea", "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],
     ["Inspect", ["runERC", "clearMarkers", "-", "showSimulator"]],
     ["Tools", ["updatePcbFromSchematic", "showPcbNew", "-", "showSymbolEditor", "showFootprintEditor", "-", "annotate", "assignFootprints", "editSymbolFields", "generateBOM"]],
@@ -50,7 +50,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   pcb: [
     ["File", ["save", "-", "share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "-", "deleteTool"]],
-    ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
+    ["View", [["Panels", ["showLayersManager", "showProperties", "showSearch", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
     ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin"]],
     ["Route", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew"]],
     ["Inspect", ["runDRC", "clearMarkers", "-", "netInspector", "boardStatistics", "inspectClearance", "-", "measureTool"]],
@@ -88,19 +88,19 @@ export const LINKS: Record<string, string> = {
 };
 
 /** Docked pane ids and the KiCad "show …" action that toggles each. */
-export const PANE_ACTION: Record<string, string> = { props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showHistory", peers: "showPeers", comments: "showComments", appearance: "showLayersManager" };
-export const PANE_TITLES: Record<string, string> = { props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance" };
+export const PANE_ACTION: Record<string, string> = { props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showHistory", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
+export const PANE_TITLES: Record<string, string> = { props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator" };
 /** Dock layout per editor: Properties · Hierarchy · Selection Filter · History left; the board keeps Appearance (with the filter below it) on the right. */
-export const DOCKS: Record<Editor, { left: string[]; right: string[] }> = {
-  sch: { left: ["props", "hier", "filter", "history", "peers", "comments", "appearance"], right: [] },
-  pcb: { left: ["props", "history", "peers", "comments"], right: ["appearance", "filter"] },
+export const DOCKS: Record<Editor, { left: string[]; right: string[]; bottom?: string[] }> = {
+  sch: { left: ["props", "hier", "netnav", "filter", "history", "peers", "comments", "appearance"], right: [], bottom: ["search"] },
+  pcb: { left: ["props", "history", "peers", "comments"], right: ["appearance", "filter"], bottom: ["search"] },
 };
 /** Panes hidden until the user opens them (per editor). */
-export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance"], pcb: ["peers", "comments"] };
+export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
 
 export const FILTERS: Record<Editor, [string, string][]> = {
-  sch: [["symbols", "Symbols"], ["pins", "Pins"], ["wires", "Wires"], ["labels", "Labels"], ["graphics", "Graphics"], ["images", "Images"], ["text", "Text"], ["other", "Other items"]],
-  pcb: [["footprints", "Footprints"], ["text", "Text"], ["tracks", "Tracks"], ["vias", "Vias"], ["pads", "Pads"], ["graphics", "Graphics"], ["zones", "Zones"], ["dimensions", "Dimensions"], ["other", "Other items"]],
+  sch: [["symbols", "Symbols"], ["pins", "Pins"], ["wires", "Wires"], ["labels", "Labels"], ["graphics", "Graphics"], ["images", "Images"], ["text", "Text"], ["other", "Other items"], ["ruleAreas", "Rule Areas"]],
+  pcb: [["footprints", "Footprints"], ["text", "Text"], ["tracks", "Tracks"], ["vias", "Vias"], ["pads", "Pads"], ["graphics", "Graphics"], ["zones", "Zones"], ["keepouts", "Rule Areas"], ["dimensions", "Dimensions"], ["gridItems", "Grid Items"], ["points", "Points"], ["other", "Other items"]],
 };
 
 export const ZOOM_PRESETS = [10, 25, 50, 75, 100, 150, 200, 300, 500, 1000];

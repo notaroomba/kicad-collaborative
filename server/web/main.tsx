@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 // chrome styling: web/styles/tailwind.css (built by @tailwindcss/cli into static/dist/ui.css)
 import { MenuBar } from "./components/MenuBar";
 import { AuxToolbar, LeftOptionsToolbar, RightDrawToolbar, TopToolbar } from "./components/Toolbar";
-import { DockLeft, DockRight } from "./components/Dock";
+import { DockBottom, DockLeft, DockRight } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
 import { Popover, SignInOverlay, Toast } from "./components/Overlays";
 import { AssistantDock } from "./ai/Assistant";
@@ -32,6 +32,7 @@ mount("ui-tbRight", <RightDrawToolbar />);
 mount("ui-dockR", <DockRight />);
 mount("ui-dockAI", <AssistantDock />);
 mount("ui-dockPlugins", <PluginDock />);
+mount("ui-dockB", <DockBottom />);
 mount("ui-statusbar", <StatusBar />);
 mount("ui-home", <><Home /><Toasts /></>);
 mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /></>);

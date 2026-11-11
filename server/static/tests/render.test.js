@@ -1280,6 +1280,27 @@ test("grid: KiCad's dots / lines / crosses, thinned by the coarse tick until mar
   assert.strictEqual(draw(20, { gridStyle: "crosses" }).calls.moveTo, 2 * 2 * 2);
 });
 
+test("appearance options: layer colours, object visibility and opacity, per-item net colours", () => {
+  const doc = K.parseDoc(PCB_HEAD + '(segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1) (uuid "s1")) ' +
+    '(gr_line (start 0 5) (end 10 5) (stroke (width 0.2) (type solid)) (layer "F.SilkS") (uuid "g1")))', "kicad_pcb");
+  const draw = (opts) => { const ctx = recCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), Object.assign({ frame: false }, opts)); return ctx.ops.filter((o) => o.op === "stroke"); };
+  const cu = K.pcbColor("F.Cu"), silk = K.pcbColor("F.SilkS");
+  const base = draw({});
+  assert(base.some((o) => o.stroke === cu) && base.some((o) => o.stroke === silk), "theme colours by default");
+  const recol = draw({ layerColors: new Map([["F.Cu", "#22B84C"]]) });
+  assert(recol.some((o) => o.stroke === "#22B84C") && !recol.some((o) => o.stroke === cu), "the layer's colour is replaced");
+  assert(recol.some((o) => o.stroke === silk), "other layers keep theirs");
+  const hid = draw({ objects: { hide: new Set(["tracks"]), show: new Set(), opacity: {} } });
+  assert(!hid.some((o) => o.stroke === cu) && hid.some((o) => o.stroke === silk), "hidden tracks are not drawn; graphics still are");
+  const dim = draw({ objects: { hide: new Set(), show: new Set(), opacity: { tracks: 0.3 } } });
+  const a0 = base.find((o) => o.stroke === cu).alpha, a1 = dim.find((o) => o.stroke === cu).alpha;
+  assert(Math.abs(a1 - a0 * 0.3) < 0.01, `track opacity scales alpha (${a0} -> ${a1})`);
+  assert.strictEqual(dim.find((o) => o.stroke === silk).alpha, base.find((o) => o.stroke === silk).alpha, "graphics keep their alpha");
+  const tint = draw({ itemColors: new Map([["s1", "#E2C12C"]]) });
+  assert(tint.some((o) => o.stroke === "#E2C12C") && !tint.some((o) => o.stroke === cu), "an item colour tints the track");
+});
+
+
 Promise.all(PENDING).then(() => {
   console.log(`${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

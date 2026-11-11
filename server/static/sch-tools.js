@@ -602,6 +602,7 @@ function hitNonSymbol(doc, x, y, tol) {
 // Our pick for the select tool; null hands the click back to app.js (symbols, empty space).
 function pickNonSymbol(ctx, mm) {
   const hit = hitNonSymbol(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (!hit) return null;
+  const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(hit)) return null;   // the Selection Filter pane
   const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
   if (symId && !LINE_KINDS.has(hit.kind)) { const sym = ctx.doc.items.get(symId); if (sym && area(sym.bbox) < area(rectOf(hit))) return null; }
   return hit;

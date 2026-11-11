@@ -2416,12 +2416,15 @@ function drawOverlay(c, view, ctx) {
     const lines = ratsnestLines(doc); const sel = S.localRatsnest ? selectionIds(ctx) : null;
     c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.lineWidth = 1 * px; c.beginPath();
     const curved = K.pcbSizes.state.curvedRatsnest;   // RATSNEST_VIEW_ITEM: a Bezier whose two control points sit 10% off the midpoint
-    for (const l of lines) {
-      if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; c.moveTo(l.a[0], l.a[1]);
+    const trace = (l) => {
+      c.moveTo(l.a[0], l.a[1]);
       if (curved) { const dx = l.b[0] - l.a[0], dy = l.b[1] - l.a[1], mx = l.a[0] + 0.5 * dx - 0.1 * dy, my = l.a[1] + 0.5 * dy + 0.1 * dx; c.bezierCurveTo(mx, my, mx, my, l.b[0], l.b[1]); }
       else c.lineTo(l.b[0], l.b[1]);
-    }
+    };
+    const tinted = S.ratsnestColors && S.ratsnestColors.size ? [] : null;   // net name -> colour, set by the Appearance pane's Nets tab
+    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
     c.stroke();
+    if (tinted) for (const l of tinted) { c.strokeStyle = S.ratsnestColors.get(l.net); c.beginPath(); trace(l); c.stroke(); }
   }
   // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
   { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
@@ -2431,7 +2434,7 @@ function drawOverlay(c, view, ctx) {
   // DRC markers: KiCad's red pins, an X in a ring
   if (S.markers.length) {
     const r = 6 * px; c.lineWidth = 1.5 * px;
-    for (const m of S.markers) { c.strokeStyle = m.severity === "error" ? MARKER : MARKER_WARN; c.globalAlpha = 0.95; ring(c, [m.x, m.y], r); line(c, [m.x - r * 0.6, m.y - r * 0.6], [m.x + r * 0.6, m.y + r * 0.6]); line(c, [m.x + r * 0.6, m.y - r * 0.6], [m.x - r * 0.6, m.y + r * 0.6]); }
+    for (const m of S.markers) { if (S.hiddenSeverities && S.hiddenSeverities.has(m.severity)) continue; c.strokeStyle = m.severity === "error" ? MARKER : MARKER_WARN; c.globalAlpha = 0.95; ring(c, [m.x, m.y], r); line(c, [m.x - r * 0.6, m.y - r * 0.6], [m.x + r * 0.6, m.y + r * 0.6]); line(c, [m.x + r * 0.6, m.y - r * 0.6], [m.x - r * 0.6, m.y + r * 0.6]); }
   }
   // drag preview: the moved segment and its neighbours at their new places
   if (S.drag && S.drag.anchor) {
@@ -2589,6 +2592,7 @@ const pcb = {
     bind(ctx); if (!ctx.doc || (ev.button !== undefined && ev.button !== 0)) return false;
     const it = hitTestItem(ctx.doc, mm[0], mm[1], HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1));
     if (!it) return false;
+    const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(it)) return false;   // the Selection Filter pane (kinds, locked items, hidden objects)
     const f = ctx.selFilter || {};
     if ((it.kind === "segment" || it.kind === "arc") && f.tracks === false) return false;
     if (it.kind === "via" && f.vias === false) return false;

@@ -74,13 +74,13 @@ const clickSlop = (): number => 5 / Math.max(1, E.zoom * 0.6);
 function pcbPick(mm: Mm): KItem | null {
   const d = doc(), t = pcbTools(); if (!d || !t) return null;
   const it = t.hitTestItem(d, mm[0], mm[1], 0.15 + 2 / Math.max(1, pxPerMm()));
-  return it && filterAllows(it.kind) ? it : null;
+  return it && filterAllows(it.kind, it) ? it : null;
 }
 function schPick(mm: Mm): KItem | null {
   const m = CollabTools.sch; if (!m || E.viewOnly) return null;
   const pick = m._ && (m._.pickNonSymbol as ((ctx: ToolCtx, mm: Mm) => KItem | null) | undefined);
   if (!pick) return null;
-  try { const it = pick(toolCtx(), mm); return it && filterAllows(it.kind) ? it : null; } catch { return null; }
+  try { const it = pick(toolCtx(), mm); return it && filterAllows(it.kind, it) ? it : null; } catch { return null; }
 }
 
 /** What a plain left click at `mm` selects, without touching the selection: the field, movable item or module item. */
@@ -142,7 +142,7 @@ export function hitsAt(mm: Mm): KItem[] {
   const out: KItem[] = [];
   for (const it of d.items.values()) {
     const b = it.bbox; if (!b || x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol) continue;
-    if (!filterAllows(it.kind)) continue;
+    if (!filterAllows(it.kind, it)) continue;
     let hit = false;
     if (it.kind === "symbol" || it.kind === "sheet") hit = true;
     else for (const g of it.geom) {

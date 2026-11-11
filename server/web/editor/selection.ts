@@ -32,19 +32,23 @@ export function fieldLocalDelta(item, dx, dy) {
 export function fieldOf(item, name) { return window.KDialogs && KDialogs._ ? KDialogs._.fieldNode(item.node, name) : null; }
 
 // KiCad's selection filter categories for an item kind.
-export function filterKey(kind) {
-  if (isSch()) return kind === "symbol" ? "symbols" : (kind === "wire" || kind === "bus") ? "wires" : /label|netclass_flag/.test(kind) ? "labels" : kind === "image" ? "images" : (kind === "text" || kind === "text_box") ? "text" : /rectangle|circle|arc|polyline|bezier|rule_area/.test(kind) ? "graphics" : "other";
-  return kind === "footprint" ? "footprints" : (kind === "segment" || kind === "arc") ? "tracks" : kind === "via" ? "vias" : kind === "zone" ? "zones" : kind === "dimension" ? "dimensions" : (kind === "gr_text" || kind === "gr_text_box") ? "text" : /^gr_|image|table/.test(kind) ? "graphics" : "other";
+export function filterKey(kind, it) {
+  if (isSch()) return kind === "symbol" ? "symbols" : (kind === "wire" || kind === "bus") ? "wires" : /label|netclass_flag/.test(kind) ? "labels" : kind === "image" ? "images" : (kind === "text" || kind === "text_box") ? "text" : kind === "rule_area" ? "ruleAreas" : /rectangle|circle|arc|polyline|bezier/.test(kind) ? "graphics" : "other";
+  return kind === "footprint" ? "footprints" : (kind === "segment" || kind === "arc") ? "tracks" : kind === "via" ? "vias" : kind === "zone" ? (it && it.node && KiCadCanvas.kid(it.node, "keepout") ? "keepouts" : "zones") : kind === "dimension" ? "dimensions" : (kind === "gr_text" || kind === "gr_text_box") ? "text" : /^gr_|image|table/.test(kind) ? "graphics" : "other";
 }
 
-export function filterAllows(kind) { const f = selFilter(); const k = filterKey(kind); return f[k] !== false; }
+/** (locked yes) — or the bare `locked` token of older files — on an item's node. */
+export function itemLocked(it) { const n = it && it.node; if (!n) return false; const l = KiCadCanvas.kid(n, "locked"); return l ? KiCadCanvas.str(l[1]) !== "no" : n.indexOf("locked") > 0; }
+
+/** The selection filter's verdict on an item kind; with the item itself also "Locked items" and Rule Areas (a keepout zone). */
+export function filterAllows(kind, it) { const f = selFilter(); if (it && f.lockedItems === false && itemLocked(it)) return false; const k = filterKey(kind, it); return f[k] !== false; }
 
 /** Hit-test options: hidden layers never count and the active layer's side is preferred (KiCad's candidate rules). */
 export function hitOpts() { return { hidden: E.hiddenLayers, side: !isSch() && E.activeLayer && /^B\./.test(E.activeLayer) ? "B" : "F" }; }
 
    // {id, onGeom} of the latest nearestFootprint() call
 export function nearestFootprint(x, y, radiusMm) {
-  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; return id ? E.items.find((f2) => f2.id === id) || null : null; }
+  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; const hitIt = id ? E.kdoc.items.get(id) : null; if (hitIt && !filterAllows(hitIt.kind, hitIt)) return null; return id ? E.items.find((f2) => f2.id === id) || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of E.items) { const d = Math.hypot(fp.x / E.IU - x, fp.y / E.IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
@@ -122,15 +126,19 @@ export function renderPropsInto(el) {
 }
 
 // Selection filter (panel_*selection_filter_base): per editor, a category is enabled unless set false.
-export const FILTER_KEYS = { sch: ["symbols", "pins", "wires", "labels", "graphics", "images", "text", "other"], pcb: ["footprints", "text", "tracks", "vias", "pads", "graphics", "zones", "dimensions", "other"] };
+export const FILTER_KEYS = { sch: ["symbols", "pins", "wires", "labels", "graphics", "images", "text", "other", "ruleAreas"], pcb: ["footprints", "text", "tracks", "vias", "pads", "graphics", "zones", "keepouts", "dimensions", "gridItems", "points", "other"] };
 
-export const filters = {};
+// Remembered per editor (kui.filter.<editor>), as KiCad keeps it in the project's local settings.
+export const filters = (() => { const out = {}; for (const ed of ["sch", "pcb"]) { try { const v = JSON.parse(localStorage.getItem("kui.filter." + ed) || "null"); if (v && typeof v === "object") out[ed] = v; } catch (e) { /* no storage */ } } return out; })();
 
 export function selFilter() { return filters[editorId()] || {}; }
 
 export function setFilter(key, on) {
   const ed = editorId(); const f = filters[ed] = filters[ed] || {};
-  if (key === "all") { for (const k of FILTER_KEYS[ed]) f[k] = !!on; } else f[key] = !!on;
+  if (key === "all") { for (const k of FILTER_KEYS[ed]) f[k] = !!on; }
+  else if (key.startsWith("only:")) { for (const k of FILTER_KEYS[ed]) f[k] = k === key.slice(5); }   // the right-click "Only …" entry
+  else f[key] = !!on;
+  try { localStorage.setItem("kui.filter." + ed, JSON.stringify(f)); } catch (e) { /* no storage */ }
   store.set({ filter: Object.assign({}, f) });
   E.selected = null; drawSelection(); renderProps();
 }
@@ -139,7 +147,7 @@ export function setFilter(key, on) {
 export function hitAny(mm) {
   const fp = nearestFootprint(mm[0], mm[1], 5 / Math.max(1, E.zoom * 0.6)); if (fp) return { id: fp.id, kind: isSch() ? "symbol" : "footprint", fp };
   const m = activeModule(); const pick = m && m._ && m._.pickNonSymbol;
-  if (pick) { try { const it = pick(toolCtx(), mm); if (it) return { id: it.id, kind: it.kind, item: it }; } catch (e) { /* module without pick */ } }
+  if (pick) { try { const it = pick(toolCtx(), mm); if (it && filterAllows(it.kind, it)) return { id: it.id, kind: it.kind, item: it }; } catch (e) { /* module without pick */ } }
   return null;
 }
 
@@ -166,10 +174,10 @@ export function finishBoxSel(ev) {
   const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
   if (moved < 4) return;
   const picked = [];
-  if (b.lasso) { for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind)) continue; const c = itemBoxCentre(it); if (c && pointInPoly(c, b.pts)) picked.push(it); } }
+  if (b.lasso) { for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const c = itemBoxCentre(it); if (c && pointInPoly(c, b.pts)) picked.push(it); } }
   else {
     const x0 = Math.min(b.start[0], b.cur[0]), x1 = Math.max(b.start[0], b.cur[0]), y0 = Math.min(b.start[1], b.cur[1]), y1 = Math.max(b.start[1], b.cur[1]), enclose = b.cur[0] >= b.start[0];
-    for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind)) continue; const bb = it.bbox;
+    for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const bb = it.bbox;
       const inside = bb[0] >= x0 && bb[2] <= x1 && bb[1] >= y0 && bb[3] <= y1, touches = bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
       if (enclose ? inside : touches) picked.push(it); }
   }

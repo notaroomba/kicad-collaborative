@@ -370,3 +370,43 @@ test("setPad edits number, type, shape, size, orientation, hole, layers, net and
   assert.ok(K.applyChange(doc, { id: "fp-1", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K.serializeItem(doc, Object.assign({}, doc.items.get("fp-1"), { node })) }, 1e6));
   assert.equal(doc.items.get("fp-1").geom.filter((x) => x.layer === "holes").length, 2, "pad 2 keeps a drawn hole (plating wall and hole)");
 });
+
+test("evalExpr reads KiCad's unit-aware numeric input: units, arithmetic and the frame's default unit", () => {
+  const near6 = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} ≈ ${b}`);
+  near6(H.evalExpr("1.27", "mm"), 1.27);
+  near6(H.evalExpr("10mil", "mm"), 0.254);
+  near6(H.evalExpr("10 mils", "mm"), 0.254);
+  near6(H.evalExpr("0.1in", "mm"), 2.54);
+  near6(H.evalExpr('0.1"', "mm"), 2.54);
+  near6(H.evalExpr("50", "mil"), 1.27);            // a bare number is in the frame's units
+  near6(H.evalExpr("0.05", "in"), 1.27);
+  near6(H.evalExpr("1+2", "mm"), 3);
+  near6(H.evalExpr("1 + 2 * 3", "mm"), 7);
+  near6(H.evalExpr("(1+2)*3", "mm"), 9);
+  near6(H.evalExpr("2 * 10mil", "mm"), 0.508);
+  near6(H.evalExpr("2 * 3", "mil"), 6 * 0.0254);
+  near6(H.evalExpr("1in/2", "mm"), 12.7);
+  near6(H.evalExpr("1mm + 10mil", "in"), 1.254);
+  near6(H.evalExpr("-0.5", "mm"), -0.5);
+  near6(H.evalExpr("1,5", "mm"), 1.5);             // a decimal comma
+  near6(H.evalExpr("500um", "mm"), 0.5);
+  near6(H.evalExpr("90", ""), 90);                 // plain numbers (angles, counts)
+  near6(H.evalExpr("45 + 45", ""), 90);
+  near6(H.evalExpr("90°", ""), 90);
+  assert.ok(Number.isNaN(H.evalExpr("", "mm")));
+  assert.ok(Number.isNaN(H.evalExpr("abc", "mm")));
+  assert.ok(Number.isNaN(H.evalExpr("1 +", "mm")));
+  assert.ok(Number.isNaN(H.evalExpr("(1+2", "mm")));
+  assert.ok(Number.isNaN(H.evalExpr("1mm", "")), "a length where a plain number is wanted");
+  assert.ok(Number.isNaN(H.evalExpr("1/0", "mm")));
+});
+
+test("formatLength shows a length in the frame's units with the unit, trailing zeros trimmed", () => {
+  assert.equal(H.formatLength(1.27, "mm"), "1.27 mm");
+  assert.equal(H.formatLength(1.27, "mil"), "50 mils");
+  assert.equal(H.formatLength(1.27, "in"), "0.05 in");
+  assert.equal(H.formatLength(0, "mm"), "0 mm");
+  assert.equal(H.formatLength(-0.00001, "mm"), "0 mm");
+  assert.equal(H.formatLength(0.254, "mm"), "0.254 mm");
+  assert.equal(H.formatLength(100, "mm"), "100 mm");
+});

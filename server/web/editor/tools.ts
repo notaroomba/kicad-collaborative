@@ -155,7 +155,7 @@ export function deleteAction() { if (schKey("Delete")) return; if (E.selected &&
 
 export function selectAll() {
   if (!E.kdoc) return; E.selection.clear();
-  for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind)) E.selection.add(it.id);
+  for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind, it)) E.selection.add(it.id);
   E.selected = E.items.find((f) => E.selection.has(f.id)) || null;
   drawSelection(); renderProps(); renderObjects(); setStatusBar({ message: `${E.selection.size} items selected` });
 }
