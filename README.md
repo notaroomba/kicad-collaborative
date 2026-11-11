@@ -13,8 +13,8 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 - **Live schematic and PCB editing.** Share component moves, property changes, additions, deletions, wires, tracks, vias, text, and shapes.
 - **Presence on the canvas.** Named, color-coded cursors and selections show where collaborators are working. Follow a peer’s viewport while reviewing a design.
 - **In-progress previews.** See peers’ routing, wiring, and drag previews before they commit an edit.
-- **Cloud projects.** Upload, browse, and open shared projects from the project manager; paired projects automatically rejoin their session.
-- **Sharing and roles.** Invite collaborators by GitHub username or email, or create revocable editor/viewer links.
+- **Cloud projects.** Upload, browse, and open shared projects from the project manager or from the web home in any browser (search, stars, thumbnails, a Trash with 30-day restore); paired projects automatically rejoin their session.
+- **Sharing and roles.** Invite collaborators by GitHub username or email, or create revocable editor/viewer links; change roles, remove people or transfer ownership, effective immediately.
 - **Comments and review.** Discuss the design through document comment threads and canvas pins.
 - **Version history.** Create named checkpoints and restore an earlier version as the project owner.
 - **Offline recovery.** Local edits are journalled and replayed after reconnection, with duplicate operations suppressed.

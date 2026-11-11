@@ -511,6 +511,13 @@ pub async fn dev_login(
     Ok((jar, Redirect::to(&next)).into_response())
 }
 
+/// POST /auth/logout: drop the browser session cookie.  Desktop tokens live in
+/// the OS keychain and are forgotten there.
+pub async fn logout(jar: CookieJar) -> Response {
+    let cookie = Cookie::build((COOKIE_NAME, "")).path("/").build();
+    (jar.remove(cookie), Json(json!({ "ok": true }))).into_response()
+}
+
 /// Shared tail of the browser flow: either hand a one-time code back to the
 /// desktop loopback, or set the session cookie and continue to `next`.
 #[derive(Deserialize)]

@@ -51,6 +51,44 @@ use kicad_collab_protocol::ClientMsg;
 struct JoinedDoc {
     tx: mpsc::Sender<DocMsg>,
     role: String,
+    project_id: uuid::Uuid,
+    /// AppState::access_epoch when `role` was looked up.
+    epoch: u64,
+}
+
+/// The role this socket holds on a joined document, looked up again when
+/// anyone's access changed since it was cached: a demoted editor stops writing
+/// and a removed member stops receiving without having to reconnect.  `None`
+/// means the access is gone.
+async fn current_role(state: &AppState, user_id: i64, d: &mut JoinedDoc) -> Option<String> {
+    let now = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
+    if now != d.epoch {
+        match persist::effective_role(&state.pool, user_id, d.project_id).await {
+            Ok(Some(role)) => {
+                d.role = role;
+                d.epoch = now;
+            }
+            Ok(None) => return None,
+            // A failed lookup must not lock anyone out; try again on the next message.
+            Err(e) => tracing::error!("role recheck failed: {e}"),
+        }
+    }
+    Some(d.role.clone())
+}
+
+/// Take this socket out of a document it may no longer see.
+async fn drop_doc<K: std::hash::Hash + Eq + Copy>(
+    joined: &mut std::collections::HashMap<K, JoinedDoc>,
+    doc_id: K,
+    client_id: &str,
+    out_tx: &mpsc::Sender<String>,
+) {
+    if let Some(d) = joined.remove(&doc_id) {
+        let _ = d
+            .tx
+            .send(DocMsg::Leave { client_id: client_id.to_string(), tx: out_tx.clone() })
+            .await;
+    }
 }
 
 fn truncate(s: &str, max: usize) -> &str {
@@ -249,6 +287,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                         continue;
                     }
                 };
+                let epoch = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
                 let role = match persist::effective_role(&state.pool, user.id, doc.project_id).await
                 {
                     Ok(Some(role)) => role,
@@ -291,7 +330,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                     }
                 };
 
-                joined.insert(doc_id, JoinedDoc { tx, role });
+                joined.insert(doc_id, JoinedDoc { tx, role, project_id: doc.project_id, epoch });
             }
             ClientMsg::leave_doc { doc_id } => {
                 if let Some(d) = joined.remove(&doc_id) {
@@ -305,7 +344,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                 }
             }
             ClientMsg::op { doc_id, client_op_id, base_seq, changes } => {
-                let Some(d) = joined.get(&doc_id) else {
+                let Some(d) = joined.get_mut(&doc_id) else {
                     // Not a permission problem: the op simply arrived before (or without) a
                     // join on this socket -- typically a client replaying its journal right
                     // after a reconnect. Reported as permission_denied this was read by the
@@ -318,13 +357,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                     );
                     continue;
                 };
-                if d.role != "editor" {
+                let role = current_role(&state, user.id, d).await;
+                if role.as_deref() != Some("editor") {
                     let _ = out_tx.try_send(
                         json!({ "type": "error", "code": "permission_denied", "docId": doc_id,
                                 "clientOpId": client_op_id }).to_string(),
                     );
+                    if role.is_none() {
+                        drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                    }
                     continue;
                 }
+                let Some(d) = joined.get(&doc_id) else { continue };
                 if let Err(reason) = validate_changes(&changes) {
                     let _ = out_tx.try_send(
                         json!({ "type": "error", "code": "bad_op", "docId": doc_id,
@@ -352,6 +396,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                         .to_string(),
                     );
                     continue;
+                }
+                // Presence is the heartbeat of someone who only watches: the place to
+                // notice that their access was taken away.
+                if let Some(d) = joined.get_mut(&doc_id) {
+                    if current_role(&state, user.id, d).await.is_none() {
+                        let _ = out_tx.try_send(
+                            json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                                .to_string(),
+                        );
+                        drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                        continue;
+                    }
                 }
                 if let Some(d) = joined.get(&doc_id) {
                     let _ = d

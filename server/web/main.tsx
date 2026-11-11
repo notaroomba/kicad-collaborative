@@ -12,6 +12,8 @@ import { DockLeft, DockRight } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
 import { Popover, SignInOverlay, Toast } from "./components/Overlays";
 import { AssistantDock } from "./ai/Assistant";
+import { Home } from "./home/Home";
+import { Toasts } from "./home/ui";
 
 function mount(id: string, node: ReactNode) {
   const host = document.getElementById(id);
@@ -28,4 +30,5 @@ mount("ui-tbRight", <RightDrawToolbar />);
 mount("ui-dockR", <DockRight />);
 mount("ui-dockAI", <AssistantDock />);
 mount("ui-statusbar", <StatusBar />);
+mount("ui-home", <><Home /><Toasts /></>);
 mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /></>);

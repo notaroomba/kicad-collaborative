@@ -10,21 +10,44 @@ this could not be an add-on).
 
 ## Using it
 
-**Cloud projects (the home for shared work).** In the KiCad project manager:
-**File → Online Projects…**. Sign in with GitHub, then browse every project you
-own or were invited to, open one (it downloads a local copy and remembers the
-pairing), upload the current project, rename, share or delete. A project opened
-this way rejoins its live session automatically every time you open it — like a
-Figma file, the document's home is the server.
+**Cloud projects (the home for shared work).** There are two doors to the same
+list of projects:
 
-**Share a project.** From the Online Projects dialog (**Share…**), or in either
-editor: **File → Start Collaboration Session…**. Sharing offers:
+- **On the web:** open the server's address in a browser. The home page lists
+  every project you own or were invited to, with search, sorting, stars and
+  thumbnails. **New project** uploads a KiCad project folder, its files or a
+  .zip (drag it onto the page), or starts a blank one. Each project's menu has
+  Share, Rename, Edit details, Make a copy, Download .zip and Move to Trash;
+  **Select** acts on several at once. It works on a phone too.
+- **In the desktop app:** **File → Online Projects…** in the project manager.
+  Sign in with GitHub, then browse, filter and sort the same list, open a
+  project (it downloads a local copy into your projects folder and remembers the
+  pairing), publish the project you have open, or manage it from the context
+  menu.
+
+A project opened either way rejoins its live session automatically every time
+you open it — like a Figma file, the document's home is the server.
+
+**Deleting is undoable.** Delete moves a project to the **Trash**: it closes for
+everyone at once, and the owner can restore it, with its history, comments and
+sharing, for 30 days. After that it is removed for good.
+
+**Share a project.** From a project's menu on the web home, from the Online
+Projects dialog (**Share…**), or in either editor: **File → Start Collaboration
+Session…**. Sharing offers:
 
 - a **share link** (editor or viewer role) copied to your clipboard, and
 - **direct invites** by GitHub username or email, with typeahead search — like
   adding a collaborator on GitHub. People who already have an account get access
   instantly; everyone else gets a pending grant that attaches when they first
   sign in.
+
+The same dialog lists who has access. The owner can switch anyone between
+**can edit** and **can view**, remove them, turn a link off, list the project
+publicly in Explore, or hand the project to another member (**Make owner…**).
+Role changes and removals take effect at once, also for people who have the
+project open. Collaborators can see the list but not change it, and can
+**leave** a project from its menu.
 
 **Join a project.** Paste a link into **File → Join Shared Project…** (either
 editor) or **Online Projects… → Join from Link…** in the project manager, which
@@ -157,8 +180,9 @@ export KICAD_COLLAB_SERVER=https://your-server.example.com
   everyone stays consistent, but it can surprise.
 - **Remote zone edits arrive unfilled** until you refill (B), unless auto-refill
   is enabled.
-- **Blocking REST on the UI thread.** Sign-in-adjacent calls (upload, join,
-  listing) freeze the window until they return; fine on a healthy network,
+- **Publishing blocks the window.** The Online Projects and Share dialogs talk
+  to the server in the background, but publishing the open project still
+  freezes the window until the upload returns; fine on a healthy network,
   unpleasant when the server is unreachable.
 - **macOS needs a WebSocket-capable libcurl** (Homebrew's, not Apple's system
   one). The client now tells you instead of silently retrying forever.

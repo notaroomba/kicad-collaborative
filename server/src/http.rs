@@ -69,10 +69,36 @@ pub(crate) fn safe_zip_name(name: &str) -> Option<String> {
         || name.starts_with('/')
         || name.contains("..")
         || name.contains(':')
+        || name.chars().any(char::is_control)
     {
         return None;
     }
-    Some(name)
+    // "a//b" and "a/./b" name the same file as "a/b": store one spelling, or two
+    // documents of a project end up pointing at one local file.
+    let parts: Vec<&str> = name.split('/').filter(|s| !s.is_empty() && *s != ".").collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// Drop a directory every file shares ("board/board.kicad_pro" -> "board.kicad_pro"),
+/// but only when the project file itself sits inside it: nested sheet folders
+/// of a project uploaded from its root must keep their paths.
+fn strip_common_dir(files: Vec<(String, Vec<u8>)>) -> Vec<(String, Vec<u8>)> {
+    let Some(first) = files.first().and_then(|(n, _)| n.split_once('/').map(|(d, _)| d.to_string()))
+    else {
+        return files;
+    };
+    let prefix = format!("{first}/");
+    let all_inside = files.iter().all(|(n, _)| n.starts_with(&prefix));
+    let has_root_pro = files.iter().any(|(n, _)| !n.contains('/') && n.ends_with(".kicad_pro"));
+    if !all_inside || has_root_pro {
+        return files;
+    }
+    strip_common_dir(
+        files.into_iter().map(|(n, b)| (n[prefix.len()..].to_string(), b)).collect(),
+    )
 }
 
 // ---------- Projects ----------
@@ -84,6 +110,11 @@ pub async fn create_project(
 ) -> AppResult<Response> {
     let mut archive: Option<Vec<u8>> = None;
     let mut name: Option<String> = None;
+    // Loose files (the web's folder / multi-file upload): each `file` part
+    // carries its project-relative path as the part's file name.
+    let mut loose: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut loose_bytes: u64 = 0;
+    let mut skipped: Vec<String> = Vec::new();
     while let Some(field) = multipart
         .next_field()
         .await
@@ -100,56 +131,116 @@ pub async fn create_project(
                 )
             }
             Some("name") => name = field.text().await.ok(),
+            Some("file") => {
+                let raw = field.file_name().unwrap_or("").to_string();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("file read failed: {e}")))?;
+                let Some(path) = safe_zip_name(&raw) else {
+                    return Err(AppError::BadRequest(format!("unsafe file path: {raw}")));
+                };
+                if is_local_state_path(&path) {
+                    continue;
+                }
+                if !allowed_file(&path) {
+                    skipped.push(path);
+                    continue;
+                }
+                if loose.len() >= MAX_FILES {
+                    return Err(AppError::BadRequest(format!("too many files (max {MAX_FILES})")));
+                }
+                loose_bytes += bytes.len() as u64;
+                if bytes.len() as u64 > MAX_FILE_BYTES || loose_bytes > MAX_TOTAL_BYTES {
+                    return Err(AppError::BadRequest(format!("{path} is too large")));
+                }
+                loose.push((path, bytes.to_vec()));
+            }
             _ => {}
         }
     }
-    let archive = archive.ok_or_else(|| AppError::BadRequest("missing 'archive' field".into()))?;
 
-    // Unzip + validate off the async runtime.
-    let files = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<u8>)>, String> {
-        let mut zip = zip::ZipArchive::new(Cursor::new(archive)).map_err(|e| e.to_string())?;
-        if zip.len() > MAX_FILES {
-            return Err(format!("too many files (max {MAX_FILES})"));
-        }
-        let mut out = Vec::new();
-        let mut budget = MAX_TOTAL_BYTES;
-        for i in 0..zip.len() {
-            let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
-            if f.is_dir() {
-                continue;
-            }
-            let Some(name) = safe_zip_name(f.name()) else {
-                return Err(format!("unsafe path in archive: {}", f.name()));
-            };
-            // People zip whole project folders: the sync folder, backups and local history
-            // hold copies of the design (a `<name>.collab/base/x.kicad_pcb` once became a
-            // second board document of a project), so those directories are skipped.
-            if is_local_state_path(&name) {
-                continue;
-            }
-            if !allowed_file(&name) {
-                return Err(format!("file type not allowed: {name}"));
-            }
-            // f.size() is attacker-declared header metadata, not a decode
-            // limit — cap the reader itself or a zip bomb OOMs the container.
-            let cap = MAX_FILE_BYTES.min(budget);
-            let mut buf = Vec::new();
-            (&mut f).take(cap + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            if buf.len() as u64 > cap {
-                return Err(format!("{name} is too large"));
-            }
-            budget -= buf.len() as u64;
-            out.push((name, buf));
-        }
-        if out.is_empty() {
-            return Err("archive contains no usable files".into());
-        }
-        Ok(out)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("unzip task failed: {e}"))?
-    .map_err(AppError::BadRequest)?;
+    let files = if let Some(archive) = archive {
+        // Unzip + validate off the async runtime.
+        let (files, zip_skipped) = tokio::task::spawn_blocking(
+            move || -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), String> {
+                let mut zip =
+                    zip::ZipArchive::new(Cursor::new(archive)).map_err(|e| e.to_string())?;
+                if zip.len() > MAX_FILES {
+                    return Err(format!("too many files (max {MAX_FILES})"));
+                }
+                let mut out = Vec::new();
+                let mut skipped = Vec::new();
+                let mut budget = MAX_TOTAL_BYTES;
+                for i in 0..zip.len() {
+                    let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
+                    if f.is_dir() {
+                        continue;
+                    }
+                    let Some(name) = safe_zip_name(f.name()) else {
+                        return Err(format!("unsafe path in archive: {}", f.name()));
+                    };
+                    // People zip whole project folders: the sync folder, backups and local
+                    // history hold copies of the design (a `<name>.collab/base/x.kicad_pcb`
+                    // once became a second board document of a project), so those
+                    // directories are skipped.
+                    if is_local_state_path(&name) {
+                        continue;
+                    }
+                    // Anything that is not a KiCad project file (a README, gerbers, a
+                    // .DS_Store) is left out rather than failing the whole upload.
+                    if !allowed_file(&name) {
+                        skipped.push(name);
+                        continue;
+                    }
+                    // f.size() is attacker-declared header metadata, not a decode
+                    // limit — cap the reader itself or a zip bomb OOMs the container.
+                    let cap = MAX_FILE_BYTES.min(budget);
+                    let mut buf = Vec::new();
+                    (&mut f).take(cap + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+                    if buf.len() as u64 > cap {
+                        return Err(format!("{name} is too large"));
+                    }
+                    budget -= buf.len() as u64;
+                    out.push((name, buf));
+                }
+                Ok((out, skipped))
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("unzip task failed: {e}"))?
+        .map_err(AppError::BadRequest)?;
+        skipped.extend(zip_skipped);
+        files
+    } else if !loose.is_empty() || !skipped.is_empty() {
+        loose
+    } else {
+        return Err(AppError::BadRequest("missing 'archive' field".into()));
+    };
 
+    // A zipped or dropped folder puts everything under one top-level directory
+    // ("myboard/myboard.kicad_pro"); documents are stored project-relative.
+    let files = strip_common_dir(files);
+    // Two files that differ only in case cannot both exist in a working copy on
+    // Windows or macOS, and the same path twice has no meaning at all.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for (path, _) in &files {
+            if !seen.insert(path.to_lowercase()) {
+                return Err(AppError::BadRequest(format!("duplicate file: {path}")));
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(AppError::BadRequest(
+            "no KiCad project files found (expected .kicad_pro, .kicad_sch, .kicad_pcb, …)".into(),
+        ));
+    }
+
+    let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    if let Some(n) = &name {
+        checked_name(n)?;
+    }
     let project_name = name
         .or_else(|| {
             files.iter().find(|(n, _)| n.ends_with(".kicad_pro")).map(|(n, _)| {
@@ -157,16 +248,34 @@ pub async fn create_project(
             })
         })
         .unwrap_or_else(|| "untitled".to_string());
+    let project_name: String = project_name.chars().take(MAX_NAME_CHARS).collect();
 
     let project = persist::create_project(&state.pool, user.id, &project_name).await?;
     let mut docs = Vec::new();
     for (path, content) in &files {
-        let doc = persist::create_document(&state.pool, project.id, path, doc_type_for(path)).await?;
-        persist::insert_snapshot(&state.pool, doc.id, 0, content, None, Some(user.id)).await?;
-        docs.push(json!({ "docId": doc.id, "path": doc.path, "docType": doc.doc_type }));
+        let stored = async {
+            let doc =
+                persist::create_document(&state.pool, project.id, path, doc_type_for(path)).await?;
+            persist::insert_snapshot(&state.pool, doc.id, 0, content, None, Some(user.id)).await?;
+            Ok::<_, sqlx::Error>(doc)
+        }
+        .await;
+        match stored {
+            Ok(doc) => {
+                docs.push(json!({ "docId": doc.id, "path": doc.path, "docType": doc.doc_type }))
+            }
+            Err(e) => {
+                // Never leave half a project behind.
+                let _ = persist::delete_project(&state.pool, project.id).await;
+                return Err(e.into());
+            }
+        }
     }
 
-    Ok(Json(json!({ "projectId": project.id, "name": project.name, "docs": docs })).into_response())
+    Ok(Json(json!({
+        "projectId": project.id, "name": project.name, "docs": docs, "skipped": skipped,
+    }))
+    .into_response())
 }
 
 /// Every project the caller owns or is a member of — the "online files" list.
@@ -180,14 +289,33 @@ pub async fn list_projects(
         .map(|p| {
             json!({
                 "projectId": p.id, "name": p.name,
+                "description": p.description,
                 "ownerId": p.owner_id, "ownerLogin": p.owner_login,
+                "ownerAvatarUrl": p.owner_avatar_url,
                 "role": p.role, "public": p.public, "docCount": p.doc_count,
+                "memberCount": p.member_count, "starred": p.starred,
                 "createdAt": p.created_at.to_rfc3339(),
                 "updatedAt": p.updated_at.to_rfc3339(),
             })
         })
         .collect();
     Ok(Json(json!({ "projects": projects })).into_response())
+}
+
+const MAX_NAME_CHARS: usize = 120;
+
+fn checked_name(name: &str) -> AppResult<()> {
+    if name.chars().count() > MAX_NAME_CHARS {
+        return Err(AppError::BadRequest(format!("name too long ({MAX_NAME_CHARS} characters max)")));
+    }
+    // "." and ".." would become a folder name on a collaborator's disk.
+    if name.chars().all(|c| c == '.' || c == ' ') {
+        return Err(AppError::BadRequest("name must contain a letter or a digit".into()));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(AppError::BadRequest("name must not contain control characters".into()));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -211,6 +339,9 @@ pub async fn update_project(
     if name == Some("") {
         return Err(AppError::BadRequest("name must not be blank".into()));
     }
+    if let Some(n) = name {
+        checked_name(n)?;
+    }
     let description = req.description.as_deref().map(str::trim);
     if description.is_some_and(|d| d.len() > 2000) {
         return Err(AppError::BadRequest("description too long (2000 chars max)".into()));
@@ -219,6 +350,9 @@ pub async fn update_project(
         return Err(AppError::BadRequest("nothing to update".into()));
     }
     persist::update_project(&state.pool, id, name, req.public, description).await?;
+    if req.public.is_some() {
+        state.access_changed();
+    }
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -242,10 +376,10 @@ pub async fn gallery(State(state): State<AppState>) -> AppResult<Response> {
 /// them; the actor's snapshot-freshness requests keep that gap small.
 pub async fn clone_project(
     State(state): State<AppState>,
-    jar: axum_extra::extract::CookieJar,
+    // AuthUser takes the web's cookie and the desktop's bearer token alike.
+    AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
 
     if !project.public {
@@ -878,20 +1012,190 @@ pub struct PreviewQuery {
     pub fit: Option<bool>,
 }
 
-/// Owner deletes the whole project. Live doc actors are not kicked — their
-/// next durable write fails and clients surface the error; the actors reap
-/// themselves once idle.
+#[derive(Deserialize)]
+pub struct DeleteQuery {
+    #[serde(default)]
+    pub permanent: bool,
+}
+
+/// Owner deletes the whole project.  By default it goes to the Trash, where it
+/// can be restored for 30 days; `?permanent=true` destroys it at once.  Either
+/// way it is gone for every collaborator immediately.  Live doc actors are not
+/// kicked — their next durable write fails and clients surface the error; the
+/// actors reap themselves once idle.
 pub async fn delete_project(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
+    Query(q): Query<DeleteQuery>,
 ) -> AppResult<Response> {
+    // Whatever happens below, live sockets re-check their access (ws.rs).
+    state.access_changed();
+    match persist::get_project(&state.pool, id).await? {
+        Some(project) => {
+            if project.owner_id != user.id {
+                return Err(AppError::Forbidden);
+            }
+            if q.permanent {
+                persist::delete_project(&state.pool, id).await?;
+            } else {
+                persist::trash_project(&state.pool, id).await?;
+            }
+        }
+        // Already in the Trash: only a permanent delete has anything left to do.
+        None => {
+            if !q.permanent || !persist::purge_trashed_project(&state.pool, id, user.id).await? {
+                return Err(AppError::NotFound);
+            }
+        }
+    }
+    Ok(Json(json!({ "ok": true, "trashed": !q.permanent })).into_response())
+}
+
+/// GET /api/trash: the caller's deleted projects that can still be restored.
+pub async fn list_trash(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    let projects: Vec<_> = persist::list_trash(&state.pool, user.id)
+        .await?
+        .into_iter()
+        .map(|p| {
+            json!({
+                "projectId": p.id, "name": p.name, "docCount": p.doc_count,
+                "deletedAt": p.deleted_at.to_rfc3339(),
+                "purgeAt": (p.deleted_at + chrono::Duration::days(30)).to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "projects": projects })).into_response())
+}
+
+/// POST /api/projects/{id}/undelete: take a project back out of the Trash.
+pub async fn undelete_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    if persist::restore_project(&state.pool, id, user.id).await? {
+        Ok(Json(json!({ "ok": true })).into_response())
+    } else {
+        Err(AppError::NotFound)
+    }
+}
+
+/// PUT / DELETE /api/projects/{id}/star: pin a project to the top of the
+/// caller's own list.  Stars are per user and need access to the project.
+pub async fn star_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
+    persist::set_star(&state.pool, user.id, id, true).await?;
+    Ok(Json(json!({ "ok": true, "starred": true })).into_response())
+}
+
+pub async fn unstar_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    persist::set_star(&state.pool, user.id, id, false).await?;
+    Ok(Json(json!({ "ok": true, "starred": false })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct TransferRequest {
+    #[serde(rename = "userId")]
+    pub user_id: i64,
+}
+
+/// POST /api/projects/{id}/transfer: the owner hands the project to a member
+/// and stays on as an editor.
+pub async fn transfer_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    LenientJson(req): LenientJson<TransferRequest>,
+) -> AppResult<Response> {
+    // Whatever happens below, live sockets re-check their access (ws.rs).
+    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
         return Err(AppError::Forbidden);
     }
-    persist::delete_project(&state.pool, id).await?;
-    Ok(Json(json!({ "ok": true })).into_response())
+    if req.user_id == user.id {
+        return Err(AppError::BadRequest("you already own this project".into()));
+    }
+    if persist::transfer_ownership(&state.pool, id, user.id, req.user_id).await? {
+        Ok(Json(json!({ "ok": true })).into_response())
+    } else {
+        Err(AppError::BadRequest("only someone who already has access can become the owner".into()))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BlankProjectRequest {
+    pub name: String,
+}
+
+/// A name that is safe as the stem of the project's files.
+fn file_stem_for(name: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' })
+        .collect();
+    let stem = stem.trim().trim_matches('.').replace(' ', "_");
+    if stem.is_empty() { "untitled".into() } else { stem.chars().take(64).collect() }
+}
+
+/// POST /api/projects/blank: start an empty project online — the same three
+/// stub files KiCad's project manager writes for File > New Project (see
+/// KICAD_MANAGER_FRAME::CreateNewProject), in the KiCad 9 file format so every
+/// client can open them; an editor upgrades the format only when content needs it.
+pub async fn create_blank_project(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    LenientJson(req): LenientJson<BlankProjectRequest>,
+) -> AppResult<Response> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("give the project a name".into()));
+    }
+    checked_name(name)?;
+    let stem = file_stem_for(name);
+    let pro = serde_json::to_vec_pretty(&json!({
+        "board": { "design_settings": { "defaults": {}, "diff_pair_dimensions": [], "drc_exclusions": [],
+                                         "rules": {}, "track_widths": [], "via_dimensions": [] } },
+        "boards": [],
+        "libraries": { "pinned_footprint_libs": [], "pinned_symbol_libs": [] },
+        "meta": { "filename": format!("{stem}.kicad_pro"), "version": 1 },
+        "net_settings": { "classes": [], "meta": { "version": 0 } },
+        "pcbnew": { "page_layout_descr_file": "" },
+        "sheets": [],
+        "text_variables": {}
+    }))
+    .unwrap();
+    let sch = format!(
+        "(kicad_sch\n\t(version 20250114)\n\t(generator \"eeschema\")\n\t(generator_version \"9.0\")\n\t(uuid \"{}\")\n\t(paper \"A4\")\n\t(lib_symbols)\n\t(sheet_instances\n\t\t(path \"/\"\n\t\t\t(page \"1\")\n\t\t)\n\t)\n\t(embedded_fonts no)\n)\n",
+        Uuid::new_v4()
+    );
+    let pcb = "(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n)\n";
+
+    let project = persist::create_project(&state.pool, user.id, name).await?;
+    let mut docs = Vec::new();
+    for (path, content) in [
+        (format!("{stem}.kicad_pro"), pro),
+        (format!("{stem}.kicad_sch"), sch.into_bytes()),
+        (format!("{stem}.kicad_pcb"), pcb.as_bytes().to_vec()),
+    ] {
+        let doc = persist::create_document(&state.pool, project.id, &path, doc_type_for(&path)).await?;
+        persist::insert_snapshot(&state.pool, doc.id, 0, &content, None, Some(user.id)).await?;
+        docs.push(json!({ "docId": doc.id, "path": doc.path, "docType": doc.doc_type }));
+    }
+    Ok(Json(json!({ "projectId": project.id, "name": project.name, "docs": docs })).into_response())
 }
 
 pub async fn get_project(
@@ -1022,13 +1326,113 @@ pub async fn claim_link(
     let link = persist::get_valid_share_link(&state.pool, &token)
         .await?
         .ok_or(AppError::NotFound)?;
+    // The owner opening their own link must not become a member of their own project.
+    let project = persist::get_project(&state.pool, link.project_id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id == user.id {
+        return Ok(Json(json!({ "projectId": link.project_id, "role": "editor" })).into_response());
+    }
     persist::claim_share_link(&state.pool, user.id, &link).await?;
-    Ok(Json(json!({ "projectId": link.project_id, "role": link.role })).into_response())
+    let role = persist::effective_role(&state.pool, user.id, link.project_id)
+        .await?
+        .unwrap_or_else(|| link.role.clone());
+    Ok(Json(json!({ "projectId": link.project_id, "role": role })).into_response())
 }
 
-/// Revoking a link doesn't revoke the grants it already handed out, so the
-/// owner needs a way to take access back.
+/// Who has access.  Any member can read the list (so collaborators can see who
+/// else is in the project); pending invites and every change stay owner-only.
 pub async fn list_members(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    let can_manage = project.owner_id == user.id;
+    let rows = persist::list_members(&state.pool, id).await?;
+    // A public project gives everyone the viewer role, which is not membership.
+    if !can_manage && !rows.iter().any(|m| m.id == user.id) {
+        return Err(AppError::Forbidden);
+    }
+    let owner = persist::get_user(&state.pool, project.owner_id).await?;
+    let members: Vec<_> = rows
+        .into_iter()
+        .map(|m| json!({ "userId": m.id, "login": m.login, "avatarUrl": m.avatar_url, "role": m.role }))
+        .collect();
+    let pending: Vec<_> = if can_manage {
+        persist::list_pending_invites(&state.pool, id)
+            .await?
+            .into_iter()
+            .map(|(perm_id, login, email, role)| {
+                json!({ "inviteId": perm_id, "login": login, "email": email, "role": role })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(Json(json!({
+        "ownerId": project.owner_id,
+        "owner": owner.map(|o| json!({ "userId": o.id, "login": o.login, "avatarUrl": o.avatar_url })),
+        "canManage": can_manage,
+        "members": members, "pending": pending,
+    }))
+    .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct RoleRequest {
+    pub role: String,
+}
+
+fn checked_role(role: &str) -> AppResult<&str> {
+    if matches!(role, "editor" | "viewer") {
+        Ok(role)
+    } else {
+        Err(AppError::BadRequest("role must be editor or viewer".into()))
+    }
+}
+
+/// PATCH /api/projects/{id}/members/{userId}: the owner changes a member's role.
+/// Like removal, it reaches a live socket on its next join_doc.
+pub async fn set_member_role(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, member_id)): Path<(Uuid, i64)>,
+    LenientJson(req): LenientJson<RoleRequest>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    let role = checked_role(&req.role)?;
+    if persist::set_member_role(&state.pool, id, member_id, role).await? {
+        state.access_changed();
+        Ok(Json(json!({ "ok": true })).into_response())
+    } else {
+        Err(AppError::NotFound)
+    }
+}
+
+/// PATCH /api/projects/{id}/invites/{inviteId}: change what a pending invite grants.
+pub async fn set_invite_role(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, invite_id)): Path<(Uuid, i64)>,
+    LenientJson(req): LenientJson<RoleRequest>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    let role = checked_role(&req.role)?;
+    if persist::set_invite_role(&state.pool, id, invite_id, role).await? {
+        Ok(Json(json!({ "ok": true })).into_response())
+    } else {
+        Err(AppError::NotFound)
+    }
+}
+
+/// GET /api/projects/{id}/links: the share links that still work, so the owner
+/// can see what is out there and revoke it.
+pub async fn list_links(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
@@ -1037,20 +1441,20 @@ pub async fn list_members(
     if project.owner_id != user.id {
         return Err(AppError::Forbidden);
     }
-    let members: Vec<_> = persist::list_members(&state.pool, id)
+    let links: Vec<_> = persist::list_share_links(&state.pool, id)
         .await?
         .into_iter()
-        .map(|(uid, login, role)| json!({ "userId": uid, "login": login, "role": role }))
-        .collect();
-    let pending: Vec<_> = persist::list_pending_invites(&state.pool, id)
-        .await?
-        .into_iter()
-        .map(|(perm_id, login, email, role)| {
-            json!({ "inviteId": perm_id, "login": login, "email": email, "role": role })
+        .map(|l| {
+            json!({
+                "token": l.token,
+                "url": format!("{}/j/{}", state.cfg.site_url, l.token),
+                "role": l.role,
+                "createdAt": l.created_at.to_rfc3339(),
+                "expiresAt": l.expires_at.map(|t| t.to_rfc3339()),
+            })
         })
         .collect();
-    Ok(Json(json!({ "ownerId": project.owner_id, "members": members, "pending": pending }))
-        .into_response())
+    Ok(Json(json!({ "links": links })).into_response())
 }
 
 pub async fn revoke_invite(
@@ -1078,9 +1482,9 @@ pub async fn remove_member(
     if project.owner_id != user.id {
         return Err(AppError::Forbidden);
     }
-    // ponytail: takes effect on the member's next join_doc; live sockets keep
-    // their cached role until they reconnect. Add a Kick DocMsg if that matters.
     if persist::remove_member(&state.pool, id, member_id).await? {
+        // Live sockets look their role up again on their next message (ws.rs).
+        state.access_changed();
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::NotFound)
@@ -1094,6 +1498,8 @@ pub async fn leave_project(
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
+    // Whatever happens below, live sockets re-check their access (ws.rs).
+    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id == user.id {
         return Err(AppError::BadRequest(

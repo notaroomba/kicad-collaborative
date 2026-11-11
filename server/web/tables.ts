@@ -38,7 +38,7 @@ export const RADIO: Record<string, string[]> = {
 export type MenuEntry = string | [string, MenuEntry[]];
 export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
-    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
+    ["File", ["save", "-", "share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "findAndReplace", "-", "deleteTool"]],
     ["View", [["Panels", ["showProperties", "showHierarchy", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance", "showAssistant"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
     ["Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea", "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],
@@ -48,7 +48,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["Help", ["help", "gettingStarted", "-", "downloadDesktop", "sourceCode", "-", "about"]],
   ],
   pcb: [
-    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
+    ["File", ["save", "-", "share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "-", "deleteTool"]],
     ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
     ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "gridSetOrigin", "drillOrigin"]],
@@ -64,8 +64,7 @@ export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
 
 /** The project manager's bar (home view): the same entries the old markup carried. */
 export const HOME_MENUS: [string, MenuEntry[]][] = [
-  ["File", ["home", "share", "checkpoint", "-", "archive", "clone", "github", "-", "kicad"]],
-  ["View", ["zoomin", "zoomout", "fit", "-", "tab-appearance", "tab-props", "tab-peers", "tab-comments", "tab-history"]],
+  ["File", ["newProject", "joinLink", "importGithub", "-", "openTrash", "-", "signOut"]],
   ["Help", ["downloadDesktop", "sourceCode", "-", "about"]],
 ];
 
@@ -77,7 +76,7 @@ export const LOCAL_LABELS: Record<string, string> = {
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
   theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App ↗", sourceCode: "Source on GitHub ↗", about: "About KiCad Collaborative", help: "Help ↗", gettingStarted: "Getting Started with KiCad ↗",
   // home-view menu entries
-  share: "Copy share link…", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
+  share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Sign Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
   "tab-appearance": "Layers", "tab-props": "Properties", "tab-peers": "Collaborators", "tab-comments": "Comments", "tab-history": "History",
 };
 export const LOCAL_KEYS: Record<string, string> = { zoomin: "+", zoomout: "−", fit: "F", undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", selectAll: "Ctrl+A" };

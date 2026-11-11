@@ -20,7 +20,7 @@ import { state, store } from "./appstore";
 import { placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus } from "./doc";
 import { $ } from "./dom";
-import { loadMe, renderHome, route } from "./home";
+import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
 import { breakFollow, sendPresence } from "./peers";
@@ -43,7 +43,7 @@ window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: 
 // ---------- home navigation (the home view is still rendered here) ----------
 document.addEventListener("click", (ev) => {
   const nav = ev.target.closest("#home [data-nav]");
-  if (nav) { state.homeTab = nav.dataset.nav; renderHome(); }
+  if (nav) { ev.preventDefault(); navigate(nav.dataset.nav === "explore" ? "/gallery" : "/"); }
 });
 
 window.addEventListener("popstate", route);
@@ -281,7 +281,9 @@ stage.addEventListener("pointerup", (ev) => {
 
 
 document.addEventListener("keydown", (ev) => {
-  if (["TEXTAREA", "INPUT"].includes(ev.target.tagName) || state.view !== "editor") return;
+  if (["TEXTAREA", "INPUT", "SELECT"].includes(ev.target.tagName) || ev.target.isContentEditable || state.view !== "editor") return;
+  // A dialog or menu of the project UI (Share…) is open over the editor: it owns the keyboard.
+  if (document.querySelector(".hp-scrim, .hp-menu-scrim")) return;
   const k = ev.key;
   if (window.KDialogs && KDialogs.isOpen()) return;                     // the dialog owns the keyboard
   if (k === "Escape") { if (store.get().popover) { closePopover(); return; }

@@ -62,6 +62,9 @@ export interface PopoverState {
 
 export interface AppState {
   view: "home" | "editor";
+  /** which page of the home view is showing, and a counter bumped on every visit (web/home) */
+  homeTab?: "projects" | "explore" | "trash";
+  homeTick?: number;
   me: User | null;
   project: ProjectInfo | null;
   role: string | null;

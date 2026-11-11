@@ -3,7 +3,7 @@ use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use axum_extra::extract::cookie::CookieJar;
 
-use crate::auth::{self, COOKIE_NAME};
+use crate::auth;
 use crate::error::{AppError, AppResult};
 use crate::persist;
 use crate::AppState;
@@ -15,6 +15,7 @@ pub(crate) fn esc(s: &str) -> String {
 pub(crate) const MARK: &str = r##"<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>"##;
 
 pub(crate) const STYLE: &str = r#"
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
   :root {
@@ -212,12 +213,12 @@ pub async fn join_page(
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let owner_login = owner.map(|o| o.login).unwrap_or_else(|| "unknown".into());
 
-    let signed_in = jar
-        .get(COOKIE_NAME)
-        .and_then(|c| auth::verify_jwt(&state, c.value()))
-        .is_some();
+    // A GET must not change anything: a link opened from another site would
+    // otherwise enrol the visitor (and show their name to the link's owner)
+    // without a click.  "Open in the web editor" does the claim, same-origin.
+    let signed_in = auth::user_from_jar(&state, &jar).await.is_some();
     let signin_html = if signed_in {
-        r#"<p class="muted">You're signed in — this project was added to your account.</p>"#.to_string()
+        r#"<p class="muted" id="joined">You're signed in. Opening the project adds it to your projects.</p>"#.to_string()
     } else {
         format!(
             r#"<p><a class="btn secondary" href="/auth/github/login?next=/j/{}">Sign in with GitHub</a>
@@ -236,7 +237,7 @@ pub async fn join_page(
     <h1>{name}</h1>
     <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>You join as</dt><dd>{role}</dd></dl>
     <div class="choices">
-      <a class="choice web" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
+      <a class="choice web" id="openweb" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
       <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">Full editing in the desktop app; a working copy is kept in sync.</span></a>
     </div>
     {signin}
@@ -246,7 +247,19 @@ pub async fn join_page(
       <button type="button" class="btn" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied';">Copy</button>
     </div>
   </div>
-</div></body></html>"#,
+</div>
+<script>
+// Joining is a deliberate click: claim the link, then open the project.
+document.getElementById('openweb').addEventListener('click', function (ev) {{
+  if (!{signed}) return;            // signed out: the editor opens read-only or asks to sign in
+  ev.preventDefault();
+  var a = this;
+  fetch('/api/join/{token}', {{ method: 'POST', credentials: 'same-origin' }})
+    .catch(function () {{}})
+    .then(function () {{ location.href = a.href; }});
+}});
+</script></body></html>"#,
+        signed = signed_in,
         name = esc(&project.name),
         owner = esc(&owner_login),
         role = esc(&link.role),

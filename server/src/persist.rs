@@ -136,9 +136,13 @@ pub struct ProjectListing {
     pub name: String,
     pub owner_id: i64,
     pub owner_login: String,
+    pub owner_avatar_url: Option<String>,
+    pub description: String,
     pub role: String,
     pub public: bool,
     pub doc_count: i64,
+    pub member_count: i64,
+    pub starred: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -148,9 +152,13 @@ pub struct ProjectListing {
 pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec<ProjectListing>> {
     sqlx::query_as::<_, ProjectListing>(
         "SELECT p.id, p.name, p.owner_id, u.login AS owner_login,
+                u.avatar_url AS owner_avatar_url, p.description,
                 CASE WHEN p.owner_id = $1 THEN 'editor' ELSE perm.role END AS role,
                 p.public,
                 (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count,
+                (SELECT COUNT(*) FROM permissions m WHERE m.project_id = p.id AND m.user_id IS NOT NULL AND m.user_id <> p.owner_id) AS member_count,
+                EXISTS (SELECT 1 FROM project_stars st
+                        WHERE st.project_id = p.id AND st.user_id = $1) AS starred,
                 p.created_at,
                 GREATEST(
                     p.created_at,
@@ -164,7 +172,7 @@ pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec
          FROM projects p
          JOIN users u ON u.id = p.owner_id
          LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
-         WHERE p.owner_id = $1 OR perm.user_id IS NOT NULL
+         WHERE (p.owner_id = $1 OR perm.user_id IS NOT NULL) AND p.deleted_at IS NULL
          ORDER BY updated_at DESC",
     )
     .bind(user_id)
@@ -219,17 +227,125 @@ pub async fn list_public_projects(pool: &PgPool, limit: i64) -> DbResult<Vec<Gal
                               WHERE d.project_id = p.id), p.created_at)
                 ) AS updated_at
          FROM projects p JOIN users u ON u.id = p.owner_id
-         WHERE p.public ORDER BY updated_at DESC LIMIT $1",
+         WHERE p.public AND p.deleted_at IS NULL ORDER BY updated_at DESC LIMIT $1",
     )
     .bind(limit)
     .fetch_all(pool)
     .await
 }
 
-/// Documents, ops, snapshots, permissions and share links all cascade.
+/// Delete for good.  Documents, ops, snapshots, permissions and share links all cascade.
 pub async fn delete_project(pool: &PgPool, id: Uuid) -> DbResult<bool> {
     let res = sqlx::query("DELETE FROM projects WHERE id = $1").bind(id).execute(pool).await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Move a project to the Trash: it vanishes for everyone (get_project and
+/// effective_role no longer see it) but nothing is destroyed until prune()
+/// purges it 30 days later, so the owner can take the delete back.
+pub async fn trash_project(pool: &PgPool, id: Uuid) -> DbResult<bool> {
+    let res = sqlx::query("UPDATE projects SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub async fn restore_project(pool: &PgPool, id: Uuid, owner_id: i64) -> DbResult<bool> {
+    let res = sqlx::query(
+        "UPDATE projects SET deleted_at = NULL
+         WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL",
+    )
+    .bind(id)
+    .bind(owner_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Purge one of the caller's trashed projects now instead of waiting for prune().
+pub async fn purge_trashed_project(pool: &PgPool, id: Uuid, owner_id: i64) -> DbResult<bool> {
+    let res = sqlx::query(
+        "DELETE FROM projects WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL",
+    )
+    .bind(id)
+    .bind(owner_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TrashedProject {
+    pub id: Uuid,
+    pub name: String,
+    pub doc_count: i64,
+    pub deleted_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The caller's own trashed projects, most recently deleted first.
+pub async fn list_trash(pool: &PgPool, owner_id: i64) -> DbResult<Vec<TrashedProject>> {
+    sqlx::query_as::<_, TrashedProject>(
+        "SELECT p.id, p.name, p.deleted_at,
+                (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count
+         FROM projects p
+         WHERE p.owner_id = $1 AND p.deleted_at IS NOT NULL
+         ORDER BY p.deleted_at DESC",
+    )
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn set_star(pool: &PgPool, user_id: i64, project_id: Uuid, on: bool) -> DbResult<()> {
+    let sql = if on {
+        "INSERT INTO project_stars (user_id, project_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+    } else {
+        "DELETE FROM project_stars WHERE user_id = $1 AND project_id = $2"
+    };
+    sqlx::query(sql).bind(user_id).bind(project_id).execute(pool).await?;
+    Ok(())
+}
+
+/// Hand a project to one of its members: they become the owner and the former
+/// owner stays on as an editor.  One transaction, so the project is never
+/// ownerless and nobody holds both a grant and the ownership.
+pub async fn transfer_ownership(
+    pool: &PgPool,
+    project_id: Uuid,
+    from_owner: i64,
+    to_member: i64,
+) -> DbResult<bool> {
+    let mut tx = pool.begin().await?;
+    let removed = sqlx::query("DELETE FROM permissions WHERE project_id = $1 AND user_id = $2")
+        .bind(project_id)
+        .bind(to_member)
+        .execute(&mut *tx)
+        .await?;
+    if removed.rows_affected() == 0 {
+        return Ok(false); // not a member: dropping tx rolls back
+    }
+    let moved = sqlx::query(
+        "UPDATE projects SET owner_id = $3 WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(from_owner)
+    .bind(to_member)
+    .execute(&mut *tx)
+    .await?;
+    if moved.rows_affected() == 0 {
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT INTO permissions (project_id, user_id, role) VALUES ($1, $2, 'editor')
+         ON CONFLICT (project_id, user_id) DO UPDATE SET role = 'editor'",
+    )
+    .bind(project_id)
+    .bind(from_owner)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Prefix match on login or display name, for the share-dialog typeahead.
@@ -329,7 +445,8 @@ pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResul
 
 pub async fn get_project(pool: &PgPool, id: Uuid) -> DbResult<Option<Project>> {
     sqlx::query_as::<_, Project>(
-        "SELECT id, owner_id, name, public, description FROM projects WHERE id = $1",
+        "SELECT id, owner_id, name, public, description FROM projects
+         WHERE id = $1 AND deleted_at IS NULL",
     )
         .bind(id)
         .fetch_optional(pool)
@@ -382,7 +499,7 @@ pub async fn effective_role(pool: &PgPool, user_id: i64, project_id: Uuid) -> Db
                 END AS role
          FROM projects p
          LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
-         WHERE p.id = $2",
+         WHERE p.id = $2 AND p.deleted_at IS NULL",
     )
     .bind(user_id)
     .bind(project_id)
@@ -416,9 +533,10 @@ pub async fn create_share_link(
 /// A share link that is neither revoked nor expired.
 pub async fn get_valid_share_link(pool: &PgPool, token: &str) -> DbResult<Option<ShareLink>> {
     sqlx::query_as::<_, ShareLink>(
-        "SELECT token, project_id, role FROM share_links
-         WHERE token = $1 AND revoked_at IS NULL
-           AND (expires_at IS NULL OR expires_at > now())",
+        "SELECT sl.token, sl.project_id, sl.role FROM share_links sl
+         JOIN projects p ON p.id = sl.project_id AND p.deleted_at IS NULL
+         WHERE sl.token = $1 AND sl.revoked_at IS NULL
+           AND (sl.expires_at IS NULL OR sl.expires_at > now())",
     )
     .bind(token)
     .fetch_optional(pool)
@@ -444,7 +562,8 @@ pub async fn claim_share_link(pool: &PgPool, user_id: i64, link: &ShareLink) -> 
         "INSERT INTO permissions (project_id, user_id, role)
          VALUES ($1, $2, $3)
          ON CONFLICT (project_id, user_id) DO UPDATE
-           SET role = CASE WHEN permissions.role = 'editor' THEN 'editor' ELSE EXCLUDED.role END",
+           SET role = CASE WHEN permissions.role = 'editor' OR permissions.role_pinned
+                           THEN permissions.role ELSE EXCLUDED.role END",
     )
     .bind(link.project_id)
     .bind(user_id)
@@ -775,21 +894,86 @@ pub async fn remove_member(pool: &PgPool, project_id: Uuid, user_id: i64) -> DbR
     Ok(res.rows_affected() > 0)
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Member {
+    pub id: i64,
+    pub login: String,
+    pub avatar_url: Option<String>,
+    pub role: String,
+}
+
 /// Members with a claimed grant (owner is implicit and not listed).
-pub async fn list_members(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<(i64, String, String)>> {
-    let rows = sqlx::query(
-        "SELECT u.id, u.login, p.role FROM permissions p
+pub async fn list_members(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<Member>> {
+    sqlx::query_as::<_, Member>(
+        "SELECT u.id, u.login, u.avatar_url, p.role FROM permissions p
          JOIN users u ON u.id = p.user_id
-         WHERE p.project_id = $1 ORDER BY u.login",
+         WHERE p.project_id = $1
+           AND p.user_id <> (SELECT owner_id FROM projects WHERE id = $1)
+         ORDER BY u.login",
     )
     .bind(project_id)
     .fetch_all(pool)
-    .await?;
+    .await
+}
 
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get("id"), r.get("login"), r.get("role")))
-        .collect())
+/// Set a member's role exactly (unlike grant_role, this can downgrade).
+pub async fn set_member_role(
+    pool: &PgPool,
+    project_id: Uuid,
+    user_id: i64,
+    role: &str,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        // role_pinned: the owner chose this role, so a share link no longer raises it.
+        "UPDATE permissions SET role = $3, role_pinned = true
+         WHERE project_id = $1 AND user_id = $2
+           AND user_id <> (SELECT owner_id FROM projects WHERE id = $1)",
+    )
+        .bind(project_id)
+        .bind(user_id)
+        .bind(role)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Change the role a pending invite will grant once it is claimed.
+pub async fn set_invite_role(
+    pool: &PgPool,
+    project_id: Uuid,
+    perm_id: i64,
+    role: &str,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        "UPDATE permissions SET role = $3 WHERE id = $1 AND project_id = $2 AND user_id IS NULL",
+    )
+    .bind(perm_id)
+    .bind(project_id)
+    .bind(role)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ActiveLink {
+    pub token: String,
+    pub role: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Share links of a project that still work (neither revoked nor expired), newest first.
+pub async fn list_share_links(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<ActiveLink>> {
+    sqlx::query_as::<_, ActiveLink>(
+        "SELECT token, role, created_at, expires_at FROM share_links
+         WHERE project_id = $1 AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > now())
+         ORDER BY created_at DESC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// Name the latest snapshot of a document, making it a permanent checkpoint.
@@ -865,6 +1049,10 @@ pub async fn checkpoint_contents(
 
 /// Prune ops and unnamed snapshots that are safely behind snapshot coverage.
 pub async fn prune(pool: &PgPool) -> DbResult<()> {
+    // Projects that sat in the Trash for 30 days are gone for good.
+    sqlx::query("DELETE FROM projects WHERE deleted_at < now() - interval '30 days'")
+        .execute(pool)
+        .await?;
     sqlx::query(
         "DELETE FROM ops o
          WHERE o.created_at < now() - interval '7 days'

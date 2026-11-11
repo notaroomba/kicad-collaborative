@@ -123,3 +123,6 @@
 @import "../ai/assistant.css" layer(components);
 
 @tailwind utilities source(none);
+
+/* The home view (web/home) is plain CSS on the same tokens: see home.css. */
+@import "./home.css";

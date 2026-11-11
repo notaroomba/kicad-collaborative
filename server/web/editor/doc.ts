@@ -210,7 +210,11 @@ export async function openEditor(id) {
   showView("editor");
   let info;
   try { info = await api(`/api/projects/${id}/info`); }
-  catch (e) { toast("Project not found or private", 3500); navigate("/", true); return; }
+  catch (e) {
+    // Signed out, a private project looks the same as a missing one: sign in and come straight back.
+    if (!state.me) { location.href = "/auth/github/login?next=" + encodeURIComponent(location.pathname + location.search); return; }
+    toast("Project not found or private", 3500); navigate("/", true); return;
+  }
   state.project = info;
   state.role = info.role;
   document.title = `${info.name} — KiCad Collaborative`;

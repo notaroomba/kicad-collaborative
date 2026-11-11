@@ -52,21 +52,31 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | liveness + DB check |
-| GET | `/gallery` · `/p/{id}` · `/p/{id}/live` | public gallery, project page, live board viewer (web) |
+| GET | `/` · `/gallery` · `/trash` · `/p/{id}` · `/p/{id}/edit` | the web app: projects, Explore, Trash, the editor (one React page serves them all) |
 | GET | `/api/gallery` | public projects (no auth) |
 | GET | `/api/projects/{id}/preview.svg` | cached kicad-cli SVG render (needs `KICAD_CLI`) |
-| GET | `/j/{token}` | share-link landing page |
+| GET | `/j/{token}` | share-link landing page; visiting changes nothing, "Open in the web editor" claims the link (`POST /api/join/{token}`) and opens the project |
 | GET | `/auth/github/login`, `/auth/github/callback` | web sign-in |
+| POST | `/auth/logout` | web sign-out (clears the session cookie) |
 | GET/POST | `/auth/desktop/{authorize,confirm,token}` | KiCad sign-in |
 | GET | `/api/me` | current user |
 | GET | `/api/users/search?q=` | share-dialog typeahead: server accounts + GitHub user search |
-| GET/POST | `/api/projects` | list my projects (owned + member) · upload a project (zip, multipart) |
-| GET/PATCH/DELETE | `/api/projects/{id}` | project info · rename · delete (owner) |
+| GET/POST | `/api/projects` | list my projects (owned + member, with description, member count, owner avatar, `starred`) · upload a project (multipart: a zip as `archive`, or loose `file` parts named by project-relative path; non-KiCad files are skipped and reported, a wrapping folder is stripped) |
+| GET/PATCH/DELETE | `/api/projects/{id}` | project info · rename / describe / make public (owner) · move to the Trash (owner; `?permanent=true` destroys it at once, the Trash is purged after 30 days) |
+| POST | `/api/projects/blank` | create an empty project (`name`): a `.kicad_pro`, a root schematic and a board, as KiCad's File → New Project writes them |
+| GET | `/api/trash` | the caller's trashed projects, with `deletedAt` and `purgeAt` |
+| POST | `/api/projects/{id}/undelete` | take a project back out of the Trash (owner) |
+| PUT/DELETE | `/api/projects/{id}/star` | star · unstar a project for the caller only |
+| POST | `/api/projects/{id}/transfer` | hand the project to a member (`userId`); the old owner stays as an editor |
+| POST | `/api/join/{token}` | claim a share link: the caller becomes a member with the link's role (a role the owner set by hand is kept) |
+| POST | `/api/projects/{id}/clone` | copy a visible project into the caller's account |
+| POST | `/api/projects/{id}/leave` | a member gives up their own access |
 | GET | `/api/projects/{id}/archive` | download zip |
-| POST | `/api/projects/{id}/links` | share link |
+| GET/POST | `/api/projects/{id}/links` | list the share links that still work (owner) · create one (`role`, optional `expiresInDays`) |
 | POST | `/api/projects/{id}/invites` | invite by login/email (instant grant when the account exists, else pending) |
-| DELETE | `/api/projects/{id}/invites/{inviteId}` | revoke a pending invite |
-| GET/DELETE | `/api/projects/{id}/members[/{userId}]` | list members + pending · revoke access |
+| PATCH/DELETE | `/api/projects/{id}/invites/{inviteId}` | change the role a pending invite grants · revoke it |
+| GET | `/api/projects/{id}/members` | who has access: owner, members, `canManage`; any member may read it, pending invites are owner-only |
+| PATCH/DELETE | `/api/projects/{id}/members/{userId}` | change a member's role · revoke access (owner); both reach sessions that are already connected |
 | POST/GET | `/api/projects/{id}/checkpoints` | name · list version checkpoints |
 | POST | `/api/projects/{id}/restore` | restore a checkpoint (hard reset + resync) |
 | POST | `/api/docs/{id}/snapshots?seq=N` | upload a snapshot |

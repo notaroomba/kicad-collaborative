@@ -53,6 +53,16 @@ pub struct AppState {
     pub auth_pending: Arc<auth::AuthPending>,
     pub registry: Arc<registry::Registry>,
     pub color_counter: Arc<AtomicUsize>,
+    /// Bumped whenever anybody's access to any project changes (role, removal,
+    /// transfer, visibility, trash).  Live sockets cache their role per joined
+    /// document; a changed epoch makes them look it up again (ws.rs).
+    pub access_epoch: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl AppState {
+    pub fn access_changed(&self) {
+        self.access_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[tokio::main]
@@ -144,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
         auth_pending: Arc::new(auth::AuthPending::default()),
         registry: Arc::new(registry::Registry::default()),
         color_counter: Arc::new(AtomicUsize::new(0)),
+        access_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     // Daily pruning of ops/snapshots behind snapshot coverage.
@@ -187,11 +198,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ws-ticket", get(auth::ws_ticket))
         .route("/auth/adopt", get(auth::adopt))
         .route("/auth/dev", get(auth::dev_login))
+        .route("/auth/logout", post(auth::logout))
         .route("/api/projects", post(http::create_project).get(http::list_projects))
         .route(
             "/api/projects/{id}",
             get(http::get_project).patch(http::update_project).delete(http::delete_project),
         )
+        .route("/api/projects/blank", post(http::create_blank_project))
+        .route("/api/trash", get(http::list_trash))
+        .route("/api/projects/{id}/undelete", post(http::undelete_project))
+        .route("/api/projects/{id}/star", axum::routing::put(http::star_project).delete(http::unstar_project))
+        .route("/api/projects/{id}/transfer", post(http::transfer_project))
         .route("/api/gallery", get(http::gallery))
         .route("/api/projects/{id}/preview.svg", get(http::preview_svg))
         .route("/api/projects/{id}/board-items", get(http::board_items))
@@ -210,18 +227,25 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::patch(http::update_comment).delete(http::delete_comment),
         )
         .route("/gallery", get(pages::app_page))
+        .route("/trash", get(pages::app_page))
         .route("/gallery-legacy", get(pages::gallery_page))
         .route("/p/{id}", get(pages::app_page))
         .route("/p/{id}/about", get(pages::project_page))
         .route("/p/{id}/live", get(pages::app_page))
         .route("/p/{id}/live-legacy", get(pages::live_page))
         .route("/api/projects/{id}/archive", get(http::download_archive))
-        .route("/api/projects/{id}/links", post(http::create_link))
+        .route("/api/projects/{id}/links", post(http::create_link).get(http::list_links))
         .route("/api/projects/{id}/invites", post(http::invite))
-        .route("/api/projects/{id}/invites/{invite_id}", delete(http::revoke_invite))
+        .route(
+            "/api/projects/{id}/invites/{invite_id}",
+            delete(http::revoke_invite).patch(http::set_invite_role),
+        )
         .route("/api/users/search", get(http::search_users))
         .route("/api/projects/{id}/members", get(http::list_members))
-        .route("/api/projects/{id}/members/{member_id}", delete(http::remove_member))
+        .route(
+            "/api/projects/{id}/members/{member_id}",
+            delete(http::remove_member).patch(http::set_member_role),
+        )
         .route("/api/projects/{id}/leave", post(http::leave_project))
         .route("/api/links/{token}", delete(http::revoke_link))
         .route("/api/join/{token}", post(http::claim_link))

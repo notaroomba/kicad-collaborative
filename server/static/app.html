@@ -98,53 +98,14 @@
   .view { display: none; min-height: 0; }
   .view.active { display: grid; }
 
-  /* ---- home: a project-manager window ---- */
-  #home { grid-template-columns: 220px 1fr; }
-  #home nav { background: var(--bench); border-right: 1px solid var(--line); padding: 10px 8px;
-              display: flex; flex-direction: column; gap: 1px; }
-  #home nav button { text-align: left; background: none; border: 0; padding: 6px 10px; border-radius: 2px;
-                     color: var(--ink); display: flex; align-items: center; gap: 9px; height: 28px; }
-  #home nav button:hover { background: var(--paper); }
-  #home nav button.active { background: var(--paper); box-shadow: inset 2px 0 0 var(--copper); }
-  #home nav .sec { color: var(--ink-3); font: 500 10px var(--mono); text-transform: uppercase;
-                   letter-spacing: .12em; padding: 16px 10px 5px; }
-  #home main { overflow: auto; padding: 28px 36px 40px;
-               background-color: var(--paper);
-               background-image: radial-gradient(color-mix(in srgb, var(--line-2) 55%, transparent) 1px, transparent 1.3px);
-               background-size: 20px 20px; }
-  #home h1 { font-size: 22px; margin: 0 0 6px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
-  #home h2 { font: 500 11px/1 var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: .12em;
-             margin: 30px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  .lead { color: var(--ink-2); margin: 0 0 16px; max-width: 64ch; font-size: 14px; }
-  #home ol.lead { padding-left: 1.3em; } #home ol.lead li { margin: 4px 0; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 14px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; overflow: hidden;
-          cursor: pointer; transition: border-color .12s, box-shadow .12s; }
-  .card:hover { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
-  .card .thumb { aspect-ratio: 4 / 3; background: var(--canvas); display: grid; place-items: center;
-                 overflow: hidden; position: relative; border-bottom: 1px solid var(--line); }
-  .card .thumb img { width: 100%; height: 100%; object-fit: contain; padding: 8px; opacity: 0; transition: opacity .25s; }
-  .card .thumb img.ready { opacity: 1; }
-  .card .thumb::before { content: ""; position: absolute; inset: 0;
-                         background: linear-gradient(100deg, transparent 30%, #ffffff0a 50%, transparent 70%);
-                         background-size: 200% 100%; animation: shimmer 1.4s infinite; }
-  .card .thumb:has(img.ready)::before, .card .thumb:has(.ph)::before { display: none; }
-  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-  @media (prefers-reduced-motion: reduce) { .card .thumb::before { animation: none; } }
-  .card .thumb .ph { color: #2F4B6B; font-size: 30px; }
-  .card .body { padding: 9px 11px 10px; }
-  .card .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card .meta { color: var(--ink-3); font: 11px var(--mono); display: flex; gap: 8px; margin-top: 3px; align-items: center; }
+  /* ---- home: the projects window.  Rendered by React (web/home) and styled by web/styles/home.css. ---- */
+  .row { display: flex; gap: 8px; align-items: center; }
   .pill { display: inline-block; font: 500 10px/1.5 var(--mono); padding: 0 6px; border-radius: 2px;
           border: 1px solid var(--line); color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; }
   .pill.owner { border-color: var(--copper); color: var(--copper); }
   .pill.editor { border-color: var(--teal); color: var(--teal); }
   .empty { color: var(--ink-2); padding: 24px; border: 1px dashed var(--line); border-radius: 3px;
            text-align: center; background: var(--panel); }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .row input { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
-               padding: 7px 10px; color: var(--ink); font: 12.5px var(--mono); }
-
 
   /* ---- editor: the page grid the React chrome (static/dist/ui.js) renders into.  The #ui-* hosts are
        display:contents wrappers, so the rendered #tbTop/#dockL/… are the grid's own children. ---- */
@@ -174,26 +135,14 @@
   .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
   .muted { color: var(--ink-2); }
   .note { color: var(--ink-2); font-size: 12px; margin: 6px 0; }
-  @media (max-width: 900px) { #home { grid-template-columns: 1fr; } #home nav { display: none; } }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="ui-menubar"></div>
 
-  <!-- ===== Home: a project-manager window (rendered by the editor bundle, web/editor) ===== -->
-  <section id="home" class="view">
-    <nav>
-      <button data-nav="recent" class="active"><svg class="glyph" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>Recent projects</button>
-      <button data-nav="explore"><svg class="glyph" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17"/></svg>Explore</button>
-      <button data-nav="open"><svg class="glyph" viewBox="0 0 24 24"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/></svg>Open a share link</button>
-      <div class="sec">Repositories</div>
-      <a class="btn" style="margin:0 2px" href="/github">GitHub sync</a>
-      <div class="sec">Desktop</div>
-      <a class="btn" style="margin:0 2px" href="https://github.com/notaroomba/kicad-collaborative/releases" target="_blank">Get the app ↗</a>
-    </nav>
-    <main id="homeMain"></main>
-  </section>
+  <!-- ===== Home: the projects window (React, server/web/home) ===== -->
+  <section id="home" class="view"><div id="ui-home"></div></section>
 
   <!-- ===== Editor: KiCad's frame.  Toolbars, docks, menus, status bar and overlays are React
        components in server/web (bundled into /static/dist/ui.js); only the stage is the editor bundle's (web/editor). ===== -->

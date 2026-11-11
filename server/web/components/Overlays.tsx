@@ -42,14 +42,14 @@ function PopoverBody({ p }: { p: PopoverState }) {
         <>
           <h4 className={H4}>Share link (editor)</h4>
           <input className={INPUT} value={p.url || ""} readOnly onClick={(ev) => ev.currentTarget.select()} />
-          <p className="note">Copied to your clipboard. Anyone with it can join in the browser or from KiCad Collaborative → File → Join Shared Project…</p>
+          <p className="note">Copied to your clipboard. Anyone with it can join in the browser or from KiCad Collaborative → File → Join Session from URL…</p>
         </>
       );
     case "kicad":
       return (
         <>
           <h4 className={H4}>Open in KiCad Collaborative</h4>
-          <p className="note">1. Install the desktop app from the <a href={RELEASES} target="_blank" rel="noreferrer">releases page</a>.<br />2. File → Join Shared Project… and paste a share link (File → Copy share link… here).<br />3. Edits sync both ways, live.</p>
+          <p className="note">1. Install the desktop app from the <a href={RELEASES} target="_blank" rel="noreferrer">releases page</a>.<br />2. File → Join Session from URL… and paste a share link (File → Copy share link… here).<br />3. Edits sync both ways, live.</p>
         </>
       );
     case "find":

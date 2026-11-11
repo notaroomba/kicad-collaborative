@@ -229,6 +229,147 @@ const cps = await (await fetch(`${BASE}/api/projects/${project.projectId}/checkp
   { headers: { Authorization: `Bearer ${alice}` } })).json();
 check('checkpoint is listed', cps.checkpoints?.some(c => c.name === 'e2e-checkpoint'));
 
+// --- managing access: the stored-projects UI's endpoints ---
+const authA = { Authorization: `Bearer ${alice}` }, authB = { Authorization: `Bearer ${bob}` };
+const jsonA = { ...authA, 'Content-Type': 'application/json' }, jsonB = { ...authB, 'Content-Type': 'application/json' };
+const listing = await (await fetch(`${BASE}/api/projects`, { headers: authA })).json();
+const row = listing.projects?.find(p => p.projectId === project.projectId);
+check('listing carries description, member count and owner avatar', !!row && 'description' in row && row.memberCount >= 1 && 'ownerAvatarUrl' in row, JSON.stringify(row));
+
+const asMember = await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authB });
+const memberView = await asMember.json();
+check('a member can see who has access, read-only', asMember.status === 200 && memberView.canManage === false
+  && memberView.owner?.login === 'e2e-alice' && memberView.pending.length === 0, JSON.stringify(memberView).slice(0, 200));
+
+const demote = await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
+  method: 'PATCH', headers: jsonA, body: JSON.stringify({ role: 'viewer' }) });
+const afterDemote = await (await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authA })).json();
+check('owner can change a member\'s role', demote.status === 200 && afterDemote.members.find(m => m.userId === bobId)?.role === 'viewer'
+  && afterDemote.canManage === true, `got ${demote.status}`);
+const selfPromote = await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
+  method: 'PATCH', headers: jsonB, body: JSON.stringify({ role: 'editor' }) });
+check('a member cannot change roles', selfPromote.status === 403, `got ${selfPromote.status}`);
+const badRole = await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
+  method: 'PATCH', headers: jsonA, body: JSON.stringify({ role: 'owner' }) });
+check('unknown roles are rejected', badRole.status === 400, `got ${badRole.status}`);
+await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
+  method: 'PATCH', headers: jsonA, body: JSON.stringify({ role: 'editor' }) });
+
+const inv = await fetch(`${BASE}/api/projects/${project.projectId}/invites`, {
+  method: 'POST', headers: jsonA, body: JSON.stringify({ email: 'e2e-nobody@example.invalid', role: 'editor' }) });
+const pendingList = (await (await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authA })).json()).pending;
+const pendingId = pendingList.find(p => p.email === 'e2e-nobody@example.invalid')?.inviteId;
+const invRole = await fetch(`${BASE}/api/projects/${project.projectId}/invites/${pendingId}`, {
+  method: 'PATCH', headers: jsonA, body: JSON.stringify({ role: 'viewer' }) });
+const pendingAfter = (await (await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authA })).json()).pending;
+check('a pending invite\'s role can be changed', inv.status === 200 && invRole.status === 200
+  && pendingAfter.find(p => p.inviteId === pendingId)?.role === 'viewer', `invite ${inv.status}, patch ${invRole.status}`);
+await fetch(`${BASE}/api/projects/${project.projectId}/invites/${pendingId}`, { method: 'DELETE', headers: authA });
+
+const links = await (await fetch(`${BASE}/api/projects/${project.projectId}/links`, { headers: authA })).json();
+check('owner can list the active share links', links.links?.some(l => l.token === link.token && l.role === 'editor'), JSON.stringify(links).slice(0, 160));
+const linksAsMember = await fetch(`${BASE}/api/projects/${project.projectId}/links`, { headers: authB });
+check('members cannot list share links', linksAsMember.status === 403, `got ${linksAsMember.status}`);
+await fetch(`${BASE}/api/links/${link.token}`, { method: 'DELETE', headers: authA });
+const linksAfter = await (await fetch(`${BASE}/api/projects/${project.projectId}/links`, { headers: authA })).json();
+check('a revoked link drops out of the list', !linksAfter.links?.some(l => l.token === link.token));
+
+// --- upload as loose files (the web's folder upload): a wrapping folder is stripped, stray files are left out ---
+const loose = new FormData();
+loose.append('name', 'e2e-loose');
+loose.append('file', new Blob([sch]), 'board/board.kicad_sch');
+loose.append('file', new Blob(['{}']), 'board/board.kicad_pro');
+loose.append('file', new Blob([sch]), 'board/sheets/sub.kicad_sch');
+loose.append('file', new Blob(['hello']), 'board/README.md');
+loose.append('file', new Blob([sch]), 'board/board.collab/base/board.kicad_sch');
+const looseRes = await fetch(`${BASE}/api/projects`, { method: 'POST', headers: authA, body: loose });
+const looseProject = await looseRes.json();
+const loosePaths = (looseProject.docs || []).map(d => d.path).sort().join(',');
+check('loose-file upload: folder stripped, non-KiCad and sync-state files left out',
+  looseRes.status === 200 && loosePaths === 'board.kicad_pro,board.kicad_sch,sheets/sub.kicad_sch'
+  && looseProject.skipped?.join() === 'board/README.md', `${looseRes.status} ${loosePaths} skipped=${looseProject.skipped}`);
+const junk = new FormData();
+junk.append('file', new Blob(['hello']), 'notes.txt');
+const junkRes = await fetch(`${BASE}/api/projects`, { method: 'POST', headers: authA, body: junk });
+check('an upload with no KiCad files is refused', junkRes.status === 400, `got ${junkRes.status}`);
+const evil = new FormData();
+evil.append('file', new Blob([sch]), '../escape.kicad_sch');
+const evilRes = await fetch(`${BASE}/api/projects`, { method: 'POST', headers: authA, body: evil });
+check('path traversal in a file name is refused', evilRes.status === 400, `got ${evilRes.status}`);
+
+// --- a role change reaches a socket that is already connected ---
+// V joined as a viewer; the block above left bob as an editor again.
+const mk = (n) => [{ ...changes[0], properties: [{ name: 'Position X', before: { type: 'int', v: 1027430 + n }, after: { type: 'int', v: 1027431 + n } }] }];
+V.send({ type: 'op', docId: doc.docId, clientOpId: 'bob-viewer:2', changes: mk(0) });
+const upAck = await V.wait(m => m.type === 'ack' && m.clientOpId === 'bob-viewer:2').catch(() => null);
+check('a promotion reaches the live session: its next edit is accepted', !!upAck);
+await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
+  method: 'PATCH', headers: jsonA, body: JSON.stringify({ role: 'viewer' }) });
+V.send({ type: 'op', docId: doc.docId, clientOpId: 'bob-viewer:3', changes: mk(1) });
+const downErr = await V.wait(m => m.type === 'error' && m.code === 'permission_denied' && m.clientOpId === 'bob-viewer:3').catch(() => null);
+check('a demotion reaches the live session: its next edit is refused', !!downErr);
+
+// --- a role the owner picked is not raised again by a share link ---
+const edLink = await (await fetch(`${BASE}/api/projects/${project.projectId}/links`, {
+  method: 'POST', headers: jsonA, body: JSON.stringify({ role: 'editor' }) })).json();
+const reclaim = await (await fetch(`${BASE}/api/join/${edLink.token}`, { method: 'POST', headers: authB })).json();
+check('an editor link does not undo the owner\'s demotion', reclaim.role === 'viewer', JSON.stringify(reclaim));
+const ownClaim = await fetch(`${BASE}/api/join/${edLink.token}`, { method: 'POST', headers: authA });
+const membersNow = await (await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authA })).json();
+check('the owner claiming their own link is not listed as a member', ownClaim.status === 200
+  && !membersNow.members.some(m => m.userId === membersNow.ownerId));
+const visit = await fetch(`${BASE}/j/${edLink.token}`, { headers: { Cookie: `kc_session=${bob}` } });
+check('visiting the link page changes nothing by itself', visit.status === 200 && /id="openweb"/.test(await visit.text()));
+
+// --- stars, Trash, blank projects, ownership transfer ---
+const star = await fetch(`${BASE}/api/projects/${project.projectId}/star`, { method: 'PUT', headers: authB });
+const starredB = (await (await fetch(`${BASE}/api/projects`, { headers: authB })).json()).projects.find(p => p.projectId === project.projectId);
+const starredA = (await (await fetch(`${BASE}/api/projects`, { headers: authA })).json()).projects.find(p => p.projectId === project.projectId);
+check('a star is per person', star.status === 200 && starredB?.starred === true && starredA?.starred === false);
+await fetch(`${BASE}/api/projects/${project.projectId}/star`, { method: 'DELETE', headers: authB });
+
+const blankRes = await fetch(`${BASE}/api/projects/blank`, { method: 'POST', headers: jsonA, body: JSON.stringify({ name: 'E2E blank: one/two' }) });
+const blank = await blankRes.json();
+check('blank project: a project file, a schematic and a board with a safe file name', blankRes.status === 200 && blank.docs?.length === 3
+  && blank.docs.every(d => !/[\/:]/.test(d.path.replace(/\.kicad_\w+$/, ''))), JSON.stringify(blank.docs?.map(d => d.path)));
+for (const bad of ['', '   ', '..', 'x'.repeat(121)]) {
+  const r = await fetch(`${BASE}/api/projects/blank`, { method: 'POST', headers: jsonA, body: JSON.stringify({ name: bad }) });
+  check(`blank project: name ${JSON.stringify(bad.slice(0, 8))} is refused`, r.status === 400, `got ${r.status}`);
+}
+const dots = await fetch(`${BASE}/api/projects/${blank.projectId}`, { method: 'PATCH', headers: jsonA, body: JSON.stringify({ name: '..' }) });
+check('a project cannot be renamed to ".."', dots.status === 400, `got ${dots.status}`);
+
+const notOwner = await fetch(`${BASE}/api/projects/${blank.projectId}`, { method: 'DELETE', headers: authB });
+check('only the owner can trash a project', notOwner.status === 403 || notOwner.status === 404, `got ${notOwner.status}`);
+const trashed = await fetch(`${BASE}/api/projects/${blank.projectId}`, { method: 'DELETE', headers: authA });
+const inTrash = (await (await fetch(`${BASE}/api/trash`, { headers: authA })).json()).projects;
+const hidden = await fetch(`${BASE}/api/projects/${blank.projectId}`, { headers: authA });
+const listedNow = (await (await fetch(`${BASE}/api/projects`, { headers: authA })).json()).projects;
+check('delete moves the project to the Trash and hides it everywhere', trashed.status === 200 && inTrash.some(p => p.projectId === blank.projectId && p.purgeAt)
+  && hidden.status === 404 && !listedNow.some(p => p.projectId === blank.projectId), `delete ${trashed.status}, get ${hidden.status}`);
+const otherTrash = (await (await fetch(`${BASE}/api/trash`, { headers: authB })).json()).projects;
+check('the Trash is private to the owner', !otherTrash.some(p => p.projectId === blank.projectId));
+const strangerRestore = await fetch(`${BASE}/api/projects/${blank.projectId}/undelete`, { method: 'POST', headers: authB });
+check('only the owner can restore', strangerRestore.status === 403 || strangerRestore.status === 404, `got ${strangerRestore.status}`);
+const restored = await fetch(`${BASE}/api/projects/${blank.projectId}/undelete`, { method: 'POST', headers: authA });
+const back = await fetch(`${BASE}/api/projects/${blank.projectId}`, { headers: authA });
+check('restore brings it back with its documents', restored.status === 200 && back.status === 200 && (await back.json()).docs?.length === 3);
+await fetch(`${BASE}/api/projects/${blank.projectId}`, { method: 'DELETE', headers: authA });
+const purge = await fetch(`${BASE}/api/projects/${blank.projectId}?permanent=true`, { method: 'DELETE', headers: authA });
+const trashAfter = (await (await fetch(`${BASE}/api/trash`, { headers: authA })).json()).projects;
+check('a trashed project can be deleted for good', purge.status === 200 && !trashAfter.some(p => p.projectId === blank.projectId), `got ${purge.status}`);
+
+const toStranger = await fetch(`${BASE}/api/projects/${project.projectId}/transfer`, { method: 'POST', headers: jsonA, body: JSON.stringify({ userId: 999999999 }) });
+check('ownership can only go to a member', toStranger.status >= 400 && toStranger.status < 500, `got ${toStranger.status}`);
+const byMember = await fetch(`${BASE}/api/projects/${project.projectId}/transfer`, { method: 'POST', headers: jsonB, body: JSON.stringify({ userId: bobId }) });
+check('a member cannot take ownership', byMember.status === 403, `got ${byMember.status}`);
+const give = await fetch(`${BASE}/api/projects/${project.projectId}/transfer`, { method: 'POST', headers: jsonA, body: JSON.stringify({ userId: bobId }) });
+const afterGive = await (await fetch(`${BASE}/api/projects/${project.projectId}/members`, { headers: authB })).json();
+check('transfer: the member becomes owner, the old owner stays as editor', give.status === 200 && afterGive.ownerId === bobId && afterGive.canManage === true
+  && afterGive.members.length === 1 && afterGive.members[0].role === 'editor', JSON.stringify(afterGive).slice(0, 200));
+const giveBack = await fetch(`${BASE}/api/projects/${project.projectId}/transfer`, { method: 'POST', headers: jsonB, body: JSON.stringify({ userId: aliceId }) });
+check('…and it can be handed back', giveBack.status === 200, `got ${giveBack.status}`);
+
 // --- member removal (the revoked-link remediation) ---
 const rm = await fetch(`${BASE}/api/projects/${project.projectId}/members/${bobId}`, {
   method: 'DELETE', headers: { Authorization: `Bearer ${alice}` } });
@@ -236,6 +377,9 @@ check('owner can remove a collaborator', rm.status === 200, `got ${rm.status}`);
 const bobAfter = await fetch(`${BASE}/api/projects/${project.projectId}`,
   { headers: { Authorization: `Bearer ${bob}` } });
 check('removed collaborator loses access', bobAfter.status === 403, `got ${bobAfter.status}`);
+V.send({ type: 'presence', docId: doc.docId, state: { cursor: [1, 2] } });
+const kicked = await V.wait(m => m.type === 'error' && m.code === 'permission_denied' && !m.clientOpId).catch(() => null);
+check('…and their open session is cut off from the document', !!kicked);
 
 A.close(); V.close();
 

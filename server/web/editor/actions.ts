@@ -17,6 +17,12 @@ export async function runAction(act, el) {
   const id = state.project && state.project.projectId;
   switch (act) {
     case "home": navigate("/"); break;
+    // the project manager's File menu: the same things the home sidebar offers
+    case "newProject": window.CollabHome?.newProject(); break;
+    case "joinLink": window.CollabHome?.join(); break;
+    case "importGithub": location.href = "/github"; break;
+    case "openTrash": if (!state.me) { toast("Sign in to see your Trash"); break; } navigate("/trash"); break;
+    case "signOut": if (!state.me) { toast("You are not signed in"); break; } window.CollabHome?.signOut(); break;
     case "zoomin": zoomBy(1.25); break;
     case "zoomout": zoomBy(0.8); break;
     case "fit": fitView(); break;
@@ -34,11 +40,10 @@ export async function runAction(act, el) {
     case "github": location.href = id ? `/p/${id}/github` : "/github"; break;
     case "clone": if (!id) break; if (!state.me) { toast("Sign in to clone"); break; }
       try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + e.message, 4000); } break;
-    case "share": if (!id) break; if (!state.me || !state.role || state.role === "viewer") { toast("Only editors can create share links"); break; }
-      try { const j = await api(`/api/projects/${id}/links`, { method: "POST", body: JSON.stringify({ role: "editor" }) });
-        await navigator.clipboard.writeText(j.url).catch(() => {});
-        showPopover("share", { url: j.url }, el);
-        toast("Share link copied"); } catch (e) { toast("Couldn't create link: " + e.message, 4000); } break;
+    // The share dialog (people, roles, links) is the home's React dialog; anyone in the project can open it
+    // to see who has access, and only the owner can change anything.
+    case "share": if (!id) break; if (!state.me) { toast("Sign in to share"); break; }
+      if (window.CollabHome) window.CollabHome.openShare(id, state.project.name); break;
     case "checkpoint": if (!id) break; if (E.viewOnly) { toast("Only editors can create checkpoints"); break; }
       { const name = prompt("Checkpoint name", `checkpoint ${new Date().toLocaleString()}`); if (!name) break;
         try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); showPane("history", true); }
