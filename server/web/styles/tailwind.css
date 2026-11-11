@@ -20,6 +20,7 @@
    spec would otherwise contribute stray candidates). */
 @source "../main.tsx";
 @source "../components/**/*.tsx";
+@source "../ai/**/*.tsx";
 @source "../*.ts";
 @source not "../generated";
 
@@ -117,5 +118,8 @@
 /* `display: grid` WITHOUT Tailwind's `grid` class: app.html's `.grid` (the home-view card grid,
    auto-fill columns + 14px gap) shares that name and, loading after ui.css, would win. */
 @utility d-grid { display: grid; }
+
+/* The Assistant dock keeps its rules in one plain stylesheet (web/ai/assistant.css). */
+@import "../ai/assistant.css" layer(components);
 
 @tailwind utilities source(none);

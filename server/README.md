@@ -114,6 +114,38 @@ File → GitHub Sync… in the web editor).
 `GITHUB_API_URL` / `GITHUB_WEB_URL` point the server at another GitHub
 (Enterprise, or the test stand-in).
 
+## Design assistant
+
+The web editor's Assistant pane (menu bar button, or View > Panels) is a chat
+with Claude that can read the open design and propose edits to it.
+
+- The browser runs the conversation and the design tools (components, nets,
+  ERC/DRC, board statistics, selection, raw items) against the live document, so
+  the model always sees what is on screen, unsaved edits included.
+- The server is an authenticated proxy to the Anthropic Messages API. It owns
+  the API key, the system prompt (`web/ai/system.md`) and the tool list
+  (`web/ai/tools.json`); the browser sends only the messages. Web search and web
+  fetch run on Anthropic's side and are how datasheets get read.
+- The assistant never edits the design. `propose_changes` puts a card in the
+  pane with a canvas preview; **Accept** sends the edits through the normal op
+  pipeline as one undo step, so everyone in the session sees them and they are
+  checkpointed like any other edit. A proposal whose items changed since it was
+  made is refused.
+
+| Endpoint | |
+|---|---|
+| `GET /api/ai` | whether the assistant is available to the caller, the model, today's usage |
+| `PUT/DELETE /api/ai/key` | store / remove the caller's own API key (AES-GCM encrypted at rest) |
+| `POST /api/projects/{id}/ai/chat` | `{messages}` in, the Messages API event stream out; project members only |
+
+| Variable | |
+|---|---|
+| `ANTHROPIC_API_KEY` | the server's key. Without it the assistant works only for people who add their own key in its settings |
+| `AI_MODEL`, `AI_EFFORT` | model id and effort level (defaults: the current Opus model, `medium`) |
+| `AI_DAILY_REQUESTS` | model calls per person per day on the server's key (default 300) |
+| `AI_WEB_TOOLS=0` | turn off web search and fetch |
+| `ANTHROPIC_API_URL` | another endpoint (a gateway, or the test stand-in) |
+
 ## Running
 
 ```bash
@@ -156,6 +188,11 @@ Chromium, desktop and phone sizes) test repository sync against
 `fake-github.mjs`, an in-memory stand-in for GitHub's OAuth and git database
 API, so no real repository is touched. `KICAD_FILES_DIR=.. cargo test --
 --ignored real_files` runs the merge over every KiCad file in the source tree.
+
+`server/scripts/ai-ui.mjs` drives the assistant in Chromium against
+`fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every
+design tool on a schematic and a board, proposal preview / accept / reject /
+stale, a second client seeing an accepted edit, undo, errors, own keys, access.
 
 `server/scripts/e2e.mjs` goes further: it drives two WebSocket clients through
 the real join → op → ack → broadcast flow and checks sharing, role enforcement,

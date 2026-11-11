@@ -134,6 +134,8 @@ export const HANDLERS = {
   showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
   collabCopyLink: (a) => runAction("share", a), collabComments: () => showPane("comments", true), collabFollow: () => cycleFollow(), collabHistory: () => showPane("history", true),
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
+  // the Assistant dock (web/ai) owns its own state; the menu entry just asks it to toggle
+  showAssistant: () => window.dispatchEvent(new Event("kc-assistant-toggle")),
   theme: () => toggleTheme(), about: (a) => runAction("about", a),
   // the home view's menu entries
   share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),

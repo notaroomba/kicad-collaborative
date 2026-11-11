@@ -40,7 +40,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
     ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "findAndReplace", "-", "deleteTool"]],
-    ["View", [["Panels", ["showProperties", "showHierarchy", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
+    ["View", [["Panels", ["showProperties", "showHierarchy", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance", "showAssistant"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
     ["Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea", "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],
     ["Inspect", ["runERC", "clearMarkers", "-", "showSimulator"]],
     ["Tools", ["updatePcbFromSchematic", "showPcbNew", "-", "showSymbolEditor", "showFootprintEditor", "-", "annotate", "assignFootprints", "editSymbolFields", "generateBOM"]],
@@ -50,7 +50,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   pcb: [
     ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "-", "deleteTool"]],
-    ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
+    ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
     ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "gridSetOrigin", "drillOrigin"]],
     ["Route", ["routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew"]],
     ["Inspect", ["runDRC", "clearMarkers", "-", "netInspector", "boardStatistics", "inspectClearance", "-", "measureTool"]],
@@ -73,7 +73,7 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [
 export const LOCAL_LABELS: Record<string, string> = {
   save: "Save Checkpoint…", collabCopyLink: "Copy Share Link", collabComments: "Comments…", collabFollow: "Follow Next Peer", collabHistory: "History",
   collabLeave: "Leave Session", archive: "Download Project (.zip)", github: "GitHub Sync…", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative…", home: "Back to Projects",
-  showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
+  showAssistant: "Assistant", showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
   theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App ↗", sourceCode: "Source on GitHub ↗", about: "About KiCad Collaborative", help: "Help ↗", gettingStarted: "Getting Started with KiCad ↗",
   // home-view menu entries

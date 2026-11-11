@@ -1,0 +1,163 @@
+[
+  {
+    "name": "get_design_overview",
+    "description": "Summary of the project and of the document that is open in the editor: the project's schematic sheets and board, which one is open, its title block, how many symbols or footprints, wires or tracks and nets it has, and what is selected. Call this first when you do not yet know what the design is.",
+    "input_schema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "list_components",
+    "description": "List the components of a schematic sheet (symbols) or of the board (footprints): reference, value, footprint, library id, position, and whether a Datasheet link and part number fields are present. Defaults to the open document; pass doc to read another sheet or the board. Power symbols are left out unless include_power is true.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "doc": { "type": "string", "description": "Path of the document to read, as listed by get_design_overview (for example \"power.kicad_sch\"). Omit for the open document." },
+        "filter": { "type": "string", "description": "Only components whose reference, value, footprint or library id contains this text (case-insensitive)." },
+        "include_power": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_component",
+    "description": "Everything about one component: all of its fields, its position and orientation, and each pin (schematic) or pad (board) with its number, name, electrical type, connection point and the net it is on.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "ref": { "type": "string", "description": "Reference designator, for example \"U3\"." },
+        "doc": { "type": "string", "description": "Document path; omit for the open document." }
+      },
+      "required": ["ref"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_nets",
+    "description": "The nets of a schematic sheet or of the board, each with the pins on it (as REF.pin). On a schematic the names come from labels and power symbols; unnamed nets are listed by their pins. A schematic net is local to its sheet unless a global label, power symbol or hierarchical label carries it to other sheets.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "doc": { "type": "string" },
+        "filter": { "type": "string", "description": "Only nets whose name or pins contain this text (case-insensitive)." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "run_checks",
+    "description": "Run the electrical rules check on a schematic sheet or the design rules check on the board and return the violations: severity, message, position and the references involved. The same checks the editor's Inspect menu runs.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "doc": { "type": "string" } },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_board_info",
+    "description": "Board-level facts: outline size, copper layers, design rules and net classes from the project file, counts of footprints, pads, vias and tracks, total track length, track widths and via sizes in use, and how many connections are still unrouted.",
+    "input_schema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_selection",
+    "description": "The items currently selected in the editor, with their kind, reference, position and fields. Use it when the person says \"this\", \"these\" or \"the selected part\".",
+    "input_schema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "get_items",
+    "description": "Raw items of a document in KiCad's s-expression form, for when the structured tools are not enough: wires and labels around a point, tracks of a net, zones, graphics, text. Filter by kind, by ids, or by a circle around a point; results are capped, so filter narrowly.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "doc": { "type": "string" },
+        "kinds": { "type": "array", "items": { "type": "string" }, "description": "KiCad item tokens, for example wire, label, global_label, junction, no_connect, symbol, segment, via, zone, footprint, gr_line." },
+        "ids": { "type": "array", "items": { "type": "string" } },
+        "near": {
+          "type": "object",
+          "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "radius": { "type": "number" } },
+          "required": ["x", "y", "radius"],
+          "additionalProperties": false
+        },
+        "net": { "type": "string", "description": "Board only: items on this net." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "find_datasheets",
+    "description": "For the parts of a schematic sheet or the board, grouped by part: the references that use it, value, footprint, the Datasheet field and any manufacturer, part number or distributor fields. Use the URL with web_fetch, or search for the part number with web_search when there is no usable link.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "doc": { "type": "string" },
+        "refs": { "type": "array", "items": { "type": "string" }, "description": "Only these references. Omit for every part." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "focus_view",
+    "description": "Centre the editor's view on a component or a point and highlight it, so the person can see what you are talking about. This does not change the design.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "refs": { "type": "array", "items": { "type": "string" }, "description": "References to show and highlight." },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "open_document",
+    "description": "Switch the editor to another schematic sheet or to the board. Changes can only be proposed for the document that is open.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "doc": { "type": "string", "description": "Path as listed by get_design_overview." } },
+      "required": ["doc"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "propose_changes",
+    "description": "Propose a set of edits to the open document. The people in the session see a card listing each edit, with the affected items highlighted on the canvas, and choose to accept or reject it; nothing changes until they accept. Returns whether every edit is valid; an invalid edit is reported with the reason and no card is shown, so correct it and call again. Edits, by `op`:\n- set_field: set a field of a component {ref, field, value}. field is Value, Reference, Footprint, Datasheet or any custom field name (created when missing).\n- move: move an item {ref or id, x, y, rotation?}.\n- remove: delete an item {ref or id}.\n- add_symbol (schematic): place a symbol {lib_id, x, y, rotation?, mirror?, reference?, value?, fields?}. lib_id must be a symbol already used on this sheet (get_design_overview lists them under libraries).\n- add_wire (schematic): {points: [[x, y], ...]} one wire segment per consecutive pair; ends must land exactly on pin connection points or on other wire ends.\n- add_label (schematic): {kind: label | global_label | hierarchical_label, text, x, y, rotation?}.\n- add_junction, add_no_connect (schematic): {x, y}.\n- add_text: {text, x, y}.\n- add_track (board): {net, layer, width?, points: [[x, y], ...]}.\n- add_via (board): {net, x, y, size?, drill?}.\n- add_item: {sexpr} a complete KiCad item s-expression, for anything the other ops do not cover.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "A few words naming the change, shown as the card's heading." },
+        "rationale": { "type": "string", "description": "One or two sentences on why, for someone who has not read the conversation." },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "op": { "type": "string", "enum": ["set_field", "move", "remove", "add_symbol", "add_wire", "add_label", "add_junction", "add_no_connect", "add_text", "add_track", "add_via", "add_item"] },
+              "ref": { "type": "string" },
+              "id": { "type": "string" },
+              "field": { "type": "string" },
+              "value": { "type": "string" },
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "rotation": { "type": "number" },
+              "mirror": { "type": "string", "enum": ["x", "y"] },
+              "lib_id": { "type": "string" },
+              "reference": { "type": "string" },
+              "fields": { "type": "object", "additionalProperties": { "type": "string" } },
+              "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } },
+              "kind": { "type": "string", "enum": ["label", "global_label", "hierarchical_label"] },
+              "text": { "type": "string" },
+              "net": { "type": "string" },
+              "layer": { "type": "string" },
+              "width": { "type": "number" },
+              "size": { "type": "number" },
+              "drill": { "type": "number" },
+              "sexpr": { "type": "string" }
+            },
+            "required": ["op"]
+          }
+        }
+      },
+      "required": ["title", "edits"],
+      "additionalProperties": false
+    }
+  }
+]

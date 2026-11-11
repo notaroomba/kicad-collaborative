@@ -1,3 +1,4 @@
+mod ai;
 mod auth;
 mod doc_actor;
 mod error;
@@ -247,6 +248,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}/github/diff", get(github::file_diff))
         .route("/api/projects/{id}/github/push", post(github::push))
         .route("/api/projects/{id}/github/pull", post(github::pull))
+        // The design assistant (ai.rs)
+        .route("/api/ai", get(ai::status))
+        .route("/api/ai/key", axum::routing::put(ai::put_key).delete(ai::delete_key))
+        .route("/api/projects/{id}/ai/chat", post(ai::chat))
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
