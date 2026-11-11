@@ -2287,6 +2287,21 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
 // browser never approximates one.  It asks a desktop editor in the document to refill; the result arrives
 // as an ordinary edit.
 act("zoneFillAll", "Fill All Zones", "B", (ctx) => { if (ctx.viewOnly) { ctx.toast("View only"); return true; } if (!ctx.requestDesktop || !ctx.requestDesktop("fill_zones")) { ctx.toast("Not connected"); return true; } ctx.toast("Asked the desktop app to refill zones"); return true; });
+// ZONE::UnFill (ZONE_FILLER_TOOL::ZoneUnfill / ZoneUnfillAll): the filled areas go and the zone is no longer marked
+// filled — exactly what pcbnew writes after an unfill, so the browser can do it itself.
+function unfillChanges(doc, zones) {
+  const out = [];
+  for (const z of zones) {
+    if (!z || z.kind !== "zone") continue;
+    const node = clone(z.node); let changed = false;
+    for (let i = node.length - 1; i > 0; i--) if (Array.isArray(node[i]) && node[i][0] === "filled_polygon") { node.splice(i, 1); changed = true; }
+    const fill = K.kid(node, "fill"); if (fill && fill[1] === "yes") { fill.splice(1, 1); changed = true; }
+    if (changed) out.push(replacedChange(z, node));
+  }
+  return out;
+}
+act("zoneUnfill", "Unfill Selected Zone(s)", "", (ctx) => { if (!canEdit(ctx)) return true; const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; return commitSel(ctx, unfillChanges(ctx.doc, ids.map((id) => ctx.doc.items.get(id))), "Unfill Zone"); });
+act("zoneUnfillAll", "Unfill All Zones", "Ctrl+B", (ctx) => { if (!canEdit(ctx)) return true; return commitSel(ctx, unfillChanges(ctx.doc, Array.from(ctx.doc.items.values())), "Unfill All Zones"); });
 // The autorouter is its own bundle (web/router → dist/autoroute.js); this is its entry in the Route menu.
 act("autoroute", "Autoroute…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.open) { ctx.toast("The autorouter is not loaded"); return true; } return r.open(ctx); }, { menu: "Route" });
 act("autoplace", "Auto Place Footprints…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.openPlace) { ctx.toast("The placer is not loaded"); return true; } return r.openPlace(ctx); }, { menu: "Tools" });
@@ -2779,7 +2794,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, unfillChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the new board tools

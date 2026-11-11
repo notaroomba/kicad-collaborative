@@ -141,3 +141,13 @@ test("flip and rotate write a footprint's zero orientation the way pcbnew does: 
   assert.deepEqual(K.kid(back, "at"), ["at", 100, 50]);
   assert.deepEqual(K.kid(K.kids(back, "pad")[1], "at"), ["at", 1.5, 0], "a pad back at zero carries no angle either");
 });
+
+test("unfill (Ctrl+B) drops the filled areas and the filled mark, as ZONE::UnFill and pcbnew's writer", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (zone (net "GND") (layer "F.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10))) (filled_polygon (layer "F.Cu") (pts (xy 1 1) (xy 9 1) (xy 9 9))))
+  (zone (net "GND") (layer "B.Cu") (uuid "z2") (hatch edge 0.5) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10)))))`, "kicad_pcb");
+  const ch = P.unfillChanges(doc, [...doc.items.values()]);
+  assert.equal(ch.length, 1, "an unfilled zone is left alone");
+  assert.equal(ch[0].id, "z1"); const out = ch[0].sexpr;
+  assert.ok(!/filled_polygon/.test(out) && /\(fill \(thermal_gap 0\.5\)/.test(out), out);
+});
