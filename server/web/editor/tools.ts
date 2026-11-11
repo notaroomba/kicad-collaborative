@@ -34,6 +34,12 @@ export function toolCtx(extra) {
     undo() { undoLast(); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender: requestRepaint, toast, enterSheet, setTool,
+    // PCB_SELECTION_TOOL's hover selection: the Clarify Selection candidates under a point, the popup that asks
+    // between them (the pick is selected, then `then` runs with a fresh context), and the app's own footprint
+    // drag handed to the module's move (a turn in flight)
+    candidatesAt(mm) { return E.hooks && E.hooks.candidatesAt ? E.hooks.candidatesAt(mm) : null; },
+    clarify(ids, then) { if (E.hooks && E.hooks.clarify) E.hooks.clarify(ids, () => then(toolCtx())); },
+    handoffDrag() { return !!(E.hooks && E.hooks.handoffDrag && E.hooks.handoffDrag()); },
     // Ask a desktop editor in this document to do what the browser cannot (fill zones).
     requestDesktop(action) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },
     setStatus(text) { setStatusBar({ mode: text || "" }); },
@@ -178,13 +184,13 @@ export function deleteSelected() {
     const m = activeModule(); let changes = null;
     if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, [doomed]); } catch (e) { console.warn(e); } }
     if (!changes) changes = [KiCadCanvas.removeChange(doomed)];
-    clearSelection(); commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
+    clearSelection(); commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects(); requestRender();   // EDIT_TOOL::Remove says nothing
     return;
   }
   sendOp([{ id: E.selected.id, typeName: E.ITEM_TYPE, kind: "REMOVED", properties: [] }]);
   if (E.kdoc) E.kdoc.items.delete(E.selected.id);
   E.items = E.items.filter((f) => f.id !== E.selected.id);
-  E.selected = null; drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
+  E.selected = null; drawSelection(); renderProps(); renderObjects(); requestRender();
 }
 
 export function moveOp(fp, nx, ny) {
@@ -197,12 +203,21 @@ export function schKey(k) { const m = CollabTools.sch; if (!m || !isSch()) retur
 
 export function orientSelected(kind) {
   if (isSch()) { if (!schKey({ ccw: "r", cw: "R", mv: "y", mh: "x" }[kind])) toast("Select a symbol or item first"); return; }
-  if (!E.selected) { toast("Select a footprint first"); return; }
+  // board: EDIT_TOOL::Rotate / Mirror in the module (the selection or the item under the cursor; footprints are never
+  // mirrored, KiCad's infobar says to use Flip)
+  if (CollabTools.pcb) { runModuleAction({ ccw: "rotateSelection", cw: "rotateSelectionCw", mh: "mirrorH", mv: "mirrorV" }[kind]); return; }
+  if (!E.selected) return;
   if (kind === "ccw") rotateSelected(-90); else if (kind === "cw") rotateSelected(90);
-  else { const h = CollabTools.props && CollabTools.props.helpers; if (h && h.setFootprintSide) { const it = E.kdoc.items.get(E.selected.id); const side = (it && it.layer === "B.Cu") ? "F.Cu" : "B.Cu"; try { h.setFootprintSide(toolCtx(), it, side); } catch (e) { toast("Flip failed: " + e.message); } } else toast("Flip runs in the desktop app"); }
 }
 
-export function deleteAction() { if (schKey("Delete")) return; if (E.selected && !E.viewOnly) deleteSelected(); else toast("Nothing selected"); }
+export function deleteAction() {
+  if (schKey("Delete")) return;
+  // board: EDIT_TOOL::Remove — the module's selection, or with nothing selected the item under the cursor (silent)
+  const m = !isSch() && activeModule();
+  if (m && m.onKey && !E.viewOnly) { try { if (m.onKey("Delete", { shiftKey: false, preventDefault() {} }, toolCtx())) return; } catch (e) { console.warn(e); } }
+  if (E.selection.size > 1 && !E.viewOnly) { deleteSelection(); return; }
+  if (E.selected && !E.viewOnly) deleteSelected();
+}
 
 export function selectAll() {
   if (!E.kdoc) return; E.selection.clear();
@@ -220,5 +235,4 @@ export function deleteSelection() {
   if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, its); } catch (e) { console.warn(e); } }
   if (!changes) changes = its.map((it) => KiCadCanvas.removeChange(it));
   clearSelection(); commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects();
-  toast(`Deleted ${its.length} item${its.length === 1 ? "" : "s"}`);
 }

@@ -255,8 +255,9 @@ export function startMove(mode: "move" | "drag"): boolean {
     const items = selectionItems(); if (!items.length) return false;
     try { m.setDragMode(toolCtx(), mode); return !!m.beginDrag(toolCtx(), items.length === 1 ? items[0] : items, mm, false); } catch (e) { console.warn(e); return false; }
   }
-  // anything but footprints alone (tracks, vias, graphics, text, zones, a mixed selection): the board module carries it
-  if (selectionItems().some((it) => it.kind !== "footprint")) return runModuleAction("move");
+  // board: EDIT_TOOL::Move in the module for everything (footprints too), so Rotate / Flip / Mirror act on the move in
+  // flight, the reference point and snapping are KiCad's, and with nothing selected the item under the cursor moves
+  if (CollabTools.pcb) return runModuleAction("move");
   const all = selectionIds(); if (!all.length) return false;
   const fps = (unlockedForEdit(all) as string[]).map((id) => (E.items as { id: string; x: number; y: number }[]).find((f) => f.id === id)).filter(Boolean) as { id: string; x: number; y: number }[];
   if (!fps.length) return true;   // everything selected is locked: said so, nothing to carry
@@ -264,6 +265,27 @@ export function startMove(mode: "move" | "drag"): boolean {
   if (fps.length === 1) E.drag = { fp, startMm: mm, curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, grabOff: [mm[0] - fp.x / E.IU, mm[1] - fp.y / E.IU], wires: [], engine: false, sticky: true };
   else E.drag = { fp, group: fps.map((f) => ({ fp: f, ox: f.x, oy: f.y })), startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0], sticky: true };
   return true;
+}
+
+/**
+ * The app's own pointer drag of footprints (E.drag) handed to the board module's move, which can turn, flip and mirror
+ * what it carries (doMoveSelection passes Rotate / Flip / Mirror to EDIT_TOOL with the move's commit).  The footprints
+ * go back to where the drag found them and the module picks them up under the same cursor.  True when a module move
+ * now runs.
+ */
+E.hooks.handoffDrag = (): boolean => handoffAppDrag();
+export function handoffAppDrag(): boolean {
+  const g = E.drag as { fp?: { id: string }; group?: { fp: { id: string } }[]; engine?: boolean; startMm?: Mm; sticky?: boolean } | null;
+  const pm = CollabTools.pcb as (PcbToolModule & { beginMove?(ctx: ToolCtx, at: Mm, sticky: boolean): boolean }) | undefined;
+  const PT = (window as unknown as { PcbTools?: { selectMoveTo?(ctx: ToolCtx, mm: Mm): void } }).PcbTools;
+  if (!g || isSch() || g.engine || !g.startMm || !pm || !pm.beginMove || !PT || !PT.selectMoveTo || !E.kdoc) return false;
+  const ids = g.group ? g.group.map((m) => m.fp.id) : g.fp ? [g.fp.id] : [];
+  if (!ids.length) return false;
+  const start: Mm = [g.startMm[0], g.startMm[1]], cur: Mm = [E.lastCursorMm[0], E.lastCursorMm[1]], sticky = !!g.sticky;
+  revertAppDrag();
+  (toolCtx() as unknown as { setSelection(ids: string[]): void }).setSelection(ids);
+  const c2 = toolCtx(); if (!pm.beginMove(c2, start, sticky)) return false;
+  PT.selectMoveTo(c2, cur); return true;
 }
 
 // ---------------------------------------------------------------- hover

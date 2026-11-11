@@ -56,6 +56,8 @@ export const E: any = {
   gridPitch: 1.27,
   localOrigin: [0, 0],
   lastCursorMm: [0, 0],
+  lastClient: null,   // the pointer's last client position over the canvas (where a Clarify Selection popup opens)
+  hooks: {},          // candidatesAt / clarify / handoffDrag for the tool modules' hover selection (contextmenu.ts, gestures.ts)
   polarCoords: false,
   crosshairMode: "small",
   renderOpts: {},

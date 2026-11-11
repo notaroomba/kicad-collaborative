@@ -152,7 +152,7 @@ export const MENU_CHECKS = new Set(["showProperties", "showSearch", "showHierarc
 export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
   sch: { rotateCCW: "rotateSelection", rotateCW: "rotateSelectionCW", mirrorH: "mirrorSelectionX", mirrorV: "mirrorSelectionY", repeatDrawItem: "repeatLast", autoplaceFields: "autoplace",
     editSymbolFields: "fieldsTable" },   // syncAllSheetsPins is the dialog (dialogs/sync-pins.ts), not the module's quick sync of the selected sheet
-  pcb: { flip: "flipSelection", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", moveExact: "moveExactly", editTracksAndVias: "changeTrackWidth", showNetInspector: "netInspector",
+  pcb: { flip: "flipSelection", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", mirrorH: "mirrorH", mirrorV: "mirrorV", moveExact: "moveExactly", editTracksAndVias: "changeTrackWidth", showNetInspector: "netInspector",
     distributeHorizontallyGaps: "distributeH", distributeVerticallyGaps: "distributeV", distributeHorizontallyCenters: "distributeHCenters", distributeVerticallyCenters: "distributeVCenters" },
 };
 /** Module action ids that only repeat another one (the same command under a second name), or that KiCad offers only in a context menu: never listed on their own. */

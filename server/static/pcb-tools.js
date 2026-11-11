@@ -1743,12 +1743,17 @@ function stepLayer(ctx, forward) {
 }
 // R / F: a lone footprint turns or flips about its own anchor; anything more goes through the selection actions
 // (about the selection centre).  Nothing of ours selected lets app.js's orientation-only fallback run.
-function rotateSelected(ctx) { if (!selectionIds(ctx).size) return false; return runAction("rotateSelection", ctx); }
-function flipSelected(ctx) { if (!selectionIds(ctx).size) return false; return runAction("flipSelection", ctx); }
+function rotateSelected(ctx) { return runAction("rotateSelection", ctx); }
+function flipSelected(ctx) { return runAction("flipSelection", ctx); }
 function deleteSelection(ctx) {
-  const changes = []; for (const id of unlockedIds(ctx, Array.from(S.sel))) { const it = ctx.doc.items.get(id); if (it) changes.push(removedChange(it)); }
-  S.sel.clear(); if (!changes.length) return;
-  ctx.commit(changes, "delete"); ctx.toast(`Deleted ${changes.length} item${changes.length > 1 ? "s" : ""}`);
+  const ids = unlockedIds(ctx, Array.from(expandGroups(ctx.doc, S.sel))); if (!ids.length) return;   // locked: the warning, nothing deleted
+  const changes = deleteChanges(ctx.doc, ids); S.sel.clear(); if (!changes.length) return;
+  ctx.commit(changes, "delete");   // EDIT_TOOL::Remove says nothing
+}
+/** EDIT_TOOL::Remove with nothing selected: the item under the cursor (hover), locks honoured; silent. */
+function hoverDelete(ctx) {
+  const sel = requestSelection(ctx, { rerun: (c) => hoverDelete(c) }); if (!sel) return;
+  ctx.commit(deleteChanges(ctx.doc, sel.ids), "delete"); applySelection(ctx, []);
 }
 const sizeUnits = () => appGlobal(() => editorState().units, "mm") || "mm";
 /** A size in the editor's units, trailing zeros trimmed: "0.25 mm", "9.84 mils". */
@@ -2036,6 +2041,37 @@ function moveNodesAt(m, dx, dy) {
 function moveApply(ctx, m, dx, dy) {   // live preview: the document's own nodes take the moved shape (originals come back on finish)
   for (const { id, node } of moveNodesAt(m, dx, dy)) { const it = ctx.doc.items.get(id); if (!it) continue; it.node.length = 0; it.node.push(...node); K.replaceChange(ctx.doc, it); }
 }
+/** The moved items exactly as they were before the move began (a turn in flight changed m.orig, not m.base). */
+function moveRestore(ctx, m) {
+  if (!m.base) { moveApply(ctx, m, 0, 0); return; }
+  for (const [id, node] of m.base) { const it = ctx.doc.items.get(id); if (!it) continue; it.node.length = 0; it.node.push(...clone(node)); K.replaceChange(ctx.doc, it); }
+}
+/**
+ * Rotate / Flip / Mirror while the selection follows the cursor (doMoveSelection passes rotateCw, rotateCcw, flip,
+ * mirrorH and mirrorV through to EDIT_TOOL::Rotate / Flip / Mirror with the move's own commit): the moving items turn
+ * about the move's reference point — the cursor — and the move goes on.  Nothing is committed here: the click commits
+ * one Move step holding the turn and the translation, Escape puts the true originals back.  m.orig holds the shapes
+ * at offset zero, so the turn is applied there about the reference point less the offset (m.start).  Flip of several
+ * items turns about the middle of their box (selection.GetCenter()); a footprint is never mirrored (no message while
+ * moving, as in KiCad).
+ */
+function moveTransform(ctx, how, arg) {
+  const m = S.move; if (!m) return false;
+  if ((m.conns && m.conns.length) || m.ends.length) return true;   // a drag keeps its tracks attached: they cannot follow a turn
+  if (!m.base) m.base = new Map(Array.from(m.orig, ([id, n]) => [id, clone(n)]));
+  let cx = m.start[0], cy = m.start[1];
+  if (how === "flip" && m.ids.length > 1) {
+    const b = bboxUnion(m.ids.map((id) => ctx.doc.items.get(id)).filter(Boolean));
+    if (b) { cx = (b[0] + b[2]) / 2 - m.last[0]; cy = (b[1] + b[3]) / 2 - m.last[1]; }
+  }
+  for (const id of m.ids) {
+    const n = m.orig.get(id); if (!n) continue;
+    if (how === "rotate") rotateNode(n, cx, cy, arg);
+    else if (how === "flip") flipNode(n, cx, ctx.doc);
+    else mirrorNode(n, cx, cy, arg);
+  }
+  m.xformed = true; moveApply(ctx, m, m.last[0], m.last[1]); ctx.requestRender(); return true;
+}
 function selectMoveTo(ctx, mm) {
   const m = S.move; if (!m) return;
   const sN = ctx.snapOn ? ctx.snap([mm[0], mm[1]]) : mm; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
@@ -2044,13 +2080,15 @@ function selectMoveTo(ctx, mm) {
 }
 function finishSelectMove(ctx, commit, force) {
   const m = S.move; S.move = null; if (!m) return;
-  const [dx, dy] = m.last; moveApply(ctx, m, 0, 0);            // originals back first, so commit() records a true inverse
+  const [dx, dy] = m.last; moveRestore(ctx, m);            // originals back first, so commit() records a true inverse
+  const unhover = () => { if (m.hover) applySelection(ctx, []); };   // a hover selection does not outlive the move
   if (!commit && m.placing) {   // Escape on a paste / duplicate that still follows the cursor takes the new items out again
     const gone = m.placing.filter((id) => ctx.doc.items.has(id)).map((id) => ctx.doc.items.get(id));
-    if (gone.length) ctx.commit(deleteChanges(ctx.doc, gone), "cancel", { amend: true, discard: true });
+    const back = (m.restore || []).filter((r) => ctx.doc.items.has(r.id)).map((r) => replacedChange(ctx.doc.items.get(r.id), r.node));   // groups the copies had joined
+    if (gone.length || back.length) ctx.commit(back.concat(deleteChanges(ctx.doc, gone)), "cancel", { amend: true, discard: true });
     applySelection(ctx, []); ctx.requestRender(); return;
   }
-  if (!commit || !m.moved || (!dx && !dy)) { ctx.requestRender(); return; }
+  if (!commit || (!m.xformed && (!m.moved || (!dx && !dy)))) { unhover(); ctx.requestRender(); return; }
   if (m.conns && !force) {   // COMPONENT_DRAGGER::FixRoute: refused while the dragged items collide (Ctrl+click forces)
     moveApply(ctx, m, dx, dy); const hits = componentDragHits(ctx, m, dx, dy); moveApply(ctx, m, 0, 0); S.rworld = null; S.sworld = null;
     if (hits.length) { showViolations(hits, hits.at || cursorPoint(ctx)); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }
@@ -2058,7 +2096,7 @@ function finishSelectMove(ctx, commit, force) {
   const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
   if (m.conns && m.conns.length) changes.push(...dragChanges(ctx, { sol: { lines: connLines(m, dx, dy) } }));
   ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing ? { amend: true } : undefined);
-  ctx.requestRender();
+  unhover(); ctx.requestRender();
 }
 /**
  * Move (M, EDIT_TOOL::Move): everything selected — tracks, vias, graphics, text, zones, footprints, the members of a
@@ -2067,13 +2105,13 @@ function finishSelectMove(ctx, commit, force) {
  */
 function beginCarryMove(ctx, opts) {
   const doc = ctx.doc; if (!doc) return false; opts = opts || {};
-  const ids = Array.from(expandGroups(doc, opts.placing ? new Set(opts.placing) : selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
+  const ids = Array.from(expandGroups(doc, opts.placing ? new Set(opts.placing) : opts.ids ? new Set(opts.ids) : selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
   if (!ids.length) return false;
   const free = unlockedIds(ctx, ids);
   if (!free.length) return true;
   cancelOps();
   const at = opts.at ? (ctx.snapOn ? ctx.snap(opts.at.slice()) : opts.at.slice()) : cursorPoint(ctx);
-  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null };
+  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
   if (opts.drag) dragEnds(doc, m);
   S.move = m; ctx.requestRender(); return true;
@@ -2310,14 +2348,43 @@ function itemAt(ctx, mm) {
   const id = K.hitTest(doc, x, y, Math.min(5 / Math.max(1, (ctx.zoom || 1) * 0.6), 0.5));
   return id ? doc.items.get(id) || null : null;
 }
+/**
+ * PCB_CONTROL::InteractiveDelete's motion handler: the item under the cursor is brightened only when exactly one
+ * candidate remains after GuessSelectionCandidates (several overlapping items brighten nothing).
+ */
+function deleteCandidate(ctx, mm) {
+  if (typeof ctx.candidatesAt === "function") {
+    let ids = null; try { ids = ctx.candidatesAt(mm); } catch (e) { ids = null; }
+    if (ids) { const u = Array.from(new Set(ids.map((id) => (typeof id === "string" && id.indexOf("#") > 0 ? id.slice(0, id.indexOf("#")) : id)))); return u.length === 1 ? ctx.doc.items.get(u[0]) || null : null; }
+  }
+  return itemAt(ctx, mm);
+}
+/**
+ * The click handler: the brightened item goes (EDIT_TOOL::DeleteItems, silently); a locked one stays and a
+ * STATUS_TEXT_POPUP says "Item locked." beside the cursor for two seconds.
+ */
 function deleteAt(ctx, mm) {
-  const it = itemAt(ctx, mm); if (!it) return null;
+  const it = S.hover && S.hover.del !== undefined ? S.hover.del : deleteCandidate(ctx, mm); if (!it || !ctx.doc.items.has(it.id)) return null;
+  if (isLocked(it.node)) { statusPopup(ctx, "Item locked.", mm, 2000); return null; }
   S.sel.delete(it.id); if (S.hover) S.hover.del = null;
   if (ctx.selected && ctx.selected.id === it.id) ctx.setSelected(null);
-  ctx.commit([removedChange(it)], "delete");
-  ctx.toast(`Deleted ${it.kind === "footprint" ? (it.ref || "footprint") : it.kind.replace(/^gr_/, "")}`);
+  ctx.commit(deleteChanges(ctx.doc, Array.from(expandGroups(ctx.doc, [it.id]))), "delete");
   ctx.requestRender();
   return it;
+}
+/** STATUS_TEXT_POPUP::PopupFor: a one-line note 20 px right of and below the cursor that goes away by itself. */
+function statusPopup(ctx, text, at, ms) {
+  S.popup = { text, at: at.slice(), until: Date.now() + ms }; ctx.requestRender();
+  if (typeof setTimeout === "function") setTimeout(() => { if (S.popup && Date.now() >= S.popup.until - 5) { S.popup = null; if (lastCtx) lastCtx.requestRender(); } }, ms);
+}
+function drawStatusPopup(c, px) {
+  const p = S.popup; if (!p) return;
+  if (Date.now() > p.until) { S.popup = null; return; }
+  const css = (name, dflt) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
+  const fs = 12 * px, m = 5 * px; c.save(); c.globalAlpha = 1; c.font = `${fs}px sans-serif`;
+  const w = c.measureText(p.text).width + 2 * m, h = fs + 2 * m, x = p.at[0] + 20 * px, y = p.at[1] + 20 * px;
+  c.fillStyle = css("--panel", "#2b2b2b"); c.strokeStyle = css("--line", "#555"); c.lineWidth = px; c.fillRect(x, y, w, h); c.strokeRect(x, y, w, h);
+  c.fillStyle = css("--ink", "#e0e0e0"); c.textBaseline = "top"; c.fillText(p.text, x + m, y + m); c.restore();
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
 function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); }
@@ -3785,7 +3852,7 @@ function rewriteNets(nodes, codeToName, doc) {
   for (const n of nodes) walk(n);
 }
 const refProp = (node) => K.kids(node, "property").find((p) => K.str(p[1]) === "Reference");
-/** Paste-special annotation modes: unique (the default), keep, clear (REF**). */
+/** Paste-special annotation modes (PASTE_MODE): keep (the default), unique, clear (REF**). */
 function annotate(nodes, doc, mode) {
   if (mode === "keep") return;
   const used = new Set(); for (const it of doc.items.values()) if (it.kind === "footprint" && it.ref) used.add(it.ref);
@@ -3800,13 +3867,55 @@ function annotate(nodes, doc, mode) {
 /** ADDED changes for clipboard text placed with its reference point at `at`; returns { changes, ids }. */
 function pasteChanges(doc, text, at, opts) {
   opts = opts || {}; const parsed = parseClipboard(text); if (!parsed) return { changes: [], ids: [] };
-  const nodes = parsed.nodes.map(clone); freshUuids(nodes); rewriteNets(nodes, parsed.codeToName, doc); annotate(nodes, doc, opts.annotations || "unique");
+  const nodes = parsed.nodes.map(clone); freshUuids(nodes); rewriteNets(nodes, parsed.codeToName, doc); annotate(nodes, doc, opts.annotations || "keep");
+  if (opts.clearNets) clearNets(nodes, doc);
   const changes = [], ids = [];
   for (const n of nodes) { if (at && (at[0] || at[1])) translateNode(n, at[0], at[1]); const c = addedChange(doc, n); changes.push(c); ids.push(c.id); }
   return { changes, ids };
 }
-/** Copy + paste in place with fresh ids (KiCad's Ctrl+D leaves the copies under the cursor for a move). */
-function duplicateChanges(doc, ids, offset) { return pasteChanges(doc, clipboardText(doc, ids, [0, 0]), offset || [0, 0], { annotations: "unique" }); }
+/**
+ * DIALOG_PASTE_SPECIAL's "Clear net assignments": every pasted connected item goes onto the orphaned net
+ * (SetNet( NETINFO_LIST::OrphanedItem() )) — pads lose their (net …), tracks, vias and zones take net 0 / "".
+ */
+function clearNets(nodes, doc) {
+  const walk = (n) => {
+    for (let i = n.length - 1; i > 0; i--) {
+      const c = n[i]; if (!isList(c)) continue;
+      if (c[0] === "net" && n[0] !== "kicad_pcb") { if (n[0] === "pad") n.splice(i, 1); else n[i] = netNode(doc, null); }
+      else if (c[0] === "net_name") c[1] = "";
+      else walk(c);
+    }
+  };
+  for (const n of nodes) walk(n);
+}
+/**
+ * EDIT_TOOL::Duplicate: BOARD_ITEM::Duplicate clones each item with a new uuid and nothing else changed — the same
+ * reference, lock state, nets and place — and a copy whose original sits in a group that is not itself being
+ * duplicated joins that group (the group is MODIFIED in the same commit).  A selected group is copied whole
+ * (PCB_GROUP::DeepDuplicate): a new group holding copies of its members.  Returns { changes, ids, restore } where
+ * restore holds the groups' nodes before the copies joined them (a cancelled placement puts them back).
+ */
+function duplicateChanges(doc, ids, offset) {
+  const sel = new Set(ids); const out = { changes: [], ids: [], restore: [] }; const joins = new Map();
+  const coveredByGroup = (id) => { for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
+  const subtree = (it, acc) => { acc.push(it); if (it.kind === "group") for (const m of groupMembers(it.node)) { const c = doc.items.get(m); if (c) subtree(c, acc); } return acc; };
+  for (const id of ids) {
+    const it = doc.items.get(id); if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
+    const src = subtree(it, []);
+    const nodes = src.map((x) => clone(x.node)); freshUuids(nodes);
+    // members first, so a group's ADDED change finds them
+    const order = nodes.map((n, i) => i).sort((a, b) => (nodes[a][0] === "group") - (nodes[b][0] === "group") || b - a);
+    let topId = null;
+    for (const i of order) {
+      const n = nodes[i]; if (offset && (offset[0] || offset[1])) translateNode(n, offset[0], offset[1]);
+      const c = addedChange(doc, n); out.changes.push(c); out.ids.push(c.id); if (i === 0) topId = c.id;
+    }
+    const g = groupOf(doc, id);
+    if (g && topId) { if (!joins.has(g.id)) joins.set(g.id, []); joins.get(g.id).push(topId); }
+  }
+  for (const [gid, add] of joins) { const g = doc.items.get(gid); out.restore.push({ id: gid, node: clone(g.node) }); out.changes.push(...groupMembersChanges(doc, g, add, [])); }
+  return out;
+}
 /** createArray: a grid of copies (the originals stay in place as cell 0, 0). */
 function arrayChanges(doc, ids, opts) {
   const nx = Math.max(1, Math.round(opts.nx || 1)), ny = Math.max(1, Math.round(opts.ny || 1)); const text = clipboardText(doc, ids, [0, 0]); const out = { changes: [], ids: [] };
@@ -4194,6 +4303,18 @@ let formImpl = function (spec) {
           if (!f.rows.length) { const p = document.createElement("div"); p.style.padding = "6px"; p.className = "note"; p.textContent = f.empty || "Nothing to show."; box.appendChild(p); }
           body.appendChild(box); continue;
         }
+        if (f.type === "radio") {   // a wxRadioBox: the title over one choice per line
+          const box = document.createElement("fieldset"); box.style.cssText = "border:1px solid var(--line,#24374E);border-radius:3px;margin:4px 0;padding:4px 8px 6px";
+          const lg = document.createElement("legend"); lg.textContent = f.label; lg.style.padding = "0 4px"; box.appendChild(lg);
+          const name = "kf-" + f.k + "-" + Math.random().toString(36).slice(2, 8); const radios = [];
+          for (const o of f.options) {
+            const l = document.createElement("label"); l.style.cssText = "display:flex;gap:6px;align-items:center;margin:3px 0";
+            const r = document.createElement("input"); r.type = "radio"; r.name = name; r.value = o[0]; r.checked = o[0] === f.value; r.style.width = "auto"; r.style.margin = "0";
+            l.appendChild(r); l.appendChild(document.createTextNode(o[1])); box.appendChild(l); radios.push(r);
+          }
+          inputs[f.k] = { type: "radio", get value() { const r = radios.find((x) => x.checked); return r ? r.value : f.value; } };
+          body.appendChild(box); continue;
+        }
         const row = document.createElement("label"); row.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0";
         const span = document.createElement("span"); span.textContent = f.label; row.appendChild(span);
         let inp;
@@ -4261,30 +4382,41 @@ const commitSel = (ctx, changes, label, keep) => { if (!changes.length) { ctx.to
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 function highlightIds(ctx, ids) { if (ctx.setHighlight) ctx.setHighlight(ids && ids.size ? new Set(ids) : null); }
 // clipboard
+// EDIT_TOOL::copyToClipboard / cutToClipboard: the selection, or the item under the cursor (a hover selection);
+// the reference point is the anchor nearest the cursor.  KiCad writes "Selection copied" to the status bar only.
 act("copy", "Copy", "Ctrl+C", (ctx) => {
-  const ids = needSel(ctx, "Select items to copy"); if (!ids) return true;
-  clipSet(ctx, clipboardText(ctx.doc, Array.from(ids), referencePoint(ctx.doc, Array.from(ids), cursorPoint(ctx)))); ctx.toast(`Copied ${plural(ids.size, "item")}`); return true;
+  const sel = requestSelection(ctx, { locks: false, rerun: (c) => runAction("copy", c) }); if (!sel) return true;
+  clipSet(ctx, clipboardText(ctx.doc, sel.ids, referencePoint(ctx.doc, sel.ids, cursorPoint(ctx)))); endHover(ctx, sel); return true;
 });
 act("cut", "Cut", "Ctrl+X", (ctx) => {
-  const ids = needSel(ctx, "Select items to cut"); if (!ids || !canEdit(ctx)) return true;
-  const all = Array.from(expandGroups(ctx.doc, ids)); clipSet(ctx, clipboardText(ctx.doc, all, referencePoint(ctx.doc, all, cursorPoint(ctx))));
-  ctx.commit(deleteChanges(ctx.doc, all), "cut"); applySelection(ctx, []); ctx.toast(`Cut ${plural(all.length, "item")}`); return true;
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => runAction("cut", c) }); if (!sel) return true;
+  clipSet(ctx, clipboardText(ctx.doc, sel.ids, referencePoint(ctx.doc, sel.ids, cursorPoint(ctx))));
+  ctx.commit(deleteChanges(ctx.doc, sel.ids), "cut"); applySelection(ctx, []); return true;
 });
 function pasteAt(ctx, opts) {
   clipGet(ctx, (text) => {
-    if (!text) { ctx.toast("Nothing to paste"); return; }
-    const r = pasteChanges(ctx.doc, text, cursorPoint(ctx), opts); if (!r.changes.length) { ctx.toast("The clipboard holds no board items"); return; }
+    if (!text) return;
+    const r = pasteChanges(ctx.doc, text, cursorPoint(ctx), opts); if (!r.changes.length) return;
     // EDIT_TOOL::Paste: the pasted items hang on the cursor by their reference point until a click places them
     ctx.commit(r.changes, "paste"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() });
   });
   return true;
 }
-act("paste", "Paste", "Ctrl+V", (ctx) => canEdit(ctx) && pasteAt(ctx, { annotations: "unique" }));
-act("pasteSpecial", "Paste Special…", "Ctrl+Shift+V", (ctx) => canEdit(ctx) && openForm({ title: "Paste Special", fields: [{ k: "annotations", label: "Reference designators", type: "select", value: "unique", options: [["unique", "Assign unique reference designators"], ["keep", "Keep existing (may duplicate)"], ["clear", "Clear reference designators"]] }], apply: (v) => { pasteAt(ctx, { annotations: v.annotations }); } }));
+// PCB_CONTROL::Paste: a plain paste keeps the references (PASTE_MODE::KEEP_ANNOTATIONS); Paste Special asks
+// (DIALOG_PASTE_SPECIAL: the three reference modes, KEEP preselected, and "Clear net assignments")
+act("paste", "Paste", "Ctrl+V", (ctx) => canEdit(ctx) && pasteAt(ctx, { annotations: "keep" }));
+act("pasteSpecial", "Paste Special…", "Ctrl+Shift+V", (ctx) => canEdit(ctx) && openForm({ title: "Paste Special", width: 460, fields: [
+  { k: "annotations", label: "Reference Designators", type: "radio", value: "keep", options: [["unique", "Assign unique reference designators to pasted symbols"], ["keep", "Keep existing reference designators, even if they are duplicated"], ["clear", "Clear reference designators on all pasted symbols"]] },
+  { k: "clearNets", label: "Clear net assignments", type: "check", value: false, tip: "Remove the net information from all connected items before pasting" }],
+  apply: (v) => { pasteAt(ctx, { annotations: v.annotations, clearNets: !!v.clearNets }); } }));
 act("duplicate", "Duplicate", "Ctrl+D", (ctx) => {
-  const ids = needSel(ctx, "Select items to duplicate"); if (!ids || !canEdit(ctx)) return true;
-  // EDIT_TOOL::Duplicate: the copies follow the cursor from where the originals are; a click places them, Escape drops them
-  const r = duplicateChanges(ctx.doc, Array.from(ids)); ctx.commit(r.changes, "duplicate"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() }); return true;
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { locks: false, rerun: (c) => runAction("duplicate", c) }); if (!sel) return true;
+  // EDIT_TOOL::Duplicate: the copies follow the cursor from where the originals are; a click places them (one
+  // "Duplicate" step), Escape drops them; a hover selection is not kept afterwards
+  const r = duplicateChanges(ctx.doc, sel.ids); if (!r.changes.length) return true;
+  ctx.commit(r.changes, "duplicate"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover }); return true;
 });
 act("copyAsText", "Copy as Text", "", (ctx) => { const ids = needSel(ctx); if (!ids) return true; const t = Array.from(ids, (id) => textOfItem(ctx.doc.items.get(id))).filter(Boolean).join("\n"); clipSet(ctx, t); ctx.toast(t ? "Text copied" : "Nothing textual selected"); return true; });
 // selection
@@ -4317,32 +4449,102 @@ act("filterSelection", "Filter Selected Items…", "", (ctx) => {
 act("unselectAll", "Unselect All", "", (ctx) => { applySelection(ctx, []); return true; });
 // placement
 const overrideLocks = () => !!appGlobal(() => editorState().overrideLocks, false);
+const LOCKED_WARNING = "Selection contains locked items. Enable 'Override locks' to operate on them.";
 /**
- * Locked items sit out of every move, turn, flip and delete unless "Override locks" is ticked
- * (PCB_SELECTION_TOOL::FilterCollectorForLockedItems): the ids that may be edited, with a word about the rest.
+ * Locked items sit out of every move, turn, flip, mirror and delete unless "Override locks" is ticked.  KiCad's
+ * RequestSelection filters them (FilterCollectorForLockedItems: the item, or a group holding a locked member) and,
+ * when anything was filtered, hands the action an empty selection: the whole action does nothing and
+ * ReportFilteredLockedItems shows its infobar warning.  Returns the ids that may be edited: all of them, or none.
  */
 function unlockedIds(ctx, ids, quiet) {
   if (overrideLocks()) return ids;
-  const free = ids.filter((id) => { const it = ctx.doc.items.get(id); return it && !isLocked(it.node); });
-  if (free.length < ids.length && !quiet) ctx.toast(free.length ? "Locked items were left as they are — tick Override locks to edit them" : "The selection is locked — tick Override locks to edit it", 3500);
-  return free;
+  const locked = ids.some((id) => { const it = ctx.doc.items.get(id); return it && isLocked(it.node); });
+  if (!locked) return ids;
+  if (!quiet) ctx.toast(LOCKED_WARNING, 3500);
+  return [];
+}
+/**
+ * The ids KiCad's hover selection would take at mm: the editor's Clarify Selection candidates (its hit test with
+ * GuessSelectionCandidates applied) when the app supplies them, else the module's own pick.  A pad stands for its
+ * footprint (FilterCollectorForFreePads), a group member for its group (FilterCollectorForHierarchy).
+ */
+function cursorCandidates(ctx, mm) {
+  let ids = null;
+  if (typeof ctx.candidatesAt === "function") { try { ids = ctx.candidatesAt(mm); } catch (e) { ids = null; } }
+  if (!ids) { const it = itemAt(ctx, mm); ids = it ? [it.id] : []; }
+  const out = [];
+  for (let id of ids) {
+    const h = typeof id === "string" ? id.indexOf("#") : -1; if (h > 0) id = id.slice(0, h);
+    let g = groupOf(ctx.doc, id); while (g) { id = g.id; g = groupOf(ctx.doc, id); }
+    if (ctx.doc.items.has(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+/**
+ * PCB_SELECTION_TOOL::RequestSelection for an EDIT_TOOL / BOARD_EDITOR_CONTROL action.  With items selected those
+ * are the action's items; with nothing selected the item under the cursor is (KiCad's old-style hover selection,
+ * selection.IsHover(): the action clears it again when it is done).  opts.filter(item) is the action's client filter
+ * (markers, generated items, tracks for Swap …), opts.locks (default on) FilterCollectorForLockedItems.  When the
+ * cursor is over several candidates the editor's Clarify Selection popup asks, and opts.rerun runs the action again
+ * on the pick.  Returns { ids (groups expanded), items, hover } or null: nothing to act on, and nothing said.
+ */
+function requestSelection(ctx, opts) {
+  opts = opts || {};
+  const keep = (it) => it && it.kind !== "generated" && (!opts.filter || opts.filter(it));
+  let ids = Array.from(selectionIds(ctx)), hover = !!S.forceHover;
+  if (!ids.length && S.padSel) { const i = S.padSel.lastIndexOf("#"), fp = S.padSel.slice(0, i); if (ctx.doc.items.has(fp)) ids = [fp]; }   // a selected pad stands for its footprint (FilterCollectorForFreePads)
+  if (!ids.length) {
+    hover = true;
+    const at = ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
+    const cands = cursorCandidates(ctx, at).filter((id) => keep(ctx.doc.items.get(id)));
+    if (!cands.length) return null;
+    if (cands.length > 1 && opts.rerun && typeof ctx.clarify === "function") {
+      // doSelectionMenu: the pick becomes the (hover) selection and the action runs on it
+      ctx.clarify(cands, (fresh) => { S.forceHover = true; try { opts.rerun(fresh || ctx); } finally { S.forceHover = false; } });
+      return null;
+    }
+    ids = [cands[0]];
+  }
+  ids = Array.from(expandGroups(ctx.doc, ids)).filter((id) => keep(ctx.doc.items.get(id)) || ctx.doc.items.get(id).kind === "group");
+  if (!ids.length) return null;
+  if (opts.locks !== false && !unlockedIds(ctx, ids, opts.quiet).length) return null;
+  return { ids, items: ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group"), hover };
+}
+/** The end of an action on a hover selection: selection.IsHover() -> selectionClear. */
+function endHover(ctx, sel) { if (sel && sel.hover) applySelection(ctx, []); }
+/**
+ * EDIT_TOOL::updateModificationPoint: a lone item turns about its own position, several about the grid-snapped
+ * centre of their bounding box.  Rotate takes the centre of a lone rectangle, polygon, text box or table instead.
+ */
+function modificationPoint(ctx, items, forRotate) {
+  if (items.length === 1) {
+    const it = items[0];
+    if (forRotate && (it.kind === "gr_rect" || it.kind === "gr_poly" || it.kind === "gr_text_box" || it.kind === "table") && it.bbox) return [(it.bbox[0] + it.bbox[2]) / 2, (it.bbox[1] + it.bbox[3]) / 2];
+    return anchorOf(it);
+  }
+  const b = bboxUnion(items); const c = b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
+  return ctx.snapOn && ctx.snap ? ctx.snap(c) : c;
 }
 function editableOrToast(ctx, what) { const ids = selectionOrToast(ctx, what); if (!ids) return null; const free = unlockedIds(ctx, ids); return free.length ? free : null; }
 function selectionOrToast(ctx, what) { const ids = needSel(ctx, what); return ids && canEdit(ctx) ? Array.from(expandGroups(ctx.doc, ids)) : null; }
+// EDIT_TOOL::Move: the selection, or the item under the cursor (hover: selected while it moves, cleared after)
 act("move", "Move", "M", (ctx) => {
-  const items = selectedItems(ctx); if (!items.length) return false;
-  if (items.every((it) => it.kind === "footprint")) return false;   // footprints alone: the app's own move, which also shows peers each step
+  if (S.route || S.move) return true;
   if (!canEdit(ctx)) return true;
-  return beginCarryMove(ctx);
+  const sel = requestSelection(ctx, { rerun: (c) => runAction("move", c) }); if (!sel) return true;
+  if (sel.hover) applySelection(ctx, sel.ids);
+  beginCarryMove(ctx, { ids: sel.ids, hover: sel.hover }); return true;
 });
 act("moveExactly", "Move Exactly…", "Shift+M", (ctx) => {
-  const ids = editableOrToast(ctx, "Select items to move"); if (!ids) return true;
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => runAction("moveExactly", c) }); if (!sel) return true; const ids = sel.ids;
   return openForm({ title: "Move Item Exactly", fields: [{ k: "dx", label: "Move X (mm)", type: "num", value: 0 }, { k: "dy", label: "Move Y (mm)", type: "num", value: 0 }, { k: "rotation", label: "Rotate (°)", type: "num", value: 0 }, { k: "about", label: "Rotate around", type: "select", value: "center", options: [["center", "Selection center"], ["anchor", "Item anchor"]] }],
     apply: (v) => commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about }), "move exactly") });
 });
 alias("moveExact", "moveExactly");
 act("positionRelative", "Position Relative To…", "Shift+P", (ctx) => {
-  const ids = editableOrToast(ctx, "Select items to position"); if (!ids) return true;
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => runAction("positionRelative", c) }); if (!sel) return true; const ids = sel.ids;
   const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((a, b) => (a.ref || "").localeCompare(b.ref || "", undefined, { numeric: true }));
   const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean); const a = topLeftAnchor(items);
   return openForm({ title: "Position Relative To Reference Item", fields: [
@@ -4356,23 +4558,75 @@ for (const [id, mode, label] of [["alignLeft", "left", "Align to Left"], ["align
 for (const [id, axis, centers, label] of [["distributeH", "x", false, "Distribute Horizontally by Gaps"], ["distributeV", "y", false, "Distribute Vertically by Gaps"], ["distributeHCenters", "x", true, "Distribute Horizontally by Centers"], ["distributeVCenters", "y", true, "Distribute Vertically by Centers"]])
   act(id, label, "", (ctx) => { const ids = editableOrToast(ctx, "Select three or more items to distribute"); if (!ids) return true; if (ids.length < 3) { ctx.toast("Distribute needs at least three items"); return true; } return commitSel(ctx, distributeChanges(ctx.doc, ids, axis, centers), label.toLowerCase()); });
 alias("distributeHorizontallyGaps", "distributeH"); alias("distributeVerticallyGaps", "distributeV"); alias("distributeHorizontallyCenters", "distributeHCenters"); alias("distributeVerticallyCenters", "distributeVCenters");
+/**
+ * A board footprint the app itself is dragging (its pointer drag) goes over to the module's move first, so a turn
+ * in flight has a move session to act on (ctx.handoffDrag, from the editor).
+ */
+const moveInFlight = (ctx) => !!S.move || !!(ctx.handoffDrag && ctx.handoffDrag() && S.move);
+/** EDIT_TOOL::Rotate: about the modification point; a hover selection is cleared afterwards; while moving, the move turns. */
 function rotateBy(ctx, deg) {
-  const ids = editableOrToast(ctx, "Select items to rotate"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
-  if (items.length === 1 && items[0].kind === "footprint") { ctx.commit([replacedChange(items[0], rotateFootprintNode(clone(items[0].node), deg))], "rotate"); return true; }
-  const c = selectionCenter(items); return commitSel(ctx, rotateChanges(ctx.doc, ids, c[0], c[1], deg), "rotate");
+  if (S.route) return true;   // isRouterActive: wxBell
+  if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg);
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => rotateBy(c, deg) }); if (!sel) return true;
+  const c = modificationPoint(ctx, sel.items, true);
+  const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg); if (ch.length) ctx.commit(ch, "rotate");
+  endHover(ctx, sel); ctx.requestRender(); return true;
 }
 act("rotateSelection", "Rotate Counterclockwise", "R", (ctx) => rotateBy(ctx, 90)); alias("rotateCcw", "rotateSelection");
 act("rotateSelectionCw", "Rotate Clockwise", "", (ctx) => rotateBy(ctx, -90)); alias("rotateCw", "rotateSelectionCw");
-act("flipSelection", "Flip", "F", (ctx) => {
-  const ids = editableOrToast(ctx, "Select items to flip"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
-  if (items.length === 1 && items[0].kind === "footprint") { const node = flipFootprintNode(clone(items[0].node)); ctx.commit([replacedChange(items[0], node)], "flip"); ctx.toast(`${items[0].ref || "Footprint"} flipped to ${layerOf(node)}`); return true; }
-  const c = selectionCenter(items); return commitSel(ctx, flipChanges(ctx.doc, ids, c[0]), "flip");
-});
+/**
+ * EDIT_TOOL::Flip ("Change Side / Flip"): a lone item about its own position (a rectangle or table about its centre),
+ * several about the middle of their box; nothing is said afterwards.
+ */
+function flipBy(ctx) {
+  if (S.route) return true;
+  if (moveInFlight(ctx)) return moveTransform(ctx, "flip");
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => flipBy(c) }); if (!sel) return true;
+  const items = sel.items, one = items.length === 1 && items[0].kind !== "gr_rect" && items[0].kind !== "table";
+  const b = bboxUnion(items); const cx = one ? anchorOf(items[0])[0] : b ? (b[0] + b[2]) / 2 : 0;
+  const ch = flipChanges(ctx.doc, sel.ids, cx); if (ch.length) ctx.commit(ch, "flip");
+  endHover(ctx, sel); ctx.requestRender(); return true;
+}
+act("flipSelection", "Flip", "F", (ctx) => flipBy(ctx));
 alias("flip", "flipSelection");
-for (const [id, axis, label] of [["mirrorH", "h", "Mirror Horizontally"], ["mirrorV", "v", "Mirror Vertically"]])
-  act(id, label, "", (ctx) => { const ids = editableOrToast(ctx, "Select items to mirror"); if (!ids) return true; const items = ids.map((i) => ctx.doc.items.get(i)); const c = selectionCenter(items); const ch = mirrorChanges(ctx.doc, ids, c[0], c[1], axis); if (!ch.length && items.some((it) => it.kind === "footprint")) { ctx.toast("Footprints cannot be mirrored in the board editor (use Flip)"); return true; } return commitSel(ctx, ch, label.toLowerCase()); });
-act("swap", "Swap", "Alt+S", (ctx) => { const ids = editableOrToast(ctx, "Select two or more items to swap"); if (!ids) return true; return commitSel(ctx, swapChanges(ctx.doc, ids), "swap"); });
-act("pack", "Pack and Move Footprints", "P", (ctx) => { const ids = editableOrToast(ctx, "Select footprints to pack"); if (!ids) return true; return commitSel(ctx, packChanges(ctx.doc, ids), "pack footprints"); });
+const MIRROR_FOOTPRINTS = "Footprints cannot be mirrored. Use Flip to move them to the other side of the board.";
+const MIRROR_GROUPS = "Groups containing footprints or other items that cannot be mirrored were skipped.";
+/**
+ * EDIT_TOOL::Mirror (mirrorH / mirrorV): graphics, text, tracks, zones … in place about the modification point (a lone
+ * item's position, else the grid-snapped centre of the selection).  Footprints are skipped (MIRROR_SKIPS), and so is a
+ * group holding one, with KiCad's infobar message.
+ */
+function mirrorBy(ctx, axis) {
+  if (S.route) return true;
+  if (moveInFlight(ctx)) return moveTransform(ctx, "mirror", axis);
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c) => mirrorBy(c, axis) }); if (!sel) return true;
+  const doc = ctx.doc; let footprints = 0, groups = 0; const skip = new Set();
+  for (const id of sel.ids) {
+    const it = doc.items.get(id); if (!it || it.kind !== "group" || groupOf(doc, id)) continue;   // the top-level groups
+    const inner = Array.from(expandGroups(doc, [id]));
+    if (inner.some((x) => { const m = doc.items.get(x); return m && m.kind === "footprint"; })) { groups++; inner.forEach((x) => skip.add(x)); }
+  }
+  for (const it of sel.items) if (it.kind === "footprint" && !skip.has(it.id)) footprints++;
+  const ids = sel.ids.filter((id) => !skip.has(id)); const items = ids.map((id) => doc.items.get(id)).filter((it) => it && it.kind !== "group");
+  if (items.length) { const c = modificationPoint(ctx, items, false); const ch = mirrorChanges(doc, ids, c[0], c[1], axis); if (ch.length) ctx.commit(ch, "mirror"); }
+  if (footprints) ctx.toast(MIRROR_FOOTPRINTS, 3500); else if (groups) ctx.toast(MIRROR_GROUPS, 3500);
+  endHover(ctx, sel); ctx.requestRender(); return true;
+}
+for (const [id, axis, label] of [["mirrorH", "h", "Mirror Horizontally"], ["mirrorV", "v", "Mirror Vertically"]]) act(id, label, "", (ctx) => mirrorBy(ctx, axis));
+// EDIT_TOOL::Swap (no tracks: PCB_TRACE_T is filtered) and PackAndMoveFootprints (footprints only)
+act("swap", "Swap", "Alt+S", (ctx) => {
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { filter: (it) => it.kind !== "segment", rerun: (c) => runAction("swap", c) }); if (!sel) return true;
+  const ch = swapChanges(ctx.doc, sel.ids); if (ch.length) ctx.commit(ch, "swap"); endHover(ctx, sel); ctx.requestRender(); return true;
+});
+act("pack", "Pack and Move Footprints", "P", (ctx) => {
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { filter: (it) => it.kind === "footprint" || it.kind === "group", rerun: (c) => runAction("pack", c) }); if (!sel) return true;
+  const ch = packChanges(ctx.doc, sel.ids); if (ch.length) ctx.commit(ch, "pack footprints"); endHover(ctx, sel); ctx.requestRender(); return true;
+});
 alias("packAndMoveFootprints", "pack");
 act("createArray", "Create Array…", "", (ctx) => {
   const ids = selectionOrToast(ctx, "Select items to array"); if (!ids) return true;
@@ -4506,7 +4760,13 @@ act("group", "Group Items", "", (ctx) => { const ids = needSel(ctx, "Select item
 act("ungroup", "Ungroup Items", "", (ctx) => { const ids = needSel(ctx, "Select a group or a member"); if (!ids || !canEdit(ctx)) return true; return commitSel(ctx, ungroupChanges(ctx.doc, ids), "ungroup"); });
 act("addToGroup", "Add Items to Group", "", (ctx) => { const ids = needSel(ctx); if (!ids || !canEdit(ctx)) return true; const g = Array.from(ids).map((id) => groupOf(ctx.doc, id) || (ctx.doc.items.get(id).kind === "group" ? ctx.doc.items.get(id) : null)).find(Boolean); if (!g) { ctx.toast("The selection touches no group"); return true; } return commitSel(ctx, groupMembersChanges(ctx.doc, g, Array.from(ids).filter((id) => id !== g.id), []), "add to group"); });
 act("removeFromGroup", "Remove Items from Group", "", (ctx) => { const ids = needSel(ctx); if (!ids || !canEdit(ctx)) return true; const out = []; const seen = new Map(); for (const id of ids) { const g = groupOf(ctx.doc, id); if (g) { if (!seen.has(g.id)) seen.set(g.id, { g, ids: [] }); seen.get(g.id).ids.push(id); } } for (const { g, ids: rm } of seen.values()) out.push(...groupMembersChanges(ctx.doc, g, [], rm)); return commitSel(ctx, out, "remove from group"); });
-act("toggleLock", "Toggle Lock", "L", (ctx) => { const ids = needSel(ctx, "Select items to lock"); if (!ids || !canEdit(ctx)) return true; const items = Array.from(ids, (id) => ctx.doc.items.get(id)); const on = !items.every((it) => isLocked(it.node)); const ch = lockChanges(ctx.doc, ids, on); ctx.toast(on ? "Locked" : "Unlocked"); return commitSel(ctx, ch, on ? "lock" : "unlock"); });
+// BOARD_EDITOR_CONTROL::ToggleLockSelected: the selection or the item under the cursor; locked if anything was not
+act("toggleLock", "Toggle Lock", "L", (ctx) => {
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { locks: false, rerun: (c) => runAction("toggleLock", c) }); if (!sel) return true;
+  const on = !sel.items.every((it) => isLocked(it.node)); const ch = lockChanges(ctx.doc, sel.ids, on); if (ch.length) ctx.commit(ch, on ? "lock" : "unlock");
+  endHover(ctx, sel); ctx.requestRender(); return true;
+});
 act("lock", "Lock", "", (ctx) => { const ids = needSel(ctx, "Select items to lock"); if (!ids || !canEdit(ctx)) return true; return commitSel(ctx, lockChanges(ctx.doc, ids, true), "lock"); });
 act("unlock", "Unlock", "", (ctx) => { const ids = needSel(ctx, "Select items to unlock"); if (!ids || !canEdit(ctx)) return true; return commitSel(ctx, lockChanges(ctx.doc, ids, false), "unlock"); });
 // footprint attributes, text, conversions, zones
@@ -4852,6 +5112,7 @@ function drawOverlay(c, view, ctx) {
     line(c, [S.hover.x - img.w / 2, S.hover.y - img.h / 2], [S.hover.x + img.w / 2, S.hover.y + img.h / 2]);
     line(c, [S.hover.x + img.w / 2, S.hover.y - img.h / 2], [S.hover.x - img.w / 2, S.hover.y + img.h / 2]);
   }
+  drawStatusPopup(c, px * (view.dpr || 1));
   // delete tool: what the click would remove
   if (S.modTool === "delete" && S.hover && S.hover.del) {
     const it = S.hover.del; c.globalAlpha = 0.9; c.strokeStyle = DEL;
@@ -5018,7 +5279,7 @@ const pcb = {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
-    if (t === "delete") hv.del = ctx.viewOnly ? null : itemAt(ctx, mm);
+    if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
     if (S.drag) dragMove(ctx, mm);
@@ -5043,7 +5304,12 @@ const pcb = {
         if (!S.sel.size && it && ids.size === 1 && ctx.doc.items.get(it.id)?.kind === "footprint") return editing() && beginCarryMove(ctx, { drag: true });
         // EDIT_TOOL::Drag: tracks and a via go to the router (D = 45°, G = free angle); nothing selected picks under the cursor
         if (ids.size && !routableItems(ctx.doc, ids)) return false;
-        if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) return false;
+        if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) {   // nothing routable under the cursor: a footprint there is hover-dragged
+          if (!editing()) return true;
+          const sel = requestSelection(ctx, { filter: (x) => x.kind === "footprint" || x.kind === "group" });
+          if (sel && sel.items.length === 1 && sel.items[0].kind === "footprint") { applySelection(ctx, sel.ids); beginCarryMove(ctx, { ids: sel.ids, drag: true, hover: true }); }
+          return true;
+        }
         if (editing()) { S.dragFree = k === "g" || k === "G"; ctx.setTool("drag"); } return true; }
     case "t": case "T": if (!shift) { ctx.setTool("gtext"); return true; } return false;
     case "L": if (shift) { ctx.setTool("gline"); return true; } return false;
@@ -5098,6 +5364,7 @@ const pcb = {
       if (shift && selectionIds(ctx).size && connectedRun(ctx.doc, selectionIds(ctx)).size) return runAction("deleteFull", ctx);   // Shift+Delete: the whole connected run
       if (S.sel.size) { if (editing()) deleteSelection(ctx); return true; }
       if (ctx.selection && ctx.selection.size) { if (editing()) { const free = unlockedIds(ctx, Array.from(ctx.selection)); if (free.length) { ctx.commit(deleteChanges(ctx.doc, free), "delete"); applySelection(ctx, []); } } return true; }   // app.js's box selection of one item
+      if (!selectionIds(ctx).size && !S.padSel) { if (editing()) hoverDelete(ctx); return true; }   // nothing selected: what is under the cursor
       return false;
     default: return false;
     }
@@ -5122,6 +5389,8 @@ const pcb = {
   // the app's drag of a mixed selection, and Move: everything selected goes along (sticky = follows the cursor until a click)
   beginMove(ctx, at, sticky) { bind(ctx); return beginCarryMove(ctx, { at, sticky }); },
   unlockedIds(ctx, ids, quiet) { bind(ctx); return unlockedIds(ctx, ids, quiet); },
+  /** RequestSelection for an app-side action (Properties): { ids, items, hover } or null; opts as requestSelection. */
+  requestSelection(ctx, opts) { bind(ctx); return requestSelection(ctx, opts); },
   setPrompt(fn) { promptImpl = fn; },
   setImagePicker(fn) { pickerImpl = fn; },
   cancel() { cancelOps(); },              // drop whatever is in flight and put a moved item back (a lost button release, Escape)
@@ -5169,7 +5438,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   // the parity pass
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
-  selectionIds, applySelection, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
+  selectionIds, applySelection, requestSelection, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,

@@ -276,7 +276,9 @@ test("module: selection keys — U expands the run, W changes width, Delete remo
   assert.equal(K.kid(doc.items.get("s-1").node, "width")[1], 0.3); assert.equal(log.commits.at(-1).changes[0].typeName, "PCB_TRACK");
   assert.equal(pcb.onKey("Delete", ev(), ctx), true);
   assert.equal(doc.items.has("s-1"), false); assert.equal(log.commits.at(-1).changes[0].kind, "REMOVED");
-  assert.equal(pcb.onKey("Delete", ev(), ctx), false);                  // nothing of ours selected: app.js's turn
+  // nothing selected: EDIT_TOOL::Remove takes what is under the cursor (here nothing: silent, nothing removed)
+  ctx.cursor = [0, 0]; const n0 = log.commits.length, t0 = log.toasts.length; assert.equal(pcb.onKey("Delete", ev(), ctx), true); assert.equal(log.commits.length, n0); assert.equal(log.toasts.length, t0);
+  ctx.cursor = null;
   ctx.selected = { id: "fp-1" };
   assert.equal(pcb.onKey("r", ev(), ctx), true); assert.equal(doc.items.get("fp-1").rot, 0);
   assert.equal(pcb.onKey("Flip", ev(), ctx), true); assert.equal(doc.items.get("fp-1").layer, "B.Cu");
@@ -912,11 +914,12 @@ test("clipboard: copy writes KiCad's kicad_pcb clipboard document; paste lands a
   const r = P.pasteChanges(doc, text, [200, 100]);
   assert.equal(r.changes.length, 2); assert.ok(r.changes.every((c) => c.kind === "ADDED")); assert.ok(!r.ids.includes("fp-1") && !r.ids.includes("s-1"));
   const nfp = doc.items.get(r.ids[0]), nseg = doc.items.get(r.ids[1]);
-  assert.equal(nfp.kind, "footprint"); assert.deepEqual([nfp.x, nfp.y, nfp.rot], [200, 100, -90]); assert.equal(nfp.ref, "R2", "R1 is taken");
+  assert.equal(nfp.kind, "footprint"); assert.deepEqual([nfp.x, nfp.y, nfp.rot], [200, 100, -90]); assert.equal(nfp.ref, "R1", "a plain paste keeps the reference (PASTE_MODE::KEEP_ANNOTATIONS)");
+  assert.equal(doc.items.get(P.pasteChanges(doc, text, [0, 0], { annotations: "unique" }).ids[0]).ref, "R2", "unique: R1 is taken");
   assert.ok(!K.kids(nfp.node, "pad").some((p) => K.uuidOf(p) === "pad-1" || K.uuidOf(p) === "pad-2"), "pads get fresh ids too");
   assert.deepEqual(K.kid(K.kids(nfp.node, "pad")[0], "net"), ["net", "GND"]); assert.equal(r.changes[0].padNets["1"], "GND");
   assert.deepEqual(K.kid(nseg.node, "start").slice(1), [210, 100]); assert.deepEqual(K.kid(nseg.node, "net"), ["net", "GND"]); assert.equal(r.changes[1].netName, "GND");
-  assert.equal(P.pasteChanges(doc, text, [0, 0], { annotations: "keep" }).changes.length && [...doc.items.values()].filter((it) => it.ref === "R1").length, 2);
+  assert.equal(P.pasteChanges(doc, text, [0, 0], { annotations: "keep" }).changes.length && [...doc.items.values()].filter((it) => it.ref === "R1").length, 3);
   const cleared = P.pasteChanges(doc, text, [0, 0], { annotations: "clear" }); assert.equal(doc.items.get(cleared.ids[0]).ref, "REF**");
   assert.deepEqual(P.pasteChanges(doc, "not a board", [0, 0]), { changes: [], ids: [] });
   // a group travels with its members and comes back pointing at the copies
@@ -1581,4 +1584,132 @@ test("multi-drag: followers of another net meet the lines already moved, not the
   assert.ok(pcb.ghostSegs().length >= 2, "the drag in progress is offered to peers");
   pcb.onPointerDown(ev(), [105, 52], ctx); assert.equal(log.commits.at(-1).label, "drag track");
   assert.deepEqual(pcb.ghostSegs(), []);
+});
+
+// ---- KiCad's hover selection, turns in flight, Mirror, Duplicate / Paste Special and locks (edit_tool.cpp)
+const LOCKED_MSG = "Selection contains locked items. Enable 'Override locks' to operate on them.";
+test("hover selection: R / F / L / Ctrl+C / Del act on the item under the cursor and leave nothing selected; an empty spot does nothing silently", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.cursor = [132, 50]; log.selection = null;
+  assert.equal(pcb.runAction("rotateSelection", ctx), true); assert.equal(log.commits.at(-1).label, "rotate");
+  assert.deepEqual([pt(doc.items.get("s-4").node, "start"), pt(doc.items.get("s-4").node, "end")], [[130, 50], [130, 45]], "a lone segment turns about its start (GetPosition)");
+  assert.deepEqual(log.selection, [], "the hover selection is cleared afterwards");
+  ctx.cursor = [130, 47]; assert.equal(pcb.runAction("flipSelection", ctx), true); assert.equal(K.kid(doc.items.get("s-4").node, "layer")[1], "B.Cu");
+  ctx.cursor = [130, 47]; assert.equal(pcb.runAction("toggleLock", ctx), true); assert.ok(P.isLocked(doc.items.get("s-4").node));
+  ctx.cursor = [130, 47]; assert.equal(pcb.runAction("copy", ctx), true); assert.ok(/\(segment /.test(log.clip) && !/locked/.test(log.clip), "a clipboard copy drops the lock (CLIPBOARD_IO)");
+  // the locked segment: KiCad's warning, nothing turns
+  const n = log.commits.length; ctx.cursor = [130, 47];
+  assert.equal(pcb.runAction("rotateSelection", ctx), true); assert.equal(log.commits.length, n); assert.equal(log.toasts.at(-1), LOCKED_MSG);
+  assert.equal(pcb.onKey("Delete", ev(), ctx), true); assert.equal(log.commits.length, n); assert.ok(doc.items.has("s-4"));
+  // nothing there: nothing happens and nothing is said
+  const t = log.toasts.length; ctx.cursor = [0, 0];
+  for (const id of ["rotateSelection", "flipSelection", "mirrorH", "move", "copy", "duplicate", "swap", "pack", "toggleLock"]) assert.equal(pcb.runAction(id, ctx), true, id);
+  assert.equal(log.commits.length, n); assert.equal(log.toasts.length, t); assert.equal(P.state.move, null);
+  // Del on an unlocked item under the cursor removes it
+  ctx.cursor = [141, 51]; assert.equal(pcb.onKey("Delete", ev(), ctx), true); assert.ok(!doc.items.has("a-1"));
+});
+
+test("hover selection with several candidates asks Clarify Selection and runs the action on the pick", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc); let asked = null;
+  ctx.cursor = [118, 53]; ctx.candidatesAt = () => ["v-1", "s-2", "s-3"];
+  ctx.clarify = (ids, then) => { asked = ids; ctx.selection = new Set(["v-1"]); then(ctx); };
+  assert.equal(pcb.runAction("rotateSelection", ctx), true); assert.deepEqual(asked, ["v-1", "s-2", "s-3"]);
+  assert.equal(log.commits.at(-1).label, "rotate"); assert.deepEqual(log.commits.at(-1).changes.map((c) => c.id), ["v-1"]); assert.deepEqual(log.selection, [], "the pick was a hover selection");
+  // a pad stands for its footprint, a group member for its group
+  ctx.candidatesAt = () => ["fp-1#0", "fp-1"]; ctx.selection = new Set(); ctx.cursor = [100, 49];
+  assert.equal(pcb.runAction("flipSelection", ctx), true); assert.equal(doc.items.get("fp-1").layer, "B.Cu");
+});
+
+test("locks: any locked item in the selection makes Rotate / Move / Mirror / Delete do nothing, with KiCad's warning", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.selection = new Set(["s-4"]); pcb.runAction("toggleLock", ctx); const n = log.commits.length;
+  ctx.selection = new Set(["s-4", "a-1"]);
+  for (const id of ["rotateSelection", "flipSelection", "mirrorV", "cut"]) { log.toasts.length = 0; assert.equal(pcb.runAction(id, ctx), true); assert.deepEqual(log.toasts, [LOCKED_MSG], id); }
+  assert.equal(pcb.runAction("move", ctx), true); assert.equal(P.state.move, null);
+  assert.equal(log.commits.length, n, "a-1 was not edited on its own either");
+  assert.deepEqual(P.unlockedIds(ctx, ["a-1"]), ["a-1"]);
+});
+
+test("Rotate / Flip / Mirror during a Move turn the move about the cursor; the click commits one Move step, Escape restores everything", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc); ctx.snapOn = false;
+  const s4 = K.serialize(doc.items.get("s-4").node);
+  ctx.selection = new Set(["s-4"]); ctx.cursor = [130, 50];
+  assert.equal(pcb.runAction("move", ctx), true); assert.ok(P.state.move && P.state.move.sticky);
+  P.selectMoveTo(ctx, [140, 60]); const n = log.commits.length;
+  assert.equal(pcb.runAction("rotateSelection", ctx), true); assert.equal(log.commits.length, n, "no separate undo entry while moving");
+  assert.deepEqual([pt(doc.items.get("s-4").node, "start"), pt(doc.items.get("s-4").node, "end")], [[140, 60], [140, 55]], "turned about the cursor");
+  P.selectMoveTo(ctx, [150, 60]); assert.deepEqual(pt(doc.items.get("s-4").node, "end"), [150, 55], "the turn moves on with the cursor");
+  P.finishSelectMove(ctx, true, false);
+  assert.equal(log.commits.length, n + 1); assert.equal(log.commits.at(-1).label, "move");
+  assert.deepEqual([pt(doc.items.get("s-4").node, "start"), pt(doc.items.get("s-4").node, "end")], [[150, 60], [150, 55]]);
+  // Escape after a turn and a flip: the true originals come back
+  const before = K.serialize(doc.items.get("s-4").node); ctx.cursor = [150, 60];
+  pcb.runAction("move", ctx); P.selectMoveTo(ctx, [160, 70]); pcb.runAction("rotateSelection", ctx); pcb.runAction("flipSelection", ctx); pcb.runAction("mirrorH", ctx);
+  assert.equal(K.kid(doc.items.get("s-4").node, "layer")[1], "B.Cu");
+  const m = log.commits.length; pcb.cancel(); assert.equal(K.serialize(doc.items.get("s-4").node), before); assert.equal(log.commits.length, m);
+  assert.notEqual(before, s4);
+  // Ctrl+D: the copies follow the cursor; a turn in flight lands in the one Duplicate step
+  ctx.selection = new Set(["a-1"]); ctx.cursor = [140, 50]; assert.equal(pcb.runAction("duplicate", ctx), true); const dup = P.state.move.placing[0];
+  P.selectMoveTo(ctx, [140, 60]); pcb.runAction("rotateSelection", ctx); P.finishSelectMove(ctx, true, false);
+  assert.deepEqual(pt(doc.items.get(dup).node, "start"), [140, 60]); assert.deepEqual(pt(doc.items.get(dup).node, "end"), [140, 58]);
+});
+
+test("Mirror: graphics and tracks in place about the modification point; footprints are skipped with KiCad's message", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.selection = new Set(["s-2"]); assert.equal(pcb.runAction("mirrorH", ctx), true); assert.equal(log.commits.at(-1).label, "mirror");
+  assert.deepEqual([pt(doc.items.get("s-2").node, "start"), pt(doc.items.get("s-2").node, "end")], [[115, 50], [112, 53]], "about the segment's start");
+  ctx.selection = new Set(["fp-1"]); const n = log.commits.length; assert.equal(pcb.runAction("mirrorV", ctx), true); assert.equal(log.commits.length, n);
+  assert.equal(log.toasts.at(-1), "Footprints cannot be mirrored. Use Flip to move them to the other side of the board.");
+  const g = P.groupChanges(doc, ["fp-1", "s-4"], ""); K.applyChange(doc, g[0], IU); ctx.selection = new Set([g[0].id]);
+  assert.equal(pcb.runAction("mirrorH", ctx), true); assert.equal(log.commits.length, n); assert.equal(log.toasts.at(-1), "Groups containing footprints or other items that cannot be mirrored were skipped.");
+});
+
+test("Duplicate keeps references, locks and nets, and a copy joins its original's group; Escape puts the group back", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.selection = new Set(["fp-1"]); pcb.runAction("toggleLock", ctx);
+  const g = P.groupChanges(doc, ["s-4", "a-1"], "pair"); ctx.commit(g, "group"); const gid = g[0].id;
+  ctx.selection = new Set(["fp-1"]); P.state.sel.clear(); assert.equal(pcb.runAction("duplicate", ctx), true);
+  const c = log.commits.at(-1); assert.equal(c.label, "duplicate"); const nfp = doc.items.get(c.changes[0].id);
+  assert.equal(nfp.ref, "R1", "BOARD_ITEM::Duplicate keeps the reference"); assert.ok(P.isLocked(nfp.node), "and the lock"); assert.notEqual(nfp.id, "fp-1");
+  P.finishSelectMove(ctx, true, false);
+  // a member of a group whose group is not duplicated: the copy joins the group in the same commit
+  const r = P.duplicateChanges(doc, ["s-4"]); assert.equal(r.ids.length, 1);
+  const mod = r.changes.find((x) => x.id === gid); assert.ok(mod && mod.kind === "MODIFIED" && mod.groupMembers.includes(r.ids[0]) && mod.groupMembers.includes("s-4"));
+  // a whole group: a new group around copies of its members
+  const r2 = P.duplicateChanges(doc, [gid, "s-4", "a-1"]); const ng = r2.changes.find((x) => x.typeName === "PCB_GROUP");
+  assert.equal(r2.changes.length, 3); assert.ok(ng.kind === "ADDED" && ng.id !== gid && ng.groupMembers.length === 2 && !ng.groupMembers.includes("s-4"));
+  // Escape on a placement whose copy joined a group: the copy goes and the group is as it was
+  ctx.selection = new Set(["a-1"]); const members = K.serialize(K.kid(doc.items.get(gid).node, "members"));
+  P.state.sel.clear(); ctx.selection = new Set(["a-1"]);
+  // a-1 is in the group: its group is selected too in the app, so select the bare member through the module instead
+  pcb.runAction("duplicate", ctx); assert.ok(P.state.move.placing.length >= 1); pcb.cancel();
+  assert.equal(K.serialize(K.kid(doc.items.get(gid).node, "members")), members);
+});
+
+test("Paste Special: KiCad's three reference modes (keep preselected) and Clear net assignments", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.selection = new Set(["fp-1", "s-1", "v-1"]); ctx.cursor = [100, 50]; pcb.runAction("copy", ctx);
+  let spec = null; pcb.setForm((s) => { spec = s; return true; });
+  assert.equal(pcb.runAction("pasteSpecial", ctx), true);
+  const f = spec.fields[0]; assert.equal(f.type, "radio"); assert.equal(f.value, "keep"); assert.equal(f.label, "Reference Designators");
+  assert.deepEqual(f.options.map((o) => o[1]), ["Assign unique reference designators to pasted symbols", "Keep existing reference designators, even if they are duplicated", "Clear reference designators on all pasted symbols"]);
+  assert.equal(spec.fields[1].label, "Clear net assignments");
+  ctx.cursor = [200, 100]; spec.apply({ annotations: "keep", clearNets: true });
+  const ids = P.state.move.placing; P.state.move = null;
+  const items = ids.map((id) => doc.items.get(id));
+  const fp = items.find((it) => it.kind === "footprint"); assert.equal(fp.ref, "R1");
+  assert.ok(!K.kids(fp.node, "pad").some((p) => K.kid(p, "net")), "pads lose their nets");
+  for (const it of items.filter((x) => x.kind !== "footprint")) assert.deepEqual(K.kid(it.node, "net"), ["net", ""]);
+  pcb.setForm(null);
+});
+
+test("Interactive Delete: a locked item stays and 'Item locked.' pops up; several candidates brighten nothing", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  ctx.selection = new Set(["s-4"]); pcb.runAction("toggleLock", ctx); ctx.selection = new Set();
+  pcb.onActivate("delete", ctx); const n = log.commits.length;
+  pcb.onPointerDown(ev(), [132, 50], ctx); assert.equal(log.commits.length, n); assert.ok(doc.items.has("s-4")); assert.equal(P.state.popup.text, "Item locked.");
+  pcb.onPointerDown(ev(), [141, 51], ctx); assert.ok(!doc.items.has("a-1")); assert.equal(log.toasts.filter((t) => /Deleted/.test(t)).length, 0, "nothing said");
+  ctx.candidatesAt = () => ["s-2", "v-1"]; pcb.onPointerMove(ev(), [118, 53], ctx); assert.equal(P.state.hover.del, null);
+  ctx.candidatesAt = () => ["v-1"]; pcb.onPointerMove(ev(), [118, 53], ctx); assert.equal(P.state.hover.del.id, "v-1");
+  P.state.popup = null;
 });

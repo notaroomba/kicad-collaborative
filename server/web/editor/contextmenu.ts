@@ -236,6 +236,15 @@ function ambiguousAt(mm: Mm): string[] {
   const others = ids.filter((id) => { const it = (E.kdoc as KDoc).items.get(id); return !(it && it.kind === "footprint"); });
   return others.length ? others : ids;
 }
+/**
+ * The board module's hover selection (PCB_SELECTION_TOOL::RequestSelection with nothing selected) asks here: the
+ * candidates under a point after GuessSelectionCandidates, and doSelectionMenu between them at the pointer.
+ */
+E.hooks.candidatesAt = (mm: Mm): string[] => (E.kdoc ? ambiguousAt(mm) : []);
+E.hooks.clarify = (ids: string[], then: () => void): void => {
+  const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
+  clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then);
+};
 /** KiCad's "Clarify Selection" list: offered when the click could have meant more than one item. */
 function clarifyRows(mm: Mm): CtxItem | null {
   const ids = candidatesAt(mm).slice(0, 12); if (ids.length < 2) return null;

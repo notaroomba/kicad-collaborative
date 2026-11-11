@@ -21,7 +21,14 @@ export function openSelectionProperties() {
   // the board module keeps a Set of ids (tracks, vias, graphics, zones), the schematic module one id
   const first = (s) => (s && typeof s === "object" && typeof s[Symbol.iterator] === "function" ? s.values().next().value : s) || null;
   const id = E.selected ? E.selected.id : (first(modSel) || first(E.selection));
-  const it = id && E.kdoc.items.get(id); if (!it) return false;
+  const it = id && E.kdoc.items.get(id);
+  if (!it && !isSch() && CollabTools.pcb && CollabTools.pcb.requestSelection) {
+    // EDIT_TOOL::Properties with nothing selected: the item under the cursor (a hover selection, not kept)
+    const sel = CollabTools.pcb.requestSelection(ctx, { locks: false, rerun: () => { openSelectionProperties(); } });
+    if (sel && sel.items.length) KDialogs.openItem(ctx, sel.items[0]);
+    return true;
+  }
+  if (!it) return false;
   KDialogs.openItem(ctx, it); return true;
 }
 

@@ -248,7 +248,7 @@ function startModuleBox(ev: PointerEvent, x: number, y: number): void {
 
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
-  E.lastCursorMm = mm; store.slice("viewport", { cursor: mm });
+  E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: mm });
   placeCrosshair(mm);
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); drawBoxSel(); return; }
