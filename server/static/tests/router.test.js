@@ -80,6 +80,13 @@ test("rounded corners: each corner becomes a tangent arc whose tangent length is
   assert.equal(P.headElems([[0, 0], [10, 0], [10, 4]], 2).every((e) => e.t === "seg"), true);
 });
 
+test("no micro segments: a sliver under 10 µm folds into its neighbour", () => {
+  const els = [{ t: "seg", a: [0, 0], b: [5, 0] }, { t: "seg", a: [5, 0], b: [5.002, 0] }, { t: "seg", a: [5.002, 0], b: [8, 3] }];
+  const f = P.foldMicro(els); assert.equal(f.length, 2); assert.deepEqual(f[0].b, [5.002, 0]); assert.deepEqual(f[1].a, [5.002, 0]);
+  const lead = P.foldMicro([{ t: "seg", a: [0, 0], b: [0.001, 0] }, { t: "seg", a: [0.001, 0], b: [4, 0] }]); assert.equal(lead.length, 1); assert.deepEqual(lead[0].a, [0, 0]);
+  assert.deepEqual(P.foldMicro([{ t: "seg", a: [5, 0], b: [5.002, 0] }]), [], "a lone sliver adds nothing");
+});
+
 test("LINE::Walkaround on a convex hull: round either way, never inside", () => {
   const H = P.octagon([[5, -1], [5, 1]], 1);
   assert.equal(P.insideConvex(H, [5, 0]), true); assert.equal(P.insideConvex(H, [0, 0]), false);

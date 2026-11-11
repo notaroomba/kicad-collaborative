@@ -1437,9 +1437,21 @@ function routeUnhighlight(ctx, rt) {
   else { S.highlightNet = null; highlightIds(ctx, null); }
 }
 /** The branch edits that add a line's elements as tracks (segments, and arcs in the rounded corner modes). */
+const MICRO_SEG = 0.01;   // a walked or snapped line's sliver under 10 µm folds into its neighbour (no micro segments on the board)
+function foldMicro(els) {
+  const out = els.map((e) => Object.assign({}, e));
+  for (let i = 0; i < out.length && out.length > 1; i++) {
+    const e = out[i]; if (e.t !== "seg" || Math.hypot(e.b[0] - e.a[0], e.b[1] - e.a[1]) >= MICRO_SEG) continue;
+    const prev = out[i - 1], next = out[i + 1];
+    if (prev && prev.t === "seg") prev.b = e.b.slice(); else if (next && next.t === "seg") next.a = e.a.slice(); else continue;
+    out.splice(i, 1); i--;
+  }
+  // a head that is nothing but a sliver (the cursor a hair off the last fixed point) adds no track
+  return out.length === 1 && out[0].t === "seg" && Math.hypot(out[0].b[0] - out[0].a[0], out[0].b[1] - out[0].a[1]) < MICRO_SEG ? [] : out;
+}
 function trackOps(doc, els, width, layer, net) {
   const ops = [];
-  for (const e of els) {
+  for (const e of foldMicro(els)) {
     if (peq(e.a, e.b)) continue;
     const node = e.t === "arc" ? arcTrackNode(doc, e.a, e.m, e.b, width, layer, net) : segmentNode(doc, e.a, e.b, width, layer, net);
     node.push(["uuid", K.newUuid()]); ops.push({ add: node });
@@ -1483,7 +1495,7 @@ function adoptNetOps(doc, rt, snap) {
  */
 function fixHead(ctx, opts) {
   opts = opts || {}; const rt = S.route; const rs = S.rs; const doc = routeDoc(ctx, rt);
-  let els = rt.els && rt.els.length ? rt.els : []; const via = headVia(ctx, rt);
+  let els = rt.els && rt.els.length ? foldMicro(rt.els) : []; const via = headVia(ctx, rt);
   if (!els.length && !via) return false;
   const O = routeObs(ctx, rt); const r = rt.width / 2;
   if (!rs.can_violate_drc || rs.mode !== RM_MARK) {
@@ -5147,7 +5159,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)
-  RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
+  RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
