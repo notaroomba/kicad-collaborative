@@ -84,6 +84,42 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | DELETE | `/api/links/{token}` | revoke a share link |
 | GET | `/ws` | the sync WebSocket |
 
+## Vendor parts and part libraries
+
+Parts can be found at LCSC / JLCPCB, Mouser and DigiKey and placed straight
+into a schematic or a board (`src/parts/`, dialog in `web/parts/`, in the
+editor under Tools → Add Part from Vendor… and Part Libraries…).
+
+A saved library stores **references only**: vendor, vendor part number,
+manufacturer part number and manufacturer. Everything else is fetched when the
+part is used and kept in a shared cache (`parts`, `part_models`), so a library
+still works when a vendor is unreachable. The cache holds the vendor's own data
+(listing, EasyEDA drawing, STEP model); the KiCad symbol and footprint are
+converted from it on each request (`src/parts/easyeda.rs`). A placed part is
+embedded in the sheet or board as KiCad does, with `LCSC` / `Mouser` /
+`DigiKey`, `MPN` and `Manufacturer` fields.
+
+LCSC needs no key. Mouser and DigiKey need API keys, either for the whole
+deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`) or
+per person in the dialog's API Keys tab (stored encrypted in `vendor_keys`).
+Neither publishes drawings, so their parts use the LCSC drawing for the same
+manufacturer part number when there is one.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/parts/vendors` | vendors and whether each is usable |
+| PUT/DELETE | `/api/parts/keys/{vendor}` | save (after a test search) · remove your key |
+| GET | `/api/parts/search?q=&vendor=` | search one vendor or all |
+| GET | `/api/parts/part?vendor=&id=&lib=&refresh=` | listing, symbol, footprint |
+| PUT | `/api/parts/cad` | use another LCSC part's drawings for a part |
+| GET | `/api/parts/model.step?vendor=&id=` | 3D model |
+| GET/POST | `/api/libraries` | list · create |
+| GET/PATCH/DELETE | `/api/libraries/{id}` | parts · rename, share with a project · delete |
+| POST | `/api/libraries/{id}/items` | add a part |
+| PATCH/DELETE | `/api/libraries/{id}/items/{item}` | note · remove |
+| POST | `/api/libraries/{id}/refresh` | refetch every part |
+| GET | `/api/libraries/{id}/export.zip` | `.kicad_sym`, `.pretty`, `.3dshapes` for desktop KiCad |
+
 ## GitHub repository sync
 
 An online project can be linked to one folder of one branch of a GitHub
@@ -203,6 +239,11 @@ API, so no real repository is touched. `KICAD_FILES_DIR=.. cargo test --
 `fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every
 design tool on a schematic and a board, proposal preview / accept / reject /
 stale, a second client seeing an accepted edit, undo, errors, own keys, access.
+`server/scripts/parts-e2e.mjs` (API) and `parts-ui.mjs` (two people in
+Chromium) test vendor parts against `fake-vendors.mjs`, which replays answers
+recorded from LCSC, JLCPCB and EasyEDA (`tests/fixtures/vendor/`, refreshed
+with `capture-vendor-fixtures.sh`) and stands in for Mouser and DigiKey from
+their API documentation.
 
 `server/scripts/e2e.mjs` goes further: it drives two WebSocket clients through
 the real join → op → ack → broadcast flow and checks sharing, role enforcement,

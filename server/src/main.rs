@@ -7,6 +7,7 @@ mod http;
 mod lenient_json;
 mod merge;
 mod pages;
+mod parts;
 mod persist;
 mod registry;
 mod ws;
@@ -276,6 +277,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ai", get(ai::status))
         .route("/api/ai/key", axum::routing::put(ai::put_key).delete(ai::delete_key))
         .route("/api/projects/{id}/ai/chat", post(ai::chat))
+        // vendor parts and saved part libraries (src/parts)
+        .route("/static/dist/parts.js", get(pages::parts_js))
+        .route("/static/dist/parts.js.map", get(pages::parts_js_map))
+        .route("/api/parts/vendors", get(parts::list_vendors))
+        .route("/api/parts/keys/{vendor}", axum::routing::put(parts::put_key).delete(parts::delete_key))
+        .route("/api/parts/search", get(parts::search))
+        .route("/api/parts/part", get(parts::get_part))
+        .route("/api/parts/cad", axum::routing::put(parts::link_cad))
+        .route("/api/parts/model.step", get(parts::get_model))
+        .route("/api/libraries", get(parts::list_libraries).post(parts::create_library))
+        .route("/api/libraries/{id}", get(parts::get_library).patch(parts::update_library).delete(parts::delete_library))
+        .route("/api/libraries/{id}/items", post(parts::add_item))
+        .route("/api/libraries/{id}/items/{item}", axum::routing::patch(parts::update_item).delete(parts::remove_item))
+        .route("/api/libraries/{id}/refresh", post(parts::refresh_library))
+        .route("/api/libraries/{id}/export.zip", get(parts::export_library))
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())

@@ -169,6 +169,12 @@ pub async fn ui_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/ui.js.map")).into_response()
 }
 
+// Vendor parts and saved part libraries (server/web/parts, `npm run build:parts`).
+pub async fn parts_js() -> Response { js_response(include_str!("../static/dist/parts.js")) }
+pub async fn parts_js_map() -> Response {
+    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/parts.js.map")).into_response()
+}
+
 pub async fn editor_js() -> Response { js_response(include_str!("../static/dist/editor.js")) }
 pub async fn editor_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/editor.js.map")).into_response()

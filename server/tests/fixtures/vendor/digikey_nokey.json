@@ -1,0 +1,11 @@
+
+            {
+                "type": "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+                "title": "Bad Request",
+                "status": 400,
+                "detail": "X-DIGIKEY-Client-Id header is missing. Ensure the X-DIGIKEY-Client-Id header has a valid key",
+                "instance": "",
+                "correlationId": "517b50ed-080a-42c6-92ed-80784b90479c",
+                "errors": {}
+            }
+        

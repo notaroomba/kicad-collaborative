@@ -675,6 +675,7 @@ export function Home() {
               <button type="button" className="hp-side-btn" onClick={() => setJoin(true)}><Ic name="link" size={18} /><span>Join with link</span></button>
               {me ? <a className={"hp-side-btn" + (tab === "trash" ? " on" : "")} href="/trash" onClick={(ev) => { ev.preventDefault(); go("/trash"); }}><Ic name="trash" size={18} /><span>Trash</span></a> : null}
               {me ? <a className="hp-side-btn" href="/github"><Ic name="branch" size={18} /><span>Import from GitHub</span></a> : null}
+              {me ? <button type="button" id="homeParts" className="hp-side-btn" onClick={() => (window as unknown as { KiCadParts?: { open(o: { tab: string }): void } }).KiCadParts?.open({ tab: "libraries" })}><Ic name="grid" size={18} /><span>Part libraries</span></button> : null}
             </div>
             <div className="hp-side-foot">
               <a className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
