@@ -11,7 +11,8 @@ got=wait(lambda: [x for x in B.get_tracks() if str(x.id.value)==str(made.id.valu
 check('a track drawn on A appears on B', bool(got), got and f'net {got[0].net.name}')
 # 2. refill on A; B gets the same copper
 zid=list(za)[0]
-A.refill_zones()
+# the editor refuses API calls for a moment after a commit; retry until it takes the refill
+t0=time.time(); wait(lambda: A.refill_zones() or True, 30); print(f'refill accepted after {time.time()-t0:.1f}s')
 sigA=wait(lambda: fill_sig(zones(A)[zid]) if fill_sig(zones(A)[zid])[0] else None, 60)
 same=wait(lambda: fill_sig(zones(B)[zid])==fill_sig(zones(A)[zid]), 30)
 check('after a refill on A, B holds identical copper', bool(same), f'A {fill_sig(zones(A)[zid])} B {fill_sig(zones(B)[zid])}')
