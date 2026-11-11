@@ -44,6 +44,8 @@
 #include <richio.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
+#include <sch_group.h>
+#include <tools/sch_actions.h>
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr_parser.h>
 #include <sch_item.h>
@@ -76,13 +78,57 @@ static const wxChar* const traceCollab = wxT( "COLLAB" );
 namespace
 {
 
-/// SCH_GROUP fragments cannot resolve their member UUIDs and stay deferred.
-/// Sheets transfer: the fragment parses without its screen, so the applier
-/// preserves the live screen across an upsert and gives a brand-new sheet an
-/// empty screen that the doc-join reconcile then populates.
+/// Every schematic item transfers.  Sheets: the fragment parses without its screen, so
+/// the applier preserves the live screen across an upsert and gives a brand-new sheet
+/// the screen of its file (shared with any other sheet of that file).  Groups: a lone
+/// fragment cannot resolve its member uuids, so the applier reads them off the
+/// fragment's (members ...) list and resolves them on the receiving screen.
 bool typeSupportsSexprTransfer( const SCH_ITEM* aItem )
 {
-    return aItem->Type() != SCH_GROUP_T;
+    return true;
+}
+
+
+/// The member uuids a group fragment names: the wire's own "groupMembers" list when the
+/// sender provided one (the board convention), else the fragment's (members "..." ...).
+std::vector<KIID> groupMemberIds( const nlohmann::json& aChange, const std::string& aSexpr )
+{
+    std::vector<KIID> ids;
+
+    if( aChange.contains( "groupMembers" ) && aChange[ "groupMembers" ].is_array() )
+    {
+        for( const nlohmann::json& member : aChange[ "groupMembers" ] )
+        {
+            if( member.is_string() )
+                ids.emplace_back( wxString::FromUTF8( member.get<std::string>() ) );
+        }
+
+        return ids;
+    }
+
+    size_t pos = aSexpr.find( "(members" );
+
+    if( pos == std::string::npos )
+        return ids;
+
+    size_t end = aSexpr.find( ')', pos );
+
+    if( end == std::string::npos )
+        return ids;
+
+    // Member ids are quoted uuids; nothing in them needs unescaping.
+    for( size_t open = aSexpr.find( '"', pos ); open != std::string::npos && open < end; )
+    {
+        size_t close = aSexpr.find( '"', open + 1 );
+
+        if( close == std::string::npos || close > end )
+            break;
+
+        ids.emplace_back( wxString::FromUTF8( aSexpr.substr( open + 1, close - open - 1 ) ) );
+        open = aSexpr.find( '"', close + 1 );
+    }
+
+    return ids;
 }
 
 
@@ -246,6 +292,11 @@ SCH_ITEM* parseItemSexpr( SCHEMATIC& aSchematic, SCH_SCREEN* aDestScreen,
         }
     }
 
+    // Whatever a parsed group resolved lives on the temporary screen and is about to be
+    // freed; membership is rebuilt against the destination by the caller.
+    if( found && found->Type() == SCH_GROUP_T )
+        static_cast<SCH_GROUP*>( found )->RemoveAll();
+
     // Remove the references from the temporary screen to prevent freeing on the DTOR,
     // then free everything we are not returning.
     tempScreen->Clear( false );
@@ -305,6 +356,110 @@ const COMMIT::COMMIT_LINE* stagedAddOf( const SCH_COMMIT& aCommit, const KIID& a
     }
 
     return nullptr;
+}
+
+
+/// The absolute file a sheet names, resolved the way KiCad does: against the directory of
+/// the sheet that holds it.
+wxFileName sheetFileOf( const SCH_SHEET* aSheet, const SCH_SCREEN* aParentScreen )
+{
+    wxFileName fn( aSheet->GetFileName() );
+
+    if( fn.IsRelative() && aParentScreen && !aParentScreen->GetFileName().IsEmpty() )
+        fn.MakeAbsolute( wxFileName( aParentScreen->GetFileName() ).GetPath() );
+
+    return fn;
+}
+
+
+/**
+ * Give a sheet that just arrived the screen of its file.
+ *
+ * A file that is already open somewhere in the hierarchy is *shared*: every sheet of one
+ * file shows one screen, which is what makes an edit inside it appear in all of them.
+ * Handing each new sheet an empty screen of its own instead left a second instance of a
+ * sheet blank for good -- its file already had a document, so nothing ever filled it.
+ * Only a file nobody has open gets a new, empty screen (the caller fills it from the
+ * server).
+ *
+ * @return false when the sheet would contain itself (its file is the file of the sheet it
+ *         sits on, or of one of that sheet's ancestors); nothing is attached then.
+ */
+bool attachSheetScreen( SCHEMATIC& aSchematic, SCH_SCREEN* aParentScreen, SCH_SHEET* aSheet )
+{
+    const wxFileName file = sheetFileOf( aSheet, aParentScreen );
+    SCH_SCREEN*      shared = nullptr;
+
+    for( const SCH_SHEET_PATH& path : aSchematic.Hierarchy() )
+    {
+        SCH_SCREEN* screen = path.LastScreen();
+
+        if( !screen || screen->GetFileName().IsEmpty() )
+            continue;
+
+        wxFileName candidate( screen->GetFileName() );
+
+        if( candidate.IsRelative() != file.IsRelative() ? candidate.GetFullName() == file.GetFullName()
+                                                        : candidate == file )
+        {
+            shared = screen;
+            break;
+        }
+    }
+
+    if( shared )
+    {
+        // Recursion: the shared screen is the one this sheet sits on, or shows above it.
+        for( const SCH_SHEET_PATH& path : aSchematic.Hierarchy() )
+        {
+            if( path.LastScreen() != aParentScreen )
+                continue;
+
+            for( size_t ii = 0; ii < path.size(); ++ii )
+            {
+                if( path.at( ii )->GetScreen() == shared )
+                    return false;
+            }
+        }
+
+        aSheet->SetScreen( shared );
+        return true;
+    }
+
+    SCH_SCREEN* newScreen = new SCH_SCREEN( &aSchematic );
+
+    newScreen->SetFileName( file.IsAbsolute() ? file.GetFullPath() : aSheet->GetFileName() );
+    aSheet->SetScreen( newScreen );
+    return true;
+}
+
+
+/// Every symbol gets an instance for every sheet path that shows it.  A sheet that arrives
+/// sharing a screen adds paths to symbols that were already there; without an instance for
+/// the new path they draw with a bare reference and lose their annotation on save.  An
+/// existing instance is never touched.
+void addMissingSymbolInstances( SCHEMATIC& aSchematic )
+{
+    for( const SCH_SHEET_PATH& path : aSchematic.Hierarchy() )
+    {
+        SCH_SCREEN* screen = path.LastScreen();
+
+        if( !screen )
+            continue;
+
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            SCH_SYMBOL*         symbol = static_cast<SCH_SYMBOL*>( item );
+            SCH_SYMBOL_INSTANCE instance;
+
+            if( symbol->GetInstances().empty() || symbol->GetInstance( instance, path.Path() ) )
+                continue;
+
+            instance = symbol->GetInstances().front();
+            instance.m_Path = path.Path();
+            symbol->AddHierarchicalReference( instance );
+        }
+    }
 }
 
 
@@ -508,6 +663,11 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                 return true;    // already gone: delete beats concurrent modify (LWW)
             }
 
+            // A removed group releases its members first: their back-pointers would
+            // dangle at the freed group otherwise.  The members stay on the sheet.
+            if( item->Type() == SCH_GROUP_T )
+                static_cast<SCH_GROUP*>( item )->RemoveAll();
+
             if( aCommit )
             {
                 // The push detaches it; ApplyRemoteOp frees what the commit ends up
@@ -542,8 +702,14 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                 return false;
             }
 
+            SCH_ITEM*   live = nullptr;
+            SCH_SCREEN* liveScreen = nullptr;
+
             if( item )
             {
+                live = item;
+                liveScreen = screen;
+
                 // Upsert-replace: highest seq wins wholesale.
                 if( aCommit )
                     aCommit->Modify( item, screen );
@@ -554,6 +720,11 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
 
                 if( item->Type() == SCH_SHEET_T )
                     keepScreen = static_cast<SCH_SHEET*>( item )->GetScreen();
+
+                // Old members' back-pointers are cleared before the swap hands the live
+                // group the parsed (empty) member list.
+                if( item->Type() == SCH_GROUP_T && fresh->Type() == SCH_GROUP_T )
+                    static_cast<SCH_GROUP*>( item )->RemoveAll();
 
                 item->SwapItemData( fresh );
 
@@ -583,20 +754,17 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             }
             else if( kind == "ADDED" )
             {
-                if( fresh->Type() == SCH_SHEET_T )
+                if( fresh->Type() == SCH_SHEET_T
+                    && !attachSheetScreen( aSchematic, aScreen, static_cast<SCH_SHEET*>( fresh ) ) )
                 {
-                    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
-                        fprintf( stderr, "COLLAB sheet: creating screen\n" );
-
-                    SCH_SHEET*  sheet = static_cast<SCH_SHEET*>( fresh );
-                    SCH_SCREEN* newScreen = new SCH_SCREEN( &aSchematic );
-
-                    newScreen->SetFileName( sheet->GetFileName() );
-                    sheet->SetScreen( newScreen );
-
-                    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
-                        fprintf( stderr, "COLLAB sheet: screen attached\n" );
+                    wxLogTrace( traceCollab, wxS( "ApplyItemChange: sheet %s would contain itself" ),
+                                id.AsString() );
+                    delete fresh;
+                    return false;
                 }
+
+                live = fresh;
+                liveScreen = aScreen;
 
                 if( aCommit )
                     aCommit->Add( fresh, aScreen );
@@ -607,6 +775,30 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
             {
                 // Replace of an item deleted in the meantime: delete beats modify.
                 delete fresh;
+            }
+
+            // Group membership resolves against the sheet the group lands on.  Members
+            // added by this same commit are staged, not on the sheet yet; members that are
+            // nowhere are skipped, and a later replace re-asserts them (LWW).
+            if( live && live->Type() == SCH_GROUP_T )
+            {
+                SCH_GROUP* group = static_cast<SCH_GROUP*>( live );
+
+                group->RemoveAll();
+
+                for( const KIID& memberId : groupMemberIds( aChange, sexpr ) )
+                {
+                    SCH_ITEM* member = liveScreen ? findInScreen( liveScreen, memberId ) : nullptr;
+
+                    if( !member && aCommit )
+                    {
+                        if( const COMMIT::COMMIT_LINE* add = stagedAddOf( *aCommit, memberId ) )
+                            member = dynamic_cast<SCH_ITEM*>( add->m_item );
+                    }
+
+                    if( member && member != live )
+                        group->AddItem( member );
+                }
             }
 
             return true;
@@ -690,6 +882,7 @@ void SCH_COLLAB::ApplyRemoteOp( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                                 const std::function<void( SCH_ITEM* )>& aBeforeFree )
 {
     SCH_COMMIT commit( aToolMgr );
+    bool       sheetArrived = false;
 
     // Stage one change list.  A REMOVED + ADDED pair for the same id in one list would
     // stage the same live object as both a removal and a modification -- the removal
@@ -707,20 +900,71 @@ void SCH_COLLAB::ApplyRemoteOp( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                 reAdded.insert( change.value( "id", "" ) );
         }
 
+        // A group resolves its members on the sheet, so whatever else the list adds lands
+        // first, and a group that is a member of another lands before the one holding it.
+        std::vector<const nlohmann::json*> ordered;
+        std::vector<const nlohmann::json*> groups;
+
         for( const nlohmann::json& change : aList )
         {
             if( !change.is_object() )
                 continue;
 
-            std::string id = change.value( "id", "" );
+            if( change.value( "typeName", "" ) == "SCH_GROUP" || change.contains( "groupMembers" ) )
+                groups.push_back( &change );
+            else
+                ordered.push_back( &change );
+        }
 
-            if( change.value( "kind", "" ) == "REMOVED" && reAdded.count( id ) )
-                continue;
+        while( !groups.empty() )
+        {
+            size_t pick = 0;
 
-            if( aOnlyIds && !aOnlyIds->count( id ) )
-                continue;
+            for( size_t ii = 0; ii < groups.size(); ++ii )
+            {
+                bool holdsPending = false;
 
-            ApplyItemChange( aSchematic, aScreen, change, &commit );
+                for( const KIID& member :
+                     groupMemberIds( *groups[ii], groups[ii]->value( "sexpr", "" ) ) )
+                {
+                    for( size_t jj = 0; jj < groups.size(); ++jj )
+                    {
+                        if( jj != ii && groups[jj]->value( "id", "" ) == member.AsStdString() )
+                            holdsPending = true;
+                    }
+                }
+
+                if( !holdsPending )
+                {
+                    pick = ii;
+                    break;
+                }
+            }
+
+            ordered.push_back( groups[pick] );
+            groups.erase( groups.begin() + pick );
+        }
+
+        {
+            for( const nlohmann::json* changePtr : ordered )
+            {
+                const nlohmann::json& change = *changePtr;
+                const std::string     type = change.value( "typeName", "" );
+
+                std::string id = change.value( "id", "" );
+
+                if( change.value( "kind", "" ) == "REMOVED" && reAdded.count( id ) )
+                    continue;
+
+                if( aOnlyIds && !aOnlyIds->count( id ) )
+                    continue;
+
+                if( ApplyItemChange( aSchematic, aScreen, change, &commit ) && type == "SCH_SHEET"
+                    && change.value( "kind", "" ) != "REMOVED" )
+                {
+                    sheetArrived = true;
+                }
+            }
         }
     };
 
@@ -773,6 +1017,13 @@ void SCH_COLLAB::ApplyRemoteOp( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
 
     if( !commit.Empty() )
         commit.Push( _( "Remote Edit" ), SKIP_UNDO | SKIP_CLEANUP );
+
+    // A sheet that arrived may show screens that were already open under new paths.
+    if( sheetArrived )
+    {
+        aSchematic.RefreshHierarchy();
+        addMissingSymbolInstances( aSchematic );
+    }
 
     for( const auto& [item, screen] : detached )
     {
@@ -987,6 +1238,11 @@ void SCH_COLLAB_SYNC::captureItem( SCH_ITEM* aItem, SCH_ITEM* aBefore, SCH_SCREE
         change.kind = CHANGE_KIND::MODIFIED;
 
         std::vector<PROPERTY_DELTA> deltas;
+
+        // A group's membership is invisible to the property system: a group always
+        // ships whole, or a rename would travel and the members added with it would not.
+        if( aItem->Type() == SCH_GROUP_T )
+            aBefore = nullptr;
 
         if( aBefore )
         {
@@ -1421,6 +1677,13 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
     std::string baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
                                                          m_frame->Prj().GetProjectName(),
                                                          relPath );
+
+    // A screen that was just rebuilt empty (see ensureSheetDocs) has nothing of its own to
+    // merge: measured against the base, its emptiness would read as "this user deleted
+    // everything" and be sent to the server as exactly that.  The online version wins.
+    if( m_takeServer.erase( aDocId ) )
+        baseText.clear();
+
     SCH_SHEET   baseSheet;
     SCH_SCREEN* baseScreen = baseText.empty() ? nullptr : loadTemp( baseText, baseSheet );
     const bool  haveBase = baseScreen != nullptr;
@@ -2132,6 +2395,43 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     for( const UNACKED* op : unacked )
         newerOwn.push_back( &op->changes );
 
+    // A sheet that is about to be removed may be the one on display, or above it: step
+    // out to its parent first.  The removal frees the sheet, and a frame left showing a
+    // screen that is no longer in the hierarchy crashes on its next repaint.
+    for( const nlohmann::json& change : aOp.changes )
+    {
+        if( !change.is_object() || change.value( "kind", "" ) != "REMOVED" )
+            continue;
+
+        KIID id( wxString::FromUTF8( change.value( "id", "" ) ) );
+
+        const SCH_SHEET_PATH& current = m_frame->GetCurrentSheet();
+
+        for( size_t ii = 0; ii < current.size(); ++ii )
+        {
+            if( current.at( ii )->m_Uuid != id )
+                continue;
+
+            SCH_SHEET_PATH parent;
+
+            for( size_t jj = 0; jj < ii; ++jj )
+                parent.push_back( current.at( jj ) );
+
+            if( parent.size() > 0 )
+            {
+                m_frame->GetToolManager()->RunAction<SCH_SHEET_PATH*>( SCH_ACTIONS::changeSheet,
+                                                                       &parent );
+            }
+
+            // The frame may have switched screens under us.
+            screen = screenForDocId( aOp.docId );
+            break;
+        }
+    }
+
+    if( !screen )
+        return false;
+
     SCH_COLLAB::ApplyRemoteOp( m_frame->Schematic(), screen, aOp.changes, newerOwn,
                                m_frame->GetToolManager(),
                                [this]( SCH_ITEM* aItem )
@@ -2209,6 +2509,21 @@ void SCH_COLLAB_SYNC::ensureSheetDocs( const wxString& aOpDocId, const nlohmann:
 
         wxString file = relPathForSheet( screen, sheet );
         file.Replace( wxS( "\\" ), wxS( "/" ) );
+
+        // A sheet of a file we already sync that arrived with a brand-new, empty screen:
+        // the file was closed here (its last sheet was deleted, and this is the delete
+        // being undone or the sheet being moved to another parent).  The document is
+        // still joined, so ask for its state again and rebuild the screen from it.
+        if( !aIsAuthor && kind == "ADDED" && !file.IsEmpty() && m_docIdByPath.count( file )
+            && sheet->GetScreen() && sheet->GetScreen()->Items().empty() )
+        {
+            const wxString docId = m_docIdByPath[ file ];
+
+            m_takeServer.insert( docId );
+            m_resyncPending[ docId ] = true;
+            COLLAB_SESSION::Get().RequestResync( docId );
+            continue;
+        }
 
         if( file.IsEmpty() || m_docIdByPath.count( file )
             || !m_ensuredSheetFiles.insert( file ).second )

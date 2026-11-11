@@ -640,6 +640,18 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         if( adapter )
             adapter->OnReset( docId, aMsg.value( "seq", 0LL ) );
     }
+    else if( type == "request" )
+    {
+        if( adapter )
+        {
+            wxString from;
+
+            if( aMsg.contains( "from" ) && aMsg["from"].is_object() )
+                from = wxString::FromUTF8( aMsg["from"].value( "name", "" ) );
+
+            adapter->OnRequest( docId, wxString::FromUTF8( aMsg.value( "action", "" ) ), from );
+        }
+    }
     else if( type == "comment" )
     {
         if( adapter )

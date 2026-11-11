@@ -43,6 +43,7 @@
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_screen.h>
 #include <sch_sheet.h>
+#include <sch_group.h>
 #include <wx/ffile.h>
 #include <wx/filename.h>
 #include <wx/utils.h>
@@ -216,6 +217,254 @@ BOOST_AUTO_TEST_CASE( SheetAddRoundTrips )
     BOOST_REQUIRE(
             SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, removal, nullptr ) );
     BOOST_CHECK( FindTwin( *m_receiving, sheet->m_Uuid, nullptr ) == nullptr );
+}
+
+
+BOOST_AUTO_TEST_CASE( GroupMembershipTravels )
+{
+    // Two items that exist on both sides; the author groups them.
+    SCH_SHEET_PATH authorPath;
+    SCH_SYMBOL*    first = FindAnySymbol( *m_authoring, &authorPath );
+    BOOST_REQUIRE( first );
+    SCH_SCREEN* authorScreen = authorPath.LastScreen();
+
+    SCH_ITEM* second = nullptr;
+
+    for( SCH_ITEM* item : authorScreen->Items() )
+    {
+        if( item != first && item->Type() != SCH_GROUP_T && item->Type() != SCH_SHEET_T )
+        {
+            second = item;
+            break;
+        }
+    }
+
+    BOOST_REQUIRE( second );
+
+    SCH_SCREEN* twinScreen = nullptr;
+    SCH_ITEM*   twin1 = FindTwin( *m_receiving, first->m_Uuid, &twinScreen );
+    SCH_ITEM*   twin2 = FindTwin( *m_receiving, second->m_Uuid, nullptr );
+    BOOST_REQUIRE( twin1 && twin2 && twinScreen );
+
+    SCH_GROUP* group = new SCH_GROUP( authorScreen );
+    group->SetName( wxS( "supply" ) );
+    group->AddItem( first );
+    group->AddItem( second );
+    authorScreen->Append( group );
+
+    nlohmann::json change = MakeChange( group, "ADDED" );
+    change[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, group );
+    BOOST_REQUIRE( !change[ "sexpr" ].get<std::string>().empty() );
+
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, change, nullptr ) );
+
+    SCH_GROUP* applied = dynamic_cast<SCH_GROUP*>( FindTwin( *m_receiving, group->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( applied );
+    BOOST_CHECK( applied->GetName() == wxS( "supply" ) );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 2 );
+    BOOST_CHECK( twin1->GetParentGroup() == applied );
+    BOOST_CHECK( twin2->GetParentGroup() == applied );
+
+    // A rename that also drops a member: both halves of the edit must land.
+    group->SetName( wxS( "rail" ) );
+    group->RemoveItem( second );
+
+    change = MakeChange( group, "MODIFIED" );
+    change[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, group );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, change, nullptr ) );
+
+    applied = dynamic_cast<SCH_GROUP*>( FindTwin( *m_receiving, group->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( applied );
+    BOOST_CHECK( applied->GetName() == wxS( "rail" ) );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 1 );
+    BOOST_CHECK( twin1->GetParentGroup() == applied );
+    BOOST_CHECK( twin2->GetParentGroup() == nullptr );
+
+    // Ungrouping leaves the members on the sheet, pointing at no group.
+    change = MakeChange( group, "REMOVED" );
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, change, nullptr ) );
+    BOOST_CHECK( FindTwin( *m_receiving, group->m_Uuid, nullptr ) == nullptr );
+    BOOST_CHECK( FindTwin( *m_receiving, first->m_Uuid, nullptr ) == twin1 );
+    BOOST_CHECK( twin1->GetParentGroup() == nullptr );
+    CheckEveryItemIsLive( twinScreen );
+}
+
+
+BOOST_AUTO_TEST_CASE( GroupArrivingWithItsNewMembersKeepsThem )
+{
+    // A pasted group: the op adds the members and the group together, group first on the
+    // wire.  The members are only staged when the group resolves them.
+    SCH_SHEET_PATH authorPath;
+    BOOST_REQUIRE( FindAnySymbol( *m_authoring, &authorPath ) );
+    SCH_SCREEN* authorScreen = authorPath.LastScreen();
+
+    SCH_SCREEN* twinScreen = nullptr;
+    BOOST_REQUIRE( FindTwin( *m_receiving, FindAnySymbol( *m_authoring, nullptr )->m_Uuid, &twinScreen ) );
+
+    SCH_LINE* wireA = new SCH_LINE( VECTOR2I( 254000, 254000 ), LAYER_WIRE );
+    wireA->SetEndPoint( VECTOR2I( 508000, 254000 ) );
+    SCH_LINE* wireB = new SCH_LINE( VECTOR2I( 254000, 508000 ), LAYER_WIRE );
+    wireB->SetEndPoint( VECTOR2I( 508000, 508000 ) );
+    authorScreen->Append( wireA );
+    authorScreen->Append( wireB );
+
+    SCH_GROUP* group = new SCH_GROUP( authorScreen );
+    group->AddItem( wireA );
+    group->AddItem( wireB );
+    authorScreen->Append( group );
+
+    nlohmann::json remote = nlohmann::json::array();
+    remote.push_back( MakeChange( group, "ADDED" ) );
+    remote.back()[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, group );
+
+    for( SCH_LINE* wire : { wireA, wireB } )
+    {
+        remote.push_back( MakeChange( wire, "ADDED" ) );
+        remote.back()[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, wire );
+    }
+
+    TOOL_MANAGER toolMgr;
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, twinScreen, remote, {}, &toolMgr );
+
+    SCH_GROUP* applied = dynamic_cast<SCH_GROUP*>( FindTwin( *m_receiving, group->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( applied );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 2 );
+
+    SCH_ITEM* landedA = FindTwin( *m_receiving, wireA->m_Uuid, nullptr );
+    BOOST_REQUIRE( landedA );
+    BOOST_CHECK( landedA->GetParentGroup() == applied );
+    CheckEveryItemIsLive( twinScreen );
+}
+
+
+BOOST_AUTO_TEST_CASE( SecondSheetOfAFileSharesItsScreen )
+{
+    SCH_SHEET_PATH authorPath;
+    SCH_SYMBOL*    anySymbol = FindAnySymbol( *m_authoring, &authorPath );
+    BOOST_REQUIRE( anySymbol );
+    SCH_SCREEN* authorScreen = authorPath.LastScreen();
+
+    SCH_SCREEN* twinScreen = nullptr;
+    BOOST_REQUIRE( FindTwin( *m_receiving, anySymbol->m_Uuid, &twinScreen ) );
+
+    auto makeSheet = [&]( const wxString& aName, const wxString& aFile, int aX ) -> SCH_SHEET*
+    {
+        SCH_SHEET* sheet = new SCH_SHEET( authorScreen, VECTOR2I( schIUScale.MilsToIU( aX ),
+                                                                  schIUScale.MilsToIU( 1000 ) ) );
+        sheet->SetName( aName );
+        sheet->SetFileName( aFile );
+        sheet->SetScreen( new SCH_SCREEN( m_authoring.get() ) );
+        authorScreen->Append( sheet );
+        return sheet;
+    };
+
+    auto addOp = [&]( SCH_SHEET* aSheet ) -> nlohmann::json
+    {
+        nlohmann::json list = nlohmann::json::array();
+        list.push_back( MakeChange( aSheet, "ADDED" ) );
+        list.back()[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, aSheet );
+        return list;
+    };
+
+    TOOL_MANAGER toolMgr;
+
+    SCH_SHEET* left = makeSheet( wxS( "Left" ), wxS( "channel.kicad_sch" ), 8000 );
+    m_authoring->RefreshHierarchy();
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, twinScreen, addOp( left ), {}, &toolMgr );
+
+    SCH_SHEET* landedLeft = dynamic_cast<SCH_SHEET*>( FindTwin( *m_receiving, left->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( landedLeft );
+    BOOST_REQUIRE( landedLeft->GetScreen() );
+
+    // Something inside the channel: a symbol, with an instance for the one path so far.
+    SCH_SHEET_PATH leftPath;
+
+    for( const SCH_SHEET_PATH& path : m_receiving->Hierarchy() )
+    {
+        if( path.Last() == landedLeft )
+            leftPath = path;
+    }
+
+    BOOST_REQUIRE( leftPath.size() > 0 );
+
+    nlohmann::json symbolAdd = MakeChange( anySymbol, "ADDED" );
+    KIID           innerId;
+    {
+        // The same fragment under a new id, so it is a new symbol inside the channel.
+        std::string sexpr = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, anySymbol );
+        std::string oldId = anySymbol->m_Uuid.AsStdString();
+        std::string newId = innerId.AsStdString();
+
+        for( size_t pos = sexpr.find( oldId ); pos != std::string::npos; pos = sexpr.find( oldId, pos ) )
+            sexpr.replace( pos, oldId.size(), newId );
+
+        symbolAdd[ "id" ] = newId;
+        symbolAdd[ "sexpr" ] = sexpr;
+    }
+
+    BOOST_REQUIRE( SCH_COLLAB::ApplyItemChange( *m_receiving, landedLeft->GetScreen(), symbolAdd,
+                                                nullptr ) );
+
+    SCH_SYMBOL* inner = nullptr;
+
+    for( SCH_ITEM* item : landedLeft->GetScreen()->Items().OfType( SCH_SYMBOL_T ) )
+        inner = static_cast<SCH_SYMBOL*>( item );
+
+    BOOST_REQUIRE( inner );
+
+    SCH_SYMBOL_INSTANCE instance;
+    BOOST_CHECK( inner->GetInstance( instance, leftPath.Path() ) );
+
+    // A second sheet of the same file shows the same screen...
+    SCH_SHEET* right = makeSheet( wxS( "Right" ), wxS( "channel.kicad_sch" ), 10000 );
+    m_authoring->RefreshHierarchy();
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, twinScreen, addOp( right ), {}, &toolMgr );
+
+    SCH_SHEET* landedRight = dynamic_cast<SCH_SHEET*>( FindTwin( *m_receiving, right->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( landedRight );
+    BOOST_CHECK( landedRight->GetScreen() == landedLeft->GetScreen() );
+    BOOST_CHECK_EQUAL( landedLeft->GetScreen()->GetRefCount(), 2 );
+
+    // ...and what is inside it has an instance for the new path as well.
+    SCH_SHEET_PATH rightPath;
+
+    for( const SCH_SHEET_PATH& path : m_receiving->Hierarchy() )
+    {
+        if( path.Last() == landedRight )
+            rightPath = path;
+    }
+
+    BOOST_REQUIRE( rightPath.size() > 0 );
+    BOOST_CHECK( inner->GetInstance( instance, rightPath.Path() ) );
+    BOOST_CHECK( inner->GetInstance( instance, leftPath.Path() ) );
+
+    // A sheet of another file gets a screen of its own.
+    SCH_SHEET* other = makeSheet( wxS( "Other" ), wxS( "other.kicad_sch" ), 12000 );
+    m_authoring->RefreshHierarchy();
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, twinScreen, addOp( other ), {}, &toolMgr );
+
+    SCH_SHEET* landedOther = dynamic_cast<SCH_SHEET*>( FindTwin( *m_receiving, other->m_Uuid, nullptr ) );
+    BOOST_REQUIRE( landedOther );
+    BOOST_REQUIRE( landedOther->GetScreen() );
+    BOOST_CHECK( landedOther->GetScreen() != landedLeft->GetScreen() );
+
+    // Deleting one of the two leaves the shared screen with the other.
+    nlohmann::json removal = nlohmann::json::array();
+    removal.push_back( MakeChange( right, "REMOVED" ) );
+    SCH_COLLAB::ApplyRemoteOp( *m_receiving, twinScreen, removal, {}, &toolMgr );
+
+    BOOST_CHECK( FindTwin( *m_receiving, right->m_Uuid, nullptr ) == nullptr );
+    BOOST_CHECK( FindTwin( *m_receiving, left->m_Uuid, nullptr ) == landedLeft );
+    BOOST_CHECK_EQUAL( landedLeft->GetScreen()->GetRefCount(), 1 );
+    BOOST_CHECK( FindTwin( *m_receiving, innerId, nullptr ) == inner );
+
+    // A sheet may not contain itself: one naming the file of the sheet it sits on is refused.
+    SCH_SHEET* loop = makeSheet( wxS( "Loop" ), wxFileName( twinScreen->GetFileName() ).GetFullName(),
+                                 14000 );
+    nlohmann::json loopAdd = MakeChange( loop, "ADDED" );
+    loopAdd[ "sexpr" ] = SCH_COLLAB::FormatItemSexpr( *m_authoring, authorScreen, loop );
+    BOOST_CHECK( !SCH_COLLAB::ApplyItemChange( *m_receiving, twinScreen, loopAdd, nullptr ) );
+    BOOST_CHECK( FindTwin( *m_receiving, loop->m_Uuid, nullptr ) == nullptr );
 }
 
 

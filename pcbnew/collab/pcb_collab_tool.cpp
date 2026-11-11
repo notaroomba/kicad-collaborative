@@ -338,8 +338,6 @@ void PCB_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
 void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
 {
     PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
-    wxString        url;
-    wxString        error;
 
     // Same guard as the manager's Publish (see SCH_COLLAB_TOOL::startWithToken).
     if( COLLAB_PROJECT::IsLinked( editFrame->Prj().GetProjectPath(), editFrame->Prj().GetProjectName() ) )
@@ -349,10 +347,30 @@ void PCB_COLLAB_TOOL::startWithToken( const wxString& aToken )
         return;
     }
 
-    std::optional<nlohmann::json> project =
-            COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,
-                                            editFrame->Prj().GetProjectPath(),
-                                            editFrame->Prj().GetProjectName(), url, error );
+    if( m_publishing )
+        return;
+
+    m_publishing = true;
+    editFrame->ShowInfoBarMsg( _( "Publishing the project..." ) );
+
+    // Off the UI thread: see SCH_COLLAB_TOOL::startWithToken.
+    COLLAB_PROJECT::CreateAndShareAsync( editFrame, COLLAB_SESSION::ServerUrl(), aToken,
+                                         editFrame->Prj().GetProjectPath(),
+                                         editFrame->Prj().GetProjectName(),
+            [this, aToken]( std::optional<nlohmann::json> aProject, const wxString& aUrl,
+                            const wxString& aError )
+            {
+                m_publishing = false;
+                finishStart( aProject, aToken, aUrl, aError );
+            } );
+}
+
+
+void PCB_COLLAB_TOOL::finishStart( const std::optional<nlohmann::json>& project,
+                                   const wxString& aToken, const wxString& url,
+                                   const wxString& error )
+{
+    PCB_EDIT_FRAME* editFrame = frame<PCB_EDIT_FRAME>();
 
     if( !project )
     {
@@ -1538,6 +1556,26 @@ void PCB_COLLAB_TOOL::OnSnapshotRequest( const wxString& aDocId )
     // pcbnew holds a single board doc, so the requested id is always its own.
     if( m_sync )
         m_sync->OnSnapshotRequest();
+}
+
+
+void PCB_COLLAB_TOOL::OnRequest( const wxString& aDocId, const wxString& aAction,
+                                 const wxString& aFromName )
+{
+    // The browser editor draws zone fills but cannot compute them, so a collaborator
+    // there asks a desktop editor to refill.  The fill is an ordinary commit here, and
+    // the sync engine shares the result like any other edit.
+    if( !m_sync || aAction != wxS( "fill_zones" ) )
+        return;
+
+    if( PCB_BASE_EDIT_FRAME* editFrame = dynamic_cast<PCB_BASE_EDIT_FRAME*>( frame() ) )
+    {
+        editFrame->SetStatusText( aFromName.IsEmpty()
+                ? _( "Refilling zones for a collaborator" )
+                : wxString::Format( _( "Refilling zones for %s" ), aFromName ) );
+    }
+
+    m_toolMgr->PostAction( PCB_ACTIONS::zoneFillAll );
 }
 
 

@@ -52,8 +52,8 @@ namespace PCB_COLLAB
 /**
  * Serialize a single board item to a self-contained s-expression fragment that
  * PCB_IO_KICAD_SEXPR::Parse() accepts.  UUIDs and net assignments are preserved
- * (unlike the clipboard path, which scrubs both).  Zone fills are stripped —
- * fills are recomputed locally and would dominate the wire otherwise.
+ * (unlike the clipboard path, which scrubs both).  A zone is written with its
+ * fill: the fill is document content and every client shows the same one.
  */
 std::string FormatItemSexpr( const BOARD_ITEM* aItem );
 
@@ -249,6 +249,9 @@ private:
     ///< KIIDs already staged in m_batch, to dedupe child edits promoted to their
     ///< parent footprint.
     std::set<KIID>  m_batchIds;
+
+    ///< The commit being captured is a zone fill: its zones ship whole, fill included.
+    bool            m_capturingFill = false;
 
     ///< Library nicknames already handled by saveMissingLibraries this session.
     std::set<wxString> m_savedLibNicknames;

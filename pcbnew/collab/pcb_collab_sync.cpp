@@ -333,17 +333,10 @@ std::string PCB_COLLAB::FormatItemSexpr( const BOARD_ITEM* aItem )
 
     try
     {
-        if( aItem->Type() == PCB_ZONE_T )
-        {
-            // Fills are recomputed locally on each client and would dominate the
-            // wire (hundreds of KB per zone); ship the outline only.
-            std::unique_ptr<ZONE> clone( static_cast<ZONE*>( aItem->Clone() ) );
-            clone->UnFill();
-            clone->SetNeedRefill( true );
-
-            return io.FormatItem( clone.get() );
-        }
-
+        // A zone travels whole, fill included.  The fill is part of the document: it is
+        // what gets plotted, and a client that cannot fill for itself (the web editor)
+        // has no other way to show it.  Stripping it meant every remote zone edit
+        // arrived unfilled and each desktop client had to refill by hand to see copper.
         return io.FormatItem( aItem );
     }
     catch( const IO_ERROR& ioe )
@@ -473,8 +466,11 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                 return false;
             }
 
+            // The fill came with the zone.  Whether it is current only its author knows:
+            // a zone sent by the fill itself ("zoneFill") is, anything else may have been
+            // edited since it was last filled.
             if( ZONE* zone = dynamic_cast<ZONE*>( fresh ) )
-                zone->SetNeedRefill( true );
+                zone->SetNeedRefill( !aChange.value( "zoneFill", false ) );
 
             BOARD_ITEM* live = nullptr;
 
@@ -569,13 +565,27 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                         if( !memberId.is_string() )
                             continue;
 
-                        BOARD_ITEM* member = aBoard->ResolveItem(
-                                KIID( wxString::FromUTF8(
-                                        memberId.get<std::string>() ) ),
-                                true );
+                        const KIID  memberKiid( wxString::FromUTF8( memberId.get<std::string>() ) );
+                        BOARD_ITEM* member = aBoard->ResolveItem( memberKiid, true );
 
+                        // A member this same commit adds is staged, not on the board
+                        // yet: a pasted group, or a tuning pattern arriving with the
+                        // tracks it generated.  Without this the group landed empty.
+                        bool staged = false;
+
+                        if( !member && aCommit )
+                        {
+                            if( const COMMIT::COMMIT_LINE* add = stagedAddOf( *aCommit, memberKiid ) )
+                            {
+                                member = dynamic_cast<BOARD_ITEM*>( add->m_item );
+                                staged = member != nullptr;
+                            }
+                        }
+
+                        // (A staged item's parent is whatever the parser left; the push
+                        // sets it.  Only an item already on the board can be a child.)
                         if( member && member != group
-                            && ( !member->GetParent() || member->GetParent() == aBoard ) )
+                            && ( staged || !member->GetParent() || member->GetParent() == aBoard ) )
                         {
                             group->AddItem( member );
                         }
@@ -662,17 +672,57 @@ void PCB_COLLAB::ApplyRemoteOp( BOARD* aBoard, const nlohmann::json& aChanges,
                 reAdded.insert( change.value( "id", "" ) );
         }
 
-        for( int pass : { 0, 1 } )
+        // Groups after everything else, and a group that is a member of another before
+        // the one holding it.
+        std::vector<const nlohmann::json*> ordered;
+        std::vector<const nlohmann::json*> groups;
+
+        for( const nlohmann::json& change : aList )
         {
-            for( const nlohmann::json& change : aList )
+            if( !change.is_object() )
+                continue;
+
+            if( change.contains( "groupMembers" ) )
+                groups.push_back( &change );
+            else
+                ordered.push_back( &change );
+        }
+
+        while( !groups.empty() )
+        {
+            size_t pick = 0;
+
+            for( size_t ii = 0; ii < groups.size(); ++ii )
             {
-                if( !change.is_object() )
-                    continue;
+                bool holdsPending = false;
 
-                bool isGroup = change.contains( "groupMembers" );
+                for( const nlohmann::json& member : ( *groups[ii] )[ "groupMembers" ] )
+                {
+                    for( size_t jj = 0; jj < groups.size(); ++jj )
+                    {
+                        if( jj != ii && member.is_string()
+                            && groups[jj]->value( "id", "" ) == member.get<std::string>() )
+                        {
+                            holdsPending = true;
+                        }
+                    }
+                }
 
-                if( ( pass == 1 ) != isGroup )
-                    continue;
+                if( !holdsPending )
+                {
+                    pick = ii;
+                    break;
+                }
+            }
+
+            ordered.push_back( groups[pick] );
+            groups.erase( groups.begin() + pick );
+        }
+
+        {
+            for( const nlohmann::json* changePtr : ordered )
+            {
+                const nlohmann::json& change = *changePtr;
 
                 std::string id = change.value( "id", "" );
 
@@ -781,9 +831,10 @@ size_t PCB_COLLAB_SYNC::CaptureCommitBegin( COMMIT& aCommit, int aCommitFlags )
     if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
         return count;
 
-    // Zone fills are local derived state: every client refills for itself.
-    if( aCommitFlags & ZONE_FILL_OP )
-        return count;
+    // A fill is an edit like any other: the zones it touched ship whole, so everyone
+    // sees the same copper without refilling.  (Skipping these commits also dropped the
+    // footprints a netlist update adds, which it pushes under the same flag.)
+    m_capturingFill = ( aCommitFlags & ZONE_FILL_OP ) != 0;
 
     // Before-images (COMMIT_LINE::m_copy) are consumed during the push, so MODIFIED
     // and REMOVED must be captured now.  ADDED is deferred to CaptureCommitEnd so
@@ -799,8 +850,7 @@ void PCB_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int a
     if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
         return;
 
-    if( aCommitFlags & ZONE_FILL_OP )
-        return;
+    m_capturingFill = ( aCommitFlags & ZONE_FILL_OP ) != 0;
 
     size_t count = aCommit.GetEntries().size();
 
@@ -811,6 +861,8 @@ void PCB_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int a
     // back to whole-item replaces.
     if( count > aPreCount )
         captureEntries( aCommit, aPreCount, count, true, true );
+
+    m_capturingFill = false;
 
     flushBatch();
 }
@@ -903,6 +955,16 @@ void PCB_COLLAB_SYNC::captureItem( BOARD_ITEM* aItem, BOARD_ITEM* aBefore, int a
 
         std::vector<PROPERTY_DELTA> deltas;
 
+        // Some changes are invisible to the property system and to operator==: a zone's
+        // fill, a group's membership, a generator's settings.  Those items always ship
+        // whole, or the edit would be dropped (or sent as a property delta that carries
+        // only half of it).
+        const bool wholeOnly = ( m_capturingFill && aItem->Type() == PCB_ZONE_T )
+                               || dynamic_cast<PCB_GROUP*>( aItem ) != nullptr;
+
+        if( wholeOnly )
+            aBefore = nullptr;
+
         if( aBefore )
             deltas = DiffItemProperties( aBefore, aItem );
 
@@ -965,6 +1027,10 @@ void PCB_COLLAB_SYNC::captureItem( BOARD_ITEM* aItem, BOARD_ITEM* aBefore, int a
         wire[ "padNets" ] = std::move( padNets );
     }
 
+    // Tell receivers this zone's fill is fresh, so they do not flag it for a refill.
+    if( m_capturingFill && aItem->Type() == PCB_ZONE_T && !sexpr.empty() )
+        wire[ "zoneFill" ] = true;
+
     if( !sexpr.empty() )
         wire[ "sexpr" ] = sexpr;
     else if( change.kind == CHANGE_KIND::MODIFIED && typeSupportsSexprTransfer( aItem ) )
@@ -1006,21 +1072,54 @@ void PCB_COLLAB_SYNC::flushBatch()
 
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
-    wxString clientOpId = wxString::Format( wxS( "%s:%d" ), session.ClientId(), ++m_opCounter );
+    // One commit is one op, unless it is too big for one message: a fill of every zone
+    // on a large board runs to megabytes.  Then it goes out as consecutive ops, cut
+    // between items.  Order is what matters to the receivers and that is preserved.
+    static const size_t OP_BYTES = 512 * 1024;
 
-    std::optional<long long> baseSeq;
+    std::vector<nlohmann::json> ops;
+    nlohmann::json              current = nlohmann::json::array();
+    size_t                      currentBytes = 0;
 
-    if( m_lastAppliedSeq > 0 )
-        baseSeq = m_lastAppliedSeq;
+    for( nlohmann::json& change : m_batch )
+    {
+        size_t bytes = change.value( "sexpr", "" ).size() + change.value( "itemSexpr", "" ).size()
+                       + 256;
 
-    // Journal before sending: an op that reaches the server but whose ack
-    // we never see must still be replayable (the server dedups it).
-    m_journal.Append( m_docId, clientOpId, m_batch );
+        if( !current.empty() && currentBytes + bytes > OP_BYTES )
+        {
+            ops.push_back( std::move( current ) );
+            current = nlohmann::json::array();
+            currentBytes = 0;
+        }
 
-    session.SendOp( m_docId, clientOpId, baseSeq, m_batch );
+        current.push_back( std::move( change ) );
+        currentBytes += bytes;
+    }
 
-    m_unacked[ clientOpId ] = { std::move( m_batch ), ++m_unackedOrder };
+    if( !current.empty() )
+        ops.push_back( std::move( current ) );
+
     m_batch = nlohmann::json();
+
+    for( nlohmann::json& changes : ops )
+    {
+        wxString clientOpId = wxString::Format( wxS( "%s:%d" ), session.ClientId(),
+                                                ++m_opCounter );
+
+        std::optional<long long> baseSeq;
+
+        if( m_lastAppliedSeq > 0 )
+            baseSeq = m_lastAppliedSeq;
+
+        // Journal before sending: an op that reaches the server but whose ack
+        // we never see must still be replayable (the server dedups it).
+        m_journal.Append( m_docId, clientOpId, changes );
+
+        session.SendOp( m_docId, clientOpId, baseSeq, changes );
+
+        m_unacked[ clientOpId ] = { std::move( changes ), ++m_unackedOrder };
+    }
 }
 
 
@@ -1051,8 +1150,12 @@ void PCB_COLLAB_SYNC::CaptureUndoRedo( PICKED_ITEMS_LIST* aList )
 
         case UNDO_REDO::CHANGED:
             // The live item holds the restored (now authoritative) state; the link
-            // holds the pre-undo image, i.e. the wire-perspective "before".
-            captureItem( item, dynamic_cast<BOARD_ITEM*>( aList->GetPickedItemLink( ii ) ),
+            // holds the pre-undo image, i.e. the wire-perspective "before".  A zone may
+            // have had its fill restored, which no property delta shows: send it whole.
+            captureItem( item,
+                         item->Type() == PCB_ZONE_T
+                                 ? nullptr
+                                 : dynamic_cast<BOARD_ITEM*>( aList->GetPickedItemLink( ii ) ),
                          CHT_MODIFY );
             break;
 
