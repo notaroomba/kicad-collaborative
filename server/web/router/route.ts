@@ -85,7 +85,7 @@ export class Router {
   }
   /** The board may have changed under a long run (other people edit it too): check the routes against it as it is now. */
   revalidate(): number {
-    const before = this.conns.filter((c) => c.nodes).length; this.G.obstacles = this.collectObstacles(this.P.netlist(this.doc)); this.validate();
+    const before = this.conns.filter((c) => c.nodes).length; this.G.obstacles = this.collectObstacles(this.P.netlist(this.doc)); this.oidx = null; this.validate();
     return before - this.conns.filter((c) => c.nodes).length;
   }
 
@@ -186,7 +186,7 @@ export class Router {
       for (let n = 1; n < clusters.length; n++) {
         let j = -1; for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i]![0] < bestTo[j]![0])) j = i;
         inTree[j] = true; const e = bestTo[j]!;
-        const conn: Conn = { id: this.conns.length, net: net.key, cls: this.classFor(net.key, Math.min(e[1].narrow || Infinity, e[2].narrow || Infinity)), a: e[2], b: e[1], len: e[0], nodes: null, shapes: [], viaCells: [], landed: -1, rips: 0, feat: null, stubs: [], zoneEnd: false };
+        const conn: Conn = { id: this.conns.length, net: net.key, cls: this.classFor(net.key, Math.min(this.roomAt(e[1], net.key), this.roomAt(e[2], net.key))), a: e[2], b: e[1], len: e[0], nodes: null, shapes: [], viaCells: [], landed: -1, rips: 0, feat: null, stubs: [], zoneEnd: false };
         this.conns.push(conn); info.conns.push(conn); update(j);
       }
       this.nets.push(info);
@@ -194,12 +194,12 @@ export class Router {
   }
 
   /** The rule class a net routes with (its netclass's track width, clearance and via), built on first use. */
-  classFor(netKey: string, narrow = Infinity): RuleClass {
+  classFor(netKey: string, cap = Infinity): RuleClass {
     const { P, s, G } = this; const nc = P.netclassOf(s, netKey); const plan = (this.opts.netOpts || {})[netKey]; const pw = plan && +plan.width! > 0 ? +plan.width! : 0;
     let width = Math.max(pw || (nc.track_width !== undefined ? nc.track_width : s.trackWidth), s.minTrackWidth || 0);
-    // A fine-pitch pad cannot take a track as wide as itself and still keep its neighbours' clearance on a grid:
-    // a connection that ends on one runs narrower, as people neck tracks down at such pads.
-    if (narrow < width + 0.1) width = Math.max(s.minTrackWidth || 0.1, Math.min(width, +(narrow - 0.1).toFixed(3)), 0.1);
+    // A fine-pitch pad only has room for so wide a track between its neighbours: a connection that ends on one
+    // runs as wide as that room allows, as people neck tracks down at such pads.
+    if (cap < width) width = Math.max(s.minTrackWidth || 0.1, 0.1, Math.floor(cap * 100 + 1e-6) / 100);
     const clr = P.netClearance(s, netKey); const viaD = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
     const viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
     const key = `${width}/${clr}/${viaD}/${viaDrill}`; return G.classes.get(key) || buildClass(G, key, width, clr, viaD, viaDrill);
@@ -276,23 +276,39 @@ export class Router {
     }
     return null;
   }
+  /** The widest track that can leave a fine-pitch pad along its axis and keep the clearance to what is beside it. */
+  private roomAt(a: Anchor, net: string): number {
+    if (!a.axis || !a.narrow || a.narrow > 0.35) return Infinity; const G = this.G, P = this.P; const clr = P.netClearance(this.s, net); this.index();
+    let half = Infinity; const B = 2; const seen = new Set<any>();
+    for (const sgn of [1, -1]) {
+      let h = Infinity; const b: Pt = [a.p[0] + a.axis[0] * 0.45 * sgn, a.p[1] + a.axis[1] * 0.45 * sgn]; const sh = { t: "seg", a: a.p, b, r: 0 }; seen.clear();
+      for (let y = Math.floor((Math.min(a.p[1], b[1]) - 1) / B); y <= Math.floor((Math.max(a.p[1], b[1]) + 1) / B); y++) for (let x = Math.floor((Math.min(a.p[0], b[0]) - 1) / B); x <= Math.floor((Math.max(a.p[0], b[0]) + 1) / B); x++) for (const e of this.oidx!.get(x + "," + y) || []) {
+        if (seen.has(e)) continue; seen.add(e); if ((e.o.net && e.o.net === net) || !e.o.layers.some((l) => a.layers.includes(l))) continue;
+        const v = P.shapeGap(e.o.shape, sh) - (e.o.edge ? G.edgeClr : Math.max(e.o.clr, clr)); if (v < h) h = v;
+      }
+      if (sgn === 1 || h > half) half = sgn === 1 ? h : Math.max(half, h);   // the better of the two ways out
+    }
+    return half === Infinity ? Infinity : Math.max(0, 2 * (half - G.margin - 0.004));
+  }
+  private index(): void {
+    if (this.oidx) return; const G = this.G, B = 2; const idx = this.oidx = new Map();
+    const full = (s: Shape): number[] => { if (s.t === "circle") return [s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r]; if (s.t === "seg") return [Math.min(s.a[0], s.b[0]) - s.r, Math.min(s.a[1], s.b[1]) - s.r, Math.max(s.a[0], s.b[0]) + s.r, Math.max(s.a[1], s.b[1]) + s.r]; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; const pts: Pt[] = s.pts || [[s.x - Math.hypot(s.w, s.h) / 2, s.y - Math.hypot(s.w, s.h) / 2], [s.x + Math.hypot(s.w, s.h) / 2, s.y + Math.hypot(s.w, s.h) / 2]]; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } const o = s.r || 0; return [x0 - o, y0 - o, x1 + o, y1 + o]; };
+    const add = (o: Obstacle) => { const bb = full(o.shape); const e = { o, bb }; for (let y = Math.floor(bb[1] / B); y <= Math.floor(bb[3] / B); y++) for (let x = Math.floor(bb[0] / B); x <= Math.floor(bb[2] / B); x++) { const k = x + "," + y; let l = idx.get(k); if (!l) idx.set(k, l = []); l.push(e); } };
+    for (const list of G.obstacles.values()) for (const o of list) { if (o.shape.t === "path" && o.shape.pts.length > 2) { for (let i = 0; i + 1 < o.shape.pts.length; i++) add({ net: o.net, layers: o.layers, clr: o.clr, edge: o.edge, shape: { t: "seg", a: o.shape.pts[i], b: o.shape.pts[i + 1], r: o.shape.r || 0 } }); } else add(o); }
+  }
   private cur: Conn | null = null; private curSoft = false; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
   /** Exact: does a piece of track keep its clearance to the board's copper, holes and edges, and to this run's routes? */
   private clearOf(shape: Shape, layer: number, net: string, clr: number, why?: { net: string; gap: number; need: number }): boolean {
     const G = this.G, P = this.P, B = 2; const bbOf = (s: Shape): number[] => s.t === "circle" ? [s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r] : s.t === "seg" ? [Math.min(s.a[0], s.b[0]) - s.r, Math.min(s.a[1], s.b[1]) - s.r, Math.max(s.a[0], s.b[0]) + s.r, Math.max(s.a[1], s.b[1]) + s.r] : null as any;
-    if (!this.oidx) {
-      const idx = this.oidx = new Map(); const full = (s: Shape): number[] => { const b = bbOf(s); if (b) return b; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; const pts: Pt[] = s.pts || [[s.x - Math.hypot(s.w, s.h) / 2, s.y - Math.hypot(s.w, s.h) / 2], [s.x + Math.hypot(s.w, s.h) / 2, s.y + Math.hypot(s.w, s.h) / 2]]; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } const o = s.r || 0; return [x0 - o, y0 - o, x1 + o, y1 + o]; };
-      const add = (o: Obstacle) => { const bb = full(o.shape); const e = { o, bb }; for (let y = Math.floor(bb[1] / B); y <= Math.floor(bb[3] / B); y++) for (let x = Math.floor(bb[0] / B); x <= Math.floor(bb[2] / B); x++) { const k = x + "," + y; let l = idx.get(k); if (!l) idx.set(k, l = []); l.push(e); } };
-      for (const list of G.obstacles.values()) for (const o of list) { if (o.shape.t === "path" && o.shape.pts.length > 2) { for (let i = 0; i + 1 < o.shape.pts.length; i++) add({ net: o.net, layers: o.layers, clr: o.clr, edge: o.edge, shape: { t: "seg", a: o.shape.pts[i], b: o.shape.pts[i + 1], r: o.shape.r || 0 } }); } else add(o); }
-    }
+    this.index();
     const bb = bbOf(shape); const m = Math.max(clr, this.s.clearance, G.edgeClr) + 0.3; const seen = new Set<any>();
-    for (let y = Math.floor((bb[1] - m) / B); y <= Math.floor((bb[3] + m) / B); y++) for (let x = Math.floor((bb[0] - m) / B); x <= Math.floor((bb[2] + m) / B); x++) for (const e of this.oidx.get(x + "," + y) || []) {
+    for (let y = Math.floor((bb[1] - m) / B); y <= Math.floor((bb[3] + m) / B); y++) for (let x = Math.floor((bb[0] - m) / B); x <= Math.floor((bb[2] + m) / B); x++) for (const e of this.oidx!.get(x + "," + y) || []) {
       if (seen.has(e)) continue; seen.add(e); if (e.o.net && e.o.net === net) continue; if (!e.o.layers.includes(layer)) continue;
-      const need = (e.o.edge ? G.edgeClr : Math.max(e.o.clr, clr)) + 1e-3; if (e.bb[0] > bb[2] + need || e.bb[2] < bb[0] - need || e.bb[1] > bb[3] + need || e.bb[3] < bb[1] - need) continue;
-      const gap = P.shapeGap(e.o.shape, shape); if (gap < need) { if (why) { why.net = e.o.net; why.gap = gap; why.need = need - 1e-3; } return false; }
+      const need = (e.o.edge ? G.edgeClr : Math.max(e.o.clr, clr)) - 5e-5; if (e.bb[0] > bb[2] + need || e.bb[2] < bb[0] - need || e.bb[1] > bb[3] + need || e.bb[3] < bb[1] - need) continue;
+      const gap = P.shapeGap(e.o.shape, shape); if (gap < need) { if (why) { why.net = e.o.net; why.gap = gap; why.need = need + 5e-5; } return false; }
     }
     if (!this.curSoft) for (const c of this.conns) {
-      if (!c.nodes || c.net === net) continue; const need = Math.max(c.cls.clr, clr) + 1e-3;
+      if (!c.nodes || c.net === net) continue; const need = Math.max(c.cls.clr, clr) - 5e-5;
       for (const o of c.shapes) { if (!o.layers.includes(layer)) continue; const ob = bbOf(o.shape); if (ob[0] > bb[2] + need || ob[2] < bb[0] - need || ob[1] > bb[3] + need || ob[3] < bb[1] - need) continue; if (P.shapeGap(o.shape, shape) < need) return false; }
     }
     return true;
@@ -446,8 +462,13 @@ export class Router {
   *run(): Generator<Progress, RouteResult> {
     const t0 = Date.now(); const conns = this.conns; const passes = Math.max(1, this.opts.passes || 3); const ripUp = this.opts.ripUp !== false;
     const gOf = new Map(this.nets.map((n) => [n.key, n.guide])); const cmp = (x: number, y: number) => x === y ? 0 : x < y ? -1 : 1;
-    const order = conns.slice().sort((a, b) => cmp(gOf.get(a.net)!.rank, gOf.get(b.net)!.rank) || gOf.get(b.net)!.priority - gOf.get(a.net)!.priority || a.len - b.len || (a.net < b.net ? -1 : a.net > b.net ? 1 : a.id - b.id));
+    // Short hops first (decoupling, crystals).  Then a fine-pitch chip is fanned out, the longest connection first:
+    // its pins leave side by side, and the one that travels furthest must turn away first for the others to nest
+    // inside it.  Everything else follows, shortest first.
+    const tier = (c: Conn) => c.len < 3 ? 0 : Math.min(c.a.narrow || Infinity, c.b.narrow || Infinity) <= 0.35 ? 1 : 2;
+    const order = conns.slice().sort((a, b) => cmp(gOf.get(a.net)!.rank, gOf.get(b.net)!.rank) || gOf.get(b.net)!.priority - gOf.get(a.net)!.priority || tier(a) - tier(b) || (tier(a) === 1 ? b.len - a.len : a.len - b.len) || (a.net < b.net ? -1 : a.net > b.net ? 1 : a.id - b.id));
     let best: { score: number; snap: (Pick<Conn, "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">)[] } | null = null; let failedLast = new Set<number>(); let pass = 0;
+    const RC = (this.opts as any).connRips || 4, RB = (this.opts as any).blockerRips || 3;
     const timeUp = () => this.stopped || (!!this.opts.timeMs && Date.now() - t0 > this.opts.timeMs);
     for (; pass < passes; pass++) {
       for (const c of conns) if (c.nodes) this.rip(c);
@@ -458,13 +479,13 @@ export class Router {
         if (timeUp()) { for (const c of queue) { failed.add(c.id); if (!c.nodes) c.why = "budget"; } break; }
         const c = queue.shift()!; if (c.nodes) continue; c.why = undefined;
         let found = this.find(c, false);
-        if (!found && ripUp && c.rips < 4) {
+        if (!found && ripUp && c.rips < RC) {
           const soft = this.find(c, true);
           if (!soft) this.stat.noSoft++;
           if (soft) {
             const bl = this.blockers(c, soft.res);
-            this.stat[!bl.length ? "noBlockers" : bl.length > 14 ? "tooMany" : bl.every((b) => b.rips < 3) ? "ripped" : "ripLimit"]++;
-            if (bl.length && bl.length <= 14 && bl.every((b) => b.rips < 3)) {
+            this.stat[!bl.length ? "noBlockers" : bl.length > 14 ? "tooMany" : bl.every((b) => b.rips < RB) ? "ripped" : "ripLimit"]++;
+            if (bl.length && bl.length <= 14 && bl.every((b) => b.rips < RB)) {
               const ripped: Conn[] = []; for (const b of bl) { b.rips++; this.rip(b, ripped); }
               c.rips++;
               if (this.fits(c, soft.res)) { found = soft; for (const r of ripped) { failed.delete(r.id); queue.unshift(r); } }
@@ -487,12 +508,41 @@ export class Router {
       conns.forEach((c, i) => Object.assign(c, best!.snap[i]));
       for (const c of conns) if (c.nodes) this.place(c, 1);
     }
+    if (ripUp && !this.stopped) this.repair(timeUp);
     this.validate();
     if (this.opts.explain !== false) this.explain();
     this.ms = Date.now() - t0; this.passes = pass;
     return this.result();
   }
 
+  /**
+   * What the passes left open, one connection at a time: take out the routes in its way, lay it, lay those again
+   * around it.  Kept only when nothing else is lost, so every step is a gain.
+   */
+  repair(timeUp: () => boolean): void {
+    const conns = this.conns; type Snap = Pick<Conn, "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">;
+    const snapOf = (): Snap[] => conns.map((c) => ({ nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd }));
+    const back = (snap: Snap[]) => { for (const c of conns) if (c.nodes !== snap[c.id].nodes && c.nodes) this.place(c, -1); conns.forEach((c, i) => { if (c.nodes !== snap[i].nodes) { Object.assign(c, snap[i]); if (c.nodes) this.place(c, 1); } }); };
+    const lay = (c: Conn): boolean => { const f = this.find(c, false); if (f) this.commit(c, f); return !!f; };
+    // lay c whatever it takes: routes in its way come out and are laid again the same way, a few levels deep;
+    // a route laid in this attempt is never taken out again
+    const force = (c: Conn, depth: number, keep: Set<Conn>): boolean => {
+      if (lay(c)) { keep.add(c); return true; } if (depth <= 0 || timeUp()) return false;
+      const soft = this.find(c, true); if (!soft) return false; const bl = this.blockers(c, soft.res); if (!bl.length || bl.length > 12 || bl.some((b) => keep.has(b))) return false;
+      const ripped: Conn[] = []; for (const b of bl) this.rip(b, ripped); if (ripped.some((r) => keep.has(r))) return false;
+      if (this.fits(c, soft.res)) this.commit(c, soft); else if (!lay(c)) return false; keep.add(c);
+      ripped.sort((a, b) => a.len - b.len); for (const r of ripped) if (!r.nodes && !force(r, depth - 1, keep)) return false;
+      return true;
+    };
+    for (let round = 0; round < 3; round++) {
+      const open = conns.filter((c) => !c.nodes && c.why !== "budget"); if (!open.length) return; let gained = false;
+      for (const c of open) {
+        if (timeUp()) return; if (c.nodes) continue; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
+        if (force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0) gained = true; else back(snap);
+      }
+      if (!gained) return;
+    }
+  }
   /** The exact check: every new track and via against the real shapes, at the real clearances.  Offenders are dropped. */
   validate(): void {
     const G = this.G, P = this.P; const B = 2; const idx = new Map<string, { o: Obstacle; bb: number[]; conn: number }[]>();

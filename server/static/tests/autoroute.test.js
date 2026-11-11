@@ -235,6 +235,7 @@ test("fine-pitch pads: tracks neck down and leave the pads off the grid, within 
   const settings = P.designSettings({ net_settings: { classes: [{ name: "Default", clearance: 0.15, track_width: 0.25, via_diameter: 0.6, via_drill: 0.3 }] }, rules: { min_track_width: 0.1 } });
   const res = R.route(K, P, doc, settings, { pitch: 0.1 });
   assert.equal(res.routed, 8, JSON.stringify(res.connections.filter((c) => !c.routed).map((c) => [c.net, c.reason, c.detail])));
-  for (const i of segs(res)) assert.equal(K.num(K.kid(i.node, "width")[1]), 0.15, "narrower than the class's 0.25 mm at these pads");
+  const widths = new Set(segs(res).map((i) => K.num(K.kid(i.node, "width")[1]))); assert.equal(widths.size, 1); const w = [...widths][0];
+  assert.ok(w < 0.25 && w >= 0.15, `narrower than the class's 0.25 mm at these pads, as wide as their neighbours allow (${w} mm)`);
   apply(doc, res); assert.deepEqual(errors(doc, settings), []); assert.equal(P.ratsnest(doc).length, 0);
 });
