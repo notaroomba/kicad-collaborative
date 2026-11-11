@@ -1,12 +1,16 @@
 // Icon.tsx — KiCad's own icons (light + dark variants from resources/bitmaps_png, chosen by
 // the `dark:` variant on the .lt / .dk groups) and the stroke glyphs of the collab tools.
-import { SPEC } from "../spec";
+import { SPEC, type IconSpec } from "../spec";
+import menuIcons from "../generated/kicad-menu-icons.json";
+
+// the icons of the menu entries the toolbars do not use (server/scripts/gen_kicad_menus.py)
+const MENU_ICONS = (menuIcons as unknown as { icons: Record<string, IconSpec> }).icons;
 
 /* `kicon` / `lt` / `dk` stay as plain hooks; the sizing and the light/dark swap are the utilities. */
 const ICON = "kicon block w-6 h-6";
 
 export function KIcon({ name, size }: { name: string | null | undefined; size?: number }) {
-  const ic = name ? SPEC.icons[name] : undefined;
+  const ic = name ? SPEC.icons[name] || MENU_ICONS[name] : undefined;
   if (!ic) {
     return (
       <svg className={ICON} viewBox="0 0 24 24" aria-hidden="true" width={size} height={size}>
@@ -15,7 +19,7 @@ export function KIcon({ name, size }: { name: string | null | undefined; size?: 
     );
   }
   return (
-    <svg className={ICON} viewBox={ic.vb || "0 0 24 24"} aria-hidden="true" width={size} height={size}>
+    <svg className={size ? "kicon block" : ICON} viewBox={ic.vb || "0 0 24 24"} aria-hidden="true" width={size} height={size}>
       <g className="lt dark:hidden" dangerouslySetInnerHTML={{ __html: ic.light || ic.dark || "" }} />
       <g className="dk hidden dark:inline" dangerouslySetInnerHTML={{ __html: ic.dark || ic.light || "" }} />
     </svg>

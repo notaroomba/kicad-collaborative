@@ -28,7 +28,7 @@ export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | 
   const acts = actionsFor(s, editor); const imps = importersFor(s, editor), exps = exportersFor(s, editor); const panels = panelsFor(s, editor);
   const byMenu = (name: string) => acts.filter((a) => (a.action.menu || "tools").toLowerCase() === name).map((a) => a.uiId);
   return menus.map(([title, entries]) => {
-    const t = title.toLowerCase(); let out = entries;
+    const t = title.replace("&", "").toLowerCase(); let out = entries;   // titles carry KiCad's "&" mnemonic marker
     if (t === "file" && (imps.length || exps.length)) {
       const extra: MenuEntry[] = []; if (imps.length) extra.push(["Import", imps.map((x) => x.uiId)]); if (exps.length) extra.push(["Export", exps.map((x) => x.uiId)]);
       const at = out.indexOf("print"); out = at >= 0 ? [...out.slice(0, at), ...extra, "-", ...out.slice(at)] : [...out, "-", ...extra];

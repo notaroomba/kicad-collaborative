@@ -34,8 +34,8 @@ const TOOLS = [
   { id: "junction", label: "Junction", key: "J", cursor: "crosshair", icon: '<path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3" fill="currentColor"/>' },
   { id: "noconnect", label: "No connect", key: "Q", cursor: "crosshair", icon: '<path d="M12 3v9M7 7l10 10M17 7L7 17"/>' },
   { id: "label", label: "Net label", key: "L", kind: "label", cursor: "crosshair", icon: '<path d="M6 17l5-11 5 11M8.5 13h5M4 21h16"/>' },
-  { id: "glabel", label: "Global label", key: "Shift+L", kind: "global_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3z"/>' },
-  { id: "hlabel", label: "Hierarchical label", key: "Shift+H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
+  { id: "glabel", label: "Global label", key: "Ctrl+L", kind: "global_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3z"/>' },
+  { id: "hlabel", label: "Hierarchical label", key: "H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
   { id: "text", label: "Text", key: "T", kind: "text", cursor: "crosshair", icon: '<path d="M5 6h14M12 6v13M9 19h6"/>' },
   { id: "place", label: "Place symbol", key: "A", cursor: "crosshair", icon: '<rect x="7" y="5" width="10" height="14"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
   { id: "power", label: "Power symbol", key: "P", cursor: "crosshair", icon: '<path d="M12 21v-9M6 12h12M12 12l-5-7M12 12l5-7"/>' },
@@ -1563,6 +1563,7 @@ function onKey(key, ev, ctx) {
   case "i": case "I": return armTool("lines");
   case "l": return armTool("label", "label");
   case "L": return armTool("glabel", "global_label");
+  case "h": case "H": return armTool("hlabel", "hierarchical_label");   // KiCad's default for Add Hierarchical Label
   case "t": case "T": return armTool("text", "text");
   case "a": case "A": return armTool("place");
   case "r": return orientSelected(ctx, "ccw");

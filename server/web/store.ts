@@ -169,6 +169,8 @@ export interface CollabAppApi {
   dispatch(action: AppAction): void;
   /** Imperative island: draws the Properties panel (props.js) into `el` for the current selection. */
   renderProps(el: HTMLElement): void;
+  /** How many items are selected right now (the app's selection plus the tool module's own): menus grey out on 0. */
+  selectionCount?(): number;
 }
 
 declare global {
