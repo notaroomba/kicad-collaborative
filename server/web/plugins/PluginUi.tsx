@@ -30,8 +30,14 @@ export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | 
   return menus.map(([title, entries]) => {
     const t = title.replace("&", "").toLowerCase(); let out = entries;   // titles carry KiCad's "&" mnemonic marker
     if (t === "file" && (imps.length || exps.length)) {
-      const extra: MenuEntry[] = []; if (imps.length) extra.push(["Import", imps.map((x) => x.uiId)]); if (exps.length) extra.push(["Export", exps.map((x) => x.uiId)]);
-      const at = out.indexOf("print"); out = at >= 0 ? [...out.slice(0, at), ...extra, "-", ...out.slice(at)] : [...out, "-", ...extra];
+      // KiCad's File menu has Import and Export submenus already: plugin entries join them, below a separator.
+      const join = (name: string, ids: string[]) => {
+        if (!ids.length) return;
+        const at = out.findIndex((e) => Array.isArray(e) && e[0] === name);
+        if (at >= 0) { const sub = out[at] as [string, MenuEntry[]]; out = [...out.slice(0, at), [name, [...sub[1], "-", ...ids]] as MenuEntry, ...out.slice(at + 1)]; return; }
+        const before = out.indexOf("print"); out = before >= 0 ? [...out.slice(0, before), [name, ids] as MenuEntry, "-", ...out.slice(before)] : [...out, "-", [name, ids] as MenuEntry];
+      };
+      join("Import", imps.map((x) => x.uiId)); join("Export", exps.map((x) => x.uiId));
     }
     if (t === "tools") out = [...out, "-", ["External Plugins", [...byMenu("tools"), ...(byMenu("tools").length ? ["-"] : []), ...(panels.length ? ["pluginPanels"] : []), "pluginManager"]]];
     else if (t === "inspect" || t === "edit" || t === "place") { const mine = byMenu(t); if (mine.length) out = [...out, "-", ...mine]; }

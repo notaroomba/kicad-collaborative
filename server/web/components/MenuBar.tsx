@@ -89,7 +89,8 @@ function disabledWhy(c: Ctx, id: string): string | null {
   if (!c.inEditor) return c.viewOnly && (id === "share" || id === "checkpoint") ? "View-only access" : null;
   if (id === "undo" && !c.undo.undo) return "Nothing to undo";
   if (id === "redo" && !c.undo.redo) return "Nothing to redo";
-  if (c.viewOnly && c.editing && !READ_ONLY_OK.has(id)) return "View-only access";
+  // Plugin entries stay open to viewers: reading and exporting are theirs to do, and the plugin host refuses a viewer's writes itself.
+  if (c.viewOnly && c.editing && !READ_ONLY_OK.has(id) && !id.startsWith("plugin")) return "View-only access";
   if (NEEDS_SELECTION.has(id) && c.selCount === 0) return "Nothing selected";
   return null;
 }
