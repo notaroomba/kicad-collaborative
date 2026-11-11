@@ -14,7 +14,7 @@ import { Popover, SignInOverlay, Toast } from "./components/Overlays";
 import { AssistantDock } from "./ai/Assistant";
 import { Home } from "./home/Home";
 import { Toasts } from "./home/ui";
-import { PluginChrome } from "./plugins/PluginUi";
+import { PluginDialogs, PluginDock } from "./plugins/PluginUi";
 import { ContextMenu } from "./components/ContextMenu";
 
 function mount(id: string, node: ReactNode) {
@@ -31,7 +31,7 @@ mount("ui-tbLeft", <LeftOptionsToolbar />);
 mount("ui-tbRight", <RightDrawToolbar />);
 mount("ui-dockR", <DockRight />);
 mount("ui-dockAI", <AssistantDock />);
-mount("ui-dockPlugins", <PluginChrome />);
+mount("ui-dockPlugins", <PluginDock />);
 mount("ui-statusbar", <StatusBar />);
 mount("ui-home", <><Home /><Toasts /></>);
-mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /></>);
+mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /></>);

@@ -33,6 +33,7 @@ const PATHS: Record<string, string> = {
   star: '<path d="M12 4l2.4 5 5.4.7-4 3.8 1 5.4L12 16.3 7.2 18.9l1-5.4-4-3.8 5.4-.7z"/>',
   restore: '<path d="M4.5 12a7.5 7.5 0 102.3-5.4"/><path d="M4.5 4.5v5h5"/>',
   branch: '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="8.5" r="2.2"/><path d="M7 8.2v7.6M17 10.7c0 3.3-4.5 2.6-8 4.6"/>',
+  plugin: '<path d="M9 4.5a2 2 0 014 0V6h4v4h1.5a2 2 0 010 4H17v5h-4.2v-1.2a1.8 1.8 0 00-3.6 0V19H5v-4.5h1.3a2 2 0 000-4H5V6h4z"/>',
   signout: '<path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9.5"/>',
 };
 export function Ic({ name, size = 16 }: { name: keyof typeof PATHS | string; size?: number }) {

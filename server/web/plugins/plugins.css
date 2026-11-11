@@ -85,3 +85,7 @@
 .plg-card .perms { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .plg-consent h2 { margin-bottom: 4px; }
 .plg-manager .btn.danger:hover { border-color: var(--err); color: var(--err); }
+.plg-manager.consenting { height: auto; max-height: 88vh; width: 620px; }
+.plg-status { margin-left: 6px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.plg-status.run { color: var(--wire); border-color: color-mix(in srgb, var(--wire) 50%, var(--line)); }
+.plg-status.bad { color: var(--err); border-color: var(--err); }

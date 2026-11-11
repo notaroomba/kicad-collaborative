@@ -232,7 +232,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
       <p>{m.description}</p>
       <h3>Permissions you granted</h3><Permissions perms={p.granted} />
       <h3>Adds</h3><Contributes m={m} />
-      <h3>Log <span className="plg-muted">{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? "not running (open a project)" : "disabled"}</span></h3>
+      <h3>Log <span className={cx("plg-status", run && run.failed && "bad", run && run.ready && !run.failed && "run")}>{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? "not running (open a project)" : "disabled"}</span></h3>
       <div className="plg-log" id="pluginLog" ref={logEl}>{lines.length ? lines.map((l, i) => <div key={i} className={l.level}><time>{new Date(l.at).toLocaleTimeString()}</time>{l.text}</div>) : <div className="plg-muted">Nothing logged yet. A plugin's console output appears here.</div>}</div>
       <div className="plg-row end">
         <button type="button" className="btn sm" onClick={() => clearLog(p.identifier)}>Clear log</button>
@@ -299,7 +299,7 @@ export function PluginManager() {
   const tabs: [typeof mgr.tab, string][] = [["installed", `Installed${n ? ` (${n})` : ""}`], ["catalog", "Catalog"], ["develop", "Install from file or URL"]];
   return (
     <div className="kd-overlay plg-overlay" onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") { if (consent) cancelInstall(); else closeManager(); } }} onPointerDown={(e) => { if (e.target === e.currentTarget) closeManager(); }}>
-      <div className="kd-dialog plg-manager" role="dialog" aria-modal="true" id="pluginManager" tabIndex={-1}>
+      <div className={cx("kd-dialog plg-manager", consent && "consenting")} role="dialog" aria-modal="true" id="pluginManager" tabIndex={-1}>
         <div className="kd-title"><span>Plugin Manager</span><span className="kd-x" title="Close (Esc)" onClick={() => closeManager()}>×</span></div>
         {consent ? <div className="kd-body"><ConsentSheet /></div> : (
           <>
@@ -315,5 +315,5 @@ export function PluginManager() {
   );
 }
 
-/** Everything of ours that mounts once. */
-export function PluginChrome() { return <><PluginDock /><PluginPrompt /><PluginManager /></>; }
+/** The dialogs sit at page level (not in the editor), so the home view can open the manager too. */
+export function PluginDialogs() { return <><PluginPrompt /><PluginManager /></>; }

@@ -364,9 +364,11 @@ export function pluginUiKey(id: string): string {
 
 async function busy<T>(id: string, what: string, fn: () => Promise<T>): Promise<T | undefined> {
   setRun(id, { busy: what });
+  // An action may wait on a dialog for minutes, so there is no deadline; a plugin that is simply stuck is named once, with the way out.
+  const slow = window.setTimeout(() => { if (!S.prompt) { log(id, "warn", `${what} has been running for 20 seconds`); toast(`${find(id)?.manifest.name || "A plugin"} is still running “${what}”. Restart it from Manage Plugins if it is stuck.`, 6000); } }, 20000);
   try { return await fn(); }
   catch (e) { const msg = e instanceof Error ? e.message : String(e); log(id, "error", `${what}: ${msg}`); toast(`${find(id)?.manifest.name || "Plugin"}: ${msg}`, 5000); return undefined; }
-  finally { if (S.running[id]) setRun(id, { busy: null }); }
+  finally { clearTimeout(slow); if (S.running[id]) setRun(id, { busy: null }); }
 }
 
 export async function runAction(plugin: string, action: string): Promise<void> {
@@ -476,7 +478,7 @@ export function initPlugins(): void {
 
   document.addEventListener("keydown", (ev) => {
     const t = ev.target as HTMLElement | null;
-    if (!S.editor || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
+    if (!S.editor || app.getState().view !== "editor" || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
     for (const a of actionsFor(S, S.editor)) if (a.action.key && hotkeyMatches(ev, a.action.key)) { ev.preventDefault(); ev.stopPropagation(); void runAction(a.plugin, a.id); return; }
   }, true);
 

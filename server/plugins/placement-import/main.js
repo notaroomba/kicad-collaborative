@@ -67,5 +67,5 @@ kicad.importers.register("placement-csv", async (file) => {
     okLabel: "Move footprints",
   });
   if (!ok) return;
-  await kicad.design.apply({ title: `place ${edits.length} footprints from ${file.name}`, edits });
+  await kicad.design.apply({ title: `place ${edits.length} footprint${edits.length === 1 ? "" : "s"} from ${file.name}`, edits });
 });

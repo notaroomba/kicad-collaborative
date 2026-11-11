@@ -387,6 +387,14 @@ await closeManager(a);
 await a.reload(); await editorReady(a); await running(a, ID('placement'));
 check('installed plugins come back after a reload', (await plug(a)).installed.length === 6 && (await frames(a)) === 6, `${(await plug(a)).installed.length} installed, ${await frames(a)} frames`);
 
+// ---- the manager is reachable from the home page, where nothing runs
+await a.goto(`${BASE}/`); await a.waitForSelector('#homePlugins', { timeout: 15000 });
+await a.click('#homePlugins'); await a.waitForSelector('#pluginManager #pluginList');
+check('the home page opens the manager', (await a.locator('#pluginList li').count()) === 6 && (await a.locator('#pluginManager').isVisible()));
+check('no plugin runs outside a project', Object.keys((await plug(a)).running).length === 0);
+await shot(a, '15-home-manager');
+await closeManager(a);
+
 const tok = mintJwt(dana, 'plug-dana'); const hdr = { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` };
 const manifest = { identifier: 'test.srv', name: 'S', description: '', runtime: { type: 'web', entrypoint: 'main.js' }, permissions: ['design:read'] };
 const put = (id, body, h = hdr) => fetch(`${BASE}/api/plugins/${id}`, { method: 'PUT', headers: h, body: JSON.stringify(body) }).then((r) => r.status);
