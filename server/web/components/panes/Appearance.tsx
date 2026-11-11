@@ -49,7 +49,7 @@ function SchObjects() {
   return (
     <>
       <input id="objSearch" placeholder={sch ? "Filter symbols…" : "Filter footprints…"} value={q} onChange={(ev) => setQ(ev.target.value)}
-        className="w-full mb-1.5 bg-canvas border border-line rounded-sm py-1 px-1.5 text-ink" />
+        className="w-full mb-1.5 bg-canvas border border-line rounded-md py-1 px-1.5 text-ink" />
       <div id="objList">
         {sch && sheets.length ? (
           <>
@@ -258,7 +258,7 @@ function PresetsAndViewports() {
 }
 
 const TABS = "ktabs flex flex-none border-b border-line bg-bench";
-const TAB = "flex-1 bg-transparent border-0 border-b-2 border-b-transparent py-1 px-0 text-sm text-ink-2 on:text-ink on:border-b-copper on:bg-paper";
+const TAB = "flex-1 bg-transparent border-0 border-b-2 border-b-transparent py-1 px-0 text-sm text-ink-2 on:text-ink on:border-b-blue on:bg-paper";
 
 function BoardAppearance() {
   const [tab, setTab] = useState<"layers" | "objects" | "nets">("layers");

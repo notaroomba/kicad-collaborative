@@ -19,7 +19,7 @@ const TH = "text-left font-semibold text-ink-2 px-1.5 py-[3px] border-b border-l
 // `tr:hover td` rule did — without depending on how Tailwind orders the sel/hover variants.
 const TR = "group sel:bg-sel";
 const TD = "px-1.5 py-[3px] border-b border-line-soft whitespace-nowrap overflow-hidden text-ellipsis max-w-40 group-hover:bg-sel-soft group-hover:cursor-default";
-const BTN = "kbtn bg-panel border border-line rounded-[3px] px-2.5 py-[3px] text-ink text-sm hover:border-ink-3 disabled:opacity-45";
+const BTN = "kbtn bg-panel border border-line rounded-sm px-2.5 py-[3px] text-ink text-sm hover:border-ink-3 disabled:opacity-45";
 
 export function HistoryPane() {
   const groups = useApp((s) => s.history.groups);

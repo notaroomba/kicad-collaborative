@@ -5,107 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KiCad Collaborative</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/dist/ui.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23001023'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23C83434'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%234D7FC4'/%3E%3Cpath d='M11 11 L21 21' stroke='%23F2EDA1' stroke-width='2.5'/%3E%3C/svg%3E">
 <style>
-  :root {
-    color-scheme: light dark;
-    /* KiCad's own palette is the only colour source: schematic paper for the
-       workbench, the board canvas for stages, layer colours as accents. */
-    --bench: #ECEBE6;      /* chrome: toolbars, sidebars, title bars */
-    --paper: #F5F4EF;      /* surfaces (the schematic sheet) */
-    --panel: #FFFFFF;      /* inputs, raised surfaces */
-    --line: #CFCDC5;       /* 1px rules (Edge.Cuts grey) */
-    --line-2: #B5B5B5;     /* grid dots */
-    --ink: #1B1B1B;
-    --ink-2: #5B5A55;
-    --ink-3: #8C8B85;
-    --copper: #C83434;     /* F.Cu — primary action */
-    --copper-2: #A82B2B;
-    --blue: #4D7FC4;       /* B.Cu — links, selection */
-    --teal: #006464;       /* values & references */
-    --wire: #009600;       /* live */
-    --warn: #D19200;       /* ERC warning */
-    --err: #E6090D;        /* ERC error */
-    --silk: #F2EDA1;       /* silkscreen: labels on the canvas */
-    --canvas: #001023;     /* board background */
-    --shadow: 0 10px 30px #0003;
-    --font: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    /* legacy aliases used by inline styles */
-    --bg: var(--bench); --panel-2: var(--paper); --text: var(--ink); --muted: var(--ink-2);
-    --accent: var(--blue); --hot: var(--warn); --ok: var(--wire); --danger: var(--err);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
-      --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
-      --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
-      --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
-    --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
-    --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
-    --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
-  }
-
-  * { box-sizing: border-box; }
+  /* Colours, type, spacing and the shared components (.btn, .input, .pill, the .kd-* dialog frame, …)
+     come from /static/theme.css, linked above.  Only the app's own layout lives here. */
   html, body { height: 100%; margin: 0; }
-  body { background: var(--bench); color: var(--ink); font: 13px/1.45 var(--font); overflow: hidden;
+  body { background: var(--bench); color: var(--ink); font: var(--fs-base)/1.45 var(--font); overflow: hidden;
          -webkit-font-smoothing: antialiased; }
-  a { color: var(--blue); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  button, input, select, textarea { font: inherit; color: inherit; }
-  button { cursor: pointer; }
-  :focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid var(--bench); }
   svg.glyph { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7;
               stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
   #app { display: grid; grid-template-rows: 32px 1fr 24px; grid-template-columns: minmax(0, 1fr); height: 100%; }
 
-  .btn { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 5px 12px;
-         color: var(--ink); font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
-         white-space: nowrap; }
-  .btn:hover { border-color: var(--ink-3); text-decoration: none; }
-  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
-  /* KiCad-style property dialogs (kicad-dialogs.js) */
-  .kd-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.28); display: flex; align-items: center; justify-content: center; }
-  .kd-dialog { background: var(--bench); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 18px 48px rgba(0,0,0,.35); min-width: 420px; max-width: min(760px, 94vw); max-height: 90vh; display: flex; flex-direction: column; font: 12px var(--font); }
-  .kd-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: 6px 6px 0 0; cursor: move; user-select: none; font-weight: 600; }
-  .kd-title .kd-x { margin-left: auto; cursor: pointer; color: var(--ink-2); font-size: 15px; line-height: 1; padding: 0 4px; }
-  .kd-title .kd-x:hover { color: var(--ink); }
-  .kd-body { padding: 10px 14px; overflow: auto; }
-  .kd-body h3 { margin: 10px 0 6px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
-  .kd-body h3:first-child { margin-top: 0; }
-  .kd-body .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; }
-  .kd-body .kv label { color: var(--ink-2); white-space: nowrap; }
-  .kd-body input[type=text], .kd-body input[type=number], .kd-body select, .kd-body textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; color: var(--ink); font-family: var(--mono); width: 100%; box-sizing: border-box; }
-  .kd-body .ro { color: var(--ink-2); font-family: var(--mono); }
-  .kd-body .actions { display: flex; gap: 6px; grid-column: 1 / -1; }
-  .kd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
-  .kd-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); }
-  .kd-foot .spacer { flex: 1; }
-  .kd-note { color: var(--ink-2); font-size: 11px; margin: 0 0 8px; }
-  .btn.primary:hover { background: var(--copper-2); }
-  .btn.danger { border-color: var(--err); color: var(--err); }
-  .btn.sm { padding: 3px 8px; font-size: 12px; }
-
   /* ---- views ---- */
   .view { display: none; min-height: 0; }
   .view.active { display: grid; }
-
-  /* ---- home: the projects window.  Rendered by React (web/home) and styled by web/styles/home.css. ---- */
-  .row { display: flex; gap: 8px; align-items: center; }
-  .pill { display: inline-block; font: 500 10px/1.5 var(--mono); padding: 0 6px; border-radius: 2px;
-          border: 1px solid var(--line); color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; }
-  .pill.owner { border-color: var(--copper); color: var(--copper); }
-  .pill.editor { border-color: var(--teal); color: var(--teal); }
-  .empty { color: var(--ink-2); padding: 24px; border: 1px dashed var(--line); border-radius: 3px;
-           text-align: center; background: var(--panel); }
 
   /* ---- editor: the page grid the React chrome (static/dist/ui.js) renders into.  The #ui-* hosts are
        display:contents wrappers, so the rendered #tbTop/#dockL/… are the grid's own children. ---- */
@@ -123,20 +39,18 @@
   #stage.panning, #stage.panning * { cursor: grabbing !important; } #stage.over-sel { cursor: move !important; }
   #crosshair { position: absolute; inset: 0; pointer-events: none; display: none; }
   #crosshair.on { display: block; }
-  #cmtPanel { position: absolute; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 260px; max-width: 340px;
+  #cmtPanel { position: absolute; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); padding: 10px 12px; min-width: 260px; max-width: 340px;
               box-shadow: var(--shadow); font-size: 12px; z-index: 5; }
   #cmtPanel .meta { color: var(--ink-3); font: 11px var(--mono); }
   #cmtPanel .cbody { margin: 2px 0 8px; white-space: pre-wrap; }
-  #cmtPanel textarea { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px; }
+  #cmtPanel textarea { width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-2); color: var(--ink); padding: 6px; }
   #cmtPanel p { margin: 8px 0 0; display: flex; gap: 6px; }
-  #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; display: none; box-shadow: var(--shadow); }
+  #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); padding: 10px 14px; display: none; box-shadow: var(--shadow); }
   .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; }
   .kv label { color: var(--ink-2); }
-  .kv input { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; color: var(--ink); font-family: var(--mono); width: 100%; }
+  .kv input { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); padding: 4px 6px; color: var(--ink); font-family: var(--mono); width: 100%; }
   .kv .ro { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-  .muted { color: var(--ink-2); }
-  .note { color: var(--ink-2); font-size: 12px; margin: 6px 0; }
 </style>
 </head>
 <body>

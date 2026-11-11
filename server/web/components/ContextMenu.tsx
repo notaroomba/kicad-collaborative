@@ -9,7 +9,7 @@ import { hasIcon } from "../ctxspec";
 import { cx } from "../util";
 import { KIcon } from "./Icon";
 
-const PANEL = "ctxmenu fixed min-w-[210px] max-h-[calc(100vh-8px)] overflow-y-auto bg-panel border border-line rounded-sm p-1 shadow-panel text-ink text-sm select-none";
+const PANEL = "ctxmenu fixed min-w-[210px] max-h-[calc(100vh-8px)] overflow-y-auto bg-panel border border-line rounded-md p-1 shadow-panel text-ink text-sm select-none";
 const ROW = "group/row relative flex items-center gap-2 w-full text-left border-0 py-1 pl-1.5 pr-2 rounded-xs whitespace-nowrap";
 const KBD = "ml-6 text-xs font-mono font-normal leading-[normal] text-ink-3";
 
@@ -53,7 +53,7 @@ function Panel({ items, path, open, active, x, y, onHover, onRun }: PanelProps) 
         return (
           <div className="relative" key={i}>
             <button type="button" role={it.check ? "menuitemcheckbox" : "menuitem"} aria-checked={it.check ? !!it.checked : undefined} aria-disabled={dim || undefined} aria-haspopup={it.sub ? "menu" : undefined}
-              className={cx(ROW, isActive ? (dim ? "bg-line/40 text-ink" : "bg-blue text-white") : "bg-transparent text-ink", dim ? "opacity-50 cursor-default" : "cursor-pointer")}
+              className={cx(ROW, isActive ? (dim ? "bg-line/40 text-ink" : "bg-accent text-white") : "bg-transparent text-ink", dim ? "opacity-50 cursor-default" : "cursor-pointer")}
               title={it.why ? `${it.label} — ${it.why}` : undefined} data-ctxact={it.act || it.label} data-dim={dim ? "1" : undefined}
               onPointerEnter={() => onHover(p, it)} onClick={(ev) => { ev.stopPropagation(); if (!it.sub) onRun(it); }}>
               {lead ? (

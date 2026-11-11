@@ -4233,10 +4233,10 @@ void main() {
 .v3d-title button:hover{background:var(--line);color:var(--ink)}
 .v3d-menubar{display:flex;gap:0;padding:0 4px;background:var(--bench);border-bottom:1px solid var(--line);flex:none;user-select:none}
 .v3d-menubar>button{all:unset;padding:4px 9px;cursor:default;border-radius:3px}
-.v3d-menubar>button:hover,.v3d-menubar>button.open{background:var(--blue);color:#fff}
+.v3d-menubar>button:hover,.v3d-menubar>button.open{background:var(--accent);color:var(--on-accent)}
 .v3d-menu{position:fixed;z-index:70;min-width:230px;padding:4px 0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);font:12px var(--font);user-select:none}
 .v3d-menu .v3d-mi{display:grid;grid-template-columns:22px 1fr auto 12px;align-items:center;gap:6px;padding:3px 10px 3px 6px;cursor:default;white-space:nowrap;position:relative}
-.v3d-menu .v3d-mi:hover{background:var(--blue);color:#fff}
+.v3d-menu .v3d-mi:hover{background:var(--accent);color:var(--on-accent)}
 .v3d-menu .v3d-mi.dis{color:var(--ink-3)}
 .v3d-menu .v3d-mi.dis:hover{background:none;color:var(--ink-3)}
 .v3d-menu .v3d-mi .k{color:var(--ink-3);font-size:11px;padding-left:18px}

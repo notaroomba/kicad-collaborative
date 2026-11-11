@@ -230,7 +230,7 @@ const WIDGET_CSS = `
 .kd-tb-node.child { padding-left: 26px; cursor: pointer; }
 .kd-tb-node.parent { cursor: pointer; }
 .kd-tb-node.parent::before { content: "▾"; display: inline-block; width: 12px; color: var(--ink-3); font-size: 10px; }
-.kd-tb-node.on { background: var(--blue); color: #fff; }
+.kd-tb-node.on { background: var(--accent); color: var(--on-accent); }
 .kd-tb-page { padding: 12px 16px; overflow: auto; max-height: 68vh; }
 .kd-grid-wrap { border: 1px solid var(--line); overflow: auto; background: var(--panel); }
 .kd-grid { border-collapse: collapse; width: 100%; font-size: 12px; }

@@ -87,7 +87,7 @@ const connectUrl = (access: string): string => `/auth/github/connect?next=${enco
 /** Run an async action behind a button: spinner while it runs, the error shown where the page says. */
 async function busy(btn: HTMLButtonElement, fn: () => Promise<unknown>): Promise<void> {
   const label = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = `<span class="spin"></span> ${label}`;
+  btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> ${label}`;
   try { await fn(); }
   catch (e) { showError(e); }
   finally { btn.disabled = false; btn.innerHTML = label; }
@@ -103,7 +103,7 @@ function showError(e: unknown): void {
 function flashHtml(): string {
   if (!flash) return "";
   const f = flash; flash = null;
-  return `<div class="note ${f.kind}" role="status">${f.html}</div>`;
+  return `<div class="callout ${f.kind}" role="status">${f.html}</div>`;
 }
 
 // ---------------------------------------------------------------- shared pieces
@@ -115,7 +115,7 @@ function connectBox(gh: Connection): string {
   if (gh.connected) {
     return `<section class="box"><h2>GitHub account</h2><div class="in"><div class="row">
       <div class="grow"><b>${esc(gh.login)}</b> is connected
-        <span class="tag">${gh.privateRepos === false ? "public repositories" : "repositories"}</span>
+        <span class="pill">${gh.privateRepos === false ? "public repositories" : "repositories"}</span>
         ${gh.privateRepos === false ? `<div class="muted">Private repositories are not included. <a href="${connectUrl("")}">Add them</a>.</div>` : ""}</div>
       <button class="btn small" id="ghDisconnect">Disconnect</button></div></div></section>`;
   }
@@ -142,7 +142,7 @@ function repoPicker(el: HTMLElement, onPick: (fullName: string, repo: Repo | nul
     const needle = q.value.trim().toLowerCase();
     const hits = all.filter((r) => !needle || r.fullName.toLowerCase().includes(needle)).slice(0, 60);
     let html = hits.map((r) => `<button type="button" class="it${r.fullName === picked ? " sel" : ""}" data-repo="${esc(r.fullName)}">
-        <span class="nm">${esc(r.fullName)}</span>${r.private ? '<span class="tag">private</span>' : ""}
+        <span class="nm">${esc(r.fullName)}</span>${r.private ? '<span class="pill">private</span>' : ""}
         <span class="sp"></span><span class="muted">${esc(ago(r.pushedAt))}</span></button>`).join("");
     // A repository that is not in the list (not a member, or beyond the first few hundred) can still be named outright.
     if (/^[\w.-]+\/[\w.-]+$/.test(q.value.trim()) && !hits.some((r) => r.fullName.toLowerCase() === needle)) {
@@ -185,22 +185,22 @@ async function renderImport(): Promise<void> {
     need("#mine").innerHTML = j.projects.length
       ? j.projects.map((p) => `<a class="commit" href="/p/${p.projectId}/github" style="color:inherit">
           <span class="msg"><b>${esc(p.name)}</b> <span class="muted">· ${esc(p.ownerLogin)}</span></span>
-          <span class="muted">${esc(ago(p.updatedAt))}</span><span class="tag">GitHub sync ›</span></a>`).join("")
+          <span class="muted">${esc(ago(p.updatedAt))}</span><span class="pill">GitHub sync ›</span></a>`).join("")
       : `<div class="in muted">No projects yet. Bring one in from a repository above, or start a session from the desktop app.</div>`;
   }).catch((e) => { need("#mine").innerHTML = `<div class="in muted">${esc(message(e))}</div>`; });
 }
 
 async function scan(full: string, branch: string | null): Promise<void> {
   const el = need("#scan");
-  el.innerHTML = `<div class="muted"><span class="spin"></span> Looking for KiCad projects in ${esc(full)}…</div>`;
+  el.innerHTML = `<div class="muted"><span class="spinner"></span> Looking for KiCad projects in ${esc(full)}…</div>`;
   let s: Scan;
   try { s = await api<Scan>(`/api/github/scan?repo=${encodeURIComponent(full)}${branch ? "&branch=" + encodeURIComponent(branch) : ""}`); }
-  catch (e) { el.innerHTML = `<div class="note err">${esc(message(e))}</div>`; return; }
+  catch (e) { el.innerHTML = `<div class="callout err">${esc(message(e))}</div>`; return; }
   const branches = s.branches.includes(s.branch) ? s.branches : [s.branch].concat(s.branches);
   el.innerHTML = `<div class="row" style="margin-bottom:8px">
       <label class="f">Branch <select id="scanBranch">${branches.map((b) => `<option${b === s.branch ? " selected" : ""}>${esc(b)}</option>`).join("")}</select></label>
       <div class="grow muted">${s.projects.length ? `${plural(s.projects.length, "KiCad project")} in <b>${esc(s.repo)}</b>` : ""}</div></div>
-    ${s.truncated ? `<div class="note warn">This repository is too large for GitHub to list completely; some folders may be missing.</div>` : ""}
+    ${s.truncated ? `<div class="callout warn">This repository is too large for GitHub to list completely; some folders may be missing.</div>` : ""}
     <div class="list">${s.projects.length ? s.projects.map((p, i) => `<div class="it" style="cursor:default">
         <span class="nm">${esc(p.name)}</span><span class="muted mono">${esc(p.path || "/")}</span><span class="sp"></span>
         <span class="muted">${plural(p.files, "file")}</span>
@@ -216,7 +216,7 @@ async function scan(full: string, branch: string | null): Promise<void> {
 }
 
 function renderSignedOut(e: unknown): void {
-  if (e && statusOf(e) !== 401) { app.innerHTML = `<div class="note err">${esc(message(e))}</div>`; return; }
+  if (e && statusOf(e) !== 401) { app.innerHTML = `<div class="callout err">${esc(message(e))}</div>`; return; }
   app.innerHTML = `<section class="box"><h2>GitHub</h2><div class="in">
     <p>Sign in to connect repositories to your online projects.</p>
     <a class="btn primary" href="/auth/github/login?next=${encodeURIComponent(here)}">Sign in with GitHub</a></div></section>`;
@@ -252,8 +252,8 @@ function changeList(title: string, side: Side | undefined): string {
 
 function diffHtml(path: string): string {
   const d = diffs[path];
-  if (!d) return `<div class="muted"><span class="spin"></span> Comparing…</div>`;
-  if ("error" in d) return `<div class="note err">${esc(d.error)}</div>`;
+  if (!d) return `<div class="muted"><span class="spinner"></span> Comparing…</div>`;
+  if ("error" in d) return `<div class="callout err">${esc(d.error)}</div>`;
   if (d.hasBase) return `<div class="sides">${changeList("Changed online", d.online)}${changeList("Changed on GitHub", d.github)}</div>`;
   return `<div class="sides">${changeList("Online, compared with GitHub", d.between)}</div>
     <p class="muted" style="margin-top:6px">These two were never synced, so there is no common version to tell who changed what.</p>`;
@@ -265,7 +265,7 @@ async function loadStatus(): Promise<void> {
   catch (e) {
     const code = statusOf(e);
     if (code === 401) return renderSignedOut(e);
-    app.innerHTML = `<div class="note err">${esc(code === 403 || code === 404 ? "You don't have access to this project." : message(e))}</div>`;
+    app.innerHTML = `<div class="callout err">${esc(code === 403 || code === 404 ? "You don't have access to this project." : message(e))}</div>`;
     return;
   }
   st = now;
@@ -294,7 +294,7 @@ function render(): void {
   if (!link) {
     html += `<div><h1>${esc(p.name)}</h1><p class="muted">This project is not linked to a repository yet.</p></div>`;
     html += connectBox(gh);
-    if (!p.isOwner) html += `<div class="note">Only the project's owner can link it to a repository.</div>`;
+    if (!p.isOwner) html += `<div class="callout">Only the project's owner can link it to a repository.</div>`;
     else if (gh.connected) html += linkForm(p);
     app.innerHTML = html;
     bindConnectBox(loadStatus);
@@ -306,7 +306,7 @@ function render(): void {
       ${p.isOwner ? `<button class="btn small danger" id="unlink">Unlink</button>` : ""}</h2><div class="in">
       <div class="row"><div class="grow">
         <a href="${esc(link.url)}" target="_blank" rel="noreferrer"><b>${esc(link.repo)}</b></a>
-        <span class="tag">${esc(link.branch)}</span>${link.path ? ` <span class="tag">/${esc(link.path)}</span>` : ""}
+        <span class="pill">${esc(link.branch)}</span>${link.path ? ` <span class="pill">/${esc(link.path)}</span>` : ""}
         <div class="muted">${link.syncedAt ? `Last synced ${esc(ago(link.syncedAt))}` : "Not synced yet"}${link.linkedBy ? ` · linked by ${esc(link.linkedBy)}` : ""}</div>
       </div><button class="btn small" id="refresh">Refresh</button></div></div></section>`;
 
@@ -317,7 +317,7 @@ function render(): void {
   }
   const r = status.remote;
   if (!r.reachable) {
-    html += `<div class="note err">${esc(r.reason)}</div>`;
+    html += `<div class="callout err">${esc(r.reason)}</div>`;
     app.innerHTML = html; bindCommon();
     return;
   }
@@ -327,11 +327,11 @@ function render(): void {
   const chip = (cls: string, n: number, text: string): string => `<div class="chip ${n ? cls : "zero"}"><b>${n}</b><span>${text}</span></div>`;
   html += `<div class="chips">${chip("push", s.push, "to push")}${chip("pull", s.pull, "to pull")}${chip("conflict", s.conflict, "changed on both")}${chip("synced", s.synced, "in sync")}</div>`;
 
-  if (!r.branchExists) html += `<div class="note">The branch <b>${esc(link.branch)}</b> does not exist on GitHub yet. The first push creates it.</div>`;
-  if (r.truncated) html += `<div class="note warn">This repository is too large for GitHub to list completely; some files may be missing from the comparison.</div>`;
-  if (s.unsaved) html += `<div class="note warn">${plural(s.unsaved, "document has", "documents have")} live edits that are not saved into the project file yet. Pushing asks an open desktop app to save first; without one, the last saved version is what gets pushed.</div>`;
-  if (!canWrite) html += `<div class="note">You can view this project's sync state. Pushing and pulling need edit access.</div>`;
-  else if (!r.canPush) html += `<div class="note warn">Your GitHub account can read <b>${esc(link.repo)}</b> but not write to it, so you can pull but not push.</div>`;
+  if (!r.branchExists) html += `<div class="callout">The branch <b>${esc(link.branch)}</b> does not exist on GitHub yet. The first push creates it.</div>`;
+  if (r.truncated) html += `<div class="callout warn">This repository is too large for GitHub to list completely; some files may be missing from the comparison.</div>`;
+  if (s.unsaved) html += `<div class="callout warn">${plural(s.unsaved, "document has", "documents have")} live edits that are not saved into the project file yet. Pushing asks an open desktop app to save first; without one, the last saved version is what gets pushed.</div>`;
+  if (!canWrite) html += `<div class="callout">You can view this project's sync state. Pushing and pulling need edit access.</div>`;
+  else if (!r.canPush) html += `<div class="callout warn">Your GitHub account can read <b>${esc(link.repo)}</b> but not write to it, so you can pull but not push.</div>`;
 
   if (canWrite) {
     const nothing = !s.push && !s.pull && !s.conflict;
@@ -348,7 +348,7 @@ function render(): void {
       <div class="row" style="margin-top:12px">
         <label class="muted" style="display:flex;gap:6px;align-items:center;min-height:34px"><input type="checkbox" id="autoPush" ${link.autoPush ? "checked" : ""}> Push to GitHub every time a checkpoint is saved</label>
       </div>
-      ${link.autoPush && link.lastAuto ? `<div class="note ${link.lastAuto.ok ? "ok" : "warn"}" id="lastAuto" style="margin-top:8px">Checkpoint <b>${esc(link.lastAuto.checkpoint || "")}</b>, ${esc(ago(link.lastAuto.at))}${link.lastAuto.by ? ` by ${esc(link.lastAuto.by)}` : ""}: ${link.lastAuto.ok ? "" : "not pushed. "}${esc(link.lastAuto.message || "")}${link.lastAuto.commitUrl ? ` · <a href="${esc(link.lastAuto.commitUrl)}" target="_blank" rel="noreferrer">view commit</a>` : ""}</div>` : ""}
+      ${link.autoPush && link.lastAuto ? `<div class="callout ${link.lastAuto.ok ? "ok" : "warn"}" id="lastAuto" style="margin-top:8px">Checkpoint <b>${esc(link.lastAuto.checkpoint || "")}</b>, ${esc(ago(link.lastAuto.at))}${link.lastAuto.by ? ` by ${esc(link.lastAuto.by)}` : ""}: ${link.lastAuto.ok ? "" : "not pushed. "}${esc(link.lastAuto.message || "")}${link.lastAuto.commitUrl ? ` · <a href="${esc(link.lastAuto.commitUrl)}" target="_blank" rel="noreferrer">view commit</a>` : ""}</div>` : ""}
       ${s.conflict ? `<div class="row" style="margin-top:12px"><span class="muted">When both sides changed the same item, keep</span>
           <span class="seg" id="prefer"><button type="button" data-v="online" class="on">the online version</button><button type="button" data-v="github">GitHub's version</button></span></div>` : ""}
     </div></section>`;
@@ -358,7 +358,7 @@ function render(): void {
     <table class="files"><thead><tr><th>File</th><th>State</th><th>What changed</th><th></th></tr></thead><tbody>
     ${files.map((f) => `<tr>
       <td class="path">${esc(f.path)}</td>
-      <td class="st"><span class="tag ${f.state}">${STATE_LABEL[f.state]}</span></td>
+      <td class="st"><span class="pill ${f.state}">${STATE_LABEL[f.state]}</span></td>
       <td class="detail">${esc(f.detail)}${f.unsavedOps > 0 ? ` · ${plural(f.unsavedOps, "unsaved edit")}` : ""} <span class="muted">· ${kb(f.size)}</span></td>
       <td class="act">${f.state === "conflict" && canWrite ? `<select data-resolve="${esc(f.path)}" aria-label="How to resolve ${esc(f.path)}">
           ${f.mergeable ? `<option value="merge">Merge both</option>` : `<option value="">Choose…</option>`}
@@ -417,8 +417,8 @@ async function doPush(): Promise<void> {
   const j = await api<PushResult>(`/api/projects/${projectId}/github/push`, { method: "POST", body });
   const sha = String(j.commit).slice(0, 7);
   lastResult = j.pullRequest
-    ? `<div class="note ok" id="result">Pushed ${plural(j.pushed.length, "file")} to <b>${esc(j.branch)}</b> and opened <a href="${esc(j.pullRequest.url)}" target="_blank" rel="noreferrer">pull request #${esc(j.pullRequest.number)}</a>. The files show as in sync once it is merged.</div>`
-    : `<div class="note ok" id="result">Pushed ${plural(j.pushed.length, "file")} to <b>${esc(j.branch)}</b> as ${j.commitUrl ? `<a class="mono" href="${esc(j.commitUrl)}" target="_blank" rel="noreferrer">${esc(sha)}</a>` : `<span class="mono">${esc(sha)}</span>`}.</div>`;
+    ? `<div class="callout ok" id="result">Pushed ${plural(j.pushed.length, "file")} to <b>${esc(j.branch)}</b> and opened <a href="${esc(j.pullRequest.url)}" target="_blank" rel="noreferrer">pull request #${esc(j.pullRequest.number)}</a>. The files show as in sync once it is merged.</div>`
+    : `<div class="callout ok" id="result">Pushed ${plural(j.pushed.length, "file")} to <b>${esc(j.branch)}</b> as ${j.commitUrl ? `<a class="mono" href="${esc(j.commitUrl)}" target="_blank" rel="noreferrer">${esc(sha)}</a>` : `<span class="mono">${esc(sha)}</span>`}.</div>`;
   await loadStatus();
 }
 
@@ -446,9 +446,9 @@ async function doPull(force: boolean): Promise<void> {
   const skipped = j.skipped.map((s) => `<li><span class="mono">${esc(s.path)}</span> — ${esc(s.reason)}</li>`);
   const needsForce = j.skipped.some((s) => /live edits/.test(s.reason));
   lastResult = `<div id="result">` +
-    (lines.length ? `<div class="note ok">Pulled from GitHub:<ul>${lines.join("")}</ul>${j.checkpoint ? `<p class="muted" style="margin-top:6px">The previous versions are kept in History as “${esc(j.checkpoint)}”.</p>` : ""}</div>` : "") +
-    (skipped.length ? `<div class="note warn" style="margin-top:8px">Left alone:<ul>${skipped.join("")}</ul>${needsForce ? `<p style="margin-top:8px"><button class="btn small" id="forcePull">Pull anyway, discarding the unsaved edits</button></p>` : ""}</div>` : "") +
-    (!lines.length && !skipped.length ? `<div class="note">Nothing to pull.</div>` : "") + `</div>`;
+    (lines.length ? `<div class="callout ok">Pulled from GitHub:<ul>${lines.join("")}</ul>${j.checkpoint ? `<p class="muted" style="margin-top:6px">The previous versions are kept in History as “${esc(j.checkpoint)}”.</p>` : ""}</div>` : "") +
+    (skipped.length ? `<div class="callout warn" style="margin-top:8px">Left alone:<ul>${skipped.join("")}</ul>${needsForce ? `<p style="margin-top:8px"><button class="btn small" id="forcePull">Pull anyway, discarding the unsaved edits</button></p>` : ""}</div>` : "") +
+    (!lines.length && !skipped.length ? `<div class="callout">Nothing to pull.</div>` : "") + `</div>`;
   await loadStatus();
   const fp = $<HTMLButtonElement>("#forcePull");
   if (fp) fp.onclick = () => busy(fp, () => doPull(true));

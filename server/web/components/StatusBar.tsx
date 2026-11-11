@@ -57,7 +57,7 @@ export function StatusBar() {
         className={cx(
           cell,
           // the connection dot: grey by default, --wire when live, --err while connecting / on error
-          "conn before:content-[''] before:inline-block before:w-[7px] before:h-[7px] before:rounded-[50%] before:bg-ink-3 before:mr-1.5 live:before:bg-wire err:before:bg-err",
+          "conn before:content-[''] before:inline-block before:w-[7px] before:h-[7px] before:rounded-full before:bg-ink-3 before:mr-1.5 live:before:bg-wire err:before:bg-err",
           live && "live",
           err && "err",
         )}

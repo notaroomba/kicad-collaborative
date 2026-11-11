@@ -4,7 +4,7 @@
    element that needs it, and the classes that other code still queries (`kb`, `on`, `desk`, `kbody`,
    `#ltools .tb.on`, …) are bare hooks with no rule of their own.
 
-   The colour tokens (--bench, --paper, --ink, …, light AND dark) live in static/app.html and are the
+   The tokens (--bench, --paper, --ink, …, light AND dark) live in static/theme.css and are the
    only colour source: the @theme below just maps them into Tailwind's namespaces, so `bg-bench`
    emits `background-color: var(--color-bench)` → `var(--bench)` and follows the theme automatically.
 
@@ -26,14 +26,15 @@
 @source not "../generated";
 
 @theme {
-  /* Wipe Tailwind's stock palette / fonts / shadows / type scale so only the app.html tokens exist:
+  /* Wipe Tailwind's stock palette / fonts / shadows / type scale so only the theme.css tokens exist:
      `bg-red-500` or `text-slate-400` fail to build instead of shipping a hard-coded colour. */
   --color-*: initial;
   --font-*: initial;
   --shadow-*: initial;
   --text-*: initial;
+  --radius-*: initial;
 
-  /* ---- surfaces & lines (app.html :root, both themes) ---- */
+  /* ---- surfaces & lines (theme.css :root, both themes) ---- */
   --color-bench: var(--bench);        /* chrome: toolbars, docks, captions      → bg-bench   */
   --color-paper: var(--paper);        /* the sheet; pane bodies, hover fill      → bg-paper   */
   --color-panel: var(--panel);        /* inputs, menus, raised surfaces          → bg-panel   */
@@ -54,8 +55,8 @@
   --color-err: var(--err);            /* ERC error                               → text-err   */
   --color-silk: var(--silk);          /* silkscreen (canvas labels)              → text-silk  */
   --color-canvas: var(--canvas);      /* board background                        → bg-canvas  */
-  /* legacy aliases app.html also defines */
-  --color-accent: var(--accent);      /* = --blue */
+  /* older names theme.css also defines */
+  --color-accent: var(--accent);      /* primary action fill                     → bg-accent  */
   --color-hot: var(--hot);            /* = --warn */
   --color-ok: var(--ok);              /* = --wire */
   --color-danger: var(--danger);      /* = --err  */
@@ -63,13 +64,25 @@
   --color-white: #fff;
   --color-black: #000;
 
-  /* ---- derived mixes the chrome uses for states (opaque, in srgb — NOT Tailwind's `/22` opacity
-          modifier, which mixes with transparent in oklab and renders differently) ---- */
-  --color-on: color-mix(in srgb, var(--blue) 22%, var(--paper));           /* .kb.on fill          → bg-on         */
-  --color-on-line: color-mix(in srgb, var(--blue) 60%, var(--line));       /* .kb.on border        → border-on-line */
-  --color-sel: color-mix(in srgb, var(--blue) 25%, var(--paper));          /* selected row / node  → bg-sel        */
-  --color-sel-soft: color-mix(in srgb, var(--blue) 12%, var(--paper));     /* table row hover      → bg-sel-soft   */
+  --color-accent-2: var(--accent-2);  /* its border, hover, pressed              → border-accent-2 */
+  --color-on-accent: var(--on-accent);/* text on an accent or error fill          → text-on-accent */
+  --color-err-2: var(--err-2);        /* destructive hover                        → bg-err-2 */
+  --color-sheet: var(--sheet);        /* schematic background                     → bg-sheet */
+  --color-mark: var(--mark);          /* canvas annotations                       → text-mark */
+
+  /* ---- states (opaque mixes defined in theme.css — NOT Tailwind's `/22` opacity modifier, which
+          mixes with transparent in oklab and renders differently) ---- */
+  --color-on: var(--on);                                                   /* .kb.on fill          → bg-on         */
+  --color-on-line: var(--on-line);                                         /* .kb.on border        → border-on-line */
+  --color-sel: var(--sel);                                                 /* selected row / node  → bg-sel        */
+  --color-sel-soft: var(--sel-soft);                                       /* table row hover      → bg-sel-soft   */
   --color-line-soft: color-mix(in srgb, var(--line) 50%, transparent);     /* table cell rule      → border-line-soft */
+
+  /* ---- radii ---- */
+  --radius-xs: var(--r-1);            /* badges, kbd                             → rounded-xs */
+  --radius-sm: var(--r-2);            /* buttons, inputs, menu items             → rounded-sm */
+  --radius-md: var(--r-3);            /* menus, popovers, dialogs                → rounded-md */
+  --radius-full: 999px;               /* dots, avatars                           → rounded-full */
 
   /* ---- fonts ---- */
   --font-sans: var(--font);           /* IBM Plex Sans stack                     → font-sans  */
@@ -77,14 +90,15 @@
 
   /* ---- shadows ---- */
   --shadow-panel: var(--shadow);      /* menus, palettes, popover                → shadow-panel */
+  --shadow-window: var(--shadow-dialog); /* dialogs and windows                → shadow-window */
 
   /* ---- type scale: the chrome's px sizes, font-size ONLY (no paired line-height, so the inherited
           13px/1.45 body leading is kept exactly as the old chrome.css did) ---- */
-  --text-2xs: 10px;                   /* pane h3 captions                        → text-2xs */
-  --text-xs: 11px;                    /* mono meta, kbd, status bar              → text-xs  */
-  --text-sm: 12px;                    /* pane bodies, buttons, controls          → text-sm  */
-  --text-base: 13px;                  /* body default                            → text-base */
-  --text-lg: 14px;                    /* pane close glyph                        → text-lg  */
+  --text-2xs: var(--fs-2xs);          /* 10px  pane h3 captions                  → text-2xs */
+  --text-xs: var(--fs-xs);            /* 11px  mono meta, kbd, status bar        → text-xs  */
+  --text-sm: var(--fs-sm);            /* 12px  pane bodies, buttons, controls    → text-sm  */
+  --text-base: var(--fs-base);        /* 13px  body default                      → text-base */
+  --text-lg: var(--fs-md);            /* 14px  pane close glyph, dialog titles   → text-lg  */
 }
 
 /* ---- variants ---- */

@@ -32,7 +32,7 @@ const CSS = `
 .pd-tree .grp { padding: 4px 8px; font-weight: 600; cursor: default; }
 .pd-tree .leaf { padding: 3px 8px 3px 24px; cursor: pointer; white-space: nowrap; }
 .pd-tree .leaf:hover { background: var(--panel-2); }
-.pd-tree .leaf.on { background: var(--blue, #2a6fd6); color: #fff; }
+.pd-tree .leaf.on { background: var(--accent); color: var(--on-accent); }
 .pd-page { overflow: auto; min-height: 0; padding-right: 4px; }
 .pd-box { margin: 0 0 12px; }
 .pd-box > .hd { font-weight: 600; margin: 0 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--line); }
@@ -52,10 +52,10 @@ const CSS = `
 .pd-grid td { padding: 0; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); height: 24px; }
 .pd-grid td.ro, .pd-grid td.txt { padding: 3px 6px; white-space: nowrap; }
 .pd-grid td.ro { color: var(--ink-2); }
-.pd-grid tr.sel td { background: color-mix(in srgb, var(--blue, #2a6fd6) 22%, transparent); }
+.pd-grid tr.sel td { background: color-mix(in srgb, var(--blue) 22%, transparent); }
 .pd-grid tr.hd td { background: var(--panel-2); font-weight: 600; padding: 3px 6px; }
 .pd-grid td input[type=text], .pd-grid td select { border: none !important; border-radius: 0 !important; background: transparent !important; width: 100%; height: 23px; padding: 2px 6px !important; font-family: inherit !important; }
-.pd-grid td input[type=text]:focus, .pd-grid td select:focus { outline: 2px solid var(--blue, #2a6fd6); outline-offset: -2px; }
+.pd-grid td input[type=text]:focus, .pd-grid td select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
 .pd-grid td input[type=text] { min-width: 84px; }
 .pd-grid td.chk { text-align: center; }
 .pd-grid td.chk input { width: auto; margin: 0; }
@@ -65,7 +65,7 @@ const CSS = `
 .pd-iconbtn:disabled { opacity: .4; cursor: default; }
 .pd-report { border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; font-size: 12px; padding: 4px 8px; min-height: 120px; }
 .pd-report .ln { padding: 1px 0; white-space: pre-wrap; }
-.pd-report .ln.error { color: var(--err, #d33); }
+.pd-report .ln.error { color: var(--err); }
 .pd-report .ln.warning { color: #c80; }
 .pd-report .ln.action { color: var(--ink); }
 .pd-report .ln.info { color: var(--ink-2); }
@@ -81,7 +81,7 @@ const CSS = `
 .pd-list { border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; }
 .pd-list .it { padding: 3px 8px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
 .pd-list .it:hover { background: var(--panel-2); }
-.pd-list .it.sel { background: color-mix(in srgb, var(--blue, #2a6fd6) 22%, transparent); }
+.pd-list .it.sel { background: color-mix(in srgb, var(--blue) 22%, transparent); }
 .pd-list .it .sub { color: var(--ink-2); padding-left: 16px; }
 .pd-list .hd { padding: 3px 8px; font-weight: 600; background: var(--panel-2); border-bottom: 1px solid var(--line); }
 .pd-swatch { display: inline-block; width: 22px; height: 12px; border: 1px solid var(--line); vertical-align: -1px; }
@@ -93,7 +93,7 @@ const CSS = `
 .pd-layertable tr.cu input[type=text] { font-weight: 600; }
 .pd-layertable .desc { color: var(--ink-2); }
 .pd-colhead { font-weight: 600; margin: 0 0 4px; }
-.pd-status { font-size: 12px; } .pd-status.err { color: var(--err, #d33); } .pd-status.ok { color: var(--ink-2); }
+.pd-status { font-size: 12px; } .pd-status.err { color: var(--err); } .pd-status.ok { color: var(--ink-2); }
 .pd-sevtable { border-collapse: collapse; width: 100%; }
 .pd-sevtable td { padding: 2px 10px 2px 0; white-space: nowrap; }
 .pd-sevtable td:first-child { white-space: normal; width: 100%; padding-left: 14px; }

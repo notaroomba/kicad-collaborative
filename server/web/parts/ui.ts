@@ -26,78 +26,78 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: Record<string,
 
 const CSS = `
 .kp-back{position:fixed;inset:0;background:#0006;z-index:200;display:flex;align-items:center;justify-content:center}
-.kp{width:min(1120px,96vw);height:min(680px,92vh);background:var(--bench,#ECEBE6);color:var(--ink,#1B1B1B);border:1px solid var(--line,#CFCDC5);border-radius:6px;box-shadow:var(--shadow,0 10px 30px #0003);display:flex;flex-direction:column;font:13px/1.4 var(--font,system-ui,sans-serif);overflow:hidden}
+.kp{width:min(1120px,96vw);height:min(680px,92vh);background:var(--bench);color:var(--ink);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow,0 10px 30px #0003);display:flex;flex-direction:column;font:13px/1.4 var(--font,system-ui,sans-serif);overflow:hidden}
 .kp *{box-sizing:border-box}
-.kp-head{display:flex;align-items:center;gap:2px;padding:6px 8px 0 10px;border-bottom:1px solid var(--line,#CFCDC5)}
+.kp-head{display:flex;align-items:center;gap:2px;padding:6px 8px 0 10px;border-bottom:1px solid var(--line)}
 .kp-title{font-weight:600;margin-right:14px;padding-bottom:6px}
-.kp-tab{background:transparent;border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0;padding:5px 12px;cursor:pointer;color:var(--ink-2,#5B5A55);margin-bottom:-1px}
-.kp-tab:hover{color:var(--ink,#1B1B1B)}
-.kp-tab.on{background:var(--paper,#F5F4EF);border-color:var(--line,#CFCDC5);color:var(--ink,#1B1B1B)}
-.kp-x{margin-left:auto;background:transparent;border:0;font-size:18px;line-height:1;padding:2px 8px 8px;cursor:pointer;color:var(--ink-2,#5B5A55)}
-.kp-x:hover{color:var(--ink,#1B1B1B)}
-.kp-body{flex:1;min-height:0;display:flex;background:var(--paper,#F5F4EF)}
+.kp-tab{background:transparent;border:1px solid transparent;border-bottom:0;border-radius:4px 4px 0 0;padding:5px 12px;cursor:pointer;color:var(--ink-2);margin-bottom:-1px}
+.kp-tab:hover{color:var(--ink)}
+.kp-tab.on{background:var(--paper);border-color:var(--line);color:var(--ink)}
+.kp-x{margin-left:auto;background:transparent;border:0;font-size:18px;line-height:1;padding:2px 8px 8px;cursor:pointer;color:var(--ink-2)}
+.kp-x:hover{color:var(--ink)}
+.kp-body{flex:1;min-height:0;display:flex;background:var(--paper)}
 .kp-main{flex:1;min-width:0;display:flex;flex-direction:column}
-.kp-bar{display:flex;gap:6px;padding:8px 10px;align-items:center;border-bottom:1px solid var(--line,#CFCDC5);flex-wrap:wrap}
-.kp input[type=text],.kp input[type=password],.kp select{background:var(--panel,#fff);border:1px solid var(--line,#CFCDC5);border-radius:3px;padding:5px 8px;color:var(--ink,#1B1B1B);font:inherit;min-width:0}
-.kp input:focus,.kp select:focus{outline:2px solid var(--blue,#4D7FC4);outline-offset:-1px}
-.kp-btn{background:var(--panel,#fff);border:1px solid var(--line,#CFCDC5);border-radius:3px;padding:5px 11px;cursor:pointer;color:var(--ink,#1B1B1B);font:inherit;white-space:nowrap;text-decoration:none;display:inline-block}
-.kp-btn:hover{border-color:var(--ink-3,#8C8B85);text-decoration:none}
+.kp-bar{display:flex;gap:6px;padding:8px 10px;align-items:center;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.kp input[type=text],.kp input[type=password],.kp select{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:5px 8px;color:var(--ink);font:inherit;min-width:0}
+.kp input:focus,.kp select:focus{outline:2px solid var(--blue);outline-offset:-1px}
+.kp-btn{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:5px 11px;cursor:pointer;color:var(--ink);font:inherit;white-space:nowrap;text-decoration:none;display:inline-block}
+.kp-btn:hover{border-color:var(--ink-3);text-decoration:none}
 .kp-btn:disabled{opacity:.45;cursor:default}
-.kp-btn.primary{background:var(--copper,#C83434);border-color:var(--copper-2,#A82B2B);color:#fff;font-weight:500}
-.kp-btn.primary:hover{background:var(--copper-2,#A82B2B)}
-.kp-btn.danger{color:var(--err,#E6090D)}
+.kp-btn.primary{background:var(--accent);border-color:var(--accent-2);color:var(--on-accent);font-weight:500}
+.kp-btn.primary:hover{background:var(--accent-2)}
+.kp-btn.danger{color:var(--err)}
 .kp-btn.sm{padding:2px 8px;font-size:12px}
 .kp-list{flex:1;min-height:0;overflow:auto}
 .kp-table{width:100%;border-collapse:collapse;font-size:12px}
-.kp-table th{position:sticky;top:0;background:var(--bench,#ECEBE6);text-align:left;font-weight:500;color:var(--ink-2,#5B5A55);padding:5px 8px;border-bottom:1px solid var(--line,#CFCDC5);white-space:nowrap;z-index:1}
-.kp-table td{padding:5px 8px;border-bottom:1px solid var(--line,#CFCDC5);vertical-align:top}
+.kp-table th{position:sticky;top:0;background:var(--bench);text-align:left;font-weight:500;color:var(--ink-2);padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+.kp-table td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
 .kp-table tr.kp-row{cursor:pointer}
-.kp-table tr.kp-row:hover td{background:color-mix(in srgb,var(--blue,#4D7FC4) 8%,transparent)}
-.kp-table tr.kp-row.on td{background:color-mix(in srgb,var(--blue,#4D7FC4) 18%,transparent)}
-.kp-dim{color:var(--ink-2,#5B5A55);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+.kp-table tr.kp-row:hover td{background:color-mix(in srgb,var(--blue) 8%,transparent)}
+.kp-table tr.kp-row.on td{background:color-mix(in srgb,var(--blue) 18%,transparent)}
+.kp-dim{color:var(--ink-2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
 .kp-table tr.kp-nopart{cursor:default}
 .kp-mono{font-family:var(--mono,ui-monospace,monospace)}
 .kp-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.kp-desc{color:var(--ink-2,#5B5A55);max-width:340px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.kp-badge{display:inline-block;border-radius:3px;padding:0 5px;font-size:11px;line-height:17px;border:1px solid var(--line,#CFCDC5);color:var(--ink-2,#5B5A55);white-space:nowrap}
-.kp-badge.lcsc,.kp-badge.mouser,.kp-badge.farnell{border-color:var(--blue,#1E63B8);color:var(--blue,#1E63B8)}.kp-badge.digikey{border-color:var(--err,#C00);color:var(--err,#C00)}
-.kp-badge.basic{border-color:var(--wire,#009600);color:var(--wire,#009600)}.kp-badge.preferred{border-color:var(--teal,#006464);color:var(--teal,#006464)}
-.kp-badge.warn{border-color:var(--warn,#D19200);color:var(--warn,#D19200)}
-.kp-empty{padding:28px 20px;color:var(--ink-2,#5B5A55);text-align:center}
-.kp-empty b{color:var(--ink,#1B1B1B);font-weight:500}
-.kp-note{padding:6px 10px;font-size:12px;color:var(--ink-2,#5B5A55);border-bottom:1px solid var(--line,#CFCDC5)}
-.kp-note.err{color:var(--err,#E6090D)}.kp-note.warn{color:var(--warn,#D19200)}
-.kp-side{width:380px;flex:none;border-left:1px solid var(--line,#CFCDC5);background:var(--bench,#ECEBE6);display:flex;flex-direction:column;min-height:0}
+.kp-desc{color:var(--ink-2);max-width:340px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.kp-badge{display:inline-block;border-radius:3px;padding:0 5px;font-size:11px;line-height:17px;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+.kp-badge.lcsc,.kp-badge.mouser,.kp-badge.farnell{border-color:var(--blue);color:var(--blue)}.kp-badge.digikey{border-color:var(--err);color:var(--err)}
+.kp-badge.basic{border-color:var(--wire);color:var(--wire)}.kp-badge.preferred{border-color:var(--teal);color:var(--teal)}
+.kp-badge.warn{border-color:var(--warn);color:var(--warn)}
+.kp-empty{padding:28px 20px;color:var(--ink-2);text-align:center}
+.kp-empty b{color:var(--ink);font-weight:500}
+.kp-note{padding:6px 10px;font-size:12px;color:var(--ink-2);border-bottom:1px solid var(--line)}
+.kp-note.err{color:var(--err)}.kp-note.warn{color:var(--warn)}
+.kp-side{width:380px;flex:none;border-left:1px solid var(--line);background:var(--bench);display:flex;flex-direction:column;min-height:0}
 .kp-detail{flex:1;min-height:0;overflow:auto;padding:10px 12px}
 .kp-detail h3{margin:0;font-size:15px;font-weight:600;word-break:break-word}
-.kp-sub{color:var(--ink-2,#5B5A55);margin:2px 0 6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.kp-sub{color:var(--ink-2);margin:2px 0 6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .kp-views{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
-.kp-view{border:1px solid var(--line,#CFCDC5);border-radius:3px;overflow:hidden;background:var(--panel,#fff)}
+.kp-view{border:1px solid var(--line);border-radius:3px;overflow:hidden;background:var(--panel)}
 .kp-view canvas{display:block;width:100%;height:172px;cursor:zoom-in}
 .kp-zoom{position:fixed;inset:0;background:#000a;z-index:210;display:flex;align-items:center;justify-content:center;cursor:zoom-out}
 .kp-ask{position:fixed;inset:0;background:#0005;z-index:220;display:flex;align-items:center;justify-content:center}
-.kp-ask form{width:min(420px,92vw);background:var(--bench,#ECEBE6);color:var(--ink,#1B1B1B);border:1px solid var(--line,#CFCDC5);border-radius:6px;box-shadow:var(--shadow,0 10px 30px #0003);padding:14px 16px;display:flex;flex-direction:column;gap:10px;animation:kp-in .12s ease-out}
-.kp-ask b{font-size:14px}.kp-ask p{margin:0;color:var(--ink-2,#5B5A55);font-size:12.5px;line-height:1.45}
-.kp-ask input{background:var(--panel,#fff);color:var(--ink,#1B1B1B);border:1px solid var(--line,#CFCDC5);border-radius:3px;padding:6px 8px;font:inherit}
+.kp-ask form{width:min(420px,92vw);background:var(--bench);color:var(--ink);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow,0 10px 30px #0003);padding:14px 16px;display:flex;flex-direction:column;gap:10px;animation:kp-in .12s ease-out}
+.kp-ask b{font-size:14px}.kp-ask p{margin:0;color:var(--ink-2);font-size:12.5px;line-height:1.45}
+.kp-ask input{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:3px;padding:6px 8px;font:inherit}
 .kp-ask div{display:flex;justify-content:flex-end;gap:6px}
 @keyframes kp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.kp-zoom canvas{width:min(820px,92vw);height:min(820px,88vh);border-radius:4px;border:1px solid var(--line,#CFCDC5)}
-.kp-view div{font-size:11px;color:var(--ink-2,#5B5A55);padding:2px 6px;border-top:1px solid var(--line,#CFCDC5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kp-zoom canvas{width:min(820px,92vw);height:min(820px,88vh);border-radius:4px;border:1px solid var(--line)}
+.kp-view div{font-size:11px;color:var(--ink-2);padding:2px 6px;border-top:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kp-facts{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin:8px 0}
-.kp-facts dt{color:var(--ink-2,#5B5A55)}.kp-facts dd{margin:0;word-break:break-word}
-.kp-actions{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--line,#CFCDC5);background:var(--paper,#F5F4EF)}
-.kp-libs{width:210px;flex:none;border-right:1px solid var(--line,#CFCDC5);background:var(--bench,#ECEBE6);display:flex;flex-direction:column;min-height:0}
-.kp-lib{padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line,#CFCDC5)}
-.kp-lib:hover{background:color-mix(in srgb,var(--blue,#4D7FC4) 8%,transparent)}
-.kp-lib.on{background:color-mix(in srgb,var(--blue,#4D7FC4) 18%,transparent)}
-.kp-lib small{display:block;color:var(--ink-2,#5B5A55);font-size:11px}
+.kp-facts dt{color:var(--ink-2)}.kp-facts dd{margin:0;word-break:break-word}
+.kp-actions{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--line);background:var(--paper)}
+.kp-libs{width:210px;flex:none;border-right:1px solid var(--line);background:var(--bench);display:flex;flex-direction:column;min-height:0}
+.kp-lib{padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--line)}
+.kp-lib:hover{background:color-mix(in srgb,var(--blue) 8%,transparent)}
+.kp-lib.on{background:color-mix(in srgb,var(--blue) 18%,transparent)}
+.kp-lib small{display:block;color:var(--ink-2);font-size:11px}
 .kp-keys{padding:14px 16px;overflow:auto;flex:1;display:grid;gap:12px;align-content:start;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
-.kp-card{background:var(--panel,#fff);border:1px solid var(--line,#CFCDC5);border-radius:4px;padding:12px}
+.kp-card{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px}
 .kp-card h4{margin:0 0 4px;font-size:14px;display:flex;gap:8px;align-items:center}
-.kp-card p{margin:0 0 8px;color:var(--ink-2,#5B5A55);font-size:12px}
-.kp-card label{display:block;font-size:12px;color:var(--ink-2,#5B5A55);margin:6px 0 2px}
+.kp-card p{margin:0 0 8px;color:var(--ink-2);font-size:12px}
+.kp-card label{display:block;font-size:12px;color:var(--ink-2);margin:6px 0 2px}
 .kp-card input{width:100%}
-.kp-spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line,#CFCDC5);border-top-color:var(--blue,#4D7FC4);border-radius:50%;animation:kp-spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
+.kp-spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--blue);border-radius:50%;animation:kp-spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes kp-spin{to{transform:rotate(360deg)}}
 .kp-ghost{position:fixed;display:none;align-items:center;justify-content:center;border:1.5px dashed #FF26E2;background:#FF26E214;color:#fff;font:11px var(--mono,monospace);pointer-events:none;z-index:150;text-shadow:0 0 3px #000}
 `;
@@ -253,8 +253,8 @@ class PartsDialog {
         return h("tr", { class: "kp-row" + (r.key === selKey ? " on" : ""), "data-vendor": r.vendor, "data-id": r.vendor_id,
           onclick: () => void this.select(r.vendor, r.vendor_id, lib ? lib.nickname : undefined),
           ondblclick: () => void this.place() },
-          h("td", null, h("div", { class: "kp-mono" }, r.mpn || r.vendor_id), h("div", { style: "color:var(--ink-2,#5B5A55)" }, r.manufacturer)),
-          h("td", null, h("div", { class: "kp-desc", title: r.description }, r.description), r.item && r.item.note ? h("div", { style: "color:var(--teal,#006464)" }, r.item.note) : null,
+          h("td", null, h("div", { class: "kp-mono" }, r.mpn || r.vendor_id), h("div", { style: "color:var(--ink-2)" }, r.manufacturer)),
+          h("td", null, h("div", { class: "kp-desc", title: r.description }, r.description), r.item && r.item.note ? h("div", { style: "color:var(--teal)" }, r.item.note) : null,
             r.item && !r.item.cached ? h("span", { class: "kp-badge warn", title: "Not in the cache yet: it is fetched when you open it" }, "not fetched") : null,
             r.item && r.item.cached && !r.item.has_cad ? h("span", { class: "kp-badge warn" }, "no drawings") : null),
           h("td", null, r.package),
@@ -302,7 +302,7 @@ class PartsDialog {
       cad ? h("div", { class: "kp-views" },
         h("div", { class: "kp-view" }, h("canvas", { id: "kp-sym", title: "Click to enlarge", onclick: () => this.zoom("symbol") }), h("div", { title: cad.symbol ? cad.symbol.lib_id : "" }, cad.symbol ? `Symbol · ${cad.symbol.pins} pins${cad.symbol.units > 1 ? ` · ${cad.symbol.units} units` : ""}` : "No symbol")),
         h("div", { class: "kp-view" }, h("canvas", { id: "kp-fp", title: "Click to enlarge", onclick: () => this.zoom("footprint") }), h("div", { title: cad.footprint ? cad.footprint.fpid : "" }, cad.footprint ? `${cad.footprint.name} · ${cad.footprint.pads} pads` : "No footprint")))
-        : h("div", { class: "kp-note warn", id: "kp-nocad", style: "border:1px solid var(--line,#CFCDC5);border-radius:3px;margin:8px 0;padding:8px" },
+        : h("div", { class: "kp-note warn", id: "kp-nocad", style: "border:1px solid var(--line);border-radius:3px;margin:8px 0;padding:8px" },
           p.vendor === "lcsc" ? "LCSC has no drawings for this part." : [`${p.vendor_name} publishes no drawings, and no LCSC listing has the manufacturer part number ${p.mpn || "of this part"}. `,
             h("a", { href: "#", onclick: (ev: Event) => { ev.preventDefault(); void this.relink(); } }, "Use the drawings of an LCSC part…")]),
       facts);
@@ -421,7 +421,7 @@ class PartsDialog {
     const bar = h("div", { class: "kp-bar" },
       h("label", { style: "display:flex;align-items:center;gap:6px" }, "Boards", h("input", { type: "number", id: "kp-boards", min: "1", max: "100000", value: String(this.boards), style: "width:76px",
         oninput: (ev: Event) => { const n = Math.floor(+(ev.target as HTMLInputElement).value); if (n >= 1 && n !== this.boards) { this.boards = Math.min(n, 100000); this.render(); } } })),
-      h("span", { id: "kp-bom-sum", style: "flex:1;color:var(--ink-2,#5B5A55)" }, lines.length
+      h("span", { id: "kp-bom-sum", style: "flex:1;color:var(--ink-2)" }, lines.length
         ? `${t.parts} parts in ${t.lines} lines on ${what} · ${t.matched} with a vendor part${t.matched ? ` · ${money(t.cost, t.currency)} for ${this.boards === 1 ? "one board" : this.boards + " boards"}` : ""}${t.short ? ` · ${t.short} short of stock` : ""}` : ""),
       h("button", { class: "kp-btn", type: "button", id: "kp-bom-jlc", disabled: !lines.length, title: "Comment, Designator, Footprint, LCSC Part #: the file JLCPCB's assembly order asks for", onclick: () => this.download(`${stem}-jlcpcb-bom.csv`, jlcCsv(lines)) }, "JLCPCB BOM ↓"),
       h("button", { class: "kp-btn", type: "button", id: "kp-bom-csv", disabled: !lines.length, title: "Every line with stock and prices, for a spreadsheet", onclick: () => this.download(`${stem}-bom.csv`, fullCsv(lines, this.boards)) }, "Full BOM ↓"));
@@ -431,13 +431,13 @@ class PartsDialog {
       const need = l.refs.length * this.boards; const p = l.part; const pr = p ? priceAt(p.prices, need) : null;
       const on = !!(this.sel && l.vendor === this.sel.vendor && l.vendorId === this.sel.id);
       const part: Child[] = l.vendor
-        ? [h("div", null, (p && p.mpn) || l.mpn || l.vendorId), h("div", { class: "kp-dim" }, this.vendorBadge(l.vendor, p ? p.vendor_name : l.vendor.toUpperCase()), " ", h("span", { class: "kp-mono" }, l.vendorId), l.loading ? h("span", { class: "kp-spin", style: "margin-left:6px" }) : null, l.err ? h("span", { style: "color:var(--err,#E6090D);margin-left:6px", title: l.err }, "not found") : null)]
+        ? [h("div", null, (p && p.mpn) || l.mpn || l.vendorId), h("div", { class: "kp-dim" }, this.vendorBadge(l.vendor, p ? p.vendor_name : l.vendor.toUpperCase()), " ", h("span", { class: "kp-mono" }, l.vendorId), l.loading ? h("span", { class: "kp-spin", style: "margin-left:6px" }) : null, l.err ? h("span", { style: "color:var(--err);margin-left:6px", title: l.err }, "not found") : null)]
         : !l.ids.length ? [h("span", { class: "kp-dim", title: "Open that sheet to give these parts a vendor part" }, "on " + l.elsewhere.join(", "))] : [h("button", { class: "kp-btn sm kp-find", type: "button", title: "Search the vendors for this part and write the choice onto " + l.refs.join(", "), onclick: (ev: Event) => { ev.stopPropagation(); this.findFor(l); } }, "Find a part…"), l.mpn ? h("span", { class: "kp-dim", style: "margin-left:6px" }, l.mpn) : null];
       body.append(h("tr", { class: "kp-row" + (on ? " on" : "") + (l.vendor ? "" : " kp-nopart"), "data-key": l.key, "data-vendor": l.vendor || "", "data-id": l.vendorId, onclick: () => { if (l.vendor) void this.select(l.vendor, l.vendorId); } },
         h("td", { title: l.refs.join(", ") }, refList(l.refs)), h("td", { class: "kp-num" }, String(need)),
         h("td", null, h("div", null, l.value), h("div", { class: "kp-dim", title: l.footprint }, l.footprint.includes(":") ? l.footprint.slice(l.footprint.indexOf(":") + 1) : l.footprint)),
         h("td", null, ...part),
-        h("td", { class: "kp-num", style: p && p.stock !== null && p.stock < need ? "color:var(--err,#E6090D)" : "" }, p && p.stock !== null ? stockText(p.stock) : ""),
+        h("td", { class: "kp-num", style: p && p.stock !== null && p.stock < need ? "color:var(--err)" : "" }, p && p.stock !== null ? stockText(p.stock) : ""),
         h("td", { class: "kp-num" }, pr ? money(pr.price, pr.currency) : ""), h("td", { class: "kp-num" }, pr ? money(pr.price * need, pr.currency) : "")));
     }
     const empty = !lines.length ? h("div", { class: "kp-empty" }, h("b", null, `No parts on ${what}.`), h("p", null, "Symbols marked “exclude from BOM” or “do not populate”, and power symbols, are left out.")) : null;
@@ -483,7 +483,7 @@ class PartsDialog {
     const list = h("div", { class: "kp-list" }, this.libs.map((l) => h("div", { class: "kp-lib" + (this.lib && this.lib.id === l.id ? " on" : ""), "data-lib": l.id, onclick: () => void this.openLibrary(l.id) },
       l.name, h("small", null, `${l.items} part${l.items === 1 ? "" : "s"}`, l.project_name ? ` · shared with ${l.project_name}` : "", l.mine ? "" : ` · by ${l.owner_login}`))));
     if (!this.libs.length) list.append(h("div", { class: "kp-empty" }, "No libraries yet."));
-    return h("div", { class: "kp-libs" }, list, h("div", { style: "padding:8px;border-top:1px solid var(--line,#CFCDC5)" },
+    return h("div", { class: "kp-libs" }, list, h("div", { style: "padding:8px;border-top:1px solid var(--line)" },
       h("button", { class: "kp-btn", type: "button", id: "kp-newlib", style: "width:100%", onclick: async () => { const id = await this.newLibrary(); if (id) await this.openLibrary(id); else this.render(); } }, "New Library…")));
   }
 
@@ -522,7 +522,7 @@ class PartsDialog {
           const r = await api.putKey(v.id, Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value.trim()])));
           this.vendors = await api.vendors(); this.render();
           if (!r.verified) void tell("Key saved", `${v.name} could not be reached to check it.`);
-        } catch (e) { msg.textContent = errText(e); msg.style.color = "var(--err,#E6090D)"; save.disabled = false; }
+        } catch (e) { msg.textContent = errText(e); msg.style.color = "var(--err)"; save.disabled = false; }
       } }, "Save");
       card.append(h("div", { style: "display:flex;gap:6px;margin-top:10px;align-items:center" }, save,
         v.key_source === "yours" ? h("button", { class: "kp-btn", type: "button", onclick: async () => { try { await api.deleteKey(v.id); this.vendors = await api.vendors(); } catch (e) { void tell("The key could not be removed", errText(e)); } this.render(); } }, "Remove") : null,

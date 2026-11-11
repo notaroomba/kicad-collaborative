@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Style guide — KiCad Collaborative</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script>try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<style>
+{{THEME}}
+  /* Everything above is static/theme.css, as every page gets it.  Below is only this page's layout. */
+  html, body { margin: 0; }
+  body { min-height: 100vh; color: var(--ink); font: var(--fs-md)/1.5 var(--font); -webkit-font-smoothing: antialiased;
+         background-color: var(--paper);
+         background-image: radial-gradient(color-mix(in srgb, var(--line-2) 55%, transparent) 1px, transparent 1.3px);
+         background-size: 20px 20px; }
+  header { display: flex; align-items: center; gap: 10px; padding: 8px var(--s-4); background: var(--bench);
+           border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header .mark svg { width: 20px; height: 20px; display: block; }
+  header b { font-weight: 600; }
+  header .crumb { color: var(--ink-2); }
+  header .sp { flex: 1; }
+  main { max-width: 980px; margin: 0 auto; padding: var(--s-5) var(--s-4) var(--s-7); display: grid; gap: var(--s-4); }
+  h1 { margin: 0 0 4px; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.01em; }
+  h3 { margin: var(--s-4) 0 var(--s-2); font: 500 var(--fs-xs) var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: .08em; }
+  h3:first-child { margin-top: 0; }
+  p { margin: 0 0 10px; max-width: 72ch; } p:last-child { margin-bottom: 0; }
+  code { font: var(--fs-sm) var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-1); padding: 0 4px; }
+  ul.rules { margin: 0; padding-left: 18px; max-width: 76ch; } ul.rules li { margin: 4px 0; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-2); }
+  .sw { border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; background: var(--panel); }
+  .sw i { display: block; height: 44px; border-bottom: 1px solid var(--line); }
+  .sw div { padding: 6px 8px; }
+  .sw b { display: block; font: 500 var(--fs-sm) var(--mono); }
+  .sw .val { font: var(--fs-xs) var(--mono); color: var(--ink-3); }
+  .sw span { display: block; font-size: var(--fs-sm); color: var(--ink-2); }
+  .demo { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+  .demo + .demo { margin-top: var(--s-2); }
+  .demo.col { flex-direction: column; align-items: stretch; }
+  .spec { font: var(--fs-xs) var(--mono); color: var(--ink-3); }
+  table.type { width: 100%; border-collapse: collapse; }
+  table.type td { padding: 6px 0; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  table.type tr:last-child td { border-bottom: 0; }
+  table.type td:first-child { width: 150px; }
+  .scale { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: flex-end; }
+  .scale div { text-align: center; }
+  .scale i { display: block; background: var(--on); border: 1px solid var(--on-line); margin: 0 auto 4px; }
+  .lift { width: 150px; height: 64px; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s-4); }
+  /* static copies of the fixed-position patterns, so they sit in the page */
+  .stage { padding: var(--s-4); background: var(--bench); border: 1px solid var(--line); border-radius: var(--r-2); display: grid; place-items: center; }
+  .stage .kd-dialog { min-width: 0; width: min(420px, 100%); }
+  .stage .kd-title { cursor: default; }
+  .caption { display: flex; align-items: center; height: 22px; padding: 0 6px; font-size: var(--fs-sm); font-weight: 600;
+             background: linear-gradient(var(--paper), var(--bench)); border-bottom: 1px solid var(--line); }
+  .pane { width: 220px; background: var(--paper); border: 1px solid var(--line); font-size: var(--fs-sm); }
+  .pane .rowi { display: flex; justify-content: space-between; padding: 3px 8px; }
+  .pane .rowi.sel { background: var(--sel); }
+  .pane .rowi span { font-family: var(--mono); color: var(--teal); }
+  .menu { width: 220px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); box-shadow: var(--shadow); font-size: var(--fs-base); }
+  .menu div { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: var(--r-1); }
+  .menu div.cur { background: var(--accent); color: var(--on-accent); }
+  .menu div .sp { flex: 1; } .menu hr { border: 0; height: 1px; background: var(--line); margin: 4px 2px; }
+  .menu div.cur .kbd { color: var(--on-accent); background: transparent; border-color: color-mix(in srgb, var(--on-accent) 45%, transparent); }
+  .toast { display: inline-flex; gap: 12px; padding: 8px 12px; border-radius: var(--r-3); background: var(--ink); color: var(--paper); box-shadow: var(--shadow); font-size: var(--fs-base); }
+  .canvasdemo { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; }
+  .canvasdemo div { padding: 14px; font: var(--fs-sm) var(--mono); min-height: 70px; }
+  @media (max-width: 600px) { main { padding: var(--s-3) 10px var(--s-6); } table.type td:first-child { width: 96px; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="mark" href="/" title="Home">{{MARK}}</a>
+  <b>KiCad Collaborative</b>
+  <span class="crumb">Style guide</span>
+  <span class="sp"></span>
+  <div class="seg" role="group" aria-label="Theme">
+    <button type="button" data-mode="system">System</button><button type="button" data-mode="light">Light</button><button type="button" data-mode="dark">Dark</button>
+  </div>
+</header>
+<main>
+  <section>
+    <h1>Style guide</h1>
+    <p class="muted">One theme for every page: the home page, sign-in and join pages, the projects window, the GitHub page, and the editor with its panes, dialogs, Assistant and plugins. This page is drawn with that theme, <code>static/theme.css</code>, so what you see here is what ships. The written rules are in <code>server/web/STYLE.md</code>.</p>
+  </section>
+
+  <section class="box"><h2>Principles</h2><div class="in">
+    <ul class="rules">
+      <li><b>It is KiCad.</b> Neutral grey chrome like KiCad's own windows, dense rows, small radii, 1px rules. The design on the canvas is the only colourful thing on screen.</li>
+      <li><b>Blue is the accent.</b> Primary buttons, links, selection, focus and the active tab are blue. One primary button per view.</li>
+      <li><b>Red means red.</b> Red is F.Cu, the brand mark, an error, or a destructive action. It never means “go”.</li>
+      <li><b>Colour comes from tokens.</b> No colour literal outside the theme. Canvas drawing uses KiCad's own layer and schematic colours and is the one exception.</li>
+      <li><b>Light and dark are the same design.</b> Every surface works in both; nothing is styled for one theme only.</li>
+      <li><b>Plain words.</b> Labels are KiCad's own where KiCad has one. Sentence case, no exclamation marks, errors say what to do next.</li>
+    </ul>
+  </div></section>
+
+  <section class="box"><h2>Colour</h2><div class="in">
+    <h3>Surfaces and lines</h3>
+    <div class="swatches">
+      <div class="sw" data-token="--bench"><i style="background:var(--bench)"></i><div><b>--bench</b><span class="val"></span><span>Toolbars, sidebars, title bars</span></div></div>
+      <div class="sw" data-token="--paper"><i style="background:var(--paper)"></i><div><b>--paper</b><span class="val"></span><span>Page and pane bodies, hover</span></div></div>
+      <div class="sw" data-token="--panel"><i style="background:var(--panel)"></i><div><b>--panel</b><span class="val"></span><span>Inputs, menus, cards</span></div></div>
+      <div class="sw" data-token="--line"><i style="background:var(--line)"></i><div><b>--line</b><span class="val"></span><span>1px rules, control borders</span></div></div>
+      <div class="sw" data-token="--line-2"><i style="background:var(--line-2)"></i><div><b>--line-2</b><span class="val"></span><span>Hovered border, grid dots</span></div></div>
+    </div>
+    <h3>Text</h3>
+    <div class="swatches">
+      <div class="sw" data-token="--ink"><i style="background:var(--ink)"></i><div><b>--ink</b><span class="val"></span><span>Primary text</span></div></div>
+      <div class="sw" data-token="--ink-2"><i style="background:var(--ink-2)"></i><div><b>--ink-2</b><span class="val"></span><span>Secondary text, labels</span></div></div>
+      <div class="sw" data-token="--ink-3"><i style="background:var(--ink-3)"></i><div><b>--ink-3</b><span class="val"></span><span>Captions, placeholders</span></div></div>
+    </div>
+    <h3>Accent</h3>
+    <div class="swatches">
+      <div class="sw" data-token="--accent"><i style="background:var(--accent)"></i><div><b>--accent</b><span class="val"></span><span>Primary button, filled selection</span></div></div>
+      <div class="sw" data-token="--accent-2"><i style="background:var(--accent-2)"></i><div><b>--accent-2</b><span class="val"></span><span>Its border, hover, pressed</span></div></div>
+      <div class="sw" data-token="--blue"><i style="background:var(--blue)"></i><div><b>--blue</b><span class="val"></span><span>Links, focus ring, active tab</span></div></div>
+      <div class="sw" data-token="--sel"><i style="background:var(--sel)"></i><div><b>--sel</b><span class="val"></span><span>Selected row</span></div></div>
+      <div class="sw" data-token="--sel-soft"><i style="background:var(--sel-soft)"></i><div><b>--sel-soft</b><span class="val"></span><span>Hovered row</span></div></div>
+      <div class="sw" data-token="--on"><i style="background:var(--on)"></i><div><b>--on</b><span class="val"></span><span>Pressed toggle</span></div></div>
+    </div>
+    <h3>Meaning</h3>
+    <div class="swatches">
+      <div class="sw" data-token="--wire"><i style="background:var(--wire)"></i><div><b>--wire</b><span class="val"></span><span>Live, ok, added</span></div></div>
+      <div class="sw" data-token="--warn"><i style="background:var(--warn)"></i><div><b>--warn</b><span class="val"></span><span>Warning, conflict</span></div></div>
+      <div class="sw" data-token="--err"><i style="background:var(--err)"></i><div><b>--err</b><span class="val"></span><span>Error, destructive</span></div></div>
+      <div class="sw" data-token="--teal"><i style="background:var(--teal)"></i><div><b>--teal</b><span class="val"></span><span>Values, references, editor role</span></div></div>
+      <div class="sw" data-token="--copper"><i style="background:var(--copper)"></i><div><b>--copper</b><span class="val"></span><span>F.Cu, brand mark, owner role</span></div></div>
+    </div>
+    <h3>Canvas (the same in both themes)</h3>
+    <div class="swatches">
+      <div class="sw" data-token="--canvas"><i style="background:var(--canvas)"></i><div><b>--canvas</b><span class="val"></span><span>Board background</span></div></div>
+      <div class="sw" data-token="--sheet"><i style="background:var(--sheet)"></i><div><b>--sheet</b><span class="val"></span><span>Schematic background</span></div></div>
+      <div class="sw" data-token="--silk"><i style="background:var(--silk)"></i><div><b>--silk</b><span class="val"></span><span>Silkscreen, crosshair</span></div></div>
+      <div class="sw" data-token="--mark"><i style="background:var(--mark)"></i><div><b>--mark</b><span class="val"></span><span>Comments, measurements</span></div></div>
+    </div>
+  </div></section>
+
+  <section class="box"><h2>Type</h2><div class="in">
+    <p>IBM Plex Sans for everything people read, IBM Plex Mono for what the design says: references, values, coordinates, file paths, counts, keys. Weights are 400, 500 for controls and 600 for titles. Nothing is set in italics or all caps except the small mono captions.</p>
+    <table class="type">
+      <tr><td class="spec">--fs-2xl · 28</td><td style="font-size:var(--fs-2xl);font-weight:600;letter-spacing:-.01em">Design boards together</td></tr>
+      <tr><td class="spec">--fs-xl · 20</td><td style="font-size:var(--fs-xl);font-weight:600;letter-spacing:-.01em">Page title</td></tr>
+      <tr><td class="spec">--fs-lg · 16</td><td style="font-size:var(--fs-lg);font-weight:600">Section heading</td></tr>
+      <tr><td class="spec">--fs-md · 14</td><td style="font-size:var(--fs-md)">Page body text, dialog titles</td></tr>
+      <tr><td class="spec">--fs-base · 13</td><td style="font-size:var(--fs-base)">App body text, buttons, inputs, menus</td></tr>
+      <tr><td class="spec">--fs-sm · 12</td><td style="font-size:var(--fs-sm)">Panes, property grids, dialog bodies</td></tr>
+      <tr><td class="spec">--fs-xs · 11</td><td style="font:var(--fs-xs) var(--mono)">X 118.90  Y 90.02  grid 0.25 mm</td></tr>
+      <tr><td class="spec">--fs-2xs · 10</td><td style="font:500 var(--fs-2xs) var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--ink-3)">Pane caption</td></tr>
+    </table>
+  </div></section>
+
+  <section class="box"><h2>Space, shape and depth</h2><div class="in">
+    <h3>Spacing: a 4px scale</h3>
+    <div class="scale">
+      <div><i style="width:4px;height:4px"></i><span class="spec">--s-1 · 4</span></div>
+      <div><i style="width:8px;height:8px"></i><span class="spec">--s-2 · 8</span></div>
+      <div><i style="width:12px;height:12px"></i><span class="spec">--s-3 · 12</span></div>
+      <div><i style="width:16px;height:16px"></i><span class="spec">--s-4 · 16</span></div>
+      <div><i style="width:24px;height:24px"></i><span class="spec">--s-5 · 24</span></div>
+      <div><i style="width:32px;height:32px"></i><span class="spec">--s-6 · 32</span></div>
+      <div><i style="width:48px;height:48px"></i><span class="spec">--s-7 · 48</span></div>
+    </div>
+    <h3>Radii</h3>
+    <div class="scale">
+      <div><i style="width:56px;height:36px;border-radius:var(--r-1)"></i><span class="spec">--r-1 · 2 · badges</span></div>
+      <div><i style="width:56px;height:36px;border-radius:var(--r-2)"></i><span class="spec">--r-2 · 3 · controls</span></div>
+      <div><i style="width:56px;height:36px;border-radius:var(--r-3)"></i><span class="spec">--r-3 · 6 · windows</span></div>
+    </div>
+    <h3>Control heights</h3>
+    <div class="demo">
+      <button class="btn sm">--h-sm · 24</button><button class="btn">--h-md · 28</button><button class="btn lg">--h-lg · 34</button>
+      <span class="spec">Dense editor rows, the app, pages. Touch-sized windows use 40.</span>
+    </div>
+    <h3>Elevation</h3>
+    <div class="demo" style="gap:var(--s-5);padding:var(--s-3) 0 var(--s-4)">
+      <div class="lift"><span class="spec">flat · 1px rule</span></div>
+      <div class="lift" style="box-shadow:var(--shadow)"><span class="spec">--shadow · menus</span></div>
+      <div class="lift" style="box-shadow:var(--shadow-dialog)"><span class="spec">--shadow-dialog</span></div>
+    </div>
+  </div></section>
+
+  <section class="box"><h2>Buttons</h2><div class="in">
+    <div class="demo">
+      <button class="btn primary">Save</button><button class="btn">Cancel</button><button class="btn ghost">More</button>
+      <button class="btn danger">Remove</button><button class="btn danger solid">Delete forever</button>
+      <button class="btn on">Toggled on</button><button class="btn" disabled>Disabled</button>
+    </div>
+    <div class="demo">
+      <button class="btn primary sm">Place</button><button class="btn sm">Refresh</button>
+      <button class="btn primary lg">Sign in with GitHub</button><button class="btn lg">Open in the desktop app</button>
+    </div>
+    <p class="muted" style="margin-top:var(--s-3)">One <code>.btn.primary</code> per view, rightmost in a dialog's button row with Cancel to its left. <code>.danger</code> asks before something is lost; the solid form is only for the confirming click.</p>
+  </div></section>
+
+  <section class="box"><h2>Fields and choices</h2><div class="in two">
+    <div class="demo col">
+      <input class="input" placeholder="Search projects" aria-label="Text field">
+      <input class="input mono" value="R_0603_1608Metric" aria-label="Mono field">
+      <select class="input" aria-label="Select"><option>All unlocked footprints (15)</option><option>Selected footprints</option></select>
+      <input class="input bad" value="0,5 mm" aria-label="Invalid field">
+      <textarea class="input" rows="2" placeholder="What is this board?" aria-label="Text area"></textarea>
+    </div>
+    <div class="demo col">
+      <div class="demo"><label class="row"><input type="checkbox" checked> Place vias</label><label class="row"><input type="checkbox"> Override locks</label></div>
+      <div class="demo"><label class="row"><input type="radio" name="r" checked> Schematic</label><label class="row"><input type="radio" name="r"> Board</label></div>
+      <div class="demo"><div class="seg"><button class="on">All</button><button>Owned by me</button><button>Shared with me</button></div></div>
+      <div class="demo"><span class="pill owner">Owner</span><span class="pill editor">Editor</span><span class="pill">Viewer</span><span class="pill info">Public</span><span class="pill ok">Synced</span><span class="pill warn">Conflict</span><span class="pill err">Failed</span></div>
+      <div class="demo"><span class="kbd">Ctrl</span><span class="kbd">S</span> <span class="kbd">R</span> <span class="kbd">Del</span> <span class="spinner"></span> <span class="muted">Comparing…</span></div>
+    </div>
+  </div></section>
+
+  <section class="box"><h2>Messages</h2><div class="in demo col">
+    <div class="callout">The branch <b>main</b> does not exist on GitHub yet. The first push creates it.</div>
+    <div class="callout ok">Pushed 3 files to <b>main</b>.</div>
+    <div class="callout warn">2 documents have live edits that are not saved into the project file yet.</div>
+    <div class="callout err">You don't have access to this project.</div>
+    <div class="demo"><span class="toast">Moved to Trash <b>Undo</b></span></div>
+    <div class="empty">No projects yet. Create one or join with a link.</div>
+  </div></section>
+
+  <section class="box"><h2>Windows</h2><div class="in two">
+    <div>
+      <h3>Dialog</h3>
+      <div class="stage">
+        <div class="kd-dialog">
+          <div class="kd-title">Auto Place Footprints<span class="kd-x">×</span></div>
+          <div class="kd-body">
+            <div class="kv"><label>Place</label><select><option>All unlocked footprints (15)</option></select><label>Spacing (mm)</label><input type="text" value="0.5"></div>
+            <p class="kd-note" style="margin-top:10px">Parts are kept inside the board outline.</p>
+          </div>
+          <div class="kd-foot"><button class="btn sm">Cancel</button><button class="btn sm primary">Place</button></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3>Pane and menu</h3>
+      <div class="stage" style="grid-auto-flow:column;gap:var(--s-4);align-items:start">
+        <div class="pane">
+          <div class="caption">Properties</div>
+          <div class="rowi"><b>Reference</b><span>R12</span></div>
+          <div class="rowi sel"><b>Value</b><span>10k</span></div>
+          <div class="rowi"><b>Footprint</b><span>0603</span></div>
+        </div>
+        <div class="menu">
+          <div>Undo<span class="sp"></span><span class="kbd">Ctrl+Z</span></div>
+          <div class="cur">Rotate<span class="sp"></span><span class="kbd">R</span></div>
+          <hr>
+          <div>Properties…<span class="sp"></span><span class="kbd">E</span></div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="box"><h2>The canvas and the mark</h2><div class="in two">
+    <div>
+      <p>The board and the sheet use KiCad's own colours in both themes; the chrome around them never competes. Layer colours are KiCad's defaults and live with the renderer, not in the theme.</p>
+      <div class="canvasdemo">
+        <div style="background:var(--canvas);color:var(--silk)">PCB · --canvas<br>silk in --silk</div>
+        <div style="background:var(--sheet);color:#840000">Schematic · --sheet</div>
+      </div>
+    </div>
+    <div>
+      <p>The mark sits at 18 to 20px in title bars and at 32px as the browser icon, always on its own background, never recoloured.</p>
+      <div class="demo" style="gap:var(--s-4)">
+        <span style="width:48px;height:48px;display:block">{{MARK}}</span>
+        <span style="width:32px;height:32px;display:block">{{MARK}}</span>
+        <span style="width:20px;height:20px;display:block">{{MARK}}</span>
+        <b>KiCad Collaborative</b>
+      </div>
+    </div>
+  </div></section>
+</main>
+<script src="/static/dist/styleguide.js"></script>
+</body>
+</html>

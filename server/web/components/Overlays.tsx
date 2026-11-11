@@ -16,12 +16,12 @@ export function Toast() {
   }, [toast]);
   // transform-[…] rather than -translate-x-1/2: Tailwind's translate-* utilities emit the separate `translate`
   // property, and app.html's centring for #toast (if ever re-added) uses `transform` — keep the one property.
-  return <div id="toast" className={cx("fixed left-1/2 bottom-10 transform-[translateX(-50%)] bg-ink text-paper rounded-[3px] py-2 px-3.5 opacity-0 transition-opacity duration-200 ease-[ease] pointer-events-none z-100 show:opacity-100", show && "show")}>{toast ? toast.text : ""}</div>;
+  return <div id="toast" className={cx("fixed left-1/2 bottom-10 transform-[translateX(-50%)] bg-ink text-paper rounded-sm py-2 px-3.5 opacity-0 transition-opacity duration-200 ease-[ease] pointer-events-none z-100 show:opacity-100", show && "show")}>{toast ? toast.text : ""}</div>;
 }
 
 const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
 const H4 = "m-0 mb-2 text-base";                                                                              // was #popover h4
-const INPUT = "w-full bg-paper border border-line rounded-[3px] py-1.5 px-2 text-ink font-mono text-sm";     // was #popover input
+const INPUT = "w-full bg-paper border border-line rounded-sm py-1.5 px-2 text-ink font-mono text-sm";     // was #popover input
 
 function PopoverBody({ p }: { p: PopoverState }) {
   const gridPitch = useApp((s) => s.viewport.gridPitch);
@@ -60,7 +60,7 @@ function PopoverBody({ p }: { p: PopoverState }) {
           <h4 className={H4}>Grid</h4>
           {gridChoices.map(([v, label]) => (
             <button type="button" key={v} data-grid={v}
-              className={cx("kbtn block w-full text-left my-0.5 bg-panel border rounded-[3px] py-[3px] px-2.5 text-ink text-sm disabled:opacity-45",
+              className={cx("kbtn block w-full text-left my-0.5 bg-panel border rounded-sm py-[3px] px-2.5 text-ink text-sm disabled:opacity-45",
                 v === gridPitch ? "border-blue hover:border-blue" : "border-line hover:border-ink-3")}
               onClick={() => { dispatch({ type: "setGrid", pitch: v }); close(); }}>{label}</button>
           ))}
@@ -101,7 +101,7 @@ export function Popover() {
     const t = setTimeout(() => document.addEventListener("pointerdown", down), 0);
     return () => { clearTimeout(t); document.removeEventListener("pointerdown", down); };
   }, [p]);
-  return <div id="popover" ref={ref} style={style} className="fixed hidden bg-panel border border-line rounded-sm py-3 px-3.5 min-w-80 shadow-panel z-60">{p ? <PopoverBody p={p} /> : null}</div>;
+  return <div id="popover" ref={ref} style={style} className="fixed hidden bg-panel border border-line rounded-md py-3 px-3.5 min-w-80 shadow-panel z-60">{p ? <PopoverBody p={p} /> : null}</div>;
 }
 
 /** "Viewing as a guest" on the stage (the stage itself stays app.js's; this is portalled into it). */

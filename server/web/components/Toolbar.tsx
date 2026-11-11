@@ -19,7 +19,7 @@ function useEditor(): Editor | null { return useApp((s) => s.document.editor); }
 // ---------------------------------------------------------------- the look (Tailwind utilities)
 /* `kb`, `on`, `desk`, `kmain`, `glyph`, `ktb`, `ktb-v`, `karrow`, … stay as hook classes (this file and
    sch-tools query them); the styling is entirely the utilities that follow them. */
-const KB = "kb relative w-7.5 h-7.5 p-0.5 border border-transparent rounded-[3px] bg-transparent text-ink inline-flex items-center justify-center flex-none"
+const KB = "kb relative w-7.5 h-7.5 p-0.5 border border-transparent rounded-sm bg-transparent text-ink inline-flex items-center justify-center flex-none"
   + " hover:bg-paper hover:border-line on:bg-on on:border-on-line on:shadow-[inset_0_1px_2px] on:shadow-black/[13.3%] desk:opacity-[.38] desk:hover:opacity-70 active:translate-y-px";
 /* No KiCad toolbar ever wraps: wxAuiToolBar keeps its one row (or column) and hides the tools that do
    not fit behind an overflow chevron that pops them up as a menu — ACTION_TOOLBAR's
@@ -33,9 +33,9 @@ const KTB_INNER = "ktb-row flex flex-row flex-nowrap items-center justify-start 
 const KTB_V = "ktb ktb-v flex flex-col items-center min-h-0 w-8.5 bg-bench";
 const KTB_V_INNER = "ktb-col flex flex-col flex-nowrap items-center justify-start gap-px px-0.5 py-1 w-full flex-1 min-h-0 overflow-hidden [&>*]:flex-none";
 /* the overflow chevron: KB's look without KB's `relative`, so it stays a plain flex item at the end of the bar */
-const KMORE = "kb kmore flex-none w-7.5 h-7.5 p-0.5 border border-transparent rounded-[3px] bg-transparent text-ink-2 inline-flex items-center justify-center"
+const KMORE = "kb kmore flex-none w-7.5 h-7.5 p-0.5 border border-transparent rounded-sm bg-transparent text-ink-2 inline-flex items-center justify-center"
   + " hover:bg-paper hover:border-line hover:text-ink [&[hidden]]:hidden";
-const KSEL = "ksel bg-panel border border-line rounded-[3px] px-1 py-0.5 h-6 text-sm text-ink max-w-[170px]";
+const KSEL = "ksel bg-panel border border-line rounded-sm px-1 py-0.5 h-6 text-sm text-ink max-w-[170px]";
 
 // ---------------------------------------------------------------- buttons
 function ActionButton({ item, a, main }: { item: ActionItem; a: Avail; main?: boolean }) {
@@ -83,12 +83,12 @@ function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElem
     return () => { clearTimeout(t); document.removeEventListener("pointerdown", down, true); };
   }, [onClose]);
   return createPortal(
-    <div className="kpalette fixed z-70 bg-panel border border-line rounded-sm shadow-panel p-1 min-w-50" ref={ref} style={style}>
+    <div className="kpalette fixed z-70 bg-panel border border-line rounded-md shadow-panel p-1 min-w-50" ref={ref} style={style}>
       {group.items.map((it) => {
         const why = unavailable(a, it.id); const k = keyFor(a, it.id);
         return (
           <button type="button" key={it.id} title={titleFor(a, it.id)} data-uiact={it.id}
-            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-blue hover:text-white cur:shadow-[inset_2px_0_0_var(--color-copper)] desk:opacity-[.45]",
+            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white cur:shadow-[inset_2px_0_0_var(--color-blue)] desk:opacity-[.45]",
               why && "desk", cur === it.id && "cur")}
             onClick={(ev) => { onClose(); dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
             <KIcon name={(actionMeta(it.id) || it).icon || "options_generic"} />
@@ -212,7 +212,7 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
     return () => { clearTimeout(t); document.removeEventListener("pointerdown", down, true); };
   }, [anchor, onClose]);
   return createPortal(
-    <div className="kpalette koverflow fixed z-70 bg-panel border border-line rounded-sm shadow-panel p-1 min-w-50 max-h-[80vh] overflow-y-auto" ref={ref} style={style}>
+    <div className="kpalette koverflow fixed z-70 bg-panel border border-line rounded-md shadow-panel p-1 min-w-50 max-h-[80vh] overflow-y-auto" ref={ref} style={style}>
       {entries.map((e) => {
         const m = e.menu!;
         // wxAuiToolBar cannot re-parent a control into its overflow menu, so it lists it as a
@@ -221,7 +221,7 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
         const why = unavailable(a, m.id); const k = keyFor(a, m.id);
         return (
           <button type="button" key={e.key} title={titleFor(a, m.id)} data-uiact={m.id}
-            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-blue hover:text-white desk:opacity-[.45]", why && "desk")}
+            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white desk:opacity-[.45]", why && "desk")}
             onClick={(ev) => { onClose(); runUiAction(a, m.id, ev.currentTarget); }}>
             {m.glyph ? <Glyph svg={m.glyph} /> : <KIcon name={m.icon || "options_generic"} />}
             <span className="flex-1">{m.label}</span>

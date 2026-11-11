@@ -86,7 +86,7 @@ function Pane({ name, first, count, children, footer }: { name: string; first: b
       <header className="flex flex-none items-center h-5.5 px-1.5 text-sm font-semibold text-ink bg-[linear-gradient(var(--color-paper),var(--color-bench))] border-b border-line select-none">
         {PANE_TITLES[name] || name}
         {count !== undefined ? <span className="n ml-1.5 font-normal text-ink-3" id={name === "peers" ? "peerN" : name === "comments" ? "cmtN" : undefined}>{count}</span> : null}
-        <button type="button" className="kx ml-auto w-4 h-4 p-0 border-0 rounded-xs bg-transparent text-ink-2 text-lg font-sans font-normal leading-none hover:bg-copper hover:text-white" data-pane-close={name} title="Close" onClick={() => dispatch({ type: "showPane", pane: name, show: false })}>×</button>
+        <button type="button" className="kx ml-auto w-4 h-4 p-0 border-0 rounded-xs bg-transparent text-ink-2 text-lg font-sans font-normal leading-none hover:bg-err hover:text-white" data-pane-close={name} title="Close" onClick={() => dispatch({ type: "showPane", pane: name, show: false })}>×</button>
       </header>
       {children}
       {footer}

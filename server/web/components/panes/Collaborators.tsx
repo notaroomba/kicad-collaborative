@@ -4,7 +4,7 @@ import { dispatch, useApp } from "../../store";
 // .peer row: flex, centred, 8px gap, 4px pad, 2px radius, panel fill on hover.
 const PEER = "peer flex items-center gap-2 p-1 rounded-xs hover:bg-panel";
 // .peer .dot: 10px circle (the fill is the peer's own colour, set inline below).
-const DOT = "dot w-2.5 h-2.5 rounded-[50%]";
+const DOT = "dot w-2.5 h-2.5 rounded-full";
 // .peer .who: takes the remaining width and ellipsises.
 const WHO = "who flex-1 truncate";
 

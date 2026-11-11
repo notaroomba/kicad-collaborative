@@ -97,7 +97,7 @@ function disabledWhy(c: Ctx, id: string): string | null {
 const isCheckable = (id: string) => MENU_CHECKS.has(id);
 
 // ---------------------------------------------------------------- panels
-const PANEL = "dd fixed min-w-[230px] bg-panel border border-line rounded-sm p-1 z-50 shadow-panel overflow-y-auto overflow-x-hidden";
+const PANEL = "dd fixed min-w-[230px] bg-panel border border-line rounded-md p-1 z-50 shadow-panel overflow-y-auto overflow-x-hidden";
 const ROW = "mi flex items-center w-full text-left bg-transparent border-0 py-[5px] pl-1.5 pr-2.5 rounded-xs text-ink no-underline hover:no-underline cursor-default whitespace-nowrap";
 const KBD = "ml-6 text-xs font-mono font-normal leading-[normal] text-ink-3";
 
@@ -150,9 +150,9 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
           const icon = SUBMENU_ICONS[n.title];
           return (
             <div key={"sub" + n.title} data-idx={i} data-sub={n.title} role="menuitem" aria-haspopup="true" aria-expanded={openIdx === i}
-              className={cx(ROW, "sub", active && "bg-blue text-white")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
+              className={cx(ROW, "sub", active && "bg-accent text-white")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
               <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{icon ? <KIcon name={icon} size={16} /> : null}</span>
-              <span className="flex-1">{n.title}</span><span className="ml-6 text-[10px] opacity-70">▶</span>
+              <span className="flex-1">{n.title}</span><span className="ml-6 text-2xs opacity-70">▶</span>
               {openIdx === i ? <Panel nodes={n.nodes} depth={depth + 1} anchor={rectOf(i)} parentPanel={ownRect} sel={sel} open={open} c={c} onHover={onHover} onEnterPanel={onEnterPanel} onRun={onRun} onOpenSub={onOpenSub} /> : null}
             </div>
           );
@@ -164,11 +164,11 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
         const title = id === "undo" && c.undo.undo ? `${c.undo.undo} step${c.undo.undo === 1 ? "" : "s"}` : id === "redo" && c.undo.redo ? `${c.undo.redo} step${c.undo.redo === 1 ? "" : "s"}` : why || off || undefined;
         const body: ReactNode = (
           <>
-            <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center text-[13px] leading-none" data-check={checkable ? (on ? "on" : "off") : undefined}>{on ? "✓" : icon ? <KIcon name={icon} size={16} /> : null}</span>
+            <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center text-base leading-none" data-check={checkable ? (on ? "on" : "off") : undefined}>{on ? "✓" : icon ? <KIcon name={icon} size={16} /> : null}</span>
             <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-white")}>{k}</kbd> : null}
           </>
         );
-        const cls = cx(ROW, active && !off && "bg-blue text-white", why && "desk opacity-50", off && "off opacity-40", on && "on");
+        const cls = cx(ROW, active && !off && "bg-accent text-white", why && "desk opacity-50", off && "off opacity-40", on && "on");
         if (LINKS[id]) return <a className={cls} key={id + i} href={LINKS[id]} target="_blank" rel="noreferrer" role="menuitem" data-idx={i} data-uiact={id} onMouseMove={() => onHover(depth, i)} onClick={(ev) => { ev.preventDefault(); onRun(n, ev.currentTarget); }}>{body}</a>;
         return (
           <button type="button" className={cls} key={id + i} role={checkable ? "menuitemcheckbox" : "menuitem"} aria-checked={checkable ? on : undefined} aria-disabled={off ? true : undefined}
@@ -359,7 +359,7 @@ export function MenuBar() {
           return (
             <div className={cx("menu relative", isOpen && "open")} data-menu={m.title.toLowerCase()} data-menu-idx={i} key={m.title}>
               <button type="button" role="menuitem" aria-haspopup="true" aria-expanded={isOpen} tabIndex={-1}
-                className={cx("bg-transparent border-0 py-1 px-2.5 rounded-[3px] text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", (isOpen || focus === i) && "bg-paper shadow-[inset_0_0_0_1px_var(--line)]")}
+                className={cx("bg-transparent border-0 py-1 px-2.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", (isOpen || focus === i) && "bg-paper shadow-[inset_0_0_0_1px_var(--line)]")}
                 onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (isOpen) close(); else openMenu(i); }}
                 onMouseEnter={() => { if (st && !isOpen) openMenu(i); else if (focus !== null && !st) setFocus(i); }}>
                 {showKeys && at >= 0 ? <>{m.title.slice(0, at)}<u>{m.title.charAt(at)}</u>{m.title.slice(at + 1)}</> : m.title}
@@ -380,7 +380,7 @@ export function MenuBar() {
       <div className="user flex items-center gap-2 text-ink-2" id="userBox">
         {me ? (
           <>
-            {me.avatarUrl ? <img className="w-5 h-5 rounded-[50%]" src={me.avatarUrl} alt="" /> : null}
+            {me.avatarUrl ? <img className="w-5 h-5 rounded-full" src={me.avatarUrl} alt="" /> : null}
             <span>{me.name || me.login}</span>
             {!inEditor ? <button type="button" className="btn sm" id="logoutBtn" onClick={() => window.CollabHome?.signOut()}>Log out</button> : null}
           </>

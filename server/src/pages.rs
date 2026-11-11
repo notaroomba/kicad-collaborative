@@ -14,100 +14,55 @@ pub(crate) fn esc(s: &str) -> String {
 
 pub(crate) const MARK: &str = r##"<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="#001023"/><path d="M10.5 10.5 L21.5 21.5" stroke="#F2EDA1" stroke-width="2.6" stroke-linecap="round"/><circle cx="10.5" cy="10.5" r="4.2" fill="#C83434"/><circle cx="21.5" cy="21.5" r="4.2" fill="#4D7FC4"/></svg>"##;
 
-pub(crate) const STYLE: &str = r#"
+/// The whole theme: tokens, then the shared components (static/theme.css).  Every page uses it,
+/// linked (`/static/theme.css`) or inlined, so no page carries a palette of its own.
+pub(crate) const THEME_CSS: &str = include_str!("../static/theme.css");
+
+/// The head of the small server-rendered pages (join, authorize, about): fonts, the theme, and
+/// the layout of a single centred dialog.
+pub(crate) const STYLE: &str = concat!(r#"
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-  :root {
-    color-scheme: light dark;
-    /* KiCad's own palette is the only colour source: schematic paper for the
-       workbench, the board canvas for stages, layer colours as accents. */
-    --bench: #ECEBE6;      /* chrome: toolbars, sidebars, title bars */
-    --paper: #F5F4EF;      /* surfaces (the schematic sheet) */
-    --panel: #FFFFFF;      /* inputs, raised surfaces */
-    --line: #CFCDC5;       /* 1px rules (Edge.Cuts grey) */
-    --line-2: #B5B5B5;     /* grid dots */
-    --ink: #1B1B1B;
-    --ink-2: #5B5A55;
-    --ink-3: #8C8B85;
-    --copper: #C83434;     /* F.Cu — primary action */
-    --copper-2: #A82B2B;
-    --blue: #4D7FC4;       /* B.Cu — links, selection */
-    --teal: #006464;       /* values & references */
-    --wire: #009600;       /* live */
-    --warn: #D19200;       /* ERC warning */
-    --err: #E6090D;        /* ERC error */
-    --silk: #F2EDA1;       /* silkscreen: labels on the canvas */
-    --canvas: #001023;     /* board background */
-    --shadow: 0 10px 30px #0003;
-    --font: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    /* legacy aliases used by inline styles */
-    --bg: var(--bench); --panel-2: var(--paper); --text: var(--ink); --muted: var(--ink-2);
-    --accent: var(--blue); --hot: var(--warn); --ok: var(--wire); --danger: var(--err);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
-      --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
-      --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
-      --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
-    --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
-    --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
-    --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
-  }
-
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
-         color: var(--ink); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased;
+"#, include_str!("../static/theme.css"), r#"
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; align-content: center; gap: var(--s-4);
+         padding: var(--s-5); color: var(--ink); font: var(--fs-md)/1.55 var(--font); -webkit-font-smoothing: antialiased;
          background-color: var(--paper);
          background-image: radial-gradient(color-mix(in srgb, var(--line-2) 55%, transparent) 1px, transparent 1.3px);
          background-size: 20px 20px; }
-  a { color: var(--blue); }
-  .dialog, .card { width: min(580px, 100%); background: var(--panel); border: 1px solid var(--line);
-                   border-radius: 4px; box-shadow: var(--shadow); overflow: hidden; }
-  .card { padding: 26px 30px; }
-  .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; background: var(--bench);
-              border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+  .dialog, .card { width: min(580px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3);
+                   box-shadow: var(--shadow-dialog); overflow: hidden; }
+  .card { padding: var(--s-5); }
+  .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px var(--s-4); background: var(--bench);
+              border-bottom: 1px solid var(--line); font-weight: 600; font-size: var(--fs-md); }
   .titlebar .mark svg { width: 18px; height: 18px; display: block; }
-  .titlebar .host { margin-left: auto; font: 11px var(--mono); color: var(--ink-3); }
-  .dialog .body { padding: 22px 24px 18px; }
-  h1 { margin: 0 0 10px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
-  p { margin: 0 0 12px; }
-  .muted { color: var(--ink-2); font-size: 13.5px; }
-  code { font: 13px var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: 3px;
+  .titlebar .host { margin-left: auto; font: var(--fs-xs) var(--mono); color: var(--ink-3); }
+  .dialog .body { padding: var(--s-5) var(--s-5) var(--s-4); }
+  h1 { margin: 0 0 10px; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+  p { margin: 0 0 var(--s-3); }
+  .muted { font-size: var(--fs-base); }
+  code { font: var(--fs-sm) var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-2);
          padding: 2px 6px; overflow-wrap: anywhere; }
-  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 14px 0 16px; align-items: baseline; }
-  .kv dt { color: var(--ink-3); font: 500 10.5px var(--mono); text-transform: uppercase; letter-spacing: .12em; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px var(--s-4); margin: 14px 0 var(--s-4); align-items: baseline; }
+  .kv dt { color: var(--ink-3); font: 500 var(--fs-2xs) var(--mono); text-transform: uppercase; letter-spacing: .12em; }
   .kv dd { margin: 0; }
-  .actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; padding: 12px 24px;
+  .actions { display: flex; gap: var(--s-2); justify-content: flex-end; align-items: center; padding: var(--s-3) var(--s-5);
              border-top: 1px solid var(--line); background: var(--bench); margin: 0; }
-  .btn { display: inline-flex; align-items: center; padding: 7px 16px; border-radius: 3px; border: 1px solid var(--line);
-         background: var(--panel); color: var(--ink); font: 500 14px var(--font); cursor: pointer;
-         text-decoration: none; white-space: nowrap; }
-  .btn:hover { border-color: var(--ink-3); }
-  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
-  .btn.primary:hover { background: var(--copper-2); }
-  .btn.secondary { background: var(--panel); }
-  .linkbox { display: flex; gap: 8px; margin-top: 8px; }
-  .linkbox input { flex: 1; min-width: 0; padding: 7px 10px; border-radius: 3px; border: 1px solid var(--line);
-                   background: var(--paper); color: var(--ink); font: 12.5px var(--mono); }
+  .btn { min-height: var(--h-lg); padding: 6px 16px; font-size: var(--fs-md); }
+  .linkbox { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
+  .linkbox input { flex: 1; min-width: 0; min-height: var(--h-lg); padding: 6px 10px; border-radius: var(--r-2); border: 1px solid var(--line);
+                   background: var(--paper); color: var(--ink); font: var(--fs-sm) var(--mono); }
   .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 14px; }
-  .choice { display: block; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: 3px;
-            padding: 12px 14px; background: var(--paper); }
-  .choice:hover { border-color: var(--blue); }
-  .choice b { display: block; font-size: 14.5px; margin-bottom: 3px; }
-  .choice .muted { font-size: 12.5px; }
+  .choice { display: block; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: var(--r-2);
+            padding: var(--s-3) 14px; background: var(--paper); }
+  .choice:hover { border-color: var(--blue); text-decoration: none; }
+  .choice b { display: block; font-size: var(--fs-md); margin-bottom: 3px; }
+  .choice .muted { font-size: var(--fs-sm); }
   .choice.web { box-shadow: inset 3px 0 0 var(--blue); }
-  .choice.desktop { box-shadow: inset 3px 0 0 var(--copper); }
-  :focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-  @media (max-width: 520px) { .choices { grid-template-columns: 1fr; } }
+  .choice.desktop { box-shadow: inset 3px 0 0 var(--ink-3); }
+  @media (max-width: 520px) { .choices { grid-template-columns: 1fr; } body { padding: var(--s-3); } }
 </style>
-"#;
+"#);
 
 /// The single-page web app (home + online editor).  Client-side routed: the
 /// same shell serves `/`, `/app` and `/p/{id}/edit`.
@@ -119,7 +74,7 @@ fn asset_version() -> &'static str {
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
         let all = [include_str!("../static/dist/editor.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
-                   include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html"),
+                   include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html"), THEME_CSS,
                    include_str!("../static/dist/viewer3d.js")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
@@ -144,7 +99,8 @@ pub async fn app_page() -> Response {
             .replace("/static/props.js\"", &format!("/static/props.js?v={v}\""))
             .replace("/static/kicad-dialogs.js\"", &format!("/static/kicad-dialogs.js?v={v}\""))
             .replace("/static/dist/ui.js\"", &format!("/static/dist/ui.js?v={v}\""))
-            .replace("/static/dist/ui.css\"", &format!("/static/dist/ui.css?v={v}\"")),
+            .replace("/static/dist/ui.css\"", &format!("/static/dist/ui.css?v={v}\""))
+            .replace("/static/theme.css\"", &format!("/static/theme.css?v={v}\"")),
     );
     ([(header::CONTENT_SECURITY_POLICY, "frame-src 'none'")], page).into_response()
 }
@@ -161,6 +117,16 @@ pub async fn canvas_js() -> Response {
 fn js_response(body: &'static str) -> Response {
     ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], body).into_response()
 }
+pub async fn theme_css() -> Response {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], THEME_CSS).into_response()
+}
+/// `/styleguide`: the living style guide, every token and shared component drawn with the theme itself.
+pub async fn styleguide_page() -> Response {
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let page = PAGE.get_or_init(|| include_str!("../static/styleguide.html").replace("{{THEME}}", THEME_CSS).replace("{{MARK}}", MARK));
+    ([(header::CACHE_CONTROL, "no-cache")], Html(page.clone())).into_response()
+}
+pub async fn styleguide_js() -> Response { js_response(include_str!("../static/dist/styleguide.js")) }
 pub async fn sch_tools_js() -> Response { js_response(include_str!("../static/sch-tools.js")) }
 pub async fn pcb_tools_js() -> Response { js_response(include_str!("../static/pcb-tools.js")) }
 pub async fn props_js() -> Response { js_response(include_str!("../static/props.js")) }
@@ -382,14 +348,15 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
 <style>
   body {{ max-width: 1080px; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }}
-  .tile {{ border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 12px;
-           overflow: hidden; }}
+  body {{ display: block; margin: 0 auto; }}
+  .grid {{ margin-top: var(--s-4); }}
+  .tile {{ border: 1px solid var(--line); border-radius: var(--r-3); background: var(--panel); overflow: hidden; }}
   .tile img {{ display: block; width: 100%; aspect-ratio: 4/3; object-fit: contain;
-               background: #f4f1e6; padding: 8px; box-sizing: border-box; }}
+               background: var(--sheet); padding: 8px; }}
   .tmeta {{ padding: 10px 14px; }}
   .tmeta a {{ color: inherit; text-decoration: none; }}
-  .tmeta .blurb {{ margin: 6px 0 4px; font-size: .9rem; opacity: .85; }}
-  .tmeta .small {{ font-size: .8rem; display: block; margin-top: 2px; }}
+  .tmeta .blurb {{ margin: 6px 0 4px; font-size: var(--fs-base); color: var(--ink-2); }}
+  .tmeta .small {{ font-size: var(--fs-sm); display: block; margin-top: 2px; }}
 </style></head><body>
 <h1>Gallery</h1>
 <p class="muted">Public projects shared by the community. Everything else on this server stays private.</p>
@@ -429,7 +396,7 @@ pub async fn project_page(
 
     let preview = if docs.iter().any(|d| d.doc_type == "kicad_pcb") {
         format!(
-            r#"<p><img style="width:100%;background:#f4f1e6;border-radius:8px;padding:10px;box-sizing:border-box"
+            r#"<p><img style="width:100%;background:var(--sheet);border:1px solid var(--line);border-radius:var(--r-2);padding:10px"
                  alt="Board preview" onerror="this.parentNode.style.display='none'"
                  src="/api/projects/{id}/preview.svg"></p>
 <p><a class="btn secondary" href="/p/{id}/live">Watch live</a></p>"#
@@ -495,9 +462,10 @@ document.getElementById("cloneBtn").onclick = async () => {{
     Ok(Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name} — KiCad Collaborative</title>{STYLE}<style>
-  body {{ max-width: 860px; }}
+  body {{ display: block; max-width: 860px; margin: 0 auto; }}
+  .card {{ width: 100%; }}
   .desc {{ white-space: pre-wrap; }}
-  #descForm textarea {{ width: 100%; box-sizing: border-box; }}
+  #descForm textarea {{ width: 100%; }}
 </style></head><body>
 <p><a href="/gallery" class="muted">&larr; Gallery</a></p>
 <div class="card">
@@ -560,23 +528,22 @@ pub async fn live_page(
         r##"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name} live — KiCad Collaborative</title>{STYLE}
 <style>
-  body {{ max-width: 1100px; }}
-  #stage {{ position: relative; background: #f4f1e6; border-radius: 8px; touch-action: none;
-            overflow: hidden; }}
+  body {{ display: block; max-width: 1100px; margin: 0 auto; }}
+  #stage {{ position: relative; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--r-2);
+            touch-action: none; overflow: hidden; }}
   #world {{ transform-origin: 0 0; position: relative; }}
   #world img, #world svg {{ display: block; width: 100%; height: auto; }}
   #overlay {{ position: absolute; inset: 0; pointer-events: none; }}
-  #status {{ font-size: .85rem; opacity: .7; margin-top: 8px; }}
-  .chip {{ display:inline-block; padding: 2px 8px; border-radius: 999px; background: #d9822b22; }}
-  .chip.err {{ background: #c0392b22; }}
-  #cmtPanel {{ position: absolute; display: none; background: #fff; color: #222;
-              border: 1px solid #0003; border-radius: 10px; padding: 10px 12px;
-              min-width: 260px; max-width: 340px; box-shadow: 0 6px 24px #0003;
-              font-size: .88rem; z-index: 5; }}
-  #cmtPanel .meta {{ opacity: .6; font-size: .78rem; }}
+  #status {{ font: var(--fs-xs) var(--mono); color: var(--ink-3); margin-top: 8px; }}
+  .chip {{ display: inline-block; padding: 0 6px; border: 1px solid var(--warn); border-radius: var(--r-1); color: var(--warn); }}
+  .chip.err {{ border-color: var(--err); color: var(--err); }}
+  #cmtPanel {{ position: absolute; display: none; background: var(--panel); color: var(--ink);
+              border: 1px solid var(--line); border-radius: var(--r-3); padding: 10px 12px;
+              min-width: 260px; max-width: 340px; box-shadow: var(--shadow);
+              font-size: var(--fs-sm); z-index: 5; }}
+  #cmtPanel .meta {{ color: var(--ink-3); font: var(--fs-xs) var(--mono); }}
   #cmtPanel .cbody {{ margin: 2px 0 8px; white-space: pre-wrap; }}
-  #cmtPanel textarea {{ width: 100%; box-sizing: border-box; }}
-  #cmtPanel button {{ font-size: .82rem; }}
+  #cmtPanel textarea {{ width: 100%; }}
   #modeBtn {{ margin-top: 8px; }}
 </style></head><body>
 <p><a href="/p/{id}" class="muted">&larr; {name}</a></p>
@@ -589,7 +556,7 @@ pub async fn live_page(
 </div>
 <div id="status">connecting&hellip;</div>
 <p><button class="btn secondary" id="modeBtn">&#128172; Add comment</button>
-<span class="muted" style="font-size:.82rem"> &nbsp; scroll to zoom &middot; right-drag to pan &middot;
+<span class="muted"> &nbsp; scroll to zoom &middot; right-drag to pan &middot;
 click a part to select &middot; drag to move &middot; R rotates &middot; Del deletes &middot; Esc clears</span></p>
 {join_note}
 <script>

@@ -1,0 +1,256 @@
+/* theme.css — the one theme of KiCad Collaborative on the web.
+
+   Every page takes its look from this file: the app shell (static/app.html links it), the
+   server-rendered pages (src/pages.rs and src/auth.rs inline it), the GitHub page and the home
+   page (`{{THEME}}`), and the style guide at /styleguide, which shows everything below live.
+   The written guide is server/web/STYLE.md.
+
+   Two parts, split at the "components" marker below:
+     1. tokens      custom properties only: colour (light, system dark, explicit dark), type,
+                    spacing, radii, control heights, elevation, motion
+     2. components  the shared classes: .btn, .input, .pill, .box, the .kd-* dialog frame, …
+
+   Rules of the house:
+     - No colour literal outside this file's token blocks.  Canvas drawing (KiCad's layer and
+       schematic colours) is the one exception and lives in web/canvas/colors.ts.
+     - Neutral grey chrome, as KiCad's own windows.  Blue is the accent: primary buttons, links,
+       selection, focus.  Red means F.Cu, the brand mark, or a destructive action, never "go".
+     - Radii stay small (3px controls, 6px windows), rules are 1px.  The one gradient on chrome
+       is the pane caption (paper to bench), as KiCad's docked panes have. */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- surfaces ---- */
+  --bench: #EBEBEB;      /* chrome: toolbars, sidebars, title bars */
+  --paper: #F5F5F5;      /* page and pane bodies, hover fill */
+  --panel: #FFFFFF;      /* inputs, menus, cards, raised surfaces */
+  --line: #CDCDCD;       /* 1px rules and control borders */
+  --line-2: #B5B5B5;     /* stronger rule, grid dots, hovered border */
+
+  /* ---- text ---- */
+  --ink: #1A1A1A;        /* primary */
+  --ink-2: #555555;      /* secondary */
+  --ink-3: #737373;      /* tertiary: captions, mono meta, placeholders */
+
+  /* ---- accent: KiCad blue ---- */
+  --accent: #2A5DB0;     /* primary action fill */
+  --accent-2: #214C93;   /* its border, hover and pressed */
+  --on-accent: #FFFFFF;  /* text and icons on --accent, --copper and --err fills */
+  --blue: #2F68C0;       /* links, selection, focus ring, active tab */
+
+  /* ---- KiCad layer colours used as meaning ---- */
+  --copper: #C83434;     /* F.Cu: brand mark, owner badge */
+  --copper-2: #A82B2B;
+  --teal: #006464;       /* values and references, editor badge */
+  --wire: #128A12;       /* live, ok */
+  --warn: #B87A00;       /* warning */
+  --err: #D2181C;        /* error, destructive */
+  --err-2: #B01317;      /* destructive hover and pressed */
+  --silk: #F2EDA1;       /* silkscreen: labels drawn on the board canvas */
+  --canvas: #001023;     /* board background (KiCad's PCB editor) */
+  --sheet: #F5F4EF;      /* schematic background (KiCad's schematic editor) */
+  --mark: #FFB43A;       /* annotations on the canvas: comments, measure, peers without a colour */
+
+  /* ---- elevation ---- */
+  --shadow: 0 6px 20px #00000026;         /* menus, popovers, toasts */
+  --shadow-dialog: 0 18px 48px #00000047; /* dialogs and windows */
+  --scrim: #00000047;                     /* behind a modal dialog */
+
+  /* ---- type ---- */
+  --font: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-2xs: 10px;        /* uppercase pane captions, badges */
+  --fs-xs: 11px;         /* mono meta, kbd, status bar */
+  --fs-sm: 12px;         /* dense editor chrome: panes, dialogs, small buttons */
+  --fs-base: 13px;       /* the app's body text and controls */
+  --fs-md: 14px;         /* page body text (GitHub, join, explore), dialog titles */
+  --fs-lg: 16px;         /* section headings */
+  --fs-xl: 20px;         /* page titles */
+  --fs-2xl: 28px;        /* the home page's display size starts here */
+
+  /* ---- spacing: a 4px scale ---- */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+
+  /* ---- radii ---- */
+  --r-1: 2px;            /* badges, kbd */
+  --r-2: 3px;            /* buttons, inputs, menu items */
+  --r-3: 6px;            /* dialogs, cards, menus */
+  --r-sheet: 12px;       /* bottom sheets on narrow windows */
+
+  /* ---- control heights ---- */
+  --h-sm: 24px;          /* dense editor rows, small buttons */
+  --h-md: 28px;          /* buttons and inputs in the app */
+  --h-lg: 34px;          /* buttons and inputs on pages */
+  --h-touch: 40px;       /* everything on touch-sized windows */
+
+  /* ---- motion ---- */
+  --ease: cubic-bezier(.2, .7, .3, 1);
+  --dur-1: .12s;         /* hover, press */
+  --dur-2: .2s;          /* dialogs, menus, toasts */
+
+  /* ---- states derived from the above (opaque mixes, so they sit on any surface) ---- */
+  --on: color-mix(in srgb, var(--blue) 22%, var(--paper));        /* a pressed toggle */
+  --on-line: color-mix(in srgb, var(--blue) 60%, var(--line));    /* its border */
+  --sel: color-mix(in srgb, var(--blue) 25%, var(--paper));       /* selected row */
+  --sel-soft: color-mix(in srgb, var(--blue) 12%, var(--paper));  /* hovered row */
+
+  /* ---- older names still used by inline styles; do not use in new code ---- */
+  --bg: var(--bench); --panel-2: var(--paper); --text: var(--ink); --muted: var(--ink-2);
+  --hot: var(--warn); --ok: var(--wire); --danger: var(--err);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bench: #222427; --paper: #2A2C30; --panel: #18191B; --line: #3D4046; --line-2: #50545B;
+    --ink: #E8E8E8; --ink-2: #B2B5BA; --ink-3: #8B8F96;
+    --accent: #3A72CC; --accent-2: #4C84DC; --blue: #7AABF2;
+    --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
+    --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
+    --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
+  }
+}
+:root[data-theme="dark"] {
+  --bench: #222427; --paper: #2A2C30; --panel: #18191B; --line: #3D4046; --line-2: #50545B;
+  --ink: #E8E8E8; --ink-2: #B2B5BA; --ink-3: #8B8F96;
+  --accent: #3A72CC; --accent-2: #4C84DC; --blue: #7AABF2;
+  --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
+  --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
+  --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+/* ==== components ==== */
+
+/* ---- base ---- */
+*, *::before, *::after { box-sizing: border-box; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+::selection { background: color-mix(in srgb, var(--blue) 35%, transparent); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; border: 2px solid var(--bench); }
+::-webkit-scrollbar-thumb:hover { background: var(--line-2); }
+::placeholder { color: var(--ink-3); opacity: 1; }
+
+/* ---- buttons: .btn, with .primary (one per view), .danger, .ghost, and sizes .sm / .lg ---- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--h-md);
+       padding: 4px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2);
+       color: var(--ink); font: 500 var(--fs-base)/1.3 var(--font); white-space: nowrap; text-decoration: none;
+       cursor: pointer; transition: background-color var(--dur-1), border-color var(--dur-1); }
+.btn:hover { border-color: var(--line-2); background: var(--paper); text-decoration: none; }
+.btn:active { background: var(--bench); }
+.btn.primary { background: var(--accent); border-color: var(--accent-2); color: var(--on-accent); }
+.btn.primary:hover, .btn.primary:active { background: var(--accent-2); border-color: var(--accent-2); }
+.btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.btn.danger:hover { background: color-mix(in srgb, var(--err) 9%, var(--panel)); border-color: var(--err); }
+.btn.danger.solid, .btn.hp-danger { background: var(--err); border-color: var(--err-2); color: var(--on-accent); }
+.btn.danger.solid:hover, .btn.hp-danger:hover { background: var(--err-2); border-color: var(--err-2); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+.btn.ghost:hover { background: var(--paper); border-color: var(--line); color: var(--ink); }
+.btn.on { background: var(--on); border-color: var(--on-line); }
+.btn.sm, .btn.small { min-height: var(--h-sm); padding: 2px 8px; font-size: var(--fs-sm); }
+.btn.lg { min-height: var(--h-lg); padding: 6px 16px; font-size: var(--fs-md); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: default; pointer-events: none; }
+.btn svg { flex: none; }
+
+/* ---- text fields: .input on input, select and textarea ---- */
+.input { width: 100%; min-width: 0; min-height: var(--h-md); padding: 4px 8px; background: var(--panel);
+         border: 1px solid var(--line); border-radius: var(--r-2); color: var(--ink);
+         font: var(--fs-base)/1.3 var(--font); }
+.input:hover { border-color: var(--line-2); }
+.input:focus, .input:focus-visible { outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.input.mono { font-family: var(--mono); font-size: var(--fs-sm); }
+.input.lg { min-height: var(--h-lg); padding: 6px 10px; font-size: var(--fs-md); }
+.input:disabled { opacity: .55; }
+.input.bad { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
+textarea.input { resize: vertical; line-height: 1.45; }
+input[type="checkbox"], input[type="radio"], input[type="range"], progress { accent-color: var(--accent); }
+
+/* ---- badges: .pill, coloured by role or state ---- */
+.pill { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: var(--r-1);
+              color: var(--ink-2); font: 500 var(--fs-2xs)/1.6 var(--mono); text-transform: uppercase;
+              letter-spacing: .06em; white-space: nowrap; }
+.pill.owner { border-color: var(--copper); color: var(--copper); }
+.pill.editor { border-color: var(--teal); color: var(--teal); }
+.pill.info { border-color: var(--blue); color: var(--blue); }
+.pill.ok { border-color: var(--wire); color: var(--wire); }
+.pill.warn { border-color: var(--warn); color: var(--warn); }
+.pill.err { border-color: var(--err); color: var(--err); }
+
+/* ---- keys ---- */
+.kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px;
+            border-radius: var(--r-1); background: var(--panel); color: var(--ink-2);
+            font: var(--fs-xs)/1.5 var(--mono); text-align: center; }
+
+/* ---- a titled box: pages group their content in these ---- */
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); overflow: hidden; }
+.box > h2 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 14px; background: var(--bench);
+            border-bottom: 1px solid var(--line); font-size: var(--fs-base); font-weight: 600; }
+.box > .in { padding: 14px; }
+
+/* ---- small text helpers ---- */
+.muted { color: var(--ink-2); }
+.note { color: var(--ink-2); font-size: var(--fs-sm); margin: 6px 0; }
+.mono { font-family: var(--mono); }
+.empty { padding: 24px; border: 1px dashed var(--line); border-radius: var(--r-2); background: var(--panel);
+         color: var(--ink-2); text-align: center; }
+.row { display: flex; gap: 8px; align-items: center; }
+
+/* ---- the dialog frame (KiCad's property dialogs and every other window): overlay, title bar,
+        body, button row.  OK/primary sits rightmost, Cancel to its left. ---- */
+.kd-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+              background: var(--scrim); }
+.kd-dialog { display: flex; flex-direction: column; min-width: 420px; max-width: min(760px, 94vw); max-height: 90vh;
+             background: var(--bench); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-3);
+             box-shadow: var(--shadow-dialog); font: var(--fs-sm) var(--font); }
+.kd-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--paper);
+            border-bottom: 1px solid var(--line); border-radius: var(--r-3) var(--r-3) 0 0; font-weight: 600;
+            cursor: move; user-select: none; }
+.kd-title .kd-x { margin-left: auto; padding: 0 4px; color: var(--ink-2); font-size: 15px; line-height: 1; cursor: pointer; }
+.kd-title .kd-x:hover { color: var(--ink); }
+.kd-body { padding: 10px 14px; overflow: auto; }
+.kd-body h3 { margin: 10px 0 6px; color: var(--ink-2); font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; }
+.kd-body h3:first-child { margin-top: 0; }
+.kd-body .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; }
+.kd-body .kv label { color: var(--ink-2); white-space: nowrap; }
+.kd-body input[type=text], .kd-body input[type=number], .kd-body select, .kd-body textarea {
+  width: 100%; padding: 4px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2);
+  color: var(--ink); font-family: var(--mono); }
+.kd-body input[type=text]:focus, .kd-body input[type=number]:focus, .kd-body select:focus, .kd-body textarea:focus {
+  outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.kd-body .ro { color: var(--ink-2); font-family: var(--mono); }
+.kd-body .actions { display: flex; gap: 6px; grid-column: 1 / -1; }
+.kd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
+.kd-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); }
+.kd-foot .spacer { flex: 1; }
+.kd-note { margin: 0 0 8px; color: var(--ink-2); font-size: var(--fs-xs); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+}
+
+/* ---- callouts: a message in the flow of a page (.info is the default; .ok, .warn, .err) ---- */
+.callout { padding: 8px 12px; border-left: 3px solid var(--blue); border-radius: 0 var(--r-2) var(--r-2) 0;
+           background: color-mix(in srgb, var(--blue) 8%, transparent); color: var(--ink); font-size: var(--fs-base); }
+.callout.ok { border-color: var(--wire); background: color-mix(in srgb, var(--wire) 8%, transparent); }
+.callout.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.callout.err { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.callout ul { margin: 4px 0 0; padding-left: 18px; }
+.callout p { margin: 6px 0 0; }
+
+/* ---- segmented control: a row of exclusive choices ---- */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; }
+.seg button { min-height: calc(var(--h-md) - 2px); padding: 3px 12px; border: 0; background: var(--panel); color: var(--ink);
+              font: 500 var(--fs-base) var(--font); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:hover { background: var(--paper); }
+.seg button.on { background: var(--on); color: var(--ink); box-shadow: inset 0 -2px 0 var(--blue); }
+
+/* ---- busy spinner ---- */
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent;
+        border-radius: 50%; animation: kc-spin .7s linear infinite; }
+@keyframes kc-spin { to { transform: rotate(360deg); } }

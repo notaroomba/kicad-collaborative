@@ -39,11 +39,11 @@ export function ContextMenu({ at, onClose }: { at: MenuAt | null; onClose: () =>
   }, [at, onClose]);
   if (!at) return null;
   return createPortal(
-    <div ref={ref} className="kctx fixed z-[400] min-w-[180px] py-1 bg-panel border border-line rounded-sm shadow-panel text-sm text-ink select-none" role="menu"
+    <div ref={ref} className="kctx fixed z-[400] min-w-[180px] py-1 bg-panel border border-line rounded-md shadow-panel text-sm text-ink select-none" role="menu"
       style={{ left: (pos || at).x, top: (pos || at).y, visibility: pos ? "visible" : "hidden" }} onContextMenu={(ev) => ev.preventDefault()}>
       {at.items.map((it, i) => it === "-"
         ? <div key={i} className="my-1 border-t border-line" />
-        : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-blue hover:text-white")}
+        : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-accent hover:text-white")}
             onClick={() => { if (it.disabled) return; onClose(); it.run(); }}>{it.label}</div>)}
     </div>, document.body);
 }
@@ -76,7 +76,7 @@ export function ColorPicker({ at, onClose }: { at: ColorAt | null; onClose: () =
   const W = 232, left = Math.max(4, Math.min(at.x, window.innerWidth - W - 8)), top = Math.max(4, Math.min(at.y, window.innerHeight - 250));
   const pick = (c: string | null) => { at.set(c); onClose(); };
   return createPortal(
-    <div ref={ref} className="kcolor fixed z-[400] p-2 bg-panel border border-line rounded-sm shadow-panel text-sm text-ink" style={{ left, top, width: W }}>
+    <div ref={ref} className="kcolor fixed z-[400] p-2 bg-panel border border-line rounded-md shadow-panel text-sm text-ink" style={{ left, top, width: W }}>
       <div className="font-semibold mb-1.5">{at.title}</div>
       <div className="flex flex-wrap gap-[3px] mb-2">
         {PALETTE.map((c) => <button type="button" key={c} title={c} data-color={c} className="w-4 h-4 p-0 rounded-xs border border-black/40 cursor-pointer" style={{ background: c }} onClick={() => pick(c)} />)}

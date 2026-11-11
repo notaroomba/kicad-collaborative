@@ -36,7 +36,7 @@ export function SearchPane() {
           className="w-full bg-panel border border-line rounded-xs py-0.5 px-1.5 text-ink text-sm" />
       </div>
       <div className="ktabs flex flex-none border-b border-line bg-bench">
-        {tabs.map((t) => <button type="button" key={t.id} data-stab={t.id} className={cx("bg-transparent border-0 border-b-2 border-b-transparent py-1 px-3 text-sm text-ink-2 on:text-ink on:border-b-copper on:bg-paper", t.id === active && "on")} onClick={() => setTab(t.id)}>{t.label}</button>)}
+        {tabs.map((t) => <button type="button" key={t.id} data-stab={t.id} className={cx("bg-transparent border-0 border-b-2 border-b-transparent py-1 px-3 text-sm text-ink-2 on:text-ink on:border-b-blue on:bg-paper", t.id === active && "on")} onClick={() => setTab(t.id)}>{t.label}</button>)}
         <span className="ml-auto self-center pr-2 text-ink-3 text-xs" data-search-count>{result.total > result.rows.length ? `${result.rows.length} of ${result.total}` : `${result.total}`}</span>
       </div>
       <div className="flex-auto min-h-0 overflow-auto">
