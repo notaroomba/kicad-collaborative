@@ -91,6 +91,11 @@ pub enum DocMsg {
     Reset {
         seq: i64,
     },
+    /// Something about the project changed that open editors show (its versions, its
+    /// branches): hand every client the message as it is.
+    Notice {
+        payload: Value,
+    },
     /// Something is about to read the document's file (a GitHub push or pull): ask a
     /// client that can write one for a snapshot now, whatever the cooldown says.
     SnapshotNow,
@@ -323,6 +328,9 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                         let msg = json!({ "type": "reset", "docId": doc_id, "seq": seq }).to_string();
                         broadcast_all(&mut clients, &mut presence_dirty, doc_id, &msg);
                     }
+                    DocMsg::Notice { payload } => {
+                        broadcast_all(&mut clients, &mut presence_dirty, doc_id, &payload.to_string());
+                    }
                     DocMsg::SnapshotNow => {
                         request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
                     }
@@ -466,6 +474,9 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                                 head_seq = head_seq.max(seq);
                                 let out = json!({ "type": "reset", "docId": doc_id, "seq": seq }).to_string();
                                 broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
+                            }
+                            "notice" => {
+                                broadcast_all(&mut clients, &mut presence_dirty, doc_id, &msg["payload"].to_string());
                             }
                             "snapshot_now" => {
                                 request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
@@ -629,7 +640,9 @@ async fn handle_join(
         Some(since) if since <= head_seq => {
             let retained_from = persist::min_op_seq(pool, doc_id).await.ok().flatten();
             let covered = since >= head_seq || matches!(retained_from, Some(min) if since + 1 >= min);
-            if covered {
+            // A restore or a merge that replaced the document since then cannot be
+            // caught up op by op: the client's base is no longer the document's.
+            if covered && !crate::versions::reset_after(pool, doc_id, since).await {
                 load_ops_tail(pool, doc_id, since).await
             } else {
                 load_snapshot_catchup(pool, doc).await

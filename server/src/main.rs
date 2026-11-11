@@ -17,6 +17,7 @@ mod persist;
 mod plugins;
 mod registry;
 mod relay;
+mod versions;
 mod ws;
 
 use std::sync::atomic::AtomicUsize;
@@ -83,6 +84,7 @@ impl AppState {
             DocMsg::Comment { payload } => Some(serde_json::json!({ "t": "comment", "d": doc_id, "comment": payload })),
             DocMsg::Reset { seq } => Some(serde_json::json!({ "t": "reset", "d": doc_id, "seq": seq })),
             DocMsg::SnapshotNow => Some(serde_json::json!({ "t": "snapshot_now", "d": doc_id })),
+            DocMsg::Notice { payload } => Some(serde_json::json!({ "t": "notice", "d": doc_id, "payload": payload })),
             _ => None,
         };
         let mut delivered = false;
@@ -323,11 +325,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/join/{token}", post(http::claim_link))
         .route("/api/docs/{doc_id}/snapshots", post(http::upload_snapshot))
         .route("/api/docs/{doc_id}/snapshots/{seq}", get(http::get_snapshot))
-        .route(
-            "/api/projects/{id}/checkpoints",
-            post(http::create_checkpoint).get(http::list_checkpoints),
-        )
-        .route("/api/projects/{id}/restore", post(http::restore_checkpoint))
+        // Version history and branches (versions.rs); the checkpoint routes are the old names
+        .merge(versions::routes())
         // GitHub repository sync (github.rs)
         .route("/auth/github/connect", get(auth::github_connect))
         .route("/github", get(github::page))

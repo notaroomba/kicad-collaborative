@@ -175,6 +175,7 @@ pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec
          JOIN users u ON u.id = p.owner_id
          LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
          WHERE (p.owner_id = $1 OR perm.user_id IS NOT NULL) AND p.deleted_at IS NULL
+           AND p.parent_id IS NULL
          ORDER BY updated_at DESC",
     )
     .bind(user_id)
@@ -229,7 +230,7 @@ pub async fn list_public_projects(pool: &PgPool, limit: i64) -> DbResult<Vec<Gal
                               WHERE d.project_id = p.id), p.created_at)
                 ) AS updated_at
          FROM projects p JOIN users u ON u.id = p.owner_id
-         WHERE p.public AND p.deleted_at IS NULL ORDER BY updated_at DESC LIMIT $1",
+         WHERE p.public AND p.deleted_at IS NULL AND p.parent_id IS NULL ORDER BY updated_at DESC LIMIT $1",
     )
     .bind(limit)
     .fetch_all(pool)
@@ -291,7 +292,7 @@ pub async fn list_trash(pool: &PgPool, owner_id: i64) -> DbResult<Vec<TrashedPro
         "SELECT p.id, p.name, p.deleted_at,
                 (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count
          FROM projects p
-         WHERE p.owner_id = $1 AND p.deleted_at IS NOT NULL
+         WHERE p.owner_id = $1 AND p.deleted_at IS NOT NULL AND p.parent_id IS NULL
          ORDER BY p.deleted_at DESC",
     )
     .bind(owner_id)
@@ -338,6 +339,11 @@ pub async fn transfer_ownership(
     if moved.rows_affected() == 0 {
         return Ok(false);
     }
+    sqlx::query("UPDATE projects SET owner_id = $2 WHERE parent_id = $1")
+        .bind(project_id)
+        .bind(to_member)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "INSERT INTO permissions (project_id, user_id, role) VALUES ($1, $2, 'editor')
          ON CONFLICT (project_id, user_id) DO UPDATE SET role = 'editor'",
@@ -447,8 +453,9 @@ pub async fn create_project(pool: &PgPool, owner_id: i64, name: &str) -> DbResul
 
 pub async fn get_project(pool: &PgPool, id: Uuid) -> DbResult<Option<Project>> {
     sqlx::query_as::<_, Project>(
-        "SELECT id, owner_id, name, public, description FROM projects
-         WHERE id = $1 AND deleted_at IS NULL",
+        "SELECT p.id, p.owner_id, p.name, p.public, p.description FROM projects p
+         WHERE p.id = $1 AND p.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM projects r WHERE r.id = p.parent_id AND r.deleted_at IS NOT NULL)",
     )
         .bind(id)
         .fetch_optional(pool)
@@ -491,17 +498,19 @@ pub async fn project_documents(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<
 }
 
 /// Effective role of a user on a project: owner => editor, else permissions row.
+/// A branch (versions.rs) has no access list of its own: it answers with its parent's.
 pub async fn effective_role(pool: &PgPool, user_id: i64, project_id: Uuid) -> DbResult<Option<String>> {
     let row = sqlx::query(
         "SELECT CASE
-                  WHEN p.owner_id = $1 THEN 'editor'
+                  WHEN r.owner_id = $1 THEN 'editor'
                   WHEN perm.role IS NOT NULL THEN perm.role
-                  WHEN p.public THEN 'viewer'
+                  WHEN r.public THEN 'viewer'
                   ELSE NULL
                 END AS role
          FROM projects p
-         LEFT JOIN permissions perm ON perm.project_id = p.id AND perm.user_id = $1
-         WHERE p.id = $2 AND p.deleted_at IS NULL",
+         JOIN projects r ON r.id = COALESCE(p.parent_id, p.id)
+         LEFT JOIN permissions perm ON perm.project_id = r.id AND perm.user_id = $1
+         WHERE p.id = $2 AND p.deleted_at IS NULL AND r.deleted_at IS NULL",
     )
     .bind(user_id)
     .bind(project_id)
@@ -1021,49 +1030,6 @@ pub async fn list_share_links(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<A
     .await
 }
 
-/// Name the latest snapshot of a document, making it a permanent checkpoint.
-pub async fn name_latest_snapshot(pool: &PgPool, doc_id: Uuid, name: &str) -> DbResult<Option<i64>> {
-    let row = sqlx::query(
-        "UPDATE snapshots SET name = $2
-         WHERE doc_id = $1 AND seq = (SELECT MAX(seq) FROM snapshots WHERE doc_id = $1)
-         RETURNING seq",
-    )
-    .bind(doc_id)
-    .bind(name)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| r.get("seq")))
-}
-
-/// (doc_id, seq, name, created_at) for every named checkpoint in a project.
-pub async fn list_checkpoints(
-    pool: &PgPool,
-    project_id: Uuid,
-) -> DbResult<Vec<(Uuid, String, i64, String, chrono::DateTime<chrono::Utc>)>> {
-    let rows = sqlx::query(
-        "SELECT s.doc_id, d.path, s.seq, s.name, s.created_at
-         FROM snapshots s JOIN documents d ON d.id = s.doc_id
-         WHERE d.project_id = $1 AND s.name IS NOT NULL
-         ORDER BY s.created_at DESC, d.path",
-    )
-    .bind(project_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            (
-                r.get("doc_id"),
-                r.get("path"),
-                r.get("seq"),
-                r.get("name"),
-                r.get("created_at"),
-            )
-        })
-        .collect())
-}
-
 pub async fn snapshot_at(pool: &PgPool, doc_id: Uuid, seq: i64) -> DbResult<Option<Vec<u8>>> {
     let row = sqlx::query("SELECT content FROM snapshots WHERE doc_id = $1 AND seq = $2")
         .bind(doc_id)
@@ -1073,26 +1039,10 @@ pub async fn snapshot_at(pool: &PgPool, doc_id: Uuid, seq: i64) -> DbResult<Opti
     Ok(row.map(|r| r.get("content")))
 }
 
-/// Content of a project's named checkpoint, per document.
-pub async fn checkpoint_contents(
-    pool: &PgPool,
-    project_id: Uuid,
-    name: &str,
-) -> DbResult<Vec<(Uuid, Vec<u8>)>> {
-    let rows = sqlx::query(
-        "SELECT s.doc_id, s.content FROM snapshots s
-         JOIN documents d ON d.id = s.doc_id
-         WHERE d.project_id = $1 AND s.name = $2",
-    )
-    .bind(project_id)
-    .bind(name)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(|r| (r.get("doc_id"), r.get("content"))).collect())
-}
-
 /// Prune ops and unnamed snapshots that are safely behind snapshot coverage.
+///
+/// The full history (every op) is kept for 30 days so the timeline can be scrubbed
+/// edit by edit; after that only what a kept version or a branch still needs stays.
 pub async fn prune(pool: &PgPool) -> DbResult<()> {
     // Projects that sat in the Trash for 30 days are gone for good.
     sqlx::query("DELETE FROM projects WHERE deleted_at < now() - interval '30 days'")
@@ -1100,9 +1050,16 @@ pub async fn prune(pool: &PgPool) -> DbResult<()> {
         .await?;
     sqlx::query(
         "DELETE FROM ops o
-         WHERE o.created_at < now() - interval '7 days'
+         WHERE o.created_at < now() - interval '30 days'
            AND o.seq <= COALESCE((SELECT MAX(s.seq) FROM snapshots s
-                                  WHERE s.doc_id = o.doc_id AND s.name IS NULL), 0)",
+                                  WHERE s.doc_id = o.doc_id AND s.name IS NULL), 0)
+           -- a kept version is its snapshot plus these ops
+           AND NOT EXISTS (SELECT 1 FROM version_docs v
+                           WHERE v.doc_id = o.doc_id AND o.seq > v.snap_seq AND o.seq <= v.seq)
+           -- a branch is merged by replaying what either side did since they last met
+           AND NOT EXISTS (SELECT 1 FROM branch_docs b
+                           WHERE (b.doc_id = o.doc_id AND o.seq > LEAST(b.merged_seq, b.fork_seq))
+                              OR (b.parent_doc_id = o.doc_id AND o.seq > LEAST(b.synced_seq, b.fork_seq)))",
     )
     .execute(pool)
     .await?;
@@ -1111,7 +1068,14 @@ pub async fn prune(pool: &PgPool) -> DbResult<()> {
          WHERE s.name IS NULL
            AND s.created_at < now() - interval '30 days'
            AND s.seq < (SELECT MAX(s2.seq) FROM snapshots s2
-                        WHERE s2.doc_id = s.doc_id AND s2.name IS NULL)",
+                        WHERE s2.doc_id = s.doc_id AND s2.name IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM version_docs v
+                           WHERE v.doc_id = s.doc_id AND v.snap_seq = s.seq)
+           -- ops that are still kept need the snapshot they sit on
+           AND NOT EXISTS (SELECT 1 FROM ops o WHERE o.doc_id = s.doc_id AND o.seq = s.seq + 1)
+           -- a branch remembers where it started
+           AND NOT EXISTS (SELECT 1 FROM branch_docs b
+                           WHERE b.doc_id = s.doc_id AND s.seq <= b.fork_seq)",
     )
     .execute(pool)
     .await?;

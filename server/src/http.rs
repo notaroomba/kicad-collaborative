@@ -1844,67 +1844,6 @@ pub async fn upload_snapshot(
         .into_response())
 }
 
-// ---------- Version history ----------
-
-#[derive(Deserialize)]
-pub struct CheckpointRequest {
-    pub name: String,
-}
-
-/// Name the current snapshot of every document in the project. Docs whose
-/// snapshot lags head are still named — the ops after it replay on restore.
-pub async fn create_checkpoint(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path(id): Path<Uuid>,
-    LenientJson(req): LenientJson<CheckpointRequest>,
-) -> AppResult<Response> {
-    let role = persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
-    if role != "editor" {
-        return Err(AppError::Forbidden);
-    }
-    if req.name.trim().is_empty() {
-        return Err(AppError::BadRequest("checkpoint name required".into()));
-    }
-
-    let docs = persist::project_documents(&state.pool, id).await?;
-    let mut named = Vec::new();
-
-    for d in &docs {
-        if let Some(seq) = persist::name_latest_snapshot(&state.pool, d.id, &req.name).await? {
-            named.push(json!({ "docId": d.id, "path": d.path, "seq": seq }));
-        }
-    }
-
-    if named.is_empty() {
-        return Err(AppError::BadRequest("project has no snapshots to name".into()));
-    }
-
-    // A project linked to GitHub can ask for every checkpoint to be pushed.
-    let pushing = crate::github::push_on_checkpoint(&state, &user, id, &req.name).await;
-
-    Ok(Json(json!({ "name": req.name, "docs": named, "githubPush": pushing })).into_response())
-}
-
-pub async fn list_checkpoints(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path(id): Path<Uuid>,
-) -> AppResult<Response> {
-    persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
-
-    let rows: Vec<_> = persist::list_checkpoints(&state.pool, id)
-        .await?
-        .into_iter()
-        .map(|(doc_id, path, seq, name, created)| {
-            json!({ "docId": doc_id, "path": path, "seq": seq, "name": name,
-                    "createdAt": created.to_rfc3339() })
-        })
-        .collect();
-
-    Ok(Json(json!({ "checkpoints": rows })).into_response())
-}
-
 pub async fn get_snapshot(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -1918,40 +1857,6 @@ pub async fn get_snapshot(
     let content = persist::snapshot_at(&state.pool, doc_id, seq).await?.ok_or(AppError::NotFound)?;
 
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], content).into_response())
-}
-
-/// Restore = hard reset: the checkpoint file becomes a new snapshot at the head
-/// of the op line and every client is told to resync. The server can't diff
-/// s-expressions, so replaying a reverse-patch isn't an option.
-pub async fn restore_checkpoint(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path(id): Path<Uuid>,
-    LenientJson(req): LenientJson<CheckpointRequest>,
-) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
-
-    let contents = persist::checkpoint_contents(&state.pool, id, &req.name).await?;
-    if contents.is_empty() {
-        return Err(AppError::NotFound);
-    }
-
-    let mut restored = Vec::new();
-
-    for (doc_id, content) in contents {
-        let head = persist::head_seq(&state.pool, doc_id).await?;
-        let seq = head + 1;
-        persist::insert_snapshot(&state.pool, doc_id, seq, &content, None, Some(user.id)).await?;
-
-        state.doc_event(doc_id, crate::doc_actor::DocMsg::Reset { seq }).await;
-
-        restored.push(json!({ "docId": doc_id, "seq": seq }));
-    }
-
-    Ok(Json(json!({ "restored": req.name, "docs": restored })).into_response())
 }
 
 pub async fn healthz(State(state): State<AppState>) -> AppResult<&'static str> {

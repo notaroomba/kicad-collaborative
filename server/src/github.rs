@@ -1636,12 +1636,10 @@ pub async fn pull(
         match lf {
             Some(lf) => {
                 if blob_sha(&content) != lf.sha {
-                    // Keep what is being replaced: a named snapshot is a checkpoint,
-                    // restorable from History and never pruned.
-                    persist::name_latest_snapshot(&state.pool, lf.doc.id, &stamp).await?;
-                    let seq = persist::head_seq(&state.pool, lf.doc.id).await? + 1;
-                    persist::insert_snapshot(&state.pool, lf.doc.id, seq, &content, None, Some(user.id)).await?;
-                    state.doc_event(lf.doc.id, DocMsg::Reset { seq }).await;
+                    // Keep what is being replaced as a version: restorable from History
+                    // and never pruned.
+                    crate::versions::keep_doc(&state.pool, id, user.id, &stamp, &lf.doc).await?;
+                    crate::versions::reset_to_content(&state, user.id, lf.doc.id, &content).await?;
                 }
             }
             None => {
