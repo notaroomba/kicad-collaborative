@@ -1,6 +1,7 @@
 // The public home page (static/landing.html).  Built by `npm run build:landing` into
 // static/dist/landing.js.
 
+import { startLettering } from "./lettering";
 import { startMini } from "./mini";
 import { startStory } from "./story";
 
@@ -96,6 +97,7 @@ function session(): void {
 function start(): void {
   theme(); nav(); lean(); reveals(); bom();
   const hero = document.getElementById("hero"), story = document.getElementById("make");
+  startLettering();
   if (hero) startMini(hero);
   if (story) startStory(story);
   session();

@@ -10,7 +10,6 @@
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#001023">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <script>document.documentElement.classList.add("js"); try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
 {{THEME}}
@@ -150,6 +149,8 @@
   .scene { position: relative; height: min(80vh, 760px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #F5F4EF;
            box-shadow: 0 30px 60px -30px #0009, 0 8px 18px -10px #0004; }
   .scene canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .scene .v3d { position: absolute; inset: 0; opacity: 0; pointer-events: none; cursor: grab; }
+  .scene .v3d:active { cursor: grabbing; }
   .scene .chip { position: absolute; left: 12px; top: 12px; font: 500 11px var(--mono); padding: 3px 8px; border-radius: 3px; letter-spacing: .04em;
                  background: #1b1b1bcc; color: #fff; transition: opacity .3s; pointer-events: none; }
   .scene .chip span { display: none; }
@@ -236,6 +237,47 @@
   .titleblock .big svg { width: 20px; height: 20px; }
   .titleblock .wide { grid-column: span 4; border-right: 0; color: var(--ink-2); font-size: 12.5px; }
 
+  /* ---- the page's own look: KiCad's lettering and drawing-sheet furniture, the app's flat panels ---- */
+  body { background: var(--bench); }
+  [data-stroke] { font-weight: 600; letter-spacing: 0; }
+  .lettered { line-height: 0; }
+  .lettered .t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .lettered svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+  .lettered path { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+  .hero h1 { font-size: clamp(28px, 4vw, 52px); line-height: 1.15; letter-spacing: 0; color: var(--ink); }
+  .hero-row { grid-template-columns: minmax(0, 1fr); gap: 22px; align-items: start; }
+  .hero-side { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px clamp(28px, 4vw, 64px); align-items: start; padding-bottom: 0; }
+  @media (max-width: 900px) { .hero-side { grid-template-columns: minmax(0, 1fr); } }
+  .hero .also { max-width: 52ch; }
+  h2 { font-size: clamp(22px, 2.5vw, 31px); line-height: 1.2; letter-spacing: 0; }
+  h3, .steps h3, .get-grid h3, .bom-r b { letter-spacing: 0; }
+  /* every section opens with a strip of a drawing sheet's title block */
+  .sheet-h { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1.5px solid var(--ink); background: var(--paper); }
+  .sheet-h h2 { padding: 14px 16px 12px; min-width: 0; }
+  .sheet-n { display: flex; align-items: center; padding: 0 16px; border-left: 1px solid var(--ink); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+  .story-head { gap: 0; }
+  .cap, .shot figcaption, figure .cap, .os, .steps .n, .bom-h, .bom-r .ref, .titleblock small, .scene .chip, .scene .turn, .win-bar, .win-status, .layers button {
+    font-family: var(--font); letter-spacing: 0; text-transform: none; }
+  .cap, .shot figcaption, figure .cap, .os { font-size: 13px; }
+  .steps .n { font-size: 13px; font-weight: 500; }
+  .bom-h { font-size: 13px; font-weight: 600; background: var(--paper); padding: 8px 10px; border: 1px solid var(--line); border-top: 0; }
+  .bom { border-top: 1px solid var(--line); }
+  .bom-r { padding: 11px 10px; }
+  .bom-r .ref { font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .titleblock small { font-size: 11.5px; font-weight: 400; }
+  .notes { border-top: 1px solid var(--line); }
+  .notes::before { content: none; }
+  .notes li { grid-template-columns: 1fr; padding: 12px 0; }
+  .notes li::before { content: none; }
+  /* flat, square surfaces as in the application: no soft cards, no floating shadows, nothing leaning */
+  .win, .scene, .shot, .get-grid { border-radius: 2px; box-shadow: none; border-color: var(--line-2); }
+  .js .win.rv, .js .win.rv.in { transform: none; }
+  .wiring { font-family: var(--font); }
+  .close { padding-top: clamp(40px, 6vw, 72px) !important; }
+  .close .lead { max-width: 60ch; }
+  .close .acts { margin-top: 18px; }
+  @media (max-width: 640px) { .sheet-n { display: none; } .sheet-h h2 { padding: 12px 12px 10px; } }
+
   /* ---- entrances ---- */
   .js .rv { opacity: 0; transform: translateY(16px); transition: opacity .8s cubic-bezier(.2, .7, .2, 1), transform .8s cubic-bezier(.2, .7, .2, 1); transition-delay: calc(var(--i, 0) * 70ms); }
   .js .rv.in { opacity: 1; transform: none; }
@@ -308,9 +350,8 @@
 <main>
 <section class="hero">
   <div class="wrap">
-    <p class="eyebrow rv"><span>A fork of KiCad 10</span><span>GPL-3.0</span><span>macOS, Windows, Linux, browser</span></p>
     <div class="hero-row">
-      <h1 class="rv" style="--i:1">KiCad, with everyone on the <em>same board</em>.</h1>
+      <h1 class="rv" data-stroke>Real-time collaboration for KiCad</h1>
       <div class="hero-side">
         <p class="lead rv" style="--i:2">Real-time collaboration built into the schematic and PCB editors. You see each other's cursors, edits land as they are made, and the project lives online, so nobody has to pass a zip around. It works in the desktop app and in the browser.</p>
         <div class="rv" style="--i:3">
@@ -318,7 +359,7 @@
             <a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.87.5-1.07-1.77-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 8 .2z"/></svg><span>Sign in with GitHub</span></a>
             <a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases/latest">Get the desktop app</a>
           </div>
-          <p class="also">or <a href="/gallery">browse public projects</a> without an account</p>
+          <p class="also">Or <a href="/gallery">browse public projects</a> without an account. A fork of KiCad 10 under GPL-3.0, for macOS, Windows, Linux and the browser.</p>
         </div>
       </div>
     </div>
@@ -360,25 +401,26 @@
 
 <section class="story" id="make" data-chapter="0">
   <div class="wrap story-head">
-    <p class="tag rv"><b>01</b> How a board gets made</p>
-    <h2 class="rv" style="--i:1">From the first wire to a finished board, in a file everyone has open.</h2>
+    <div class="sheet-h rv"><h2 data-stroke>How a board gets made</h2><span class="sheet-n">Sheet 1 / 5</span></div>
+    <p class="lead rv" style="--i:1; margin-top:18px">One design, from the first wire to a finished board, in a file everyone has open. Scroll to follow it.</p>
   </div>
   <div class="story-track">
     <div class="wrap story-pin">
       <ol class="steps">
-        <li data-step class="on"><span class="n">Sheet 1 / Schematic</span><h3>Draw the circuit together</h3>
+        <li data-step class="on"><span class="n">1. Schematic</span><h3>Draw the circuit together</h3>
           <div class="more"><div><p>Symbols, wires and labels show up on everyone's sheet as they are placed. A wire someone is still drawing appears as a preview, so two people never wire the same net twice.</p></div></div></li>
-        <li data-step><span class="n">Sheet 2 / Placement</span><h3>Split the board and place it</h3>
+        <li data-step><span class="n">2. Placement</span><h3>Split the board and place it</h3>
           <div class="more"><div><p>Parts arrive on the board in a pile, with airwires showing what connects to what. Take the connector while someone else takes the timing parts. A part being dragged is outlined in its owner's colour.</p></div></div></li>
-        <li data-step><span class="n">Sheet 3 / Routing</span><h3>Route it, by hand or not</h3>
+        <li data-step><span class="n">3. Routing</span><h3>Route it, by hand or not</h3>
           <div class="more"><div><p>Tracks appear for everyone segment by segment as they are laid. In the web editor, the autorouter can finish the connections you leave and shows its result as a preview before anything is kept.</p></div></div></li>
-        <li data-step><span class="n">Sheet 4 / Board</span><h3>It is still KiCad</h3>
+        <li data-step><span class="n">4. 3D viewer</span><h3>It is still KiCad</h3>
           <div class="more"><div><p>The files are ordinary .kicad_sch and .kicad_pcb. Rule checks and the 3D viewer work in the browser too, and fabrication outputs come from the desktop app as they always have. Name a checkpoint before you order, and restore it if you need to.</p></div></div></li>
       </ol>
       <div class="scene">
         <canvas aria-label="A 555 LED blinker drawn as a schematic, then placed, routed and shown as a finished board as you scroll."></canvas>
+        <div class="v3d" data-3d aria-hidden="true"></div>
         <span class="turn">drag to turn</span>
-        <span class="chip"><span class="c0">blinker.kicad_sch</span><span class="c1">blinker.kicad_pcb</span><span class="c2">blinker.kicad_pcb</span><span class="c3">3D view</span></span>
+        <span class="chip"><span class="c0">blinker.kicad_sch</span><span class="c1">blinker.kicad_pcb</span><span class="c2">blinker.kicad_pcb</span><span class="c3">3D Viewer</span></span>
       </div>
     </div>
   </div>
@@ -386,8 +428,8 @@
 
 <section id="together">
   <div class="wrap">
-    <p class="tag rv"><b>02</b> Working together</p>
-    <h2 class="rv" style="--i:1; margin-top:18px">What you see when someone else is in the file.</h2>
+    <div class="sheet-h rv"><h2 data-stroke>Working together</h2><span class="sheet-n">Sheet 2 / 5</span></div>
+    <p class="lead rv" style="--i:1; margin-top:18px">What you see when someone else is in the file.</p>
     <div class="together-grid">
       <figure class="rv">
         <div class="shot"><img src="/static/landing/editor.webp" width="1600" height="1000" loading="lazy" alt="The web PCB editor in dark mode, zoomed in on a routed board. Jun has selected diode D11, which is outlined on Ada's screen, and Jun's named cursor is beside it."></div>
@@ -407,12 +449,11 @@
 
 <section id="bom" style="padding-top:0">
   <div class="wrap">
-    <p class="tag rv"><b>03</b> What ships</p>
-    <h2 class="rv" style="--i:1; margin-top:18px">Bill of materials.</h2>
-    <p class="lead rv" style="--i:2; margin-top:14px">Everything in this list is in the product today. The screenshots are the real thing.</p>
+    <div class="sheet-h rv"><h2 data-stroke>What ships</h2><span class="sheet-n">Sheet 3 / 5</span></div>
+    <p class="lead rv" style="--i:1; margin-top:18px">Everything in this list is in the product today. The screenshots are the real thing.</p>
     <div class="bom-grid">
       <div class="bom rv" role="tablist" aria-label="Features" aria-orientation="vertical">
-        <div class="bom-h"><span>REF</span><span>ITEM</span></div>
+        <div class="bom-h"><span>Ref</span><span>Item</span></div>
         <button class="bom-r" role="tab" aria-selected="true" data-shot="editor"><span class="ref">01</span><span><b>Web editor</b><span class="d"><span>The schematic and PCB editors in a browser tab, with KiCad's menus, hotkeys, docked panels and mouse model. Wire, route, edit properties, place parts from the KiCad libraries, run the rule checks, update the board from the schematic, and open the 3D viewer.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="projects"><span class="ref">02</span><span><b>Online projects</b><span class="d"><span>Upload a project in the browser or publish it from the desktop app. Search, stars, thumbnails, and a Trash that keeps things for 30 days.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="share"><span class="ref">03</span><span><b>Sharing and roles</b><span class="d"><span>Invite by GitHub username or email, or send an editor or viewer link you can revoke. Role changes apply at once, also for people who have the project open.</span></span></span></button>
@@ -441,8 +482,8 @@
 
 <section id="get" style="padding-top:0">
   <div class="wrap">
-    <p class="tag rv"><b>04</b> Get it</p>
-    <h2 class="rv" style="--i:1; margin-top:18px">Two ways in. Same project either way.</h2>
+    <div class="sheet-h rv"><h2 data-stroke>Get it</h2><span class="sheet-n">Sheet 4 / 5</span></div>
+    <p class="lead rv" style="--i:1; margin-top:18px">Use the desktop app or the browser. It is the same project either way.</p>
     <div class="get-grid rv" style="--i:2">
       <div>
         <h3>Desktop app</h3>
@@ -468,9 +509,9 @@
       </div>
     </div>
 
+    <div class="sheet-h rv" id="how" style="margin-top:clamp(56px, 8vw, 104px)"><h2 data-stroke>How it works</h2><span class="sheet-n">Sheet 5 / 5</span></div>
     <div class="how-grid">
       <div class="rv">
-        <p class="tag" style="margin-bottom:18px"><b>05</b> Under the hood</p>
         <p>The editors send <b>property-level changes</b> over a WebSocket to a Rust server backed by PostgreSQL. The server puts every operation in order and stores it before acknowledging it and passing it on, so everyone applies the same edits in the same sequence.</p>
         <p>When two people change the same property, the last writer wins. Cursors and selections travel on a separate channel that is never stored.</p>
         <p>It is open source, and the server is yours to run: <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/server/README.md">self-hosting guide</a>, <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/COLLABORATION.md">collaboration guide</a>.</p>
@@ -491,7 +532,7 @@
 
 <section class="close" style="padding-top:0">
   <div class="wrap">
-    <h2 class="rv">Open a board with someone.</h2>
+    <p class="lead rv">Sign in to start a project in the browser, or get the desktop app and open it from there.</p>
     <div class="acts rv" style="--i:1">
       <a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><span>Sign in with GitHub</span></a>
       <a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases/latest">Get the desktop app</a>

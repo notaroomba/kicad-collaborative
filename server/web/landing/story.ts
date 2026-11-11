@@ -11,6 +11,8 @@ import { Cam, boardTexture, drawBodies, drawFace, drawLed, drawSlab } from "./so
 import { MONO, SANS, Stage, makeStage, reducedMotion } from "./stage";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** What the page uses of the editor's 3D viewer (server/web/viewer3d/viewer.ts). */
+interface V3D { canvas: HTMLCanvasElement; setDoc(doc: KDoc, fit: boolean): unknown; pose(x: number, y: number, z: number, zoom?: number): void }
 const DUR = [15, 9, 12, 4.2];                       // seconds each chapter takes to play
 const FAST = 7;                                     // how much faster a chapter finishes once scrolled past
 const PCB_BG = "#001023";
@@ -98,8 +100,31 @@ export function startStory(root: HTMLElement): void {
   let symAt: Pt[] = [], cam: Pt | null = null, ratKey = "", rats: Rat[] = [];
   let resting: HTMLCanvasElement | null = null, rest = "";
 
+  // The last chapter is the editor's own 3D viewer (server/web/viewer3d), fetched when the story comes near.
+  // Until it is there, or where there is no WebGL, the board is drawn as a flat solid instead.
+  const host3d = root.querySelector<HTMLElement>("[data-3d]");
+  let viewer: V3D | null = null, asked = false, pose3d = "";
+  function want3d(): void {
+    if (asked || !host3d) return;
+    asked = true;
+    const sc = document.createElement("script");
+    sc.src = "/static/dist/viewer3d.js"; sc.async = true;
+    sc.onload = () => {
+      try {
+        const api = (window as unknown as { KiCadViewer3D?: { embed(host: HTMLElement, opts: { wheel: boolean }): V3D } }).KiCadViewer3D;
+        if (!api) return;
+        const v = api.embed(host3d, { wheel: false });
+        v.canvas.style.touchAction = "pan-y";
+        v.setDoc(loadPcb(), true);
+        viewer = v; pose3d = ""; stage.invalidate();
+      } catch (e) { viewer = null; }
+    };
+    document.head.appendChild(sc);
+  }
+
   function readScroll(): void {
     const r = track.getBoundingClientRect();
+    if (r.top < window.innerHeight * 1.5 && r.bottom > -window.innerHeight) want3d();
     const room = r.height - window.innerHeight;
     g = room > 0 ? clamp(-r.top / room) * 4 : 0;
     // Back above the story: the next visit starts from an empty sheet.
@@ -302,6 +327,7 @@ export function startStory(root: HTMLElement): void {
     };
 
     if (blend < 1) pointers(drawSchematic(s, ctx, p[0], dt), 1 - blend);
+    if (host3d && (blend <= 0 || p[2] < 1 || p[3] <= 0) && host3d.style.opacity !== "0") { host3d.style.opacity = "0"; host3d.style.pointerEvents = "none"; pose3d = ""; }
     if (blend <= 0) return false;
 
     // The board goes onto its own canvas while the sheet is still fading out under it.
@@ -318,6 +344,18 @@ export function startStory(root: HTMLElement): void {
     if (board) pointers(board, blend * (1 - span(q3, 0, 0.12)));
     if (q3 <= 0) return false;
     const ppm = fit(W, H, dpr, [BOARD.x - 3, BOARD.y - 3, BOARD.x + BOARD.w + 3, BOARD.y + BOARD.h + 3]).ppm;
+
+    if (viewer && host3d) {
+      // KiCad's 3D viewer takes over from the editor view: it comes up square-on at the same size, then leans back.
+      const fade = ease(span(q3, 0, 0.3)), tilt = ease(span(q3, 0.2, 0.86));
+      const fitted = Math.min(W / (BOARD.w * 1.08), H / (BOARD.h * 1.08)), zoom = lerp(ppm / fitted, 0.7, tilt);
+      const key = `${W}x${H}:${tilt.toFixed(4)}`;
+      // Once it has settled the pose is left alone, so a drag can turn the board.
+      if (key !== pose3d) { pose3d = key; viewer.pose(-48 * tilt, 0, 18 * tilt, zoom); }
+      host3d.style.opacity = fade.toFixed(3);
+      host3d.style.pointerEvents = q3 >= 1 ? "auto" : "none";
+      return false;
+    }
 
     // The finished board: the editor view gives way to the fabricated face, which then tilts.
     if (!tex) tex = boardTexture(loadPcb());

@@ -45,6 +45,7 @@ export class Viewer {
   frames = 0;
 
   private host: HTMLElement;
+  private wheel = true;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private pivot = new THREE.Group();
@@ -68,8 +69,9 @@ export class Viewer {
   /** milliseconds a view change takes (0: none) */
   animationMs = 220;
 
-  constructor(host: HTMLElement) {
-    this.host = host;
+  /** `wheel: false` leaves the mouse wheel to the page (a viewer embedded in a scrolling page). */
+  constructor(host: HTMLElement, opts: { wheel?: boolean } = {}) {
+    this.host = host; this.wheel = opts.wheel !== false;
     this.canvas = document.createElement("canvas");
     this.canvas.className = "v3d-canvas";
     this.canvas.style.cssText = "display:block;width:100%;height:100%;touch-action:none;outline:none";
@@ -204,6 +206,14 @@ export class Viewer {
     this.animateTo(this.tmpQ2, this.tmpV.set(0, 0, this.fitDistance())); this.fitted = true;
   }
 
+  /** Put the board in a pose at once: its rotation about X, then Y, then Z (degrees, as the standard views are given) and the zoom (1: fitted). */
+  pose(x: number, y: number, z: number, zoom = 1): void {
+    this.stopAnimation(false);
+    this.pivot.quaternion.setFromEuler(new THREE.Euler(rad(x), rad(y), rad(z), "XYZ"));
+    this.cam.set(0, 0, this.fitDistance() / Math.max(0.05, zoom)); this.fitted = zoom === 1;
+    this.requestRender();
+  }
+
   /** Ease the board's rotation and the camera to a new pose over animationMs (at once when animation is off). */
   private animateTo(q: THREE.Quaternion, cam: THREE.Vector3): void {
     const a = this.anim;
@@ -300,7 +310,7 @@ export class Viewer {
     c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
     c.addEventListener("contextmenu", (ev) => ev.preventDefault());
     c.addEventListener("auxclick", (ev) => ev.preventDefault());
-    c.addEventListener("wheel", (ev) => {
+    if (this.wheel) c.addEventListener("wheel", (ev) => {
       ev.preventDefault();
       this.stopAnimation(false);
       const r = c.getBoundingClientRect();

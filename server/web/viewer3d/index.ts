@@ -6,6 +6,7 @@
 //
 //   KiCadViewer3D.open({ getDoc, getName?, subscribe?, toast? })  → the window (focused if already open)
 //   KiCadViewer3D.close() / .isOpen() / .current
+//   KiCadViewer3D.embed(host, { wheel? })  → the bare Viewer (setDoc, pose, dispose), no window chrome
 //
 // Package layout: outline (Edge.Cuts → board outlines, drilled holes), textures (the two faces composed
 // from the document's layers with the editor's own 2D painter), bodies (placeholder component bodies),
@@ -17,6 +18,7 @@ import { localPads, partSolids } from "./parts";
 import { arcPoints, assignHoles, boardHoles, boardShape, chainLoops, circlePoints, nestLoops, ovalPoints, polyArea } from "./outline";
 import { stencilGeom, textureExtent } from "./textures";
 import { OpenOptions, ViewerWindow } from "./ui";
+import { Viewer } from "./viewer";
 
 let current: ViewerWindow | null = null;
 
@@ -27,6 +29,8 @@ export const api = {
     return current;
   },
   close(): void { if (current) current.close(); current = null; },
+  /** The bare 3D canvas without the window around it, for a page that shows a board (the home page's last chapter). */
+  embed(host: HTMLElement, opts?: { wheel?: boolean }): Viewer { return new Viewer(host, opts); },
   isOpen(): boolean { return !!current && !current.closed; },
   get current(): ViewerWindow | null { return current && !current.closed ? current : null; },
   /** the pure geometry behind the scene, for the node tests (static/tests/viewer3d.test.js) */
