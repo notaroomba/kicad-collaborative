@@ -2,6 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setToggles, store } from "./appstore";
 import { refreshCrosshair } from "./crosshair";
+import { getThemeMode, initTheme, setThemeMode, subscribeTheme, toggleTheme } from "../theme";
 import { $ } from "./dom";
 import { filters } from "./selection";
 import { E } from "./state";
@@ -40,18 +41,16 @@ export function showPane(name, show) {
   requestRender();
 }
 
-// Theme (kui.theme): light/dark override of the system preference.
+// Theme: owned by web/theme.ts; the Preferences > Appearance entries show the chosen mode as checked.
 export function applyTheme() {
-  const saved = (() => { try { return localStorage.getItem("kui.theme"); } catch (e) { return null; } })();
-  if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+  initTheme();
+  const sync = () => { const m = getThemeMode(); setToggles({ themeLight: m === "light", themeDark: m === "dark", themeSystem: m === "system" }); };
+  sync(); subscribeTheme(sync);
 }
 
-export function toggleTheme() {
-  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  const next = cur === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("kui.theme", next); } catch (e) { /* no storage */ }
-}
+export { toggleTheme };
+
+export function setTheme(mode) { setThemeMode(mode); }
 
 
 export function setupEditorChrome() {

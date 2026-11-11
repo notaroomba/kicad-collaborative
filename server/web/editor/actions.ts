@@ -6,7 +6,7 @@ import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, se
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
 import { chooseTrackWidth, chooseViaSize } from "./pcbrouting";
-import { setCrosshair, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
+import { setCrosshair, setTheme, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
 import { contextMenuAction } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
 import { drawSelection, renderProps, setFilter } from "./selection";
@@ -147,7 +147,7 @@ export const HANDLERS = {
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   // the Assistant dock (web/ai) owns its own state; the menu entry just asks it to toggle
   showAssistant: () => window.dispatchEvent(new Event("kc-assistant-toggle")),
-  theme: () => toggleTheme(), about: (a) => runAction("about", a),
+  theme: () => toggleTheme(), themeLight: () => setTheme("light"), themeDark: () => setTheme("dark"), themeSystem: () => setTheme("system"), about: (a) => runAction("about", a),
   // the home view's menu entries
   share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),
   zoomin: () => zoomBy(1.25), zoomout: () => zoomBy(0.8), fit: () => fitView(), grid: () => runAction("grid"), snap: () => runAction("snap"), linemode: () => runAction("linemode"),

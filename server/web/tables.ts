@@ -50,6 +50,8 @@ const UNITS_MENU: MenuEntry = ["&Units", ["inchesUnits", "milsUnits", "millimete
 const VIEW_WEB: MenuEntry[] = ["toggleGrid", "gridProperties", "gridNext", "gridPrev", UNITS_MENU, "cursorFullCrosshairs", "togglePolarCoords", "resetLocalCoords"];
 const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInvolved", "donate", "reportBug", "-", "downloadDesktop", "sourceCode", "-", "about"];
 const LANG_MENU: MenuEntry = ["Set Language", ["languageEnglish"]];
+// the UI theme (web/theme.ts): KiCad's Preferences > Common > "Appearance" choice, as a sub-menu
+const THEME_MENU: MenuEntry = ["&Appearance", ["themeLight", "themeDark", "themeSystem"]];
 export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
     ["&File", ["save", "saveCurrSheetCopyAs", "revert", "-",
@@ -81,7 +83,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       "-", "editSymbolFields", "editSymbolLibraryLinks", "-", "annotate", "module:clearAnnotation", "toggleAnnotateAuto", "incrementAnnotations", "-", "assignFootprints", "generateBOM", "generateBOMLegacy",
       "-", "updateSchematicFromPcb", "-", "createNetChain", "-",
       ["Variants", ["addVariant", "removeVariant", "editVariantDescription", "renameVariant", "copyVariant"]]]],
-    ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU, "-", "theme"]],
+    ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
     ["&Help", HELP_MENU],
   ],
   pcb: [
@@ -127,7 +129,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&Tools", ["updatePcbFromSchematic", "showEeschema", "showProjectManager", "showCalculatorTools", "-", "drcRuleEditor", "-", "showFootprintEditor", "updateFootprints", "migrate3DModels", "editFootprintFields",
       "-", "zonesManager", "-", "cleanupTracksAndVias", "removeUnusedPads", "cleanupGraphics", "repairBoard", "-", "collect3DModels", "-", "boardReannotate", "updateSchematicFromPcb",
       ["Multi-Channel", ["generatePlacementRuleAreas", "repeatLayout"]]]],
-    ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU, "-", "theme"]],
+    ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
     ["&Help", HELP_MENU],
   ],
 };
@@ -142,7 +144,7 @@ export const MENU_CHECKS = new Set(["showProperties", "showSearch", "showHierarc
   "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons",
   "setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP", "toggleAnnotateAuto",
   "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "graphicsOutlines", "textOutlines", "highContrastMode", "flipBoard",
-  "toggleGrid", "inchesUnits", "milsUnits", "millimetersUnits", "cursorFullCrosshairs", "togglePolarCoords", "showRatsnest", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "languageEnglish"]);
+  "toggleGrid", "inchesUnits", "milsUnits", "millimetersUnits", "cursorFullCrosshairs", "togglePolarCoords", "showRatsnest", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "languageEnglish", "themeLight", "themeDark", "themeSystem"]);
 /**
  * A KiCad menu id whose command the tool module publishes under another name (CollabTools.<editor>.actions): the
  * entry keeps KiCad's id, label, icon and hotkey and runs the module's action.
@@ -172,7 +174,7 @@ export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete",
 export const READ_ONLY_OK = new Set(["saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
   "selectNet", "deselectNet", "selectSameSheet", "module:selectAllOnLayer", "selectUnconnected", "filterSelection", "runERC", "runDRC", "clearMarkers", "boardStatistics", "measureTool", "inspectClearance",
-  "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "languageEnglish",
+  "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "themeLight", "themeDark", "themeSystem", "languageEnglish",
   "layerTop", "layerBottom", "layerNext", "layerPrev", "showNetInspector", "showBusSyntaxHelp"]);
 /**
  * Keys a tool module binds to something other than KiCad's default, taken before the module sees them
@@ -217,7 +219,7 @@ export const LOCAL_LABELS: Record<string, string> = {
   collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative...", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
-  theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About KiCad Collaborative",
+  theme: "Toggle Dark Theme", themeLight: "Light", themeDark: "Dark", themeSystem: "System", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About KiCad Collaborative",
   languageEnglish: "English", showSearch: "Search", toDLabel: "Change to Directive Label", decrement: "Decrement", netInspector: "Net Inspector",
   // home-view menu entries
   share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Log Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
