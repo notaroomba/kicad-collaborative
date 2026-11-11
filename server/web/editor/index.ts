@@ -29,7 +29,7 @@ import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
 import { installPcbRouting, pcbLayerKey } from "./pcbrouting";
 import { breakFollow, sendPresence } from "./peers";
-import { drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
+import { collapseSelectionTo, drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
 import { clearSelection, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto } from "./selection";
 import { E } from "./state";
 import "./panels/index";
@@ -121,6 +121,9 @@ stage.addEventListener("dblclick", (ev) => {
     let pad = null;
     try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(E.kdoc, x, y) : null; if (!pad && CollabTools.pcb.padAt) pad = CollabTools.pcb.padAt(E.kdoc, x, y); } catch (e) { pad = null; }
     if (pad && pad.item && pad.index !== undefined) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
+  }
+  if (isSch() && CollabTools.sch && CollabTools.sch.enterGroupAt) {         // a double-click on a group enters it (KiCad), it does not open a dialog
+    const g = hitAny([x, y]); try { if (g && CollabTools.sch.enterGroupAt(ctx, g.id)) return; } catch (e) { console.warn(e); }
   }
   const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
   if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
@@ -280,9 +283,10 @@ const onPointerUp = (ev) => {
   if (ev.button !== 0 || !E.drag) return;
   if (E.drag.group) { finishGroupDrag(); return; }
   if (E.drag.engine) {
-    const fpE = E.drag.fp, cur = E.drag.curMm; E.drag = null; dragG.replaceChildren();
+    const fpE = E.drag.fp, cur = E.drag.curMm, clickId = E.drag.moved ? null : E.drag.clickId; E.drag = null; dragG.replaceChildren();
     if (CollabTools.sch.state.drag) { try { CollabTools.sch.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
     sendPresence(cur, []);
+    if (clickId) { collapseSelectionTo(clickId); return; }
     if (E.kdoc) syncItemsFromDoc(); E.selected = E.items.find((f) => f.id === fpE.id) || E.selected; drawSelection(); renderProps(); requestRender();
     return;
   }
@@ -321,6 +325,7 @@ document.addEventListener("keydown", (ev) => {
     if (cancelInteraction()) return;
     cmtPanel.style.display = "none";
     if (E.tool !== "select") { setTool("select"); return; }
+    if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup) CollabTools.sch.exitGroup();   // Esc leaves an entered group
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }

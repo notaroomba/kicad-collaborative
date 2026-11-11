@@ -130,6 +130,17 @@ export function rotateSelected(delta) {
 }
 
 export function deleteSelected() {
+  // With the document loaded this is an ordinary undoable commit (and the module tidies up what the item
+  // alone justified: junctions, a group it emptied); it used to go out as a bare op that Ctrl+Z could not bring back.
+  const it = E.kdoc && E.selected ? E.kdoc.items.get(E.selected.id) : null;
+  if (it) {
+    const m = activeModule(); let changes = null;
+    if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, [it]); } catch (e) { console.warn(e); } }
+    if (!changes) changes = [KiCadCanvas.removeChange(it)];
+    E.selected = null; E.selection.delete(it.id);
+    commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
+    return;
+  }
   sendOp([{ id: E.selected.id, typeName: E.ITEM_TYPE, kind: "REMOVED", properties: [] }]);
   if (E.kdoc) E.kdoc.items.delete(E.selected.id);
   E.items = E.items.filter((f) => f.id !== E.selected.id);

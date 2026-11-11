@@ -72,13 +72,20 @@ export function startGroupDrag(hit, mm, ev) {
   const fp = hit.fp || { id: hit.id, x: Math.round(KiCadCanvas.atOf(hit.item.node)[0] * E.IU), y: Math.round(KiCadCanvas.atOf(hit.item.node)[1] * E.IU) };
   if (isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
     let d = null; try { d = CollabTools.sch.beginDrag(toolCtx(), its, mm, true); } catch (e) { d = null; }
-    if (d) { E.drag = { fp, engine: true, startMm: mm, curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, wires: [] }; stage.setPointerCapture(ev.pointerId); return; }
+    if (d) { E.drag = { fp, engine: true, clickId: hit.id, startMm: mm, curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, wires: [] }; stage.setPointerCapture(ev.pointerId); return; }
   }
   // board (or a schematic module without group support): move the footprints together
   const members = its.filter((it) => it.kind === "footprint" || it.kind === "symbol").map((it) => { const f = E.items.find((q) => q.id === it.id); return f ? { fp: f, ox: f.x, oy: f.y } : null; }).filter(Boolean);
   if (!members.length) return;
-  E.drag = { fp, group: members, startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0] };
+  E.drag = { fp, group: members, clickId: hit.id, startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0] };
   stage.setPointerCapture(ev.pointerId);
+}
+
+/** A plain click (no drag) on one item of a multi-selection selects that item alone, as in KiCad. */
+export function collapseSelectionTo(id) {
+  if (!id || !E.kdoc || !E.kdoc.items.has(id) || E.selection.size < 2) return;
+  const keep = groupExpand([id]); if (keep.size === E.selection.size) return;
+  toolCtx().setSelection(keep);
 }
 
 export function moveGroupDrag(mm) {
@@ -90,7 +97,7 @@ export function moveGroupDrag(mm) {
 }
 
 export function finishGroupDrag() {
-  const g = E.drag; E.drag = null; dragG.replaceChildren(); if (!g.moved || (!g.last[0] && !g.last[1])) return;
+  const g = E.drag; E.drag = null; dragG.replaceChildren(); if (!g.moved) collapseSelectionTo(g.clickId); if (!g.moved || (!g.last[0] && !g.last[1])) return;
   const changes = g.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y));
   const inverse = g.group.map((m) => moveOp({ id: m.fp.id, x: m.fp.x, y: m.fp.y }, m.ox, m.oy));
   sendOp(changes);

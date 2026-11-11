@@ -139,6 +139,8 @@ interface ToolModule {
 interface SchToolModule extends ToolModule {
   select(id: string | null): void;
   beginDrag(ctx: ToolCtx, item: KItem | KItem[], mm: [number, number], byPointer?: boolean): unknown;
+  enterGroupAt?(ctx: ToolCtx, id: string): boolean;
+  exitGroup?(): boolean;
   moveDrag(ctx: ToolCtx, mm: [number, number]): void;
   endDrag(ctx: ToolCtx, apply: boolean): void;
   cancelDrag?(ctx: ToolCtx): void;

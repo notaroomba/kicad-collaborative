@@ -112,13 +112,13 @@ export async function connect() {
         replayPending(sock);
       }
     }
-    if (msg.type === "op") { if (noteSeq(msg.seq, sock) !== "apply") return; E.editsSeen++; if (E.kdoc) applyChanges(msg.changes); else noteRemoteOp(msg); bumpEdits(); if (!E.kdoc) scheduleRenderRefresh(); }
+    if (msg.type === "op") { if (noteSeq(msg.seq, sock) !== "apply") return; E.editsSeen++; if (E.kdoc) { applyChanges(msg.changes); reapplyPending(msg.changes); } else noteRemoteOp(msg); bumpEdits(); if (!E.kdoc) scheduleRenderRefresh(); }
     if (msg.type === "ops") {
       for (const op of msg.ops || []) {
         const step = noteSeq(op.seq, sock);
         if (step === "gap") break;                     // a resync is on its way; the rest is moot
         if (step === "skip") continue;                 // already applied
-        E.editsSeen++; if (E.kdoc) applyChanges(op.changes); else noteRemoteOp(op);
+        E.editsSeen++; if (E.kdoc) { applyChanges(op.changes); reapplyPending(op.changes); } else noteRemoteOp(op);
       }
       bumpEdits(); if (!E.kdoc) scheduleRenderRefresh();
     }
@@ -184,6 +184,24 @@ export function replayPending(sock) {
   for (const [clientOpId, op] of E.pendingOps) {
     if (op.docId !== state.docId) continue;   // kept: switching back to that sheet replays it
     ws.send(JSON.stringify({ type: "op", docId: op.docId, clientOpId, baseSeq: null, changes: op.changes }));
+  }
+}
+
+/**
+ * Keep the local document in server order.  An op of ours that is still unacknowledged was applied here
+ * first, but the server sequences it *after* every op we receive before its ack — so a remote change to
+ * an item one of those ops also touches must not be the last word locally: our change is put back on top.
+ * (Changes are whole-item replacements, so re-applying one is idempotent.)  Without this, two people
+ * editing the same item at the same moment each ended up showing the other's version.
+ */
+export function reapplyPending(remote) {
+  if (!E.pendingOps.size || !remote || !remote.length) return;
+  const touched = new Set(); let docLevel = false;
+  for (const c of remote) { if (c && c.id) touched.add(String(c.id)); else docLevel = true; }
+  for (const op of E.pendingOps.values()) {
+    if (op.docId !== state.docId) continue;
+    const again = (op.changes || []).filter((c) => (c && c.id ? touched.has(String(c.id)) : docLevel));
+    if (again.length) applyChanges(again);
   }
 }
 
