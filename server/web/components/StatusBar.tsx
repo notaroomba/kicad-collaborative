@@ -43,10 +43,12 @@ export function StatusBar() {
   const live = conn.status === "live";
   const err = conn.status === "error" || conn.status === "connecting";
   // the sheet path as the editor resolved it for the title block ("/" on the root sheet, "/Name/" below it)
-  const kdoc = (window as unknown as { CollabEditor?: { kdoc?: { sheetPath?: string } | null } }).CollabEditor?.kdoc;
+  const kdoc = (window as unknown as { CollabEditor?: { kdoc?: { sheetPath?: string; layers?: Map<string, { userName?: string }> } | null } }).CollabEditor?.kdoc;
   const stem = doc ? (doc.path.split("/").pop() || "").replace(/\.kicad_sch$/, "") : "";
   const sheetPath = (kdoc && kdoc.sheetPath) || (doc && rootDocId && doc.docId !== rootDocId ? `/${stem}/` : "/");
-  const where = !inEditor ? "" : editor === "sch" ? sheetPath : vp.activeLayer;
+  // the board's own name for the layer (BOARD::GetLayerName), as the layer combo shows it
+  const layerRow = kdoc && kdoc.layers && kdoc.layers.get ? kdoc.layers.get(vp.activeLayer) : null;
+  const where = !inEditor ? "" : editor === "sch" ? sheetPath : (layerRow && layerRow.userName) || vp.activeLayer;
   return (
     <div
       id="statusbar"

@@ -389,6 +389,17 @@ test("highlight option: the set is drawn brightened with a halo, everything else
   // highlight composes with high-contrast dimming and hidden layers
   ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["s1"]), hidden: new Set(["F.Cu"]) }); assert(!ctx.ops.some((o) => o.stroke === "#e49a9a"));
 });
+test("net highlight by pad: \"footprint#pad\" brightens that pad only, the footprint's other pads and silk stay dark", () => {
+  const pcb = K.parseDoc(PCB_HEAD + '(footprint "T:R" (layer "F.Cu") (uuid "fp") (at 0 0) (fp_line (start -2 -1) (end 2 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "l1"))'
+    + ' (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net 1 "A") (uuid "p1")) (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "B") (uuid "p2"))))');
+  const view = fitView(pcb, 800, 600);
+  const padFills = (ctx) => ctx.ops.filter((o) => o.op === "fill");
+  let ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["fp#0"]) });
+  assert(padFills(ctx).some((o) => o.alpha === 1), "pad 1 brightened"); assert(padFills(ctx).some((o) => o.alpha === 0.25), "pad 2 dimmed");
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.alpha === 0.25), "silk dimmed");
+  ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["fp"]) });
+  assert(!padFills(ctx).some((o) => o.alpha === 0.25), "a whole-footprint id still brightens every pad");
+});
 test("selected: a halo for every id in the set; polylines with a fill", () => {
   const doc = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (wire (pts (xy 0 8) (xy 10 8)) (stroke (width 0) (type default)) (uuid "w3")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")))');
   const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };

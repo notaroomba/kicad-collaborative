@@ -289,6 +289,7 @@ function queueHover(ev: PointerEvent): void { hoverEv = { clientX: ev.clientX, c
 export function drawHover(ctx: CanvasRenderingContext2D, view: KView): void {
   const d = doc(), id = E.hoverId as string | null; if (!d || !id || !d.items.has(id)) return;
   if (!E.hoverPinned && (E.tool !== "select" || selectionIds().includes(id))) return;
+  if (!E.hoverPinned && !isSch()) return;   // pcbnew has no rollover look: only a hovered Clarify Selection row brightens its item
   const dpr = view.dpr || 1, s = view.ppm * view.zoom * dpr;
   const drawHalo = KiCadCanvas.drawHalo as (ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden: Set<string>, style: { color: string | ((c: string) => string); alpha: number; extraPx: number }) => void;
   const bright = KiCadCanvas.brightened as (c: string, f: number) => string;

@@ -24,7 +24,7 @@
 let K = root.KiCadCanvas;                 // re-bound from ctx.K on every hook
 const WIDTHS = [0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
 const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
-const RATSNEST = "rgba(0, 248, 255, 0.55)", MARKER = "#FF3C3C", MARKER_WARN = "#FFB43A";   // KiCad's ratsnest and marker colours
+const RATSNEST = "rgba(0, 248, 255, 0.35)", MARKER = "#FF3C3C", MARKER_WARN = "#FFB43A";   // KiCad's ratsnest and marker colours
 // the router's preview colours: the ratsnest Brightened(0.8) with alpha + 0.4 for the routed net, Brightened(0.5) for
 // the leading line from the head (DisplayRatline), and DARKDARKGRAY clearance halos
 const RATSNEST_BRIGHT = "rgba(204, 250, 255, 0.95)", RATSNEST_LEAD = "rgba(128, 252, 255, 0.95)", HALO_COLOR = "rgb(72, 72, 72)";
@@ -54,7 +54,7 @@ const S = {
   settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
   docVer: 0, rworld: null, nlc: null, violations: null,   // the router's caches (per document change) and the obstacles shown in violation
 };
-let lastCtx = null, chip = null, chipSel = null, domReady = false;
+let lastCtx = null, domReady = false;
 
 // ---------------------------------------------------------------- small helpers
 const isList = Array.isArray;
@@ -951,10 +951,10 @@ function leadingRatline(ctx, rt) {
   return best ? [end.slice(), best.slice()] : null;
 }
 /** highlightNets( true, { net } ): the routed net brightened, the rest dimmed; a highlight the user had on that net is kept for afterwards. */
-function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netItemIds(ctx.doc, rt.netKey, netlistCached(ctx.doc))); }
+function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netHighlightIds(ctx.doc, rt.netKey, netlistCached(ctx.doc))); }
 function routeUnhighlight(ctx, rt) {
   if (!ctx || !rt || !rt.netKey) return;
-  if (rt.keepHighlight && S.highlightNet === rt.netKey) highlightIds(ctx, netItemIds(ctx.doc, rt.netKey, netlistCached(ctx.doc)));
+  if (rt.keepHighlight && S.highlightNet === rt.netKey) highlightIds(ctx, netHighlightIds(ctx.doc, rt.netKey, netlistCached(ctx.doc)));
   else { S.highlightNet = null; highlightIds(ctx, null); }
 }
 /** LINE_PLACER::FixRoute: commit the head (the walked line since the last click); refused while it violates clearance. */
@@ -1086,7 +1086,7 @@ function placeVia(ctx, hv) {
 }
 function setLayer(ctx, layer) {
   if (S.route) { if (layer !== S.route.layer) routeVia(ctx, layer); return; }   // layer change mid-route goes through a via
-  S.layer = layer; S.gfxLayer = layer; sizesOf(ctx).setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+  S.layer = layer; S.gfxLayer = layer; sizesOf(ctx).setActiveLayer(layer); refreshChip(ctx); ctx.requestRender();
 }
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 function stepLayer(ctx, forward) {
@@ -1114,10 +1114,10 @@ function sizeSelection(ctx) {
 }
 /** W / Shift+W (BOARD_EDITOR_CONTROL::TrackWidthInc / Dec). */
 function cycleWidth(ctx, dir) {
-  const R = sizesOf(ctx), fwd = dir !== -1, PS = K.pcbSizes;
+  const R = sizesOf(ctx), fwd = dir !== -1;
   if (S.route) {
     R.stepTrackWidth(fwd, true); S.route.width = R.routeWidth(netNameOf(ctx, S.route.net), S.route.connected);
-    ctx.toast(PS.trackWidthLabels(R.sizes, sizeUnits())[R.trackIndex]); refreshChip(ctx); ctx.requestRender(); return;
+    refreshChip(ctx); ctx.requestRender(); return;
   }
   const sel = sizeSelection(ctx);
   if (sel) {   // each selected track goes to the next larger (smaller) of the netclass width and the pre-defined widths
@@ -1126,15 +1126,14 @@ function cycleWidth(ctx, dir) {
       if (it.kind === "via") continue; const w = R.steppedWidth(widthOf(it.node, 0), fwd); if (w === null) continue;
       const node = clone(it.node); const wn = K.kid(node, "width"); if (wn) wn[1] = r6(w); else node.splice(node.indexOf(K.kid(node, "layer")), 0, ["width", r6(w)]); changes.push(replacedChange(it, node));
     }
-    if (changes.length) { ctx.commit(changes, fwd ? "Increase Track Width" : "Decrease Track Width"); ctx.toast(`Track width ${fmtSize(widthOf(ctx.doc.items.get(changes[0].id).node, 0))}`); }
-    else ctx.toast(fwd ? "No larger pre-defined track width" : "No smaller pre-defined track width");
+    if (changes.length) ctx.commit(changes, fwd ? "Increase Track Width" : "Decrease Track Width");
     return;
   }
-  R.stepTrackWidth(fwd, false); ctx.toast(PS.trackWidthLabels(R.sizes, sizeUnits())[R.trackIndex]); refreshChip(ctx);
+  R.stepTrackWidth(fwd, false); refreshChip(ctx);   // the toolbar's width combo shows it
 }
 /** ' / \ (ViaSizeInc / Dec). */
 function cycleVia(ctx, dir) {
-  const R = sizesOf(ctx), fwd = dir !== -1, PS = K.pcbSizes;
+  const R = sizesOf(ctx), fwd = dir !== -1;
   const sel = S.route ? null : sizeSelection(ctx);
   if (sel) {
     const changes = [];
@@ -1142,11 +1141,10 @@ function cycleVia(ctx, dir) {
       if (it.kind !== "via") continue; const sn = K.kid(it.node, "size"); const v = R.steppedVia(sn ? K.num(sn[1]) : 0, fwd); if (!v) continue;
       const node = clone(it.node); const s2 = K.kid(node, "size"), d2 = K.kid(node, "drill"); if (s2) s2[1] = r6(v.diameter); if (d2 && v.drill > 0) d2[1] = r6(v.drill); changes.push(replacedChange(it, node));
     }
-    if (changes.length) { ctx.commit(changes, fwd ? "Increase Via Size" : "Decrease Via Size"); const v = viaNow(ctx.doc.items.get(changes[0].id).node); ctx.toast(`Via ${fmtSize(v.size, true)} / ${fmtSize(v.drill)}`); }
-    else ctx.toast(fwd ? "No larger pre-defined via size" : "No smaller pre-defined via size");
+    if (changes.length) ctx.commit(changes, fwd ? "Increase Via Size" : "Decrease Via Size");
     return true;
   }
-  R.stepViaSize(fwd); ctx.toast(PS.viaSizeLabels(R.sizes, sizeUnits())[R.viaIndex]); refreshChip(ctx); if (ctx.requestRender) ctx.requestRender(); return true;
+  R.stepViaSize(fwd); refreshChip(ctx); if (ctx.requestRender) ctx.requestRender(); return true;
 }
 /** { size, drill } of a via node, or of the via the tools would place now. */
 function viaNow(node) {
@@ -1200,7 +1198,7 @@ function beginToolDrag(ctx, free) {
   if (!its && !ids.size) { const c = dragCandidate(ctx, at); if (c) its = [c]; }
   return !!its && beginInlineDrag(ctx, its, at, free, "tool");
 }
-function dragHighlight(ctx, d) { if (!d.netKey) return; d.keepHighlight = S.highlightNet === d.netKey; highlightIds(ctx, netItemIds(ctx.doc, d.netKey, netlistCached(ctx.doc))); }
+function dragHighlight(ctx, d) { if (!d.netKey) return; d.keepHighlight = S.highlightNet === d.netKey; highlightIds(ctx, netHighlightIds(ctx.doc, d.netKey, netlistCached(ctx.doc))); }
 /** ROUTER::Move while dragging: every sub-drag to the snapped cursor (the followers by the lead's displacement). */
 function dragMove(ctx, mm) {
   const D = S.drag; if (!D) return; const p = ctx.snapOn ? ctx.snap(mm.slice()) : mm.slice();
@@ -2007,6 +2005,14 @@ function netItemIds(doc, key, nl) {
   for (const list of [net.pads, net.tracks, net.vias, net.zones]) for (const c of list) ids.add(c.id);
   return ids;
 }
+/** What a net highlight brightens (PCB_PAINTER by netcode): the net's tracks, vias and zones by id and each of its
+ *  pads as "footprintId#padIndex", so the footprint's other pads and its silk stay dark. */
+function netHighlightIds(doc, key, nl) {
+  nl = nl || netlist(doc); const net = nl.nets.get(key); const ids = new Set(); if (!net) return ids;
+  for (const c of net.pads) ids.add(c.id + "#" + c.index);
+  for (const list of [net.tracks, net.vias, net.zones]) for (const c of list) ids.add(c.id);
+  return ids;
+}
 /** Nets of the selection: connected items give theirs, a footprint every net of its pads. */
 function selectionNets(ctx, nl) {
   const keys = new Set();
@@ -2798,6 +2804,188 @@ function boardStatistics(doc) {
   if (b) { st.width = r6(b[2] - b[0]); st.height = r6(b[3] - b[1]); } st.area = r6(ol.outline ? ol.area : (b ? (b[2] - b[0]) * (b[3] - b[1]) : 0));
   return st;
 }
+// ---------------------------------------------------------------- message panel (EDA_MSG_PANEL)
+// The strip under the canvas: GetMsgPanelInfo of the one selected item (PCB_TRACK / PCB_VIA / PAD / FOOTPRINT / ZONE /
+// PCB_SHAPE), the board summary (BOARD::GetMsgPanelInfo) otherwise, the router's (ROUTER_TOOL::UpdateMessagePanel)
+// while a track is being routed.  Values follow MessageTextFromValue: "%.4f mm", "%.2f mils", "%.4f in"; areas short.
+function msgValue(v, units) { const u = units || "mm"; return u === "mil" ? (v / 0.0254).toFixed(2) + " mils" : u === "in" ? (v / 25.4).toFixed(4) + " in" : v.toFixed(4) + " mm"; }
+function msgArea(a, units) { const u = units || "mm"; return u === "mil" ? (a / 0.0254 / 0.0254).toFixed(0) + " mils²" : u === "in" ? (a / 25.4 / 25.4).toFixed(3) + " in²" : a.toFixed(3) + " mm²"; }
+/** UnescapeString: the {slash}-style escapes KiCad keeps in net names, shown as the characters. */
+const UNESC = { slash: "/", backslash: "\\", lt: "<", gt: ">", colon: ":", dblquote: '"', quote: "'", space: " ", tab: "\t", return: "\n", brace: "{", bar: "|" };
+const unescapeName = (t) => String(t || "").replace(/\{(slash|backslash|lt|gt|colon|dblquote|quote|space|tab|return|brace|bar)\}/g, (_, k) => UNESC[k]);
+const msgAngle = (v) => String(+(+v).toPrecision(4));
+/** BOARD::GetLayerName: the user name the board gives a layer, else its canonical one. */
+function boardLayerName(doc, name) { const l = doc && doc.layers && doc.layers.get ? doc.layers.get(name) : null; return l && l.userName ? l.userName : name; }
+/** BOARD_ITEM::LayerMaskDescribe for a pad: all copper layers, else the first copper / technical / any layer, "and others". */
+function padLayerDescribe(doc, p) {
+  const copper = copperOf(doc), cu = padCopperLayers(p, copper);
+  if (cu.size === copper.length) return "all copper layers";
+  const tech = p.layers.filter((l) => !/\.Cu$/.test(l) && l !== "*.Cu");
+  for (const set of [Array.from(cu), tech, p.layers]) if (set.length) return boardLayerName(doc, set[0].replace(/^\*\./, "F.")) + (set.length > 1 ? " and others" : "");
+  return "no layers";
+}
+/** Clearance and its source as the DRC engine resolves it for an item on `net` (netclass rule, or the board minimum). */
+function msgClearance(s, net) {
+  const nc = netClearance(s, net), min = s.minClearance || 0;
+  return nc >= min ? { v: nc, from: `netclass '${netclassName(s, net)}'` } : { v: min, from: "board setup constraints" };
+}
+/** BOARD::GetTrackLength: the summed length of the track run the item belongs to. */
+function routedLength(doc, id) {
+  let len = 0;
+  for (const rid of connectedRun(doc, [id])) {
+    const it = doc.items.get(rid); if (!it) continue;
+    if (it.kind === "segment") { const a = pt(it.node, "start"), b = pt(it.node, "end"); if (a && b) len += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+    else if (it.kind === "arc") { const a = pt(it.node, "start"), m = pt(it.node, "mid"), b = pt(it.node, "end"); const arc = a && m && b && K.arcFrom3(a, m, b); len += arc ? arcLength(arc) : (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0); }
+  }
+  return len;
+}
+const PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
+const PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
+/**
+ * The message panel's columns [{ title, value }] for the selection `ids` (an id, or "footprintId#padIndex" for a pad).
+ * opts: { settings, units, route, nl }.  Nothing (or several things) selected gives the board summary, as pcbnew.
+ */
+function msgPanelInfo(doc, ids, opts) {
+  opts = opts || {}; const units = opts.units || "mm", s = opts.settings || designSettings(null), out = [];
+  const add = (title, value) => out.push({ title: String(title), value: String(value === undefined || value === null ? "" : value) });
+  const V = (v) => msgValue(v, units), NN = (net) => netclassName(s, net);
+  const rt = opts.route;
+  if (rt) {   // ROUTER_TOOL::UpdateMessagePanel
+    const net = rt.net && (rt.net.name || "");
+    if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`); else add("Routing Track", "(no net)");
+    add("Corner Style", rt.freeAngle ? "Free-angle" : "45-degree");
+    add("Mode", "Walk around");
+    const R = K.pcbSizes && K.pcbSizes.state;
+    const widthFrom = rt.connected && R && R.useConnectedWidth && !R.tempOverride ? "existing track" : R && !R.useNetclassTrack ? "user choice" : `netclass '${NN(net)}'`;
+    add(`Track Width: ${V(rt.width)}`, `(from ${widthFrom})`);
+    const c = msgClearance(s, net); add(`Min Clearance: ${V(c.v)}`, `(from ${c.from === "board setup constraints" ? "board minimum clearance" : c.from})`);
+    return out;
+  }
+  const list = Array.from(ids || []);
+  if (list.length === 1) {
+    const id = String(list[0]), hash = id.indexOf("#");
+    const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
+    if (it && hash > 0 && it.kind === "footprint") {   // PAD::GetMsgPanelInfo
+      const p = padsOf(it)[+id.slice(hash + 1)];
+      if (p) {
+        add("Footprint", it.ref || "");
+        add("Pad", p.number);
+        const pf = K.kid(p.node, "pinfunction"), ptp = K.kid(p.node, "pintype");
+        if (pf && K.str(pf[1])) add("Pin Name", K.str(pf[1]));
+        if (ptp && K.str(ptp[1])) add("Pin Type", K.str(ptp[1]));
+        add("Net", unescapeName(p.net.name)); add("Resolved Netclass", NN(p.net.name));
+        if (isLocked(it.node) || isLocked(p.node)) add("Status", "Locked");
+        if (p.type === "smd" || p.type === "connect") add("Layer", padLayerDescribe(doc, p));
+        const prop = K.kid(p.node, "property"); const PROP = { pad_prop_bga: "BGA", pad_prop_fiducial_glob: "Fiducial global", pad_prop_fiducial_loc: "Fiducial local", pad_prop_testpoint: "Test point", pad_prop_heatsink: "Heat sink", pad_prop_castellated: "Castellated", pad_prop_mechanical: "Mechanical", pad_prop_pressfit: "Press-fit" };
+        add(PAD_SHAPE[p.shape] || "???", (PAD_ATTR[p.type] || "???") + (prop && PROP[K.str(prop[1])] ? "," + PROP[K.str(prop[1])] : ""));
+        if (p.shape === "circle" || (p.shape === "oval" && Math.abs(p.w - p.h) < 1e-9)) add("Diameter", V(p.w)); else { add("Width", V(p.w)); add("Height", V(p.h)); }
+        const frot = K.atOf(it.node)[2] || 0; const prel = norm180(p.rot - frot);
+        add("Rotation", frot ? `${msgAngle(prel)}(+ ${msgAngle(frot)})` : msgAngle(p.rot));
+        const dr = K.kid(p.node, "drill");
+        if (dr) { const oval = K.str(dr[1]) === "oval"; const nums = dr.slice(oval ? 2 : 1).filter((x) => typeof x === "number"); if (nums.length && nums[0] > 0) { if (oval) add("Hole X / Y", `${V(nums[0])} / ${V(nums.length > 1 ? nums[1] : nums[0])}`); else add("Hole", V(nums[0])); } }
+        const c = msgClearance(s, p.net.name); add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+        return out;
+      }
+    }
+    if (it && (it.kind === "segment" || it.kind === "arc")) {   // PCB_TRACK::GetMsgPanelInfo
+      const n = it.node, net = netOf(n).name || "", w = widthOf(n, 0.25), layer = layerOf(n);
+      add("Type", it.kind === "arc" ? "Track (arc)" : "Track");
+      add("Net", unescapeName(net)); add("Resolved Netclass", NN(net)); if (isLocked(n)) add("Status", "Locked");
+      add("Layer", boardLayerName(doc, layer)); add("Width", V(w));
+      const a = pt(n, "start"), b = pt(n, "end"); let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+      if (it.kind === "arc") { const m = pt(n, "mid"); const arc = a && m && b && K.arcFrom3(a, m, b); if (arc) { len = arcLength(arc); add("Radius", V(arc.r)); add("Angle", (len / arc.r * 180 / Math.PI * (arc.anticlockwise ? -1 : 1)).toFixed(2) + "deg"); } }
+      add("Segment Length", V(len));
+      if (hasNet(netOf(n))) add("Routed Length", V(routedLength(doc, it.id)));
+      add("Copper Area", msgArea(len * w + Math.PI * w * w / 4, units));
+      const c = msgClearance(s, net); add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+      const nc = netclassOf(s, net); const mn = s.minTrackWidth || 0; const parts = []; if (mn > 0) parts.push("min " + V(mn)); if (nc && nc.track_width !== undefined) parts.push("opt " + V(nc.track_width));
+      if (parts.length) add(`Width Constraints: ${parts.join("; ")}`, `(from netclass '${NN(net)}')`);
+      return out;
+    }
+    if (it && it.kind === "via") {   // PCB_VIA::GetMsgPanelInfo
+      const n = it.node, net = netOf(n).name || ""; const v = viaNow(n);
+      add("Type", n.includes("micro") ? "Micro Via" : n.includes("blind") ? "Blind Via" : n.includes("buried") ? "Buried Via" : "Through Via");
+      add("Net", unescapeName(net)); add("Resolved Netclass", NN(net)); if (isLocked(n)) add("Status", "Locked");
+      const ls = K.kid(n, "layers"); const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
+      add("Layer", `${boardLayerName(doc, pair[0] || "F.Cu")} - ${boardLayerName(doc, pair[pair.length - 1] || "B.Cu")}`);
+      add("Diameter", V(v.size)); add("Hole", V(v.drill));
+      const c = msgClearance(s, net); add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+      add(`Min Annular Width: ${V(s.minViaAnnular || 0)}`, "(from board setup constraints)");
+      return out;
+    }
+    if (it && it.kind === "footprint") {   // FOOTPRINT::GetMsgPanelInfo (board editor)
+      const n = it.node; const val = K.kids(n, "property").find((q) => K.str(q[1]) === "Value");
+      add(it.ref || "", it.value !== undefined ? it.value : val ? K.str(val[2]) : "");
+      add("Board Side", it.layer === "B.Cu" ? "Back (Flipped)" : "Front");
+      add("Rotation", msgAngle(K.atOf(n)[2] || 0));
+      const status = [], attrs = []; if (isLocked(n)) status.push("Locked"); if (n.includes("placed") || K.kid(n, "placed")) status.push("autoplaced");
+      const at = K.kid(n, "attr"); const toks = at ? at.slice(1).map(K.str) : [];
+      if (toks.includes("board_only")) attrs.push("not in schematic"); if (toks.includes("exclude_from_pos_files")) attrs.push("exclude from pos files"); if (toks.includes("exclude_from_bom")) attrs.push("exclude from BOM"); if (toks.includes("dnp")) attrs.push("DNP");
+      add("Status: " + status.join(", "), "Attributes: " + attrs.join(", "));
+      const m3 = K.kid(n, "model");
+      add(`Footprint: ${K.str(n[1])}`, `3D-Shape: ${m3 ? K.str(m3[1]) : "<none>"}`);
+      const descr = K.kid(n, "descr"), tags = K.kid(n, "tags");
+      add(`Doc: ${descr ? K.str(descr[1]) : ""}`, `Keywords: ${tags ? K.str(tags[1]) : ""}`);
+      return out;
+    }
+    if (it && it.kind === "zone") {   // ZONE::GetMsgPanelInfo
+      const n = it.node, keep = K.kid(n, "keepout"), net = netOf(n).name || "", zl = zoneLayers(n);
+      add("Type", keep ? "Rule Area" : "Zone");
+      if (keep) { const r = []; for (const [k, l] of [["vias", "No vias"], ["tracks", "No tracks"], ["pads", "No pads"], ["copperpour", "No zone fills"], ["footprints", "No footprints"]]) { const x = K.kid(keep, k); if (x && K.str(x[1]) === "not_allowed") r.push(l); } if (r.length) add("Restrictions", r.join(", ")); }
+      else if (zl.some((l) => /\.Cu$/.test(l) || l === "*.Cu")) { add("Net", unescapeName(net)); add("Resolved Netclass", NN(net)); const pr = K.kid(n, "priority"); add("Priority", pr ? K.num(pr[1]) : 0); }
+      if (isLocked(n)) add("Status", "Locked");
+      const names = zl.map((l) => boardLayerName(doc, l));
+      add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
+      const nm = K.kid(n, "name"); if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
+      if (!keep) {
+        const fill = K.kid(n, "fill"); const hatched = fill && K.kid(fill, "mode") && K.str(K.kid(fill, "mode")[1]) === "hatch";
+        add("Fill Mode", hatched ? "Hatched" : "Solid");
+        let area = 0; for (const fp of K.kids(n, "filled_polygon")) { const q = K.ptsOf(fp); for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; area += a[0] * b[1] - b[0] * a[1]; } }
+        add("Filled Area", msgArea(Math.abs(area) / 2, units));
+        const cp = K.kid(n, "connect_pads"); const cc = cp && K.kid(cp, "clearance"); const c = msgClearance(s, net);
+        const zc = cc ? K.num(cc[1]) : 0; const v = Math.max(zc, c.v); add(`Min Clearance: ${V(v)}`, `(from ${zc >= c.v && cc ? "zone" : c.from})`);
+      }
+      return out;
+    }
+    if (it && /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) {   // PCB_SHAPE::GetMsgPanelInfo (EDA_SHAPE::ShapeGetMsgPanelInfo)
+      const n = it.node, kind = it.kind.slice(3); const SHAPE = { line: "Line", rect: "Rectangle", circle: "Circle", arc: "Arc", poly: "Polygon", curve: "Bezier Curve" };
+      add("Type", "Drawing"); if (isLocked(n)) add("Status", "Locked");
+      add("Shape", SHAPE[kind]);
+      const a = pt(n, "start"), b = pt(n, "end"), c = pt(n, "center");
+      if (kind === "circle" && c && b) add("Radius", V(Math.hypot(b[0] - c[0], b[1] - c[1])));
+      else if (kind === "arc") { const m = pt(n, "mid"); const arc = a && m && b && K.arcFrom3(a, m, b); if (arc) { const L = arcLength(arc); add("Length", V(L)); add("Angle", (L / arc.r * 180 / Math.PI).toFixed(1) + "°"); add("Radius", V(arc.r)); } }
+      else if (kind === "curve") { const q = K.bezierPts(K.ptsOf(n)); let L = 0; for (let i = 1; i < q.length; i++) L += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]); add("Length", V(L)); }
+      else if (kind === "poly") add("Points", K.ptsOf(n).length);
+      else if (kind === "rect" && a && b) { add("Width", V(Math.abs(b[0] - a[0]))); add("Height", V(Math.abs(b[1] - a[1]))); }
+      else if (kind === "line" && a && b) { add("Length", V(Math.hypot(b[0] - a[0], b[1] - a[1]))); add("Angle", (Math.atan2(a[1] - b[1], b[0] - a[0]) * 180 / Math.PI).toFixed(1) + "°"); }
+      const layer = layerOf(n); add("Layer", boardLayerName(doc, layer));
+      if (/\.Cu$/.test(layer) && hasNet(netOf(n))) add("Net", unescapeName(netOf(n).name));
+      return out;
+    }
+  }
+  if (opts.net && !list.length) {   // NETINFO_ITEM::GetMsgPanelInfo: a net highlighted with nothing selected
+    const NT = netTable(doc), name = opts.net; let code = 0;
+    for (const [c, nm] of NT.byCode) if (nm === name) { code = c; break; }
+    if (!code) { let i = 0; for (const nm of NT.byName.keys()) { i++; if (nm === name) { code = i; break; } } }
+    let padCount = 0, viaCount = 0, first = null;
+    for (const it of doc.items.values()) {
+      if (it.kind === "footprint") { for (const p of K.kids(it.node, "pad")) if (NT.key(netOf(p)) === name) padCount++; }
+      else if ((it.kind === "via" || it.kind === "segment" || it.kind === "arc") && NT.key(netOf(it.node)) === name) { if (it.kind === "via") viaCount++; else if (!first) first = it; }
+    }
+    add("Net Name", unescapeName(name)); add("Net Code", code); add("Pads", padCount); add("Vias", viaCount);
+    if (first) { const L = routedLength(doc, first.id); add("Net Length", V(L)); add("On Board", V(L)); add("In Package", V(0)); }
+    return out;
+  }
+  // BOARD::GetMsgPanelInfo
+  let pads = 0, vias = 0, segs = 0; const nets = new Set();
+  for (const it of doc.items.values()) {
+    if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) { pads++; const nn = netOf(p); if (hasNet(nn)) nets.add(nn.name || nn.code); }
+    else if (it.kind === "via" || it.kind === "segment" || it.kind === "arc") { if (it.kind === "via") vias++; else segs++; const nn = netOf(it.node); if (hasNet(nn)) nets.add(nn.name || nn.code); }
+  }
+  add("Pads", pads); add("Vias", vias); add("Track Segments", segs); add("Nets", nets.size);
+  add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
+  return out;
+}
 function bboxOfPts(pts) { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; }
 /** Ids of everything with copper or drawings on a layer (footprints by their side). */
 function idsOnLayer(doc, layer) {
@@ -3094,7 +3282,7 @@ act("runDRC", "Design Rules Checker…", "", (ctx) => {
 act("clearMarkers", "Clear DRC Markers", "", (ctx) => { S.markers = []; ctx.requestRender(); return true; });
 act("netInspector", "Net Inspector…", "", (ctx) => {
   const rows = netInspector(ctx.doc);
-  return openForm({ title: "Net Inspector", width: 640, fields: [{ k: "list", type: "table", columns: [{ label: "Name", width: "2fr" }, { label: "Pads", width: "50px" }, { label: "Vias", width: "50px" }, { label: "Track length", width: "100px" }, { label: "Unconnected", width: "90px" }], rows: rows.map((r) => [r.name, r.padCount, r.viaCount, fmt(r.trackLength) + " mm", r.unconnected]), empty: "No nets on this board.", onRow: (i) => highlightIds(ctx, netItemIds(ctx.doc, rows[i].name)) }], apply: () => { highlightIds(ctx, null); } });
+  return openForm({ title: "Net Inspector", width: 640, fields: [{ k: "list", type: "table", columns: [{ label: "Name", width: "2fr" }, { label: "Pads", width: "50px" }, { label: "Vias", width: "50px" }, { label: "Track length", width: "100px" }, { label: "Unconnected", width: "90px" }], rows: rows.map((r) => [r.name, r.padCount, r.viaCount, fmt(r.trackLength) + " mm", r.unconnected]), empty: "No nets on this board.", onRow: (i) => highlightIds(ctx, netHighlightIds(ctx.doc, rows[i].name)) }], apply: () => { highlightIds(ctx, null); } });
 });
 alias("showNetInspector", "netInspector");
 act("boardStatistics", "Board Statistics…", "", (ctx) => {
@@ -3113,9 +3301,9 @@ act("showNetInRatsnest", "Show Net in Ratsnest", "", (ctx) => { const nl = netli
 act("highlightNet", "Highlight Net", "`", (ctx) => {
   const nl = netlist(ctx.doc); let keys = selectionNets(ctx, nl);
   if (!keys.size) { const p = cursorPoint(ctx); const k = nl.table.key(netUnder(ctx.doc, p[0], p[1], null)); if (k) keys = new Set([k]); }
-  if (!keys.size) { highlightIds(ctx, null); S.highlightNet = null; ctx.toast("No net under the cursor"); return true; }
+  if (!keys.size) { highlightIds(ctx, null); S.highlightNet = null; return true; }
   const key = keys.values().next().value; if (S.highlightNet === key) { S.highlightNet = null; highlightIds(ctx, null); return true; }
-  S.highlightNet = key; const ids = new Set(); for (const k of keys) for (const id of netItemIds(ctx.doc, k, nl)) ids.add(id); highlightIds(ctx, ids); ctx.toast(`Net ${Array.from(keys).join(", ")} highlighted`); return true;
+  S.highlightNet = key; const ids = new Set(); for (const k of keys) for (const id of netHighlightIds(ctx.doc, k, nl)) ids.add(id); highlightIds(ctx, ids); return true;   // no infobar: the net shows in the message panel
 });
 act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => { S.highlightNet = null; highlightIds(ctx, null); return true; });
 alias("toggleNetHighlight", "highlightNet", "Toggle Last Net Highlight", "Alt+`"); alias("highlightNetSelection", "highlightNet", "Highlight Net of Selection", "");
@@ -3187,42 +3375,20 @@ function ensureDom(ctx) {
   // Keys app.js consumes before the module (F = fit view, Shift+C = comment, Escape) are caught in the
   // capture phase and re-posted under names of our own so they still arrive through onKey with a fresh ctx.
   document.addEventListener("keydown", onCaptureKey, true);
-  chip = document.createElement("div"); chip.id = "pcbChip";
-  chip.style.cssText = "position:absolute;left:8px;top:8px;z-index:5;display:none;align-items:center;gap:8px;padding:3px 8px;border-radius:3px;background:rgba(0,16,35,.82);border:1px solid #24374E;color:#D0D2CD;font:11px var(--mono,ui-monospace,monospace);pointer-events:auto;user-select:none";
-  chip.innerHTML = '<span data-k="layer" title="Active copper layer — click to swap (PgUp / PgDn)" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer"><i data-k="sw" style="width:10px;height:10px;border-radius:2px;display:inline-block"></i><b data-k="name"></b></span>'
-    + '<span data-k="w" title="Track width (W cycles)"></span><span data-k="v" title="Via size / drill"></span>'
-    + '<label data-k="gfx" style="display:none;align-items:center;gap:4px">on <select data-k="gsel" style="font:inherit;background:#0A1421;color:inherit;border:1px solid #24374E;border-radius:2px"></select></label>';
-  chip.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-  chip.querySelector('[data-k="layer"]').addEventListener("click", () => { if (lastCtx) setLayer(lastCtx, sizesOf(lastCtx).pairedLayer(S.layer)); });
-  chipSel = chip.querySelector('[data-k="gsel"]');
-  chipSel.addEventListener("change", () => { S.gfxLayer = chipSel.value; chipSel.blur(); if (lastCtx) { sizesOf(lastCtx).setActiveLayer(S.gfxLayer); lastCtx.toast("Drawing on " + S.gfxLayer); } });   // blur hands the hotkeys back
-  ctx.stage.appendChild(chip);
-  // the layer list is rebuilt whenever a document opens: that is the cue to show or hide the chip
-  const layersEl = document.getElementById("layers");
-  if (layersEl && typeof MutationObserver !== "undefined") new MutationObserver(() => refreshChip(lastCtx)).observe(layersEl, { childList: true });
+  // pcbnew has no canvas chip: the active layer, track width and via size live in the aux toolbar's combos
   K.pcbSizes.state.subscribe(() => { refreshChip(lastCtx); if (lastCtx && lastCtx.requestRender) lastCtx.requestRender(); });   // the toolbar's selectors and the size hotkeys land here
   refreshChip(ctx);
 }
+/** Keeps the graphic tools' layer on a layer they can draw on (the toolbar's layer combo shows it). */
 function refreshChip(ctx) {
-  if (!chip) return;
-  const show = isPcbDoc(); chip.style.display = show ? "flex" : "none"; if (!show) return;
-  chip.querySelector('[data-k="sw"]').style.background = color(S.layer);
-  chip.querySelector('[data-k="name"]').textContent = S.layer;
-  chip.querySelector('[data-k="w"]').textContent = fmtSize(S.route ? S.route.width : widthFor());
-  const cv = viaNow(); chip.querySelector('[data-k="v"]').textContent = "via " + fmtSize(cv.size, true) + "/" + fmtSize(cv.drill, true);
-  const drawing = gfxTool(S.modTool);
-  chip.querySelector('[data-k="gfx"]').style.display = drawing ? "inline-flex" : "none";
-  if (drawing) {
-    const opts = gfxLayers(ctx && ctx.doc);
-    if (Array.from(chipSel.options, (o) => o.value).join() !== opts.join()) chipSel.innerHTML = opts.map((l) => `<option value="${l}">${l}</option>`).join("");
-    if (!opts.includes(S.gfxLayer)) S.gfxLayer = opts[0] || "F.SilkS";
-    chipSel.value = S.gfxLayer;
-  }
+  if (!isPcbDoc() || !gfxTool(S.modTool)) return;
+  const opts = gfxLayers(ctx && ctx.doc);
+  if (!opts.includes(S.gfxLayer)) { S.gfxLayer = opts[0] || "F.SilkS"; if (ctx) sizesOf(ctx).setActiveLayer(S.gfxLayer); }
 }
 function onStagePointerDown(ev) {
   if (ev.button !== 0 || !isPcbDoc() || appTool() !== "select") return;
   if (S.downHandled === ev) return;                                // onSelectDown already took this click
-  if (ev.target.closest && (ev.target.closest("#cmtPanel") || ev.target.closest("#pcbChip") || ev.target.closest("#signinOverlay"))) return;
+  if (ev.target.closest && (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay"))) return;
   const ctx = lastCtx, doc = liveDoc(); if (!ctx || !doc) return;
   const [x, y] = ctx.worldMm(ev);
   if (K.hitTest(doc, x, y, Math.min(5 / Math.max(1, liveZoom() * 0.6), 0.5))) { if (S.sel.size) { S.sel.clear(); ctx.requestRender(); } return; }   // app.js took the footprint
@@ -3255,7 +3421,7 @@ function onCaptureKey(ev) {
       const dragTool = S.drag && S.drag.tool;
       cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
       if (dragTool && lastCtx) lastCtx.setTool("select");   // Escape ends InlineDrag: back to the selection tool
-      if (lastCtx) { lastCtx.toast("Cancelled"); refreshChip(lastCtx); lastCtx.requestRender(); }
+      if (lastCtx) { refreshChip(lastCtx); lastCtx.requestRender(); }   // Esc cancels silently
     } else if (S.sel.size) { S.sel.clear(); if (lastCtx) lastCtx.requestRender(); }
     return;
   }
@@ -3346,17 +3512,10 @@ function drawDimPreview(c, d, px) {
 }
 function drawOverlay(c, view, ctx) {
   bind(ctx); const doc = ctx.doc; if (!doc) return;
-  if (chip && chip.style.display === "none") refreshChip(ctx);   // the first document renders before the layer-list observer exists
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
   c.lineCap = "round"; c.lineJoin = "round";
-  // selection highlight
-  c.strokeStyle = HL; c.globalAlpha = 0.85;
-  const dragHidden = dragHiddenIds();
-  for (const id of S.sel) {
-    const it = doc.items.get(id); if (!it || (dragHidden && dragHidden.has(id))) continue;
-    if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") { const b = it.bbox; if (b) { c.lineWidth = 1.5 * px; c.strokeRect(b[0] - 0.2, b[1] - 0.2, b[2] - b[0] + 0.4, b[3] - b[1] + 0.4); } continue; }
-    for (const g of it.geom) { if (it.kind === "zone" && g.fill) continue; c.lineWidth = (g.w || 0) + 3 * px; strokeGeom(c, g); }
-  }
+  // the selection is not drawn here: the document pass repaints selected items in their layer's selected colour
+  // (PCB_PAINTER::getColor, m_layerColorsSel), with no outline
   // ratsnest (KiCad's default colour), the whole board or only the lines reaching the selected footprints
   if (S.showRatsnest) {
     const lines = ratsnestLines(doc); const sel = S.localRatsnest ? selectionIds(ctx) : null;
@@ -3529,7 +3688,6 @@ const pcb = {
     S.draw = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
     if (t === "drag" && !beginToolDrag(ctx, !!S.dragFree)) { S.modTool = null; ctx.toast("Select a track or a via first, or point at one, then press D to drag it"); ctx.setTool("select"); return; }
-    if (mine) ctx.toast(gfxTool(t) ? `${TOOL_HINT[t]} — on ${S.gfxLayer}` : t === "zone" ? `${TOOL_HINT[t]} — on ${S.layer}` : TOOL_HINT[t], 3000);
     refreshChip(ctx); ctx.requestRender();
     if (t === "image" && !S.image && !ctx.viewOnly) openImagePicker();   // KiCad opens the file dialog as the tool starts
   },
@@ -3684,11 +3842,11 @@ const pcb = {
     bind(ctx); if (!layer) return; const R = sizesOf(ctx);
     if (/\.Cu$/.test(layer)) { if (layer !== (S.route ? S.route.layer : S.layer) || R.activeLayer !== layer) setLayer(ctx, layer); return; }
     if (R.activeLayer === layer && S.gfxLayer === layer) return;
-    S.gfxLayer = layer; R.setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+    S.gfxLayer = layer; R.setActiveLayer(layer); refreshChip(ctx); ctx.requestRender();
   },
   sizes: () => K.pcbSizes.state,
   setRoutingDialogs(d) { routingDialogs = d || {}; },
-  netlist, ratsnest, localRatsnest, netInspector, netItemIds, drc, designSettings, inspectClearance, boardStatistics,
+  netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
   clipboardText, pasteChanges, cursorPoint, selectionIds,
   get markers() { return S.markers; },
@@ -3711,7 +3869,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
-  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, connectedCopperIds,
+  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

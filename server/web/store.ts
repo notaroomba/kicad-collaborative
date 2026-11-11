@@ -210,6 +210,8 @@ export interface AppState {
   panes: Record<string, boolean>;
   undo: { undo: number; redo: number };
   status: { message: string; mode: string };
+  /** EDA_MSG_PANEL: the columns (title over value) of the selection's GetMsgPanelInfo, the board summary or the router */
+  msgPanel: { items: { title: string; value: string }[] };
   toast: { id: number; text: string; ms: number } | null;
   popover: PopoverState | null;
   contextMenu: ContextMenuState | null;
@@ -271,7 +273,7 @@ const EMPTY: AppState = {
   peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
   versions: { loading: false, error: null, busy: false, list: [], runs: [], docs: [], branches: [], main: null, parentId: null, branchName: null, view: null, dialog: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
-  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
+  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, msgPanel: { items: [] }, toast: null, popover: null, contextMenu: null,
   routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },
 };
 

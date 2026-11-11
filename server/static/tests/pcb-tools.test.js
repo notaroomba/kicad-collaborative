@@ -251,7 +251,7 @@ test("module: route from a pad, add a via with V, finish with Enter", () => {
   assert.equal(P.state.route, null);
   assert.equal(K.kid(doc.items.get(log.commits[2].changes[0].id).node, "layer")[1], "B.Cu");
   assert.equal(pcb.onKey("PageUp", ev(), ctx), true); assert.equal(P.state.layer, "F.Cu");
-  assert.ok(log.toasts.some((m) => /Active layer: F\.Cu/.test(m)));
+  assert.ok(!log.toasts.some((m) => /Active layer/.test(m)), "no banner: the layer shows in the toolbar combo and the status bar");
   // a change applied mid-route (own commit or a peer's) keeps the route; a new document object resets it
   pcb.onPointerDown(ev(), [130, 60], ctx); assert.ok(P.state.route);
   P.state.sel = new Set(["s-4"]); pcb.onDocChanged(ctx); assert.ok(P.state.route); assert.equal(P.state.sel.size, 1);
@@ -1087,7 +1087,7 @@ test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / dup
   ctx.selection = new Set(["s-4"]); assert.equal(pcb.onKey("l", ev(), ctx), true); assert.ok(P.isLocked(doc.items.get("s-4").node)); assert.equal(pcb.onKey("l", ev(), ctx), true); assert.ok(!P.isLocked(doc.items.get("s-4").node));
   ctx.selection = new Set(["v-1"]); assert.equal(pcb.runAction("selectNet", ctx), true); assert.ok(log.selection.includes("s-4") && log.selection.includes("v-1") && !log.selection.includes("fp-1"), "the net's copper, not its footprints");
   ctx.selection = new Set(["v-1"]); assert.equal(pcb.runAction("selectConnection", ctx), true); assert.deepEqual(log.selection.sort(), ["s-2", "v-1"], "s-1 was turned and s-3 moved away above");
-  ctx.selection = new Set(["s-2"]); assert.equal(pcb.runAction("highlightNet", ctx), true); assert.ok(log.highlight.has("fp-1") && log.highlight.has("s-2") && log.highlight.has("v-1"));
+  ctx.selection = new Set(["s-2"]); assert.equal(pcb.runAction("highlightNet", ctx), true); assert.ok(log.highlight.has("fp-1#0") && !log.highlight.has("fp-1") && log.highlight.has("s-2") && log.highlight.has("v-1"), "the net's pad, not its whole footprint");
   assert.equal(pcb.onKey("~", ev(), ctx), true); assert.equal(log.highlight, null);
   // DRC keeps its markers on the module until the document changes; the net inspector is a dialog
   let title = null; pcb.setForm((spec) => { title = spec.title; return true; });
@@ -1181,8 +1181,8 @@ test("router: the head walks around another net's pad at clearance and the route
   const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
   pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
   const rt = P.state.route; assert.ok(rt); assert.equal(rt.netKey, "A"); assert.equal(rt.diagFirst, false, "straight first (start_diagonal false)");
-  // the routed net is highlighted: its footprints, not the other net's
-  const hl = log.highlight.at(-1); assert.ok(hl.has("fa") && hl.has("fb") && !hl.has("fc"));
+  // the routed net is highlighted: its pads ("footprint#pad"), not the other net's
+  const hl = log.highlight.at(-1); assert.ok(hl.has("fa#0") && hl.has("fb#0") && !hl.has("fc#0") && !hl.has("fa"));
   pcb.onPointerMove(ev(), [30, 10], ctx);
   assert.equal(rt.reached, true); assert.deepEqual(rt.target, [30, 10]);
   assert.ok(rt.head.length > 2, "a straight run through pad C would short: the head turns around it " + JSON.stringify(rt.head));
@@ -1267,4 +1267,52 @@ test("router: V drops no via where the via would break another net's clearance",
   pcb.onPointerMove(ev(), [70, 12], ctx); pcb.onKey("v", ev(), ctx);
   assert.equal(log.commits.length, 1); assert.ok(log.commits[0].changes.some((c) => c.typeName === "PCB_VIA")); assert.equal(P.state.route.layer, "B.Cu");
   pcb.cancel();
+});
+
+test("message panel: the board summary, a track, a via, a pad and a footprint as pcbnew's GetMsgPanelInfo", () => {
+  const doc = fixture(); const s = P.designSettings(null);
+  const cols = (ids, opts) => P.msgPanelInfo(doc, ids, Object.assign({ settings: s }, opts));
+  const val = (list, title) => { const c = list.find((x) => x.title === title); return c ? c.value : undefined; };
+  // BOARD::GetMsgPanelInfo: Pads / Vias / Track Segments / Nets / Unrouted, also for a multi-selection
+  const board = cols([]);
+  assert.deepEqual(board.map((c) => c.title), ["Pads", "Vias", "Track Segments", "Nets", "Unrouted"]);
+  assert.equal(val(board, "Pads"), "2"); assert.equal(val(board, "Vias"), "1"); assert.equal(val(board, "Track Segments"), "5"); assert.equal(val(board, "Nets"), "2");
+  assert.equal(val(board, "Unrouted"), String(P.ratsnest(doc).length));
+  assert.deepEqual(cols(["s-1", "s-2"]).map((c) => c.title), board.map((c) => c.title));
+  // PCB_TRACK: Type, Net, Resolved Netclass, Layer, Width, Segment Length, Routed Length, Copper Area, Min Clearance
+  const tr = cols(["s-2"]);
+  assert.deepEqual(tr.slice(0, 7).map((c) => c.title), ["Type", "Net", "Resolved Netclass", "Layer", "Width", "Segment Length", "Routed Length"]);
+  assert.equal(val(tr, "Type"), "Track"); assert.equal(val(tr, "Net"), "GND"); assert.equal(val(tr, "Resolved Netclass"), "Default");
+  assert.equal(val(tr, "Width"), "0.2500 mm"); assert.equal(val(tr, "Segment Length"), (3 * Math.SQRT2).toFixed(4) + " mm");
+  assert.equal(val(tr, "Routed Length"), (5 + 3 * Math.SQRT2 + 7).toFixed(4) + " mm", "the run through the via");
+  const clr = tr.find((c) => /^Min Clearance: /.test(c.title)); assert.equal(clr.title, "Min Clearance: 0.2000 mm"); assert.equal(clr.value, "(from netclass 'Default')");
+  assert.equal(val(cols(["s-2"], { units: "mil" }), "Width"), "9.84 mils");
+  // PCB_VIA
+  const v = cols(["v-1"]); assert.equal(val(v, "Type"), "Through Via"); assert.equal(val(v, "Layer"), "F.Cu - B.Cu"); assert.equal(val(v, "Diameter"), "0.8000 mm"); assert.equal(val(v, "Hole"), "0.4000 mm");
+  // PAD (a pad picked on its own: "footprintId#padIndex")
+  const pd = cols(["fp-1#1"]); assert.equal(val(pd, "Footprint"), "R1"); assert.equal(val(pd, "Pad"), "2"); assert.equal(val(pd, "Net"), "/SIG"); assert.equal(val(pd, "Layer"), "F.Cu", "LayerMaskDescribe: the one copper layer");
+  assert.equal(val(pd, "Rounded rectangle"), "SMD"); assert.equal(val(pd, "Width"), "1.0000 mm"); assert.equal(val(pd, "Height"), "1.2000 mm");
+  // FOOTPRINT: reference over value, side, rotation
+  const fp = cols(["fp-1"]); assert.deepEqual(fp[0], { title: "R1", value: "10k" }); assert.equal(val(fp, "Board Side"), "Front");
+  // the router's panel while a track is routed
+  const rt = cols([], { route: { net: { name: "GND" }, width: 0.25, connected: null } });
+  assert.deepEqual(rt.slice(0, 3), [{ title: "Routing Track: GND", value: "Resolved Netclass: Default" }, { title: "Corner Style", value: "45-degree" }, { title: "Mode", value: "Walk around" }]);
+  assert.ok(rt.some((c) => c.title === "Track Width: 0.2500 mm"));
+  // layers by the board's own names (BOARD::GetLayerName)
+  const named = K.parseDoc(FIXTURE.replace('(0 "F.Cu" signal)', '(0 "F.Cu" signal "top_layer")'), "kicad_pcb");
+  assert.equal(val(P.msgPanelInfo(named, ["s-1"], { settings: s }), "Layer"), "top_layer"); assert.equal(P.boardLayerName(named, "B.Cu"), "B.Cu");
+});
+
+test("net highlight names the net's pads one by one: footprintId#padIndex", () => {
+  const doc = fixture(); const ids = P.netHighlightIds(doc, "GND");
+  assert.ok(ids.has("fp-1#0") && !ids.has("fp-1#1") && !ids.has("fp-1"), "pad 1 is GND, pad 2 is /SIG");
+  for (const id of ["s-1", "s-2", "s-3", "s-4", "a-1", "v-1"]) assert.ok(ids.has(id));
+});
+
+test("message panel: a highlighted net with nothing selected shows NETINFO_ITEM's columns", () => {
+  const doc = fixture(); const cols = P.msgPanelInfo(doc, [], { settings: P.designSettings(null), net: "GND" });
+  assert.deepEqual(cols.slice(0, 4).map((c) => c.title), ["Net Name", "Net Code", "Pads", "Vias"]);
+  assert.equal(cols[0].value, "GND"); assert.equal(cols[2].value, "1"); assert.equal(cols[3].value, "1");
+  assert.equal(cols.find((c) => c.title === "On Board").value, (5 + 3 * Math.SQRT2 + 7).toFixed(4) + " mm");
+  assert.equal(P.msgPanelInfo(doc, ["s-1"], { net: "GND" })[0].value, "Track", "a selection wins");
 });

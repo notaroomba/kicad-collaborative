@@ -277,6 +277,10 @@ export function render(doc, ctx, view, opts) {
   const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
   const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
   const hlGeoms = hl ? new Set() : null;   // geometry of the highlighted items
+  // a net highlight names single pads as "footprintId#padIndex" (PCB_PAINTER brightens by netcode, so the
+  // footprint's other pads, its mask / paste openings of other pads and its silk stay dark)
+  let hlPadFps = null;
+  if (hl && isPcb) for (const k of hl) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (hlPadFps || (hlPadFps = new Set())).add(k.slice(0, i)); }
   const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;   // board selection: repainted, not haloed
   const selGeoms = selPcb ? new Set() : null;
   const hlColor = (c) => highlightColor(c, isPcb);
@@ -399,6 +403,7 @@ export function render(doc, ctx, view, opts) {
     if ((ids && !ids.has(it.id)) || (skip && skip.has(it.id))) continue;
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
+    const padHl = !isHl && hlPadFps && hlPadFps.has(it.id) ? it.id + "#" : null;   // highlighted pads of this footprint
     const isSel = selPcb ? selPcb.has(it.id) : false;
     const itemTint = itemColors ? itemColors.get(it.id) : null;
     const isFp = objHide && it.kind === "footprint";
@@ -431,7 +436,7 @@ export function render(doc, ctx, view, opts) {
       const z = zOf(g);
       bucket(BUCKETS, z).push(g);
       if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex]; if (tc) tint.set(g, tc); }
-      if (isHl) hlGeoms.add(g);
+      if (isHl || (padHl && g.padIndex !== undefined && hl.has(padHl + g.padIndex))) hlGeoms.add(g);
       if (isSel) selGeoms.add(g);
       if (netNames && g.net > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);

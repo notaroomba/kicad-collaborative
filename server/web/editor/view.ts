@@ -1,5 +1,6 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { updateMsgPanel } from "./msgpanel";
 import { state, store } from "./appstore";
 import { refreshCrosshair } from "./crosshair";
 import { drawComments } from "./comments";
@@ -59,6 +60,12 @@ export function sizeCanvas() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
 
+/** The app's selection plus the board module's own picks (tracks, vias, graphics, zones): all repainted brightened. */
+function boardSelected(): Set<string> | null {
+  const base = selectedSet(); const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> });
+  if (isSch() || !pcb || !pcb.sel || !pcb.sel.size) return base;
+  const out = new Set<string>(base || []); for (const id of pcb.sel) out.add(id); return out;
+}
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
@@ -71,7 +78,8 @@ export function drawCanvas() {
   // pinned comment threads sit on their part or net: a full render means items may have moved (a local move
   // updates the item's box only when it lands, after the document version was bumped)
   if (force && E.comments && E.comments.length) drawComments();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
+  updateMsgPanel();
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));
