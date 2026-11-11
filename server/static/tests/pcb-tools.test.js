@@ -970,7 +970,10 @@ test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / dup
   assert.equal(pcb.onKey("Copy", ev(), ctx), true); assert.ok(/^\(kicad_pcb \(version/.test(log.clip) && /\(segment \(start 0 0\) \(end 5 0\)/.test(log.clip));
   ctx.cursor = [200, 100]; assert.equal(pcb.onKey("Paste", ev(), ctx), true);
   let c = log.commits.at(-1); assert.equal(c.label, "paste"); assert.equal(c.changes[0].kind, "ADDED"); assert.deepEqual(log.selection, [c.changes[0].id]); assert.deepEqual(pt(doc.items.get(c.changes[0].id).node, "start"), [200, 100]);
+  // the paste hangs on the cursor until a click places it (dropped where it is here)
+  assert.deepEqual(P.state.move && P.state.move.placing, [c.changes[0].id]); P.state.move = null;
   ctx.selection = new Set(["s-4"]); assert.equal(pcb.runAction("duplicate", ctx), true); c = log.commits.at(-1); assert.equal(c.label, "duplicate"); assert.notEqual(c.changes[0].id, "s-4"); assert.deepEqual(pt(doc.items.get(c.changes[0].id).node, "start"), [130, 50]);
+  assert.deepEqual(P.state.move && P.state.move.placing, [c.changes[0].id]); P.state.move = null;
   ctx.selection = new Set(["a-1"]); assert.equal(pcb.onKey("Cut", ev(), ctx), true); c = log.commits.at(-1); assert.deepEqual(c.changes.map((x) => [x.kind, x.id]), [["REMOVED", "a-1"]]); assert.ok(/\(arc /.test(log.clip)); assert.deepEqual(log.selection, []);
   ctx.selection = new Set(["s-1", "s-2"]); assert.equal(pcb.runAction("group", ctx), true); c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_GROUP"); const gid = c.changes[0].id;
   ctx.selection = new Set(["s-1"]); assert.equal(pcb.runAction("ungroup", ctx), true); assert.deepEqual(log.commits.at(-1).changes.map((x) => [x.kind, x.id]), [["REMOVED", gid]]);
