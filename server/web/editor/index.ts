@@ -372,6 +372,21 @@ refocusCanvas.observe(document.body, { childList: true });
 const overlaysRoot = document.getElementById("ui-overlays"); if (overlaysRoot) refocusCanvas.observe(overlaysRoot, { childList: true, subtree: true });   // a click drops an item that follows the cursor after Move
 
 
+// KiCad's edit actions run SCH_SELECTION_TOOL::RequestSelection: with nothing selected the item under the cursor
+// becomes a hover selection for the one action (and a rotate / mirror lets go of it afterwards).
+const HOVER_KEYS = new Set(["E", "V", "U", "F", "M", "G", "R", "Shift+R", "X", "Y", "D", "Del", "Backspace", "Ctrl+D", "Ctrl+C", "Ctrl+X", "Ctrl+E", "Alt+3", "Ctrl+4"]);
+const HOVER_RELEASE = new Set(["R", "Shift+R", "X", "Y"]);
+function hoverSelect(ev: KeyboardEvent): void {
+  if (!isSch() || !E.kdoc || E.tool !== "select" || !E.lastCursorMm) return;
+  const combo = comboOf(ev); if (!HOVER_KEYS.has(combo)) return;
+  const S = CollabTools.sch ? (CollabTools.sch.state as unknown as { sel?: string | null; wire?: unknown; carry?: unknown; drag?: unknown; draw?: unknown }) : null;
+  if (E.selected || E.selection.size || E.selField || (S && (S.sel || S.wire || S.carry || S.drag || S.draw))) return;
+  const hit = hitAny(E.lastCursorMm); if (!hit) return;
+  if (hit.fp || !CollabTools.sch) toolCtx().setSelection([hit.id]);
+  else { CollabTools.sch.select(hit.id); requestRender(); }                    // wires, labels and the rest live in the module's own selection
+  if (HOVER_RELEASE.has(combo)) setTimeout(() => { if (E.selection.size === 1 && E.selection.has(hit.id)) clearAllSelection(); if (S && S.sel === hit.id && CollabTools.sch) CollabTools.sch.select(null); requestRender(); }, 0);
+}
+
 document.addEventListener("keydown", (ev) => {
   if (state.view !== "editor" || typingTarget(ev)) return;              // a field, a dialog or an open menu owns the keyboard
   // A dialog or menu of the project UI (Share…) is open over the editor: it owns the keyboard.
@@ -386,6 +401,7 @@ document.addEventListener("keydown", (ev) => {
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField) CollabTools.sch.exitGroup();
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
+  hoverSelect(ev);                                                      // SCH_SELECTION_TOOL::RequestSelection: nothing selected -> the item under the cursor
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "g" || k === "G")) { ev.preventDefault(); HANDLERS.showSearch(); return; }   // ACTIONS::showSearch

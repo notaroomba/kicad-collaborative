@@ -27,6 +27,8 @@ const DRAW_TOOLS = new Set(["rect", "circle", "arc", "textbox", "sheet", "table"
 const TYPE_NAMES = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };
 // KiCad's delete cursor: a small bin with a crosshair hotspot
 const DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
+// KICURSOR::BULLSEYE (the highlight-net tool)
+const BULLSEYE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-width="3"/><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="1.2"/><circle cx="12" cy="12" r="5" fill="none" stroke="#fff" stroke-width="3"/><circle cx="12" cy="12" r="5" fill="none" stroke="#000" stroke-width="1.2"/><circle cx="12" cy="12" r="1.6" fill="#000"/></svg>') + '") 12 12, crosshair';
 const TOOLS = [
   { id: "wire", label: "Wire", key: "W", kind: "wire", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10"/>' },
   { id: "bus", label: "Bus", key: "B", kind: "bus", cursor: "crosshair", icon: '<path d="M3 18h8v-9h10" stroke-width="3.2"/>' },
@@ -55,7 +57,7 @@ const TOOLS = [
   { id: "rulearea", label: "Rule area", key: "", cursor: "crosshair", icon: '<path d="M4 5h16v14H4z" stroke-dasharray="2 2"/><path d="M8 9l8 6M16 9l-8 6"/>' },
   { id: "image", label: "Image", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M3 16l5-5 4 4 3-3 6 5"/><circle cx="16" cy="9" r="1.5"/>' },
   // ` is KiCad's net-highlight hotkey (highlightNetTool itself has no default)
-  { id: "highlight", label: "Highlight net", key: "`", cursor: "crosshair", icon: '<path d="M3 12h6l3-6 3 12 3-6h3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 2"/>' },
+  { id: "highlight", label: "Highlight net", key: "", cursor: BULLSEYE_CURSOR, icon: '<path d="M3 12h6l3-6 3 12 3-6h3"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 2"/>' },
 ];
 const toolOf = (id) => TOOLS.find((t) => t.id === id) || null;
 
@@ -461,6 +463,11 @@ function setHighlight(ctx, ids) {
   S.highlight = ids && ids.size ? ids : null;
   if (typeof ctx.setHighlight === "function") ctx.setHighlight(S.highlight);
   ctx.requestRender();
+}
+// SCH_EDITOR_CONTROL::HighlightNet: the net of the item under the cursor, straight away; nothing there clears it.
+function highlightNetNow(ctx) {
+  const c = cursorOf(ctx); if (!c) return false;
+  highlightClick(ctx, c); return true;
 }
 function highlightClick(ctx, mm) {
   const pick = pickNet(ctx, mm);
@@ -919,6 +926,8 @@ function dropCarry(ctx) {
  */
 function singleClickPlace(ctx, toolId, dbl) {
   const c = S.carry; if (!c) return null;
+  S.carry = null;                 // the commit's onDocChanged re-ghosts a carry: the ghost shares the placed item's uuid and would take it out
+  const keep = () => { S.carry = c; };
   const doc = ctx.doc, p = anchorOf(c.kind, c.node);
   let existing = null;
   for (const it of doc.items.values()) if (it.kind === c.kind && same(atOf(it.node), p)) { existing = it; break; }
@@ -926,7 +935,7 @@ function singleClickPlace(ctx, toolId, dbl) {
   if (existing) {
     if (c.kind === "no_connect") { ctx.commit([removeChange(existing)], "Remove No Connect Flag"); if (S.sel === existing.id) S.sel = null; }
   } else if (c.kind === "junction") {
-    if (!explicitJunctionAllowed(doc, p)) { ctx.toast("Junction location contains no joinable wires and/or pins."); ctx.requestRender(); return null; }
+    if (!explicitJunctionAllowed(doc, p)) { keep(); ctx.toast("Junction location contains no joinable wires and/or pins."); ctx.requestRender(); return null; }
     const t = editTxn(doc, ctx.IU); try { placed = txnAddJunction(t, doc, p); } finally { t.restore(); }
     ctx.commit(t.changes(), "Add Junction");
   } else {
@@ -1002,6 +1011,234 @@ function pickAny(ctx, mm) {
   const hit = pickNonSymbol(ctx, mm); if (hit) return hit;
   const id = K.hitTest(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx)));
   return id ? ctx.doc.items.get(id) || null : null;
+}
+
+// ---------------------------------------------------------------- point editor (eeschema/tools/sch_point_editor.cpp)
+// A single selected line, shape, text box, sheet or rule area shows KiCad's edit points; dragging one reshapes
+// the item ("Move Point").  Rectangles, text boxes and sheets also get the four edge handles (EDIT_LINE midpoints)
+// that move one side; a rectangle's centre point moves it whole.  Graphic lines drag the graphic line joined at
+// the edited end (LINE_POINT_EDIT_BEHAVIOR, notes layer only); a sheet's pins stay on their edges
+// (SCH_SHEET::Resize / ConstrainOnEdge) and the wires and no-connects on them follow.
+const PE_MIN = 0.0254;                                   // schIUScale.MilsToIU( 1 )
+const RECT_LINES = [[0, 1], [1, 3], [3, 2], [2, 0]];      // RECT_TOP, RECT_RIGHT, RECT_BOT, RECT_LEFT
+function boxOf(item) {
+  const n = item.node;
+  if (item.kind === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); return [Math.min(num(s[1]), num(e[1])), Math.min(num(s[2]), num(e[2])), Math.max(num(s[1]), num(e[1])), Math.max(num(s[2]), num(e[2]))]; }
+  const at = kid(n, "at"), sz = kid(n, "size"); const x = num(at[1]), y = num(at[2]), w = num(sz[1]), h = num(sz[2]);
+  return [Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)];
+}
+function circleOf(a, b, c) {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1])); if (Math.abs(d) < 1e-12) return null;
+  const a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
+  return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
+}
+const kp = (n, key) => { const k = kid(n, key); return k ? [num(k[1]), num(k[2])] : null; };
+// The edit points of an item: { pts, lines (edge handles, by point index pairs), guides (indicator lines) } or null.
+function editPoints(doc, item) {
+  if (!item) return null;
+  const k = item.kind, n = item.node;
+  if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
+    const pts = ptsOf(n); if (pts.length < 2) return null;
+    return { pts, lines: [], guides: k === "bezier" && pts.length === 4 ? [[0, 1], [3, 2]] : [] };
+  }
+  if (k === "rule_area") { const pl = kid(n, "polyline"); const pts = pl ? ptsOf(pl) : []; return pts.length ? { pts, lines: [], guides: [] } : null; }
+  if (k === "rectangle" || k === "text_box" || k === "sheet") {
+    const [x0, y0, x1, y1] = boxOf(item);
+    const pts = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+    if (k !== "sheet") pts.push([(x0 + x1) / 2, (y0 + y1) / 2]);     // RECT_CENTER
+    return { pts, lines: RECT_LINES, guides: [] };
+  }
+  if (k === "circle") { const c = kp(n, "center"), r = num((kid(n, "radius") || [])[1]); return c ? { pts: [c, [c[0] + r, c[1]]], lines: [], guides: [] } : null; }
+  if (k === "arc") {
+    const s = kp(n, "start"), m = kp(n, "mid"), e = kp(n, "end"); if (!s || !m || !e) return null;
+    const c = circleOf(s, m, e); if (!c) return null;
+    return { pts: [s, m, e, c], lines: [], guides: [[3, 0], [3, 2]] };            // ARC_START, ARC_MID, ARC_END, ARC_CENTER
+  }
+  return null;
+}
+// Handles in pick order: the points, then each edge's midpoint (index pts.length + line).
+function editHandles(ep) { return ep.pts.concat(ep.lines.map(([a, b]) => [(ep.pts[a][0] + ep.pts[b][0]) / 2, (ep.pts[a][1] + ep.pts[b][1]) / 2])); }
+const normA = (a) => { a %= 2 * Math.PI; return a < 0 ? a + 2 * Math.PI : a; };
+// The arc through start and end on circle c, swept the way the original arc went: its true midpoint.
+function arcMid(c, s, e, ccw) {
+  const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]), a1 = Math.atan2(e[1] - c[1], e[0] - c[0]), r = Math.hypot(s[0] - c[0], s[1] - c[1]);
+  const am = ccw ? a0 + normA(a1 - a0) / 2 : a0 - normA(a0 - a1) / 2;
+  return [c[0] + r * Math.cos(am), c[1] + r * Math.sin(am)];
+}
+const resize = (c, v, r) => { const l = Math.hypot(v[0], v[1]) || 1; return [c[0] + v[0] / l * r, c[1] + v[1] / l * r]; };
+// PinEditedCorner: the edited corner (or edge) stays inside the opposite one by the minimum size.
+function pinCorner(idx, tl, tr, bl, br, minW, minH) {
+  if (idx === 0) { tl[0] = Math.min(tl[0], br[0] - minW); tl[1] = Math.min(tl[1], br[1] - minH); tr[1] = tl[1]; bl[0] = tl[0]; }
+  else if (idx === 1) { tr[0] = Math.max(tr[0], bl[0] + minW); tr[1] = Math.min(tr[1], bl[1] - minH); tl[1] = tr[1]; br[0] = tr[0]; }
+  else if (idx === 2) { bl[0] = Math.min(bl[0], tr[0] - minW); bl[1] = Math.max(bl[1], tr[1] + minH); br[1] = bl[1]; tl[0] = bl[0]; }
+  else if (idx === 3) { br[0] = Math.max(br[0], tl[0] + minW); br[1] = Math.max(br[1], tl[1] + minH); bl[1] = br[1]; tr[0] = br[0]; }
+}
+// The new box for a dragged corner (0..3), centre (4, rectangles only) or edge (lines: top, right, bottom, left).
+function editBox(box, ep, idx, p, minW, minH) {
+  let [x0, y0, x1, y1] = box;
+  const np = ep.pts.length;
+  if (idx < 4) {
+    const tl = [x0, y0], tr = [x1, y0], bl = [x0, y1], br = [x1, y1], c = [tl, tr, bl, br][idx];
+    c[0] = p[0]; c[1] = p[1];
+    if (idx === 0) { tr[1] = p[1]; bl[0] = p[0]; } else if (idx === 1) { tl[1] = p[1]; br[0] = p[0]; } else if (idx === 2) { br[1] = p[1]; tl[0] = p[0]; } else { bl[1] = p[1]; tr[0] = p[0]; }
+    pinCorner(idx, tl, tr, bl, br, minW, minH);
+    return [tl[0], tl[1], br[0], br[1]];
+  }
+  if (idx === 4 && np === 5) { const dx = p[0] - (x0 + x1) / 2, dy = p[1] - (y0 + y1) / 2; return [x0 + dx, y0 + dy, x1 + dx, y1 + dy]; }
+  const edge = idx - np;
+  if (edge === 0) y0 = Math.min(p[1], y1 - minH); else if (edge === 1) x1 = Math.max(p[0], x0 + minW);
+  else if (edge === 2) y1 = Math.max(p[1], y0 + minH); else if (edge === 3) x0 = Math.min(p[0], x1 - minW);
+  return [x0, y0, x1, y1];
+}
+// Sheet minimum size (SCH_SHEET::GetMinWidth / GetMinHeight): the pins on the moving edges' perpendicular sides keep fitting.
+function sheetMin(node, box, fromRight, fromBottom) {
+  let w = PE_MIN, h = PE_MIN;
+  for (const pin of kids(node, "pin")) {
+    const [x, y, rot] = atOf(pin), r = ((Math.round(rot || 0) % 360) + 360) % 360;
+    if (r === 90 || r === 270) w = Math.max(w, fromRight ? x - box[0] : box[2] - x);
+    else h = Math.max(h, fromBottom ? y - box[1] : box[3] - y);
+  }
+  return [w, h];
+}
+// Apply a dragged edit point: mutates the item's node (and its followers') in place, from the originals in pe.
+function applyPointEdit(doc, pe, p) {
+  const item = pe.item, n = item.node, k = item.kind, ep = pe.ep, idx = pe.idx;
+  restoreNode(n, pe.orig); for (const f of pe.followers) restoreNode(f.item.node, f.orig);
+  const touched = [item];
+  if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
+    const pts = ep.pts.map((q) => q.slice()); pts[idx] = [r4(p[0]), r4(p[1])]; setPts(n, pts);
+    for (const f of pe.followers) if (f.end === idx) { const q = ptsOf(f.item.node); q[f.index] = pts[idx].slice(); setPts(f.item.node, q); touched.push(f.item); }
+  } else if (k === "rule_area") {
+    const pl = kid(n, "polyline"), pts = ep.pts.map((q) => q.slice()); pts[idx] = [r4(p[0]), r4(p[1])]; setPts(pl, pts);
+  } else if (k === "circle") {
+    const c = ep.pts[0];
+    if (idx === 0) { const ck = kid(n, "center"); ck[1] = r4(p[0]); ck[2] = r4(p[1]); }
+    else { const rk = kid(n, "radius"); rk[1] = r4(Math.max(PE_MIN, Math.hypot(p[0] - c[0], p[1] - c[1]))); }
+  } else if (k === "arc") {
+    const [s, m, e, c] = ep.pts, ccw = normA(Math.atan2(m[1] - c[1], m[0] - c[0]) - Math.atan2(s[1] - c[1], s[0] - c[0])) < normA(Math.atan2(e[1] - c[1], e[0] - c[0]) - Math.atan2(s[1] - c[1], s[0] - c[0]));
+    let ns = s, ne = e, cc = c;
+    if (idx === 3) { const dx = p[0] - c[0], dy = p[1] - c[1]; ns = [s[0] + dx, s[1] + dy]; ne = [e[0] + dx, e[1] + dy]; cc = p; }
+    else if (idx === 1) { const r = Math.max(PE_MIN, Math.hypot(p[0] - c[0], p[1] - c[1])); ns = resize(c, [s[0] - c[0], s[1] - c[1]], r); ne = resize(c, [e[0] - c[0], e[1] - c[1]], r); }   // EditArcMidKeepCenter
+    else {                                                                                                                                            // EditArcEndpointKeepCenter
+      const mv = idx === 0 ? s : e, other = idx === 0 ? e : s;
+      let v1 = [p[0] - c[0], p[1] - c[1]]; if (!v1[0] && !v1[1]) v1 = [mv[0] - c[0], mv[1] - c[1]];
+      let v2 = [other[0] - c[0], other[1] - c[1]]; if (!v2[0] && !v2[1]) v2 = [1, 0];
+      const r = Math.max(PE_MIN, Math.hypot(v1[0], v1[1])), p1 = resize(c, v1, r), p2 = resize(c, v2, r);
+      if (idx === 0) { ns = p1; ne = p2; } else { ns = p2; ne = p1; }
+    }
+    const nm = arcMid(cc, ns, ne, ccw);
+    for (const [key, q] of [["start", ns], ["mid", nm], ["end", ne]]) { const kk = kid(n, key); kk[1] = r4(q[0]); kk[2] = r4(q[1]); }
+  } else if (k === "rectangle" || k === "text_box") {
+    const b = editBox(boxOf({ kind: k, node: pe.orig }), ep, idx, p, PE_MIN, PE_MIN).map(r4);
+    if (k === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); s[1] = b[0]; s[2] = b[1]; e[1] = b[2]; e[2] = b[3]; }
+    else { const at = kid(n, "at"), sz = kid(n, "size"); at[1] = b[0]; at[2] = b[1]; sz[1] = r4(b[2] - b[0]); sz[2] = r4(b[3] - b[1]); }
+  } else if (k === "sheet") {
+    const ob = boxOf({ kind: k, node: pe.orig }), np = ep.pts.length, edge = idx - np;
+    const fromRight = idx === 1 || idx === 3 || edge === 1, fromBottom = idx === 2 || idx === 3 || edge === 2;
+    const [mw, mh] = sheetMin(pe.orig, ob, fromRight, fromBottom);
+    const b = editBox(ob, ep, idx, p, mw, mh).map(r4);
+    const at = kid(n, "at"), sz = kid(n, "size"), dx = r4(b[0] - ob[0]), dy = r4(b[1] - ob[1]);
+    at[1] = b[0]; at[2] = b[1]; sz[1] = r4(b[2] - b[0]); sz[2] = r4(b[3] - b[1]);
+    if (dx || dy) for (const f of kids(n, "property")) { const fa = kid(f, "at"); if (fa) { fa[1] = r4(num(fa[1]) + dx); fa[2] = r4(num(fa[2]) + dy); } }   // SetPositionIgnoringPins moves the fields
+    const moved = [];
+    for (const pin of kids(n, "pin")) {                                                                     // ConstrainOnEdge( pos, false )
+      const pa = kid(pin, "at"), r = ((Math.round(num(pa[3]) || 0) % 360) + 360) % 360, was = [num(pa[1]), num(pa[2])];
+      if (r === 0 || r === 180) { pa[1] = r === 180 ? b[0] : b[2]; pa[2] = r4(Math.min(Math.max(num(pa[2]), b[1]), b[3])); }
+      else { pa[2] = r === 90 ? b[1] : b[3]; pa[1] = r4(Math.min(Math.max(num(pa[1]), b[0]), b[2])); }
+      moved.push([was, [num(pa[1]), num(pa[2])]]);
+    }
+    for (const f of pe.followers) {
+      const mvp = moved.find(([w]) => same(w, f.at)); if (!mvp || same(mvp[0], mvp[1])) continue;
+      if (f.item.kind === "no_connect") { const fa = kid(f.item.node, "at"); fa[1] = mvp[1][0]; fa[2] = mvp[1][1]; }
+      else { const q = ptsOf(f.item.node); q[f.index] = mvp[1].slice(); setPts(f.item.node, q); }
+      touched.push(f.item);
+    }
+  }
+  for (const it of new Set(touched.concat(pe.followers.map((f) => f.item)))) K.replaceChange(doc, it);
+  return touched;
+}
+// The items that follow an edit: graphic lines joined at a graphic line's ends, the wires / no-connects on a sheet's pins.
+function editFollowers(doc, item, ep) {
+  const out = [];
+  if (item.kind === "polyline" && ep.pts.length === 2) {
+    for (let end = 0; end < 2; end++) {
+      for (const o of doc.items.values()) {
+        if (o === item || o.kind !== "polyline") continue;
+        const q = ptsOf(o.node); if (q.length !== 2) continue;
+        const i = same(q[0], ep.pts[end], 1e-6) ? 0 : same(q[1], ep.pts[end], 1e-6) ? 1 : -1;
+        if (i >= 0) { out.push({ item: o, orig: deep(o.node), end, index: i }); break; }
+      }
+    }
+  } else if (item.kind === "sheet") {
+    for (const pin of kids(item.node, "pin")) {
+      const [x, y] = atOf(pin);
+      for (const o of doc.items.values()) {
+        if (o.kind === "wire" || o.kind === "bus") { const q = ptsOf(o.node); const i = same(q[0], [x, y], 1e-6) ? 0 : same(q[q.length - 1], [x, y], 1e-6) ? q.length - 1 : -1; if (i >= 0) out.push({ item: o, orig: deep(o.node), at: [x, y], index: i }); }
+        else if (o.kind === "no_connect" && same(atOf(o.node), [x, y], 1e-6)) out.push({ item: o, orig: deep(o.node), at: [x, y] });
+      }
+    }
+  }
+  return out;
+}
+// The one item the point editor works on: a single selection of an editable kind.
+function pointEditTarget(ctx) {
+  if (S.multi && S.multi.size > 1) return null;
+  if (ctx.selection && ctx.selection.size > 1) return null;
+  const it = S.sel ? ctx.doc.items.get(S.sel) : ctx.selected ? ctx.doc.items.get(ctx.selected.id) : null;
+  if (!it) return null;
+  const ep = editPoints(ctx.doc, it); return ep ? { item: it, ep } : null;
+}
+const EDIT_POINT_PX = 8;                                  // EDIT_POINT::POINT_SIZE
+function pointEditStart(ctx, mm, ev) {
+  if (ctx.viewOnly || S.drag || S.wire || S.carry) return false;
+  const t = pointEditTarget(ctx); if (!t) return false;
+  const tol = (EDIT_POINT_PX / 2 + 2) * mmPerPx(ctx), hs = editHandles(t.ep);
+  let best = -1, bd = Infinity;
+  hs.forEach((h, i) => { const d = Math.max(Math.abs(h[0] - mm[0]), Math.abs(h[1] - mm[1])); if (d <= tol && d < bd) { bd = d; best = i; } });
+  if (best < 0) return false;
+  S.pedit = { item: t.item, ep: t.ep, idx: best, orig: deep(t.item.node), followers: editFollowers(ctx.doc, t.item, t.ep), start: hs[best], moved: false, last: hs[best] };
+  try { if (ev && ev.pointerId !== undefined) ctx.stage.setPointerCapture(ev.pointerId); } catch (e) { /* not a real pointer */ }
+  ctx.requestRender();
+  return true;
+}
+function pointEditSnap(ctx, mm, ev) {
+  const pe = S.pedit, k = pe.item.kind;
+  if (k === "wire" || k === "bus") return snapConn(ctx, mm, k, ev);
+  if (ev && (ev.ctrlKey || ev.metaKey)) return [r4(mm[0]), r4(mm[1])];
+  return ctx.snap([mm[0], mm[1]]).map(r4);
+}
+function pointEditMove(ctx, mm, ev) {
+  const pe = S.pedit; if (!pe) return;
+  const p = pointEditSnap(ctx, mm, ev);
+  if (!pe.moved && same(p, pe.start)) return;
+  pe.moved = true; pe.last = p;
+  applyPointEdit(ctx.doc, pe, p); ctx.requestRender();
+}
+function pointEditEnd(ctx, commit) {
+  const pe = S.pedit; S.pedit = null; if (!pe) return null;
+  const doc = ctx.doc;
+  let nodes = null;
+  if (commit && pe.moved) { const touched = applyPointEdit(doc, pe, pe.last); nodes = touched.map((it) => ({ it, node: deep(it.node) })); }
+  restoreNode(pe.item.node, pe.orig); for (const f of pe.followers) restoreNode(f.item.node, f.orig);   // originals back, so commit() records a true inverse
+  K.replaceChange(doc, pe.item); for (const f of pe.followers) K.replaceChange(doc, f.item);
+  let changes = [];
+  if (nodes) {
+    const seen = new Set();
+    for (const { it, node } of nodes) { if (seen.has(it.id)) continue; seen.add(it.id); if (K.serialize(node) !== K.serialize(it.node)) changes.push(modChange(doc, it, node)); }
+    if (changes.length) ctx.commit(changes, "Move Point");
+  }
+  ctx.requestRender();
+  return changes;
+}
+// EDIT_POINTS::ViewDraw: filled squares in the aux-items colour with a lighter border; edge handles the same.
+function drawEditPoints(c, ctx, px) {
+  const t = S.pedit ? { item: S.pedit.item, ep: editPoints(ctx.doc, S.pedit.item) } : pointEditTarget(ctx); if (!t || !t.ep) return;
+  const fill = K.SCH.aux || "#000000", border = "rgba(179,179,179,0.8)", size = EDIT_POINT_PX * px / 2;
+  c.save();
+  if (t.ep.guides.length) { c.strokeStyle = fill; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.beginPath(); for (const [a, b] of t.ep.guides) { c.moveTo(t.ep.pts[a][0], t.ep.pts[a][1]); c.lineTo(t.ep.pts[b][0], t.ep.pts[b][1]); } c.stroke(); c.setLineDash([]); }
+  c.fillStyle = fill; c.strokeStyle = border; c.lineWidth = 3 * px;
+  for (const h of editHandles(t.ep)) { c.strokeRect(h[0] - size, h[1] - size, 2 * size, 2 * size); c.fillRect(h[0] - size, h[1] - size, 2 * size, 2 * size); }
+  c.restore();
 }
 
 // ---------------------------------------------------------------- drag (KiCad's "drag": attached ends stretch)
@@ -1181,7 +1418,7 @@ function applyDrag(doc, d, dx, dy) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)];
     for (const e of a.ends) {
       let pts = e.orig.map((q) => q.slice());
-      if (connected) { const g = endGeometry(e, Pn, S.lineMode); pts = g.extra ? (e.index === 0 ? [g.extra[1], g.extra[0], g.pts[1]] : [g.pts[0], g.extra[0], g.extra[1]]) : g.pts; }
+      if (connected) { const g = endGeometry(e, Pn, d.mode ? "free" : S.lineMode); pts = g.extra ? (e.index === 0 ? [g.extra[1], g.extra[0], g.pts[1]] : [g.pts[0], g.extra[0], g.extra[1]]) : g.pts; }
       setPts(e.item.node, pts); K.replaceChange(doc, e.item);
     }
     for (const f of a.followers) { const to = connected ? Pn : f.orig; const [cx, cy] = atOf(f.item.node); shiftNode("no_connect", f.item.node, r4(to[0] - cx), r4(to[1] - cy)); K.replaceChange(doc, f.item); }
@@ -1225,7 +1462,7 @@ function dragChanges(ctx, d, dx, dy) {
   if (connected) for (const a of d.anchors) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
     for (const e of a.ends) {
-      const g = endGeometry(e, Pn, S.lineMode);
+      const g = endGeometry(e, Pn, d.mode ? "free" : S.lineMode);
       if (g.zero) { put(K.removeChange(e.item)); continue; }
       const n = deep(e.item.node); setPts(n, g.pts); put(modChange(doc, e.item, n));
       if (g.extra) { put(addNode(doc, lineNode(e.item.kind, g.extra[0], g.extra[1])).change); touched.push(g.extra[0]); }
@@ -1438,6 +1675,8 @@ function onDownCapture(ev) {
   if (tool !== "select" || ev.button !== 0) return;
   const mm = ctx.worldMm(ev);
   if (S.drag) { endDrag(ctx, true); ev.stopImmediatePropagation(); ev.preventDefault(); return; }   // a key-started drag is dropped by the click
+  if (!ev.shiftKey && pointEditStart(ctx, mm, ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }   // SCH_POINT_EDITOR runs ahead of the selection tool
+  if (autostartAt(ctx, mm, ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }
   const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm);
   if (!hit) { if (S.sel) { S.sel = null; ctx.requestRender(); } return; }
   ev.stopImmediatePropagation(); ev.preventDefault();
@@ -1446,22 +1685,44 @@ function onDownCapture(ev) {
   try { ctx.stage.setPointerCapture(ev.pointerId); } catch (e) { /* not a real pointer */ }
   ctx.requestRender();
 }
+// A plain click with the selection tool on a dangling anchor starts the wire (bus, line) there; finishing it
+// returns to the selection tool (quitOnDraw).
+function autostartAt(ctx, mm, ev) {
+  if (!S.autoStartWires || ctx.viewOnly || (ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey))) return false;
+  const p = snapConn(ctx, mm, "wire"), kind = autostartKind(ctx.doc, p); if (!kind) return false;
+  if (Math.hypot(p[0] - mm[0], p[1] - mm[1]) > Math.max((ctx.gridPitch || 1.27) * 0.5, 6 * mmPerPx(ctx))) return false;
+  S.sel = null; S.hover = null; S.pending = null; if (ctx.setSelection) ctx.setSelection([]); else ctx.setSelected(null);
+  switchTool(ctx, AUTOSTART_TOOL[kind]);
+  startWire(ctx, kind, p, { quitOnDraw: true }); S.cursor = p;
+  return true;
+}
+// The selection tool's hover cursor over an anchor that would start a line (SCH_SELECTION_TOOL::Main).
+function autostartCursor(ctx, mm) {
+  if (!ctx.stage || !S.autoStartWires || ctx.viewOnly) return;
+  const p = snapConn(ctx, mm, "wire"); let kind = null;
+  if (Math.hypot(p[0] - mm[0], p[1] - mm[1]) <= Math.max((ctx.gridPitch || 1.27) * 0.5, 6 * mmPerPx(ctx))) kind = autostartKind(ctx.doc, p);
+  const want = kind ? AUTOSTART_CURSOR[kind] : "";
+  if (S.autoCursor !== want) { S.autoCursor = want; ctx.stage.style.cursor = want; }
+}
 function onMoveCapture(ev) {
   const ctx = S.ctx; if (!ctx || !schActive()) return;
   const mm = ctx.worldMm(ev); S.cursor = mm; S.cursorClient = [ev.clientX, ev.clientY];
+  if (S.pedit) { pointEditMove(ctx, mm, ev); return; }
   if (S.drag) { moveDrag(ctx, mm); return; }
   if (S.pending) {
     if (Math.hypot(mm[0] - S.pending.mm[0], mm[1] - S.pending.mm[1]) > 0.4) { const p = S.pending; S.pending = null; if (beginDrag(ctx, p.item, p.mm, true)) moveDrag(ctx, mm); }
     return;
   }
   const tool = curTool();
-  if (tool !== "select") { if (S.hover && tool !== "delete") { S.hover = null; ctx.requestRender(); } return; }   // the delete tool keeps its own hover
+  if (tool !== "select") { S.autoCursor = null; if (S.hover && tool !== "delete") { S.hover = null; ctx.requestRender(); } return; }   // the delete tool keeps its own hover
   const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm), id = hit ? hit.id : null;
   if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
+  if (!ev.buttons) autostartCursor(ctx, mm);
 }
 function onUpCapture() {
   const ctx = S.ctx; if (!ctx) return;
   S.pending = null;
+  if (S.pedit) pointEditEnd(ctx, true);
   if (S.drag && S.drag.byPointer) endDrag(ctx, true);
 }
 function onKeyCapture(ev) {
@@ -1481,7 +1742,7 @@ function onKeyCapture(ev) {
   if (tag === "INPUT" && (ev.key === " " || ev.key === "Enter")) return;   // a ticked filter box keeps Space / Enter
   if (ev.key === "Escape") {
     let took = true;
-    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
+    if (S.pedit) pointEditEnd(ctx, false); else if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
     else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) setHighlight(ctx, null); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
@@ -1815,6 +2076,103 @@ function ghostSegs() {
   return out;
 }
 
+// ---------------------------------------------------------------- dangling ends (UpdateDanglingState + SCH_PAINTER::drawDanglingIndicator)
+// Every connection end on the sheet with its DANGLING_END_T, then each item's own rule for what attaches it:
+// a wire end anything but a bus end or the bus side of an entry; a pin another symbol's pin, a label, a sheet pin,
+// a wire end, a no-connect or a junction; a label or sheet pin a pin, a no-connect, a label or sheet pin, or any
+// point of a wire or bus.  Returns the dangling points: { p, what: "wire" | "pin" | "label", item, color key }.
+const DANGLE_LABEL_COLOR = { label: "label", global_label: "glabel", hierarchical_label: "hlabel", netclass_flag: "netclass", directive_label: "netclass" };
+function danglingEnds(doc) {
+  const at = new Map(), key = (p) => r4(p[0]) + "," + r4(p[1]);
+  const add = (p, type, item) => { const k = key(p); let l = at.get(k); if (!l) at.set(k, l = []); l.push({ type, item }); };
+  const lines = [], pins = [], labels = [];
+  for (const it of doc.items.values()) {
+    const k = it.kind, n = it.node;
+    if (k === "wire" || k === "bus") { const p = ptsOf(n); if (p.length < 2) continue; add(p[0], k === "wire" ? "WIRE_END" : "BUS_END", it); add(p[p.length - 1], k === "wire" ? "WIRE_END" : "BUS_END", it); lines.push(it); }
+    else if (k === "symbol") for (const q of symbolPins(doc, it)) { add([q.x, q.y], "PIN_END", it); pins.push({ q, item: it }); }
+    else if (k === "junction") add(atOf(n), "JUNCTION_END", it);
+    else if (k === "no_connect") add(atOf(n), "NO_CONNECT_END", it);
+    else if (DANGLE_LABEL_COLOR[k]) { add(atOf(n), "LABEL_END", it); labels.push({ p: atOf(n).slice(0, 2), item: it, color: DANGLE_LABEL_COLOR[k] }); }
+    else if (k === "sheet") for (const pin of kids(n, "pin")) { add(atOf(pin), "SHEET_LABEL_END", it); labels.push({ p: atOf(pin).slice(0, 2), item: it, color: "sheetLabel" }); }
+    else if (k === "bus_entry") { const c = connPoints(doc, it); add(c[0], "BUS_ENTRY_END", it); add(c[1], "WIRE_ENTRY_END", it); }
+  }
+  const out = [];
+  for (const it of lines) {
+    if (it.kind !== "wire") continue;                                   // only wires show the indicator
+    const p = ptsOf(it.node);
+    for (const e of [p[0], p[p.length - 1]]) {
+      const l = at.get(key(e)) || [];
+      if (!l.some((x) => x.item !== it && x.type !== "BUS_END" && x.type !== "BUS_ENTRY_END")) out.push({ p: e, what: "wire", item: it, color: "wire" });
+    }
+  }
+  const PIN_OK = new Set(["PIN_END", "LABEL_END", "SHEET_LABEL_END", "WIRE_END", "NO_CONNECT_END", "JUNCTION_END"]);
+  for (const { q, item } of pins) {
+    if (q.hidden) continue;
+    const l = at.get(key([q.x, q.y])) || [];
+    if (!l.some((x) => x.item !== item && PIN_OK.has(x.type))) out.push({ p: [q.x, q.y], what: "pin", item, color: "pin" });
+  }
+  const LABEL_OK = new Set(["PIN_END", "NO_CONNECT_END", "LABEL_END", "SHEET_LABEL_END"]);
+  for (const lb of labels) {
+    const l = at.get(key(lb.p)) || [];
+    if (l.some((x) => x.item !== lb.item && LABEL_OK.has(x.type))) continue;
+    if (lines.some((ln) => segs(ln).some(([a, b]) => segDist(lb.p, a, b) <= 1e-3))) continue;
+    out.push({ p: lb.p, what: "label", item: lb.item, color: lb.color });
+  }
+  return out;
+}
+/**
+ * SCH_SELECTION_TOOL::autostartEvent: the line a plain click on a dangling anchor starts — "wire", "bus" or
+ * "polyline" (drawLines) — or null.  Pins, wire ends, labels and sheet pins that are dangling start a wire (a
+ * bus for a bus label), dangling bus ends a bus, a bus entry a wire (a bus when it is not on a bus), and the
+ * ends of a graphic line (never connected, so always dangling) a graphic line.
+ */
+function autostartKind(doc, p) {
+  for (const d of danglingList(doc)) if (same(d.p, p)) {
+    if (d.what === "label") { const n = d.item.kind === "sheet" ? null : d.item.node; if (n && BUS_TEXT.test(str(n[1]))) return "bus"; }
+    return "wire";
+  }
+  for (const it of doc.items.values()) {
+    if (it.kind === "bus") {
+      const q = ptsOf(it.node); if (q.length < 2) continue;
+      for (const e of [q[0], q[q.length - 1]]) if (same(e, p)) {
+        const other = Array.from(doc.items.values()).some((o) => o !== it && connPoints(doc, o).some((c) => same(c, p)) && o.kind !== "wire" && o.kind !== "symbol");
+        if (!other) return "bus";
+      }
+    } else if (it.kind === "bus_entry") {
+      const [a, b] = connPoints(doc, it), onBus = Array.from(doc.items.values()).some((o) => o.kind === "bus" && segs(o).some(([u, v]) => segDist(a, u, v) <= 1e-3));
+      const endFree = !Array.from(doc.items.values()).some((o) => o !== it && connPoints(doc, o).some((c) => same(c, b)));
+      if ((same(a, p) && !onBus) || (same(b, p) && endFree)) return onBus ? "wire" : "bus";
+    } else if (it.kind === "polyline") {
+      const q = ptsOf(it.node); if (q.length === 2 && (same(q[0], p) || same(q[1], p))) return "polyline";
+    }
+  }
+  return null;
+}
+// KiCad's LINE_WIRE / LINE_BUS / LINE_GRAPHIC cursors: the crosshair with a pencil and a short line of the kind's colour.
+const LINE_CURSOR = (color, w) => 'url("data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M8 1v14M1 8h14" stroke="#fff" stroke-width="3"/><path d="M8 1v14M1 8h14" stroke="#000" stroke-width="1"/><path d="M12 22l10-10" stroke="${color}" stroke-width="${w}"/><path d="M16 8l3-3 2 2-3 3z" fill="#fc0" stroke="#000" stroke-width=".8"/></svg>`) + '") 8 8, crosshair';
+const AUTOSTART_CURSOR = { wire: LINE_CURSOR("#009600", 2), bus: LINE_CURSOR("#0000C2", 4), polyline: LINE_CURSOR("#0000C2", 1.2) };
+const AUTOSTART_TOOL = { wire: "wire", bus: "bus", polyline: "lines" };
+S.autoStartWires = true;                   // eeschema drawing.auto_start_wires (default on)
+const brighten = (hex, f) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return hex; const v = parseInt(m[1], 16); const c = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => Math.round(x * (1 - f) + 255 * f)); return `rgb(${c[0]},${c[1]},${c[2]})`; };
+const MIL = 0.0254, DANGLING_SYMBOL_SIZE = 12 * MIL, TARGET_PIN_RADIUS = 15 * MIL, DEFAULT_PEN = 6 * MIL;
+let danglingCache = { doc: null, gen: -1, list: [] };
+S.docGen = 0;
+function danglingList(doc) {
+  if (danglingCache.doc !== doc || danglingCache.gen !== S.docGen || S.drag) danglingCache = { doc, gen: S.docGen, list: danglingEnds(doc) };
+  return danglingCache.list;
+}
+function drawDangling(c, doc, px) {
+  danglingList(doc);
+  const thick = Math.max(DEFAULT_PEN / 3, px);
+  c.save(); c.lineWidth = thick;
+  for (const d of danglingCache.list) {
+    const col = brighten(K.SCH[d.color] || K.SCH.wire, 0.3); c.strokeStyle = col;
+    if (d.what === "pin") { c.beginPath(); c.arc(d.p[0], d.p[1], TARGET_PIN_RADIUS, 0, Math.PI * 2); c.stroke(); continue; }
+    const w = d.what === "wire" ? DEFAULT_PEN : DANGLING_SYMBOL_SIZE / 2, r = w + DANGLING_SYMBOL_SIZE / 2;
+    c.strokeRect(d.p[0] - r, d.p[1] - r, 2 * r, 2 * r);
+  }
+  c.restore();
+}
 // Junction dots in the junction colour (the preview of where a drop will add them), KiCad's default dot size.
 function drawJunctionDots(c, pts, px) {
   if (!pts || !pts.length) return;
@@ -1826,8 +2184,10 @@ function drawJunctionDots(c, pts, px) {
 function drawOverlay(c, view, ctx) {
   S.ctx = ctx; installDom(ctx);
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
+  if (S.showDangling !== false) drawDangling(c, doc, px);
   if (S.hover && S.hover !== S.sel && !S.drag) { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
   if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
+  if (curTool() === "select" && !S.drag) drawEditPoints(c, ctx, px);
   if (S.highlight && typeof ctx.setHighlight !== "function") {   // app.js paints the highlight when it can; else a plain outline
     for (const id of S.highlight) { const it = doc.items.get(id); if (it) outline(c, it, "#FF40FF", px, 2); }
   }
@@ -1941,14 +2301,24 @@ function onActivate(toolId, ctx) {
   else if (toolId === "image" && !S.carry) openImagePicker(ctx);
   ctx.requestRender();
 }
+// pointerdown carries no click count in every browser (Chrome reports 0): count it here like the OS double-click (500 ms, 4 px)
+let lastDown = null;
+function clickCount(ev) {
+  if (ev.detail >= 2) return ev.detail;
+  const t = ev.timeStamp, x = ev.clientX, y = ev.clientY;
+  if (t === undefined || x === undefined) return ev.detail || 1;
+  const n = lastDown && t - lastDown.t < 500 && Math.hypot(x - lastDown.x, y - lastDown.y) <= 4 ? lastDown.n + 1 : 1;
+  lastDown = { t, x, y, n }; return n;
+}
 function onPointerDown(ev, mm, ctx) {
   S.ctx = ctx; installDom(ctx);
   if (ev.button !== undefined && ev.button !== 0) return false;
   const t = toolOf(S.tool); if (!t) return false;
+  const dbl = clickCount(ev) === 2;
   S.cursor = mm; if (ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY];
   if (t.kind === "wire" || t.kind === "bus" || t.kind === "polyline") {
     const p = snapConn(ctx, mm, t.kind, ev);
-    if (!S.wire) { if (ev.detail !== 2) startWire(ctx, t.kind, p); } else wireClick(ctx, p, ev.detail === 2);
+    if (!S.wire) { if (!dbl) startWire(ctx, t.kind, p); } else wireClick(ctx, p, dbl);
     return true;
   }
   if (TEXT_KINDS.has(t.kind)) {
@@ -1957,7 +2327,7 @@ function onPointerDown(ev, mm, ctx) {
   }
   if (t.id === "junction" || t.id === "noconnect" || t.id === "busentry") {
     if (!S.carry) onActivate(t.id, ctx);
-    placeCarry(ctx, mm, ev); singleClickPlace(ctx, t.id, ev.detail === 2);
+    placeCarry(ctx, mm, ev); singleClickPlace(ctx, t.id, dbl);
     return true;
   }
   if (t.id === "place" || t.id === "power") {
@@ -2033,7 +2403,7 @@ function onKey(key, ev, ctx) {
     if (key === "Escape") { cancelDraw(ctx); return true; }
   }
   switch (key) {
-  case "`": return armTool("highlight");
+  case "`": return highlightNetNow(ctx);                     // SCH_ACTIONS::highlightNet: at once, no tool
   case "w": case "W": return armTool("wire", "wire");
   case "b": case "B": return armTool("bus", "bus");
   case "z": case "Z": return armTool("busentry");
@@ -2068,7 +2438,7 @@ function onKey(key, ev, ctx) {
   }
 }
 function onDocChanged(ctx) {
-  S.ctx = ctx; installDom(ctx);
+  S.ctx = ctx; installDom(ctx); S.docGen++;
   // An edit of the same sheet (ours or a peer's) leaves a wire, a shape or an item on the cursor alone, as an
   // undo does on the desktop; a different sheet ends them.
   const sameDoc = S.docRef === ctx.doc;
@@ -2080,8 +2450,9 @@ function onDocChanged(ctx) {
     S.docRef = ctx.doc; S.lastPlaced = null; S.unfold = null;
     if (S.markersDoc !== ctx.doc) { S.markers = []; S.markersDoc = null; }
   }
-  if (S.highlight) setHighlight(ctx, null);
-  closePrompt(); closePicker(); announceModes(ctx);
+  if (S.highlight && !sameDoc) setHighlight(ctx, null);   // an edit of the same sheet keeps the net highlighted
+  if (!sameDoc) { closePrompt(); closePicker(); }
+  announceModes(ctx);
   S.tool = curTool();
 }
 
@@ -2234,12 +2605,12 @@ function pasteChanges(doc, parsed, at, opts) {
   return { changes, ids: items.map((it) => it.id) };
 }
 function copySelection(ctx) {
-  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const items = selectedItems(ctx); if (!items.length) return false;
   clipWrite(ctx, clipboardText(ctx.doc, items)); return true;
 }
 function cutSelection(ctx) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const items = selectedItems(ctx); if (!items.length) return false;
   clipWrite(ctx, clipboardText(ctx.doc, items));
   const changes = deleteChanges(ctx.doc, items);
   setSelectionIds(ctx, []); ctx.commit(changes, "cut"); ctx.requestRender();
@@ -2290,7 +2661,7 @@ function pasteSpecial(ctx, opts) {
 }
 function duplicateSelection(ctx) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const items = selectedItems(ctx); if (!items.length) return false;
   // Duplicate goes through Paste like the desktop's (same reference rules), then the copy follows the cursor
   return pasteText(ctx, clipboardText(ctx.doc, items), { label: "duplicate" });
 }
@@ -2699,7 +3070,7 @@ function clearAnnotation(ctx, opts) {
 }
 function editFieldPrompt(ctx, name, title, quiet) {
   if (!editable(ctx)) return false;
-  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) { if (!quiet) ctx.toast("Select a symbol first"); return false; }
+  const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
   const p = kids(it.node, "property").find((q) => str(q[1]) === name); const cur = p ? str(p[2]) : "";
   promptImpl(title, cur, S.cursorClient, (text) => {
     if (text === null || text === undefined || text === cur) return;
@@ -3068,7 +3439,7 @@ function moveExactChanges(ctx, items, dx, dy, rot) {
 }
 function moveExactly(ctx, opts) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const items = selectedItems(ctx); if (!items.length) return false;
   const apply = (dx, dy, rot) => { const changes = moveExactChanges(ctx, items, dx, dy, rot); if (changes.length) ctx.commit(changes, "move exactly"); return changes.length > 0; };
   if (opts && (opts.dx !== undefined || opts.dy !== undefined || opts.rot !== undefined)) return apply(num(opts.dx), num(opts.dy), num(opts.rot));
   const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null; if (!KD) return false;
@@ -3135,7 +3506,7 @@ function alignToGridChanges(ctx, items) {
 }
 function alignToGrid(ctx) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx); if (!items.length) { ctx.toast("Nothing selected"); return false; }
+  const items = selectedItems(ctx); if (!items.length) return false;
   const changes = alignToGridChanges(ctx, items); if (!changes.length) { ctx.toast("Already on the grid"); return true; }
   ctx.commit(changes, "align to grid"); return true;
 }
@@ -3175,14 +3546,44 @@ function breakWireChanges(doc, item, p) {
   return [modChange(doc, item, a), b.change];
 }
 function closestOnSeg(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return [r4(a[0] + t * dx), r4(a[1] + t * dy)]; }
-function breakWire(ctx) {
+/**
+ * SCH_MOVE_TOOL in BREAK / SLICE mode (KiCad 10).  preprocessBreakOrSliceSelection breaks the selected line at
+ * the cursor (several selected lines each at their midpoint), commits "Break Wire" / "Slice Wire", and the move
+ * loop then carries the cut: for BREAK the new corner (both halves' shared end) follows the cursor, for SLICE the
+ * first half's end alone, opening the gap.  A click places it (folded into the same undo step), Esc takes the
+ * whole operation back.  Outside a session with a pointer (tests, headless) the break stays where it was made.
+ */
+function breakWire(ctx, mode) {
   if (!editable(ctx)) return false;
-  const c = cursorOf(ctx); let it = selectedItems(ctx).find((x) => isNetLine(x.kind));
-  if (!it) { const hit = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (hit && isNetLine(hit.kind)) it = hit; }
-  if (!it) { ctx.toast("Point at a wire"); return false; }
-  const changes = breakWireChanges(ctx.doc, it, snapCursor(ctx)); if (!changes.length) return false;
-  ctx.commit(changes, "break wire"); setSelectionIds(ctx, [changes[1].id]); return true;
+  mode = mode === "slice" ? "slice" : "break";
+  const c = cursorOf(ctx); let lines = selectedItems(ctx).filter((x) => isNetLine(x.kind) && ptsOf(x.node).length === 2);
+  if (!lines.length) { const hit = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (hit && isNetLine(hit.kind)) lines = [hit]; }
+  if (!lines.length) return false;
+  const doc = ctx.doc, changes = [], cuts = [];
+  for (const it of lines) {
+    const q = ptsOf(it.node), at = lines.length === 1 ? snapCursor(ctx) : [r4((q[0][0] + q[1][0]) / 2), r4((q[0][1] + q[1][1]) / 2)];
+    const ch = breakWireChanges(doc, it, at); if (!ch.length) continue;
+    changes.push(...ch); cuts.push({ head: it.id, tail: ch[1].id, p: ptsOf(fragOf(ch[0]))[1] });
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, mode === "slice" ? "Slice Wire" : "Break Wire");
+  setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head, x.tail]) : cuts.map((x) => x.head));
+  if (typeof ctx.undo !== "function" || typeof document === "undefined" || !S.dom) return true;
+  const anchors = [];
+  for (const cut of cuts) {
+    const head = doc.items.get(cut.head), tail = doc.items.get(cut.tail); if (!head) continue;
+    const ends = [{ item: head, index: 1, orig: ptsOf(head.node).map((v) => v.slice()) }];
+    if (mode === "break" && tail) ends.push({ item: tail, index: 0, orig: ptsOf(tail.node).map((v) => v.slice()) });
+    anchors.push({ p: cut.p, ends, stub: null, followers: [] });
+  }
+  if (S.drag) endDrag(ctx, false);
+  const p0 = cuts[0].p;
+  S.drag = { items: [], item: doc.items.get(cuts[0].head), kind: "wire", orig: null, anchor0: p0, grab: [0, 0], last: [0, 0], applied: [0, 0], moved: true, byPointer: false,
+    riders: [], anchors, preview: [], mode, pasted: true, restoreMode: S.dragMode };
+  S.dragMode = "drag"; announceModes(ctx);
+  return true;
 }
+const fragOf = (change) => { const t = K.parseAll(change.sexpr); return t.find((n) => Array.isArray(n) && n[0] !== "lib_symbols") || t[0]; };
 
 // ---------------------------------------------------------------- symbol fields table (Tools → Symbol Fields Table)
 const refCmp = (a, b) => { const ma = str(a).match(/^(.*?)(\d*)$/), mb = str(b).match(/^(.*?)(\d*)$/); return ma[1].localeCompare(mb[1]) || ((+ma[2] || 0) - (+mb[2] || 0)) || str(a).localeCompare(str(b)); };
@@ -3349,13 +3750,13 @@ const ACTION_LIST = [
   act("rotateSelectionCW", "Rotate Clockwise", "Shift+R", (ctx) => orientSelected(ctx, "cw")),
   act("mirrorSelectionX", "Mirror Horizontally", "X", (ctx) => orientSelected(ctx, "y")),
   act("mirrorSelectionY", "Mirror Vertically", "Y", (ctx) => orientSelected(ctx, "x")),
-  act("breakWire", "Break", "", (ctx) => breakWire(ctx)),
-  act("slice", "Slice", "", (ctx) => breakWire(ctx)),
+  act("breakWire", "Break", "", (ctx) => breakWire(ctx, "break")),
+  act("slice", "Slice", "", (ctx) => breakWire(ctx, "slice")),
   act("fieldsTable", "Symbol Fields Table...", "", (ctx) => openFieldsTable(ctx)),
   act("unfoldBus", "Unfold from Bus", "C", (ctx, opts) => unfoldAction(ctx, opts)),
   act("syncSheetPins", "Sync Sheet Pins...", "", (ctx) => syncSheetPins(ctx)),
   act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx) => cleanupSheetPins(ctx)),
-  act("highlightNet", "Highlight Net", "`", (ctx) => { ctx.setTool("highlight"); return true; }),
+  act("highlightNet", "Highlight Net", "`", (ctx) => highlightNetNow(ctx)),
   act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => { setHighlight(ctx, null); return true; }),
 ];
 const actions = {}; for (const a of ACTION_LIST) actions[a.id] = a;
@@ -3381,8 +3782,8 @@ root.CollabTools.sch = {
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
     selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
     lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
-    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
-    analyzePoint, explicitJunctionNeeded, explicitJunctionAllowed, previewJunctions, editTxn, txnCleanUp, txnTrimWire, singleClickPlace, busyMessage, vetoTool, startWire, cancelWire, hitNonSymbol, textRect, pickNonSymbol,
+    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, editPoints, editHandles, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
+    analyzePoint, danglingEnds, autostartKind, autostartAt, explicitJunctionNeeded, explicitJunctionAllowed, previewJunctions, editTxn, txnCleanUp, txnTrimWire, singleClickPlace, busyMessage, vetoTool, startWire, cancelWire, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool
     rectangleNode, circleNode, arcNode, polylineNode, textBoxNode, classLabelNode, placeClassLabel, isPowerSymbol, powerSymbols, pickSymbol,

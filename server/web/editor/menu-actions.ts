@@ -288,7 +288,7 @@ export const MENU_HANDLERS: Record<string, (anchor?: unknown) => unknown> = {
   saveCopy: () => saveDocCopy(), saveCurrSheetCopyAs: () => saveDocCopy(),
   exportNetlist: () => exportNetlist(), drawSheetOnClipboard: () => drawingToClipboard(),
   plot: () => plotDialog(),
-  properties: () => { if (!openSelectionProperties()) toast("Select an item first"); },
+  properties: () => { openSelectionProperties(); },
   zoomFitSelection, zoomIn: () => zoomAtCursor(1.25), zoomOut: () => zoomAtCursor(0.8), zoomCenter: centreOnCursor,
   panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),
   cursorUp: () => cursorStep(0, -1, 1), cursorDown: () => cursorStep(0, 1, 1), cursorLeft: () => cursorStep(-1, 0, 1), cursorRight: () => cursorStep(1, 0, 1),
@@ -308,8 +308,8 @@ export const MENU_HANDLERS: Record<string, (anchor?: unknown) => unknown> = {
 };
 Object.assign(HANDLERS, MENU_HANDLERS, {
   // schematic only (tables.ts EDITOR_ONLY): Move / Drag start the module's connected drag exactly as its M / G keys do
-  move: () => { if (!startMove("move")) toast("Select an item first"); },
-  drag: () => { if (!startMove("drag")) toast("Select an item first"); },
+  move: () => { startMove("move"); },
+  drag: () => { startMove("drag"); },
 });
 setToggle("languageEnglish", true);
 
