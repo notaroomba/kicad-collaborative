@@ -74,7 +74,7 @@ export function summaryText(s: AutorouteSummary): string {
 }
 
 // ---------------------------------------------------------------- dialogs
-const FIELD = "font:inherit;background:var(--panel);color:inherit;border:1px solid var(--line);border-radius:3px;padding:3px 5px";
+const FIELD = "font:inherit;background:var(--panel);color:inherit;border:1px solid var(--line);border-radius:var(--r-2);padding:3px 5px";
 function row(body: HTMLElement, label: string, control: HTMLElement): void {
   const r = document.createElement("label"); r.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0";
   const s = document.createElement("span"); s.textContent = label; r.append(s, control); body.appendChild(r);
@@ -135,7 +135,7 @@ function runWithProgress(ctx: any, opts: RouteOptions): void {
     title: "Autorouting…", width: 420, okLabel: "Stop and keep",
     build(body: HTMLElement) {
       text = note(body, "Reading the board…");
-      const track = document.createElement("div"); track.style.cssText = "height:8px;border:1px solid var(--line);border-radius:4px;background:var(--panel);overflow:hidden;margin:8px 0";
+      const track = document.createElement("div"); track.style.cssText = "height:8px;border:1px solid var(--line);border-radius:var(--r-3);background:var(--panel);overflow:hidden;margin:8px 0";
       bar = document.createElement("div"); bar.style.cssText = "height:100%;width:0;background:var(--blue);transition:width .1s"; track.appendChild(bar); body.appendChild(track);
       note(body, "Stop and keep lays down what is routed so far. Cancel changes nothing.");
     },
@@ -160,7 +160,7 @@ function report(ctx: any, s: AutorouteSummary): void {
       if (s.dropped) note(body, `The board changed while routing: ${plural(s.dropped, "route")} no longer fitted and were left out.`);
       if (s.failed.length) {
         note(body, `${plural(s.failed.length, "connection")} could not be routed within the design rules and are still shown in the ratsnest:`);
-        const box = document.createElement("div"); box.style.cssText = "max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:3px;background:var(--panel);font:12px var(--mono);padding:4px 6px";
+        const box = document.createElement("div"); box.style.cssText = "max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-2);background:var(--panel);font:12px var(--mono);padding:4px 6px";
         for (const f of s.failed) { const d = document.createElement("div"); d.textContent = `${f.net}  (${f.a[0].toFixed(2)}, ${f.a[1].toFixed(2)}) → (${f.b[0].toFixed(2)}, ${f.b[1].toFixed(2)})`; box.appendChild(d); }
         body.appendChild(box);
       }

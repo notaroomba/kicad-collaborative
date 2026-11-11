@@ -27,7 +27,7 @@ export function placeSummaryText(s: AutoplaceSummary): string {
   return t;
 }
 
-const FIELD = "font:inherit;background:var(--panel);color:inherit;border:1px solid var(--line);border-radius:3px;padding:3px 5px";
+const FIELD = "font:inherit;background:var(--panel);color:inherit;border:1px solid var(--line);border-radius:var(--r-2);padding:3px 5px";
 /** Tools ▸ Auto Place Footprints…: the command behind the menu entry. */
 export function openPlace(ctx: any): boolean {
   if (!ctx || !ctx.doc) return false; if (ctx.viewOnly) { ctx.toast("View-only access"); return true; }

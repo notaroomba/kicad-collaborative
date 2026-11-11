@@ -58,7 +58,7 @@ const CSS = `
 .klib-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, 1.15fr) 5px minmax(240px, 1fr); padding: 8px 10px 0; }
 .klib-left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .klib-split { cursor: col-resize; }
-.klib-filter { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; margin-bottom: 6px; }
+.klib-filter { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); padding: 0 6px; margin-bottom: 6px; }
 .klib-filter:focus-within { border-color: var(--blue); }
 .klib-filter svg { flex: none; color: var(--ink-2); }
 .klib-filter input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 12px var(--font); padding: 5px 0; }
@@ -89,9 +89,9 @@ const CSS = `
 .klib-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 6px; }
 .klib-pane { position: relative; flex: 1; min-height: 60px; border: 1px solid var(--line); overflow: hidden; }
 .klib-pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.klib-pane .klib-msg { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; color: #8a8a8a; font-size: 11px; pointer-events: none; }
+.klib-pane .klib-msg { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; color: var(--ink-3); font-size: 11px; pointer-events: none; }
 .klib-fpsel { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
-.klib-fpsel select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 3px 6px; color: var(--ink); font: 12px var(--font); }
+.klib-fpsel select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); padding: 3px 6px; color: var(--ink); font: 12px var(--font); }
 .klib-foot { align-items: center; }
 .klib-foot label { display: flex; gap: 6px; align-items: center; margin-right: 14px; white-space: nowrap; }
 .klib-foot label.off { color: var(--ink-3); }

@@ -198,7 +198,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 .hp-note.err { color: var(--err); }
 
 /* ---- dialogs ---- */
-.hp-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, .38); display: grid; place-items: center; padding: 16px; animation: hp-fade .12s ease-out; }
+.hp-scrim { position: fixed; inset: 0; z-index: 200; background: var(--scrim); display: grid; place-items: center; padding: 16px; animation: hp-fade .12s ease-out; }
 @keyframes hp-fade { from { opacity: 0; } }
 /* From a fixed top edge, growing downward: a dialog whose content changes does not jump under the pointer. */
 @media (min-width: 761px) {
@@ -207,7 +207,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
   .hp-modal-b:has(> .hp-modes) { min-height: 242px; box-sizing: border-box; }
 }
 .hp-modal { width: min(var(--w, 480px), 100%); max-height: min(86vh, 760px); display: flex; flex-direction: column; background: var(--bench); color: var(--ink);
-  border: 1px solid var(--line); border-radius: var(--r-3); box-shadow: 0 18px 48px rgba(0, 0, 0, .35); outline: 0; animation: hp-pop .14s ease-out; }
+  border: 1px solid var(--line); border-radius: var(--r-3); box-shadow: var(--shadow-dialog); outline: 0; animation: hp-pop .14s ease-out; }
 @keyframes hp-pop { from { transform: translateY(6px); opacity: 0; } }
 .hp-modal-h { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--line); }
 .hp-modal-h h2 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -227,7 +227,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
   border-radius: var(--r-3); box-shadow: var(--shadow); max-height: 240px; overflow: auto; }
 .hp-suggest li { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: var(--r-2); cursor: pointer; min-width: 0; }
 .hp-suggest li.cur { background: var(--accent); color: var(--on-accent); }
-.hp-suggest li.cur .hp-dim, .hp-suggest li.cur .hp-suggest-src { color: #ffffffcc; }
+.hp-suggest li.cur .hp-dim, .hp-suggest li.cur .hp-suggest-src { color: color-mix(in srgb, var(--on-accent) 80%, transparent); }
 .hp-suggest-login { font-weight: 600; }
 .hp-suggest .hp-dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .hp-suggest-src { margin-left: auto; font: 10px var(--mono); color: var(--ink-3); white-space: nowrap; }
@@ -440,7 +440,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
   .hp-links li { flex-wrap: wrap; }
   .hp-links .hp-input { flex: 1 1 100%; }
   .hp-link-meta { flex: 1; }
-  .hp-menu-scrim.sheet { background: rgba(0, 0, 0, .38); display: flex; align-items: flex-end; animation: hp-fade .12s ease-out; }
+  .hp-menu-scrim.sheet { background: var(--scrim); display: flex; align-items: flex-end; animation: hp-fade .12s ease-out; }
   .hp-menu-scrim.sheet .hp-menu { position: static; width: 100%; max-height: 90vh; max-height: 90dvh; overflow: auto; border-radius: var(--r-sheet) var(--r-sheet) 0 0; border-width: 1px 0 0; padding: 6px 6px calc(8px + env(safe-area-inset-bottom)); animation: hp-sheet .16s ease-out; }
   .hp-menu-scrim.sheet .hp-menu button { padding: 10px 12px; font-size: 15px; }
   .hp-menu-scrim.sheet .hp-menu button:active { background: color-mix(in srgb, var(--ink) 9%, transparent); }

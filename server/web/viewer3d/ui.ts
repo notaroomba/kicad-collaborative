@@ -27,22 +27,22 @@ type MenuItem = Action | "-" | { label: string; icon?: string; sub: MenuItem[] }
 const STYLE_ID = "v3d-style";
 const CSS = `
 .v3d-win{position:fixed;z-index:55;display:flex;flex-direction:column;min-width:420px;min-height:300px;background:var(--bench);color:var(--ink);
-  border:1px solid var(--line);border-radius:6px;box-shadow:0 18px 48px rgba(0,0,0,.35);font:12px var(--font);outline:none;overflow:hidden}
+  border:1px solid var(--line);border-radius:var(--r-3);box-shadow:var(--shadow-dialog);font:12px var(--font);outline:none;overflow:hidden}
 .v3d-win.v3d-max{border-radius:0}
 .v3d-title{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;background:var(--paper);border-bottom:1px solid var(--line);cursor:move;user-select:none;font-weight:600;flex:none}
 .v3d-title .v3d-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.v3d-title button{all:unset;cursor:pointer;color:var(--ink-2);width:22px;height:20px;display:grid;place-items:center;border-radius:3px;font-size:14px;line-height:1}
+.v3d-title button{all:unset;cursor:pointer;color:var(--ink-2);width:22px;height:20px;display:grid;place-items:center;border-radius:var(--r-2);font-size:14px;line-height:1}
 .v3d-title button:hover{background:var(--line);color:var(--ink)}
 .v3d-menubar{display:flex;gap:0;padding:0 4px;background:var(--bench);border-bottom:1px solid var(--line);flex:none;user-select:none}
-.v3d-menubar>button{all:unset;padding:4px 9px;cursor:default;border-radius:3px}
+.v3d-menubar>button{all:unset;padding:4px 9px;cursor:default;border-radius:var(--r-2)}
 .v3d-menubar>button:hover,.v3d-menubar>button.open{background:var(--accent);color:var(--on-accent)}
-.v3d-menu{position:fixed;z-index:70;min-width:230px;padding:4px 0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);font:12px var(--font);user-select:none}
+.v3d-menu{position:fixed;z-index:70;min-width:230px;padding:4px 0;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-3);box-shadow:var(--shadow);font:12px var(--font);user-select:none}
 .v3d-menu .v3d-mi{display:grid;grid-template-columns:22px 1fr auto 12px;align-items:center;gap:6px;padding:3px 10px 3px 6px;cursor:default;white-space:nowrap;position:relative}
 .v3d-menu .v3d-mi:hover{background:var(--accent);color:var(--on-accent)}
 .v3d-menu .v3d-mi.dis{color:var(--ink-3)}
 .v3d-menu .v3d-mi.dis:hover{background:none;color:var(--ink-3)}
 .v3d-menu .v3d-mi .k{color:var(--ink-3);font-size:11px;padding-left:18px}
-.v3d-menu .v3d-mi:hover .k{color:#fff}
+.v3d-menu .v3d-mi:hover .k{color:var(--on-accent)}
 .v3d-menu .v3d-mi .chk{width:16px;text-align:center}
 .v3d-menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
 .v3d-ic{display:block;width:24px;height:24px}
@@ -52,7 +52,7 @@ const CSS = `
 :root[data-theme="dark"] .v3d-ic .dk{display:inline}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .v3d-ic .lt{display:none}:root:not([data-theme="light"]) .v3d-ic .dk{display:inline}}
 .v3d-toolbar{display:flex;align-items:center;gap:1px;padding:2px 4px;background:var(--bench);border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
-.v3d-toolbar button{all:unset;width:28px;height:28px;display:grid;place-items:center;border-radius:3px;cursor:pointer}
+.v3d-toolbar button{all:unset;width:28px;height:28px;display:grid;place-items:center;border-radius:var(--r-2);cursor:pointer}
 .v3d-toolbar button:hover{background:var(--line)}
 .v3d-toolbar button.on{background:var(--line);box-shadow:inset 0 0 0 1px var(--blue)}
 .v3d-toolbar button.dis{opacity:.35;cursor:default}
@@ -65,9 +65,9 @@ const CSS = `
 .v3d-side h4{margin:2px 10px 6px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
 .v3d-row{display:grid;grid-template-columns:18px 18px 1fr;align-items:center;gap:6px;padding:2px 10px;cursor:default}
 .v3d-row:hover{background:var(--paper)}
-.v3d-row .sw{width:14px;height:14px;border:1px solid var(--line-2);border-radius:2px;box-sizing:border-box}
+.v3d-row .sw{width:14px;height:14px;border:1px solid var(--line-2);border-radius:var(--r-1);box-sizing:border-box}
 .v3d-row input[type=checkbox]{margin:0;width:14px;height:14px}
-.v3d-row input[type=color]{width:18px;height:16px;padding:0;border:1px solid var(--line-2);border-radius:2px;background:none;grid-column:1 / span 2;justify-self:start}
+.v3d-row input[type=color]{width:18px;height:16px;padding:0;border:1px solid var(--line-2);border-radius:var(--r-1);background:none;grid-column:1 / span 2;justify-self:start}
 .v3d-side hr{border:0;border-top:1px solid var(--line);margin:6px 0}
 .v3d-status{display:flex;gap:16px;padding:3px 10px;border-top:1px solid var(--line);background:var(--bench);color:var(--ink-2);font:11px var(--mono);flex:none;white-space:nowrap;overflow:hidden}
 .v3d-status .grow{flex:1;overflow:hidden;text-overflow:ellipsis}

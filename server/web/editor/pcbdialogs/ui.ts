@@ -24,11 +24,11 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props?: Props |
 
 const CSS = `
 .pd-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin: 0 0 10px; flex-wrap: wrap; }
-.pd-tab { padding: 5px 12px; border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0; background: none; color: var(--ink-2); margin-bottom: -1px; white-space: nowrap; }
+.pd-tab { padding: 5px 12px; border: 1px solid transparent; border-bottom: none; border-radius: var(--r-3) var(--r-3) 0 0; background: none; color: var(--ink-2); margin-bottom: -1px; white-space: nowrap; }
 .pd-tab:hover { color: var(--ink); }
 .pd-tab.on { background: var(--bench); border-color: var(--line); color: var(--ink); font-weight: 600; }
 .pd-book { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 0 14px; height: 100%; min-height: 0; }
-.pd-tree { border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; padding: 4px 0; user-select: none; }
+.pd-tree { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); overflow: auto; padding: 4px 0; user-select: none; }
 .pd-tree .grp { padding: 4px 8px; font-weight: 600; cursor: default; }
 .pd-tree .leaf { padding: 3px 8px 3px 24px; cursor: pointer; white-space: nowrap; }
 .pd-tree .leaf:hover { background: var(--panel-2); }
@@ -45,14 +45,14 @@ const CSS = `
 .pd-check input { width: auto; margin: 0; }
 .pd-check.disabled { color: var(--ink-3, var(--ink-2)); }
 .pd-note { color: var(--ink-2); font-size: 12px; margin: 4px 0 8px; }
-.pd-info { background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 6px 10px; margin: 0 0 10px; color: var(--ink); }
-.pd-grid { border: 1px solid var(--line); border-radius: 3px; overflow: auto; background: var(--panel); }
+.pd-info { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-2); padding: 6px 10px; margin: 0 0 10px; color: var(--ink); }
+.pd-grid { border: 1px solid var(--line); border-radius: var(--r-2); overflow: auto; background: var(--panel); }
 .pd-grid table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .pd-grid th { position: sticky; top: 0; background: var(--panel-2); text-align: left; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; z-index: 1; }
 .pd-grid td { padding: 0; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); height: 24px; }
 .pd-grid td.ro, .pd-grid td.txt { padding: 3px 6px; white-space: nowrap; }
 .pd-grid td.ro { color: var(--ink-2); }
-.pd-grid tr.sel td { background: color-mix(in srgb, var(--blue) 22%, transparent); }
+.pd-grid tr.sel td { background: var(--sel); }
 .pd-grid tr.hd td { background: var(--panel-2); font-weight: 600; padding: 3px 6px; }
 .pd-grid td input[type=text], .pd-grid td select { border: none !important; border-radius: 0 !important; background: transparent !important; width: 100%; height: 23px; padding: 2px 6px !important; font-family: inherit !important; }
 .pd-grid td input[type=text]:focus, .pd-grid td select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
@@ -60,28 +60,28 @@ const CSS = `
 .pd-grid td.chk { text-align: center; }
 .pd-grid td.chk input { width: auto; margin: 0; }
 .pd-gridbar { display: flex; gap: 4px; margin: 4px 0 0; }
-.pd-iconbtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); color: var(--ink); padding: 0; }
+.pd-iconbtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); color: var(--ink); padding: 0; }
 .pd-iconbtn:hover { border-color: var(--ink-3, var(--ink-2)); }
 .pd-iconbtn:disabled { opacity: .4; cursor: default; }
-.pd-report { border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; font-size: 12px; padding: 4px 8px; min-height: 120px; }
+.pd-report { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); overflow: auto; font-size: 12px; padding: 4px 8px; min-height: 120px; }
 .pd-report .ln { padding: 1px 0; white-space: pre-wrap; }
 .pd-report .ln.error { color: var(--err); }
-.pd-report .ln.warning { color: #c80; }
+.pd-report .ln.warning { color: var(--warn); }
 .pd-report .ln.action { color: var(--ink); }
 .pd-report .ln.info { color: var(--ink-2); }
 .pd-sev { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
-.pd-sev.error { background: #e0443a; border-radius: 50%; }
-.pd-sev.warning { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 10px solid #f2b233; }
-.pd-sev.exclusion { background: #9aa; }
-.pd-sev.ignore { background: #9aa; border-radius: 2px; }
+.pd-sev.error { background: var(--err); border-radius: 50%; }
+.pd-sev.warning { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 10px solid var(--warn); }
+.pd-sev.exclusion { background: var(--ink-3); }
+.pd-sev.ignore { background: var(--ink-3); border-radius: var(--r-1); }
 .pd-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; }
 .pd-row select, .pd-row input[type=text] { width: auto; }
 .pd-cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 .pd-cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 20px; }
-.pd-list { border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; }
+.pd-list { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); overflow: auto; }
 .pd-list .it { padding: 3px 8px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
 .pd-list .it:hover { background: var(--panel-2); }
-.pd-list .it.sel { background: color-mix(in srgb, var(--blue) 22%, transparent); }
+.pd-list .it.sel { background: var(--sel); }
 .pd-list .it .sub { color: var(--ink-2); padding-left: 16px; }
 .pd-list .hd { padding: 3px 8px; font-weight: 600; background: var(--panel-2); border-bottom: 1px solid var(--line); }
 .pd-swatch { display: inline-block; width: 22px; height: 12px; border: 1px solid var(--line); vertical-align: -1px; }
@@ -112,7 +112,7 @@ const CSS = `
 .pd-stat th { text-align: left; font-weight: 600; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); }
 .pd-stat td { padding: 3px 8px 3px 0; } .pd-stat td.n, .pd-stat th + th { text-align: right; font-variant-numeric: tabular-nums; }
 .pd-stat tr.total td { border-top: 1px solid var(--line); font-weight: 600; }
-.pd-fieldlist { margin-top: 8px; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; background: var(--panel); max-height: 380px; overflow: auto; }
+.pd-fieldlist { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-2); padding: 6px 8px; background: var(--panel); max-height: 380px; overflow: auto; }
 .pd-report .ln.hd { font-weight: 600; }
 .pd-xy { display: inline-flex; gap: 6px; align-items: center; } .pd-xy input { width: 96px; } .pd-xy label { color: var(--ink); }
 .pd-zone { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 0 16px; }

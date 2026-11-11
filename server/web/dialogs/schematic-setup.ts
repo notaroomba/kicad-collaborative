@@ -138,11 +138,11 @@ function build(pro: JsonObj, page?: string): void {
               g.append(h("div", { style: "text-align:right;padding-right:8px;white-space:nowrap" }, PIN_TYPE_NAMES[i]));
               for (let j = 0; j < 12; j++) {
                 if (j > i) { g.append(j === i + 1 ? h("div", { style: "grid-column:span " + (11 - i) + ";padding-left:6px;white-space:nowrap;color:var(--ink-2);font-size:11px" }, PIN_TYPE_NAMES[i]) : h("span", { style: "display:none" })); continue; }
-                const b = h("button", { type: "button", disabled: ro, style: "width:24px;height:22px;border:1px solid var(--line);border-radius:3px;color:#fff;font-weight:700;font-size:12px;padding:0;cursor:pointer" }); b.dataset.cell = `${i},${j}`; paint(b, pinMap[i][j]);
+                const b = h("button", { type: "button", disabled: ro, style: "width:24px;height:22px;border:1px solid var(--line);border-radius:var(--r-2);color:#fff;font-weight:700;font-size:12px;padding:0;cursor:pointer" }); b.dataset.cell = `${i},${j}`; paint(b, pinMap[i][j]);
                 b.addEventListener("click", () => { const v = (pinMap[i][j] + 1) % 3; pinMap[i][j] = pinMap[j][i] = v; paint(b, v); }); g.append(b);
               }
             }
-            pg.append(g, h("div", { class: "kd-row", style: "margin-top:12px;gap:16px;color:var(--ink-2)" }, ...[0, 1, 2].map((v) => h("span", { class: "kd-row", style: "gap:5px" }, h("span", { style: `display:inline-block;width:14px;height:14px;border-radius:2px;background:${COL[v]}` }), TIP[v])),
+            pg.append(g, h("div", { class: "kd-row", style: "margin-top:12px;gap:16px;color:var(--ink-2)" }, ...[0, 1, 2].map((v) => h("span", { class: "kd-row", style: "gap:5px" }, h("span", { style: `display:inline-block;width:14px;height:14px;border-radius:var(--r-1);background:${COL[v]}` }), TIP[v])),
               h("button", { class: "btn sm", type: "button", disabled: ro, style: "margin-left:auto", onclick: () => { for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) pinMap[i][j] = DEFAULT_PIN_MAP[i][j]; g.querySelectorAll<HTMLElement>("button[data-cell]").forEach((b) => { const [i, j] = b.dataset.cell!.split(",").map(Number); paint(b, pinMap[i][j]); }); } }, "Reset to Defaults")));
           } },
         ] },

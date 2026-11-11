@@ -154,8 +154,8 @@ export function plotDialog(): void {
   const layers = (store.get().document.layers || []) as LayerRow[];
   D.open({ title: "Plot", width: sch ? 460 : 620,
     build(body) {
-      const layerList = sch ? "" : `<div><h3>Include Layers</h3><div id="kd-layers" style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:3px;padding:4px 6px;background:var(--panel)">
-        ${layers.map((l) => `<label style="display:flex;gap:6px;align-items:center;padding:1px 0;color:var(--ink)"><input type="checkbox" data-layer="${esc(l.key)}" style="width:auto;margin:0"${E.hiddenLayers.has(l.key) ? "" : " checked"}><i style="width:10px;height:10px;border-radius:2px;display:inline-block;background:${esc(l.color)}"></i>${esc(l.name)}</label>`).join("")}</div>
+      const layerList = sch ? "" : `<div><h3>Include Layers</h3><div id="kd-layers" style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-2);padding:4px 6px;background:var(--panel)">
+        ${layers.map((l) => `<label style="display:flex;gap:6px;align-items:center;padding:1px 0;color:var(--ink)"><input type="checkbox" data-layer="${esc(l.key)}" style="width:auto;margin:0"${E.hiddenLayers.has(l.key) ? "" : " checked"}><i style="width:10px;height:10px;border-radius:var(--r-1);display:inline-block;background:${esc(l.color)}"></i>${esc(l.name)}</label>`).join("")}</div>
         <div class="actions" style="display:flex;gap:6px;margin-top:6px"><button type="button" class="btn sm" id="kd-all">Select All</button><button type="button" class="btn sm" id="kd-none">Deselect All</button></div></div>`;
       const check = (id: string, label: string, on: boolean, off?: boolean) => `<label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${off ? " disabled" : ""}> ${label}</label>`;
       body.innerHTML = `<div style="display:grid;grid-template-columns:${sch ? "1fr" : "220px 1fr"};gap:6px 18px">${layerList}<div><h3>${sch ? "Options" : "General Options"}</h3><div class="kv">

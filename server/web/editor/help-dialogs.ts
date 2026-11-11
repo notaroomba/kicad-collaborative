@@ -50,7 +50,7 @@ export function openHotkeyList(): void {
   D.open({ title: "Hotkey List", width: 760,
     build(body) {
       body.innerHTML = `<input id="hkFilter" type="text" placeholder="Type filter text" autocomplete="off" spellcheck="false" style="margin-bottom:8px">
-        <div id="hkList" style="height:min(60vh,520px);overflow:auto;border:1px solid var(--line);border-radius:3px;background:var(--panel)"></div>
+        <div id="hkList" style="height:min(60vh,520px);overflow:auto;border:1px solid var(--line);border-radius:var(--r-2);background:var(--panel)"></div>
         <p class="kd-note" style="margin:8px 0 0">Default hotkeys of KiCad. Greyed commands run in the desktop app.</p>`;
       const list = body.querySelector<HTMLElement>("#hkList")!, filter = body.querySelector<HTMLInputElement>("#hkFilter")!;
       const avail = new Map<string, boolean>();
@@ -105,7 +105,7 @@ export function openAbout(): void {
     build(body) {
       body.innerHTML = `<div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">${LOGO}<div><div style="font-size:20px;font-weight:700">KiCad Collaborative</div>
         <div style="font-family:var(--mono);color:var(--ink-2);margin-top:2px" id="abVer">Version: ${esc(PRODUCT_VERSION)}, web editor</div><div style="color:var(--ink-2);margin-top:2px">Based on KiCad 10.99</div></div></div>
-        <div id="abTabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line)">${Object.keys(pages).map((t, i) => `<button type="button" data-tab="${t}" class="${i ? "" : "on"}" style="border:1px solid var(--line);border-bottom:0;border-radius:4px 4px 0 0;padding:5px 12px;background:${i ? "transparent" : "var(--panel)"};color:var(--ink);font:inherit;cursor:pointer">${t}</button>`).join("")}</div>
+        <div id="abTabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line)">${Object.keys(pages).map((t, i) => `<button type="button" data-tab="${t}" class="${i ? "" : "on"}" style="border:1px solid var(--line);border-bottom:0;border-radius:var(--r-3) var(--r-3) 0 0;padding:5px 12px;background:${i ? "transparent" : "var(--panel)"};color:var(--ink);font:inherit;cursor:pointer">${t}</button>`).join("")}</div>
         <div id="abPage" style="height:260px;overflow:auto;border:1px solid var(--line);border-top:0;background:var(--panel);padding:10px 14px;line-height:1.5"></div>
         <div style="margin-top:10px"><button type="button" class="btn" id="abCopy">Copy Version Info</button></div>`;
       const page = body.querySelector<HTMLElement>("#abPage")!;
