@@ -21,17 +21,17 @@ export interface PlaceSpec {
 }
 export interface PlaceOptions { footprints?: PlaceSpec[]; outline?: Box; spacing?: number; grid?: number }
 export interface Placement { ref: string; id: string; x: number; y: number; rot: number; side: "front" | "back"; group: string }
-export interface PlaceScore { ratsnest: number; overlaps: number; courtyardClashes: number; outside: number; area: number }
+export interface PlaceScore { ratsnest: number; overlaps: number; courtyardClashes: number; outside: number; area: number; clashes: [string, string][]; outsideRefs: string[] }
 export interface PlaceResult { placements: Placement[]; score: PlaceScore; outline: Box; outlineFromBoard: boolean; groups: { name: string; anchor: string; refs: string[]; box: Box }[]; unknown: string[] }
 
 interface Pad { x: number; y: number; net: string; thru: boolean }
 interface Part {
   ref: string; id: string; node: any; sheet: string; cur: [number, number, number]; flip: boolean; back: boolean; thru: boolean;
-  pads: Pad[]; box: Box; holes: Box[];   // in the part's own frame; holes: what its drilled pads take on the other side (origin at its anchor, rotation 0)
+  pads: Pad[]; box: Box; padBox: Box; holes: Box[];   // in the part's own frame; holes: what its drilled pads take on the other side (origin at its anchor, rotation 0)
   spec: PlaceSpec | null; movable: boolean; group: string;
   x: number; y: number; rot: number; placed: boolean;   // in its block's frame, then on the board
 }
-interface Block { name: string; parts: Part[]; anchor: Part; box: Box; x: number; y: number; rot: number; placed: boolean; fixed: boolean; edge: string | null }
+interface Block { name: string; parts: Part[]; anchor: Part; box: Box; padBox: Box; x: number; y: number; rot: number; placed: boolean; fixed: boolean; edge: string | null }
 
 const rotv = (deg: number, x: number, y: number): Pt => { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return [x * c + y * s, -x * s + y * c]; };
 const norm = (d: number) => ((Math.round(d) % 360) + 360) % 360;
@@ -50,18 +50,18 @@ function partOf(K: any, P: any, doc: any, it: any, spec: PlaceSpec | null): Part
   let node = it.node; const cur = K.atOf(it.node) as [number, number, number]; const layer = K.kid(node, "layer"); const isBack = !!layer && K.str(layer[1]) === "B.Cu";
   const wantBack = spec && spec.side ? spec.side === "back" : isBack; const flip = wantBack !== isBack;
   if (flip) { node = structuredClone(node); P.flipNode(node, cur[0], doc); }
-  const [fx, fy, frot] = K.atOf(node); const pads: Pad[] = []; const holes: Box[] = []; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; let thru = false;
+  const [fx, fy, frot] = K.atOf(node); const pads: Pad[] = []; const holes: Box[] = []; let pb: Box = [Infinity, Infinity, -Infinity, -Infinity]; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; let thru = false;
   const take = (ax: number, ay: number, m: number) => { const [lx, ly] = rotv(-frot, ax - fx, ay - fy); x0 = Math.min(x0, lx - m); y0 = Math.min(y0, ly - m); x1 = Math.max(x1, lx + m); y1 = Math.max(y1, ly + m); return [lx, ly]; };
   for (const p of P.padsOf({ node })) {
     const t = p.type === "thru_hole" || p.type === "np_thru_hole"; if (t) thru = true;
-    const [lx, ly] = rotv(-frot, p.x - fx, p.y - fy); pads.push({ x: lx, y: ly, net: p.net && p.net.name ? p.net.name : "", thru: t }); if (t) { const m = Math.max(p.w, p.h) / 2; holes.push([lx - m, ly - m, lx + m, ly + m]); }
+    const [lx, ly] = rotv(-frot, p.x - fx, p.y - fy); pads.push({ x: lx, y: ly, net: p.net && p.net.name ? p.net.name : "", thru: t }); { const m = Math.max(p.w, p.h) / 2; pb = [Math.min(pb[0], lx - m), Math.min(pb[1], ly - m), Math.max(pb[2], lx + m), Math.max(pb[3], ly + m)]; } if (t) { const m = Math.max(p.w, p.h) / 2; holes.push([lx - m, ly - m, lx + m, ly + m]); }
   }
   let any = false; const cy = P.courtyards({ node });
   for (const k of Object.keys(cy)) for (const loop of cy[k]) for (const q of loop) { take(q[0], q[1], 0); any = true; }
   if (!any) for (const p of P.padsOf({ node })) take(p.x, p.y, Math.max(p.w, p.h) / 2 + 0.25);
   if (x0 > x1) { x0 = y0 = -0.5; x1 = y1 = 0.5; }
   const sh = K.kid(it.node, "sheetname") || K.kid(it.node, "path");
-  return { ref: refOf(K, it.node), id: it.id, node: it.node, sheet: sh ? K.str(sh[1]).replace(/\/[^/]*$/, "") : "", cur, flip, back: wantBack, thru, pads, box: [x0, y0, x1, y1], holes, spec, movable: false, group: "", x: 0, y: 0, rot: 0, placed: false };
+  return { ref: refOf(K, it.node), id: it.id, node: it.node, sheet: sh ? K.str(sh[1]).replace(/\/[^/]*$/, "") : "", cur, flip, back: wantBack, thru, pads, box: [x0, y0, x1, y1], padBox: pb[0] <= pb[2] ? pb : [x0, y0, x1, y1], holes, spec, movable: false, group: "", x: 0, y: 0, rot: 0, placed: false };
 }
 
 export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOptions = {}): PlaceResult {
@@ -84,7 +84,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   // ---- groups
   const groupOf = new Map<string, Part[]>(); const join = (g: string, p: Part) => { p.group = g; let l = groupOf.get(g); if (!l) groupOf.set(g, l = []); l.push(p); };
   const loose: Part[] = [];
-  for (const p of moving) { if (p.spec && p.spec.group) join(p.spec.group, p); else loose.push(p); }
+  const isFixed = (p: Part) => !!p.spec && typeof p.spec.fixed === "object" && !!p.spec.fixed; const hasFixed = new Set<string>(); let solo = 0;
+  for (const p of moving) {
+    if (!(p.spec && p.spec.group)) { loose.push(p); continue; }
+    // a group moves as one piece, so it can hold only one pinned part: any further ones stand on their own
+    if (isFixed(p)) { if (hasFixed.has(p.spec.group)) { join(p.spec.group + "~" + (++solo), p); continue; } hasFixed.add(p.spec.group); }
+    join(p.spec.group, p);
+  }
   for (const p of loose) if (p.spec && p.spec.near && byRef.get(p.spec.near) && byRef.get(p.spec.near)!.group) join(byRef.get(p.spec.near)!.group, p);
   const rest = loose.filter((p) => !p.group); const big = rest.filter((p) => p.pads.length > 3 || !!(p.spec && (p.spec.edge || p.spec.fixed)));
   for (const p of big) join("~" + p.ref, p);
@@ -108,7 +114,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     if (a.p.thru && b.p.thru) return false; return false;
   };
   for (const [name, parts] of groupOf) {
-    const anchor = parts.find((p) => p.spec && p.spec.anchor) || parts.slice().sort((a, b) => b.pads.length - a.pads.length || (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]) - (a.box[2] - a.box[0]) * (a.box[3] - a.box[1]))[0];
+    const anchor = parts.find(isFixed) || parts.find((p) => p.spec && p.spec.anchor) || parts.slice().sort((a, b) => b.pads.length - a.pads.length || (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]) - (a.box[2] - a.box[0]) * (a.box[3] - a.box[1]))[0];
     anchor.x = 0; anchor.y = 0; anchor.rot = 0; anchor.placed = true; const down: Part[] = [anchor];
     const pull = (p: Part) => { let s = 0; for (const a of p.pads) for (const q of down) for (const b of q.pads) if (a.net && a.net === b.net) s += w(a.net); return s; };
     const todo = parts.filter((p) => p !== anchor);
@@ -140,9 +146,10 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
       if (best) { p.x = best.x; p.y = best.y; p.rot = best.rot; } else { p.x = focus[0]; p.y = focus[1]; p.rot = 0; }
       p.placed = true; down.push(p);
     }
-    let box: Box = [Infinity, Infinity, -Infinity, -Infinity]; for (const p of parts) { const b = boxAt(p); box = [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.max(box[2], b[2]), Math.max(box[3], b[3])]; }
+    let box: Box = [Infinity, Infinity, -Infinity, -Infinity], padBox: Box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const p of parts) { const b = boxAt(p); box = [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.max(box[2], b[2]), Math.max(box[3], b[3])]; const q = shift(turnBox(p.padBox, p.rot), p.x, p.y); padBox = [Math.min(padBox[0], q[0]), Math.min(padBox[1], q[1]), Math.max(padBox[2], q[2]), Math.max(padBox[3], q[3])]; }
     const edgePart = parts.find((p) => p.spec && p.spec.edge); const fixedPart = parts.find((p) => p.spec && typeof p.spec.fixed === "object" && p.spec.fixed);
-    blocks.push({ name, parts, anchor: fixedPart || edgePart || anchor, box, x: 0, y: 0, rot: 0, placed: false, fixed: !!fixedPart, edge: edgePart ? edgePart.spec!.edge! : null });
+    blocks.push({ name, parts, anchor: fixedPart || edgePart || anchor, box, padBox, x: 0, y: 0, rot: 0, placed: false, fixed: !!fixedPart, edge: edgePart ? edgePart.spec!.edge! : null });
   }
 
   // ---- the board
@@ -163,7 +170,8 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   const partBoxes = (b: Block, rot: number, x: number, y: number): Geo[] => b.parts.map((p) => { const [px, py] = rotv(rot, p.x, p.y); return geo(p, p.rot + rot, x + px, y + py); });
   const rebuildPads = () => { placedPads.clear(); for (const p of still) for (const d of p.pads) if (d.net) { const [x, y] = rotv(p.cur[2], d.x, d.y); addPad(d.net, [p.cur[0] + x, p.cur[1] + y]); } for (const b of blocks) if (b.placed) for (const d of blockPads(b)) { const [x, y] = rotv(b.rot, d.x, d.y); addPad(d.net, [b.x + x, b.y + y]); } };
   const legal = (b: Block, rot: number, x: number, y: number) => {
-    const bb = shift(turnBox(b.box, rot), x, y); if (bb[0] < O[0] + inset - 1e-6 || bb[1] < O[1] + inset - 1e-6 || bb[2] > O[2] - inset + 1e-6 || bb[3] > O[3] - inset + 1e-6) return b.edge ? edgeOk(b, bb) && free(b, rot, x, y, bb) : false;
+    // the pads must be on the board; a courtyard may hang over its edge (connectors do)
+    const bb = shift(turnBox(b.box, rot), x, y), pb = shift(turnBox(b.padBox, rot), x, y); if (pb[0] < O[0] + inset - 1e-6 || pb[1] < O[1] + inset - 1e-6 || pb[2] > O[2] - inset + 1e-6 || pb[3] > O[3] - inset + 1e-6) return b.edge ? edgeOk(b, bb) && free(b, rot, x, y, bb) : false;
     return free(b, rot, x, y, bb);
   };
   const edgeOk = (b: Block, bb: Box) => bb[0] >= O[0] - 1e-6 - (b.edge === "left" ? 1e3 : 0) && bb[1] >= O[1] - 1e-6 - (b.edge === "top" ? 1e3 : 0) && bb[2] <= O[2] + 1e-6 + (b.edge === "right" ? 1e3 : 0) && bb[3] <= O[3] + 1e-6 + (b.edge === "bottom" ? 1e3 : 0);
@@ -174,14 +182,19 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     return true;
   };
   const cx = (O[0] + O[2]) / 2, cy = (O[1] + O[3]) / 2;
+  // A block nearly as long as the board (a pin header, a card-edge connector) only fits along an edge, and has to
+  // go down before the middle fills up.
+  const long = (b: Block) => Math.max(b.box[2] - b.box[0], b.box[3] - b.box[1]) >= 0.6 * Math.max(O[2] - O[0], O[3] - O[1]);
+  let hug: Block | null = null;
   const costAt = (pads: { x: number; y: number; net: string }[], rot: number, x: number, y: number) => {
     let c = 0, tied = 0;
+    if (hug) { const bb = shift(turnBox(hug.padBox, rot), x, y); const wide = bb[2] - bb[0] >= bb[3] - bb[1]; c += 2 * (wide ? Math.min(bb[1] - O[1], O[3] - bb[3]) : Math.min(bb[0] - O[0], O[2] - bb[2])); }
     for (const d of pads) { const l = placedPads.get(d.net); if (!l) continue; const [dx, dy] = rotv(rot, d.x, d.y); let dmin = Infinity; for (const q of l) { const v = Math.abs(q[0] - x - dx) + Math.abs(q[1] - y - dy); if (v < dmin) dmin = v; } c += dmin * w(d.net); tied++; }
     return c + (Math.abs(x - cx) + Math.abs(y - cy)) * (tied ? 0.01 : 0.2);
   };
   const g = opts.grid && opts.grid > 0 ? opts.grid : Math.max(0.5, Math.min(1.27, Math.round(Math.max(O[2] - O[0], O[3] - O[1]) / 80 * 4) / 4));
   const put = (b: Block, grid = g): boolean => {
-    const pads = blockPads(b); const ap = b.anchor; const spec = ap.spec;
+    hug = long(b) && !b.edge ? b : null; const pads = blockPads(b); const ap = b.anchor; const spec = ap.spec;
     if (b.fixed && spec && typeof spec.fixed === "object" && spec.fixed) {   // the pinned part lands exactly where asked; its block comes with it
       const rot = norm((spec.fixed.rot !== undefined ? spec.fixed.rot : spec.rot !== undefined ? spec.rot : ap.cur[2]) - ap.rot); const [px, py] = rotv(rot, ap.x, ap.y);
       b.rot = rot; b.x = spec.fixed.x - px; b.y = spec.fixed.y - py; b.placed = true; return true;
@@ -196,7 +209,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     }
     let best: { c: number; rot: number; x: number; y: number } | null = null;
     for (const rot of rots) {
-      const tb = turnBox(b.box, rot);
+      const tb = turnBox(b.edge ? b.box : b.padBox, rot);
       if (b.edge) {   // slide along the edge, the named part's body flush with it
         const [ax, ay] = rotv(rot, ap.x, ap.y); const abx = turnBox(ap.box, ap.rot + rot); const horiz = b.edge === "top" || b.edge === "bottom";
         const fx = b.edge === "left" ? O[0] - (ax + abx[0]) : O[2] - (ax + abx[2]), fy = b.edge === "top" ? O[1] - (ay + abx[1]) : O[3] - (ay + abx[3]);
@@ -213,7 +226,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   };
   /** Nowhere legal for a part: the spot where it is least in the way (the score will say so). */
   const squeeze = (b: Block) => {
-    let best: { c: number; x: number; y: number } | null = null; const tb = turnBox(b.box, 0); const pads = blockPads(b); const side = b.anchor.back; const others: Box[] = stillBoxes.filter((t) => t.p.back === side).map((t) => t.b);
+    let best: { c: number; x: number; y: number } | null = null; const tb = turnBox(b.padBox, 0); const pads = blockPads(b); const side = b.anchor.back; const others: Box[] = stillBoxes.filter((t) => t.p.back === side).map((t) => t.b);
     for (const o of blocks) if (o !== b && o.placed) for (const t of partBoxes(o, o.rot, o.x, o.y)) if (t.p.back === side) others.push(t.b);
     for (let y = O[1] + inset - tb[1]; y <= O[3] - inset - tb[3] + 1e-6; y += g) for (let x = O[0] + inset - tb[0]; x <= O[2] - inset - tb[2] + 1e-6; x += g) {
       const bb = shift(tb, x, y); let ov = 0; for (const o of others) { const wv = Math.min(bb[2], o[2]) - Math.max(bb[0], o[0]), hv = Math.min(bb[3], o[3]) - Math.max(bb[1], o[1]); if (wv > 0 && hv > 0) ov += wv * hv; }
@@ -228,30 +241,31 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     const i = blocks.indexOf(b); if (i >= 0) blocks.splice(i, 1);
     const parts = [b.anchor].concat(b.parts.filter((p) => p !== b.anchor));
     for (const p of parts) {
-      p.x = 0; p.y = 0; p.rot = 0; const nb: Block = { name: b.name, parts: [p], anchor: p, box: p.box, x: 0, y: 0, rot: 0, placed: false, fixed: false, edge: p.spec && p.spec.edge ? p.spec.edge : null };
+      p.x = 0; p.y = 0; p.rot = 0; const nb: Block = { name: b.name, parts: [p], anchor: p, box: p.box, padBox: p.padBox, x: 0, y: 0, rot: 0, placed: false, fixed: false, edge: p.spec && p.spec.edge ? p.spec.edge : null };
       blocks.push(nb); if (!put(nb) && !put(nb, g / 4)) squeeze(nb); rebuildPads();
     }
   };
   const sizeOf = (b: Block) => b.parts.reduce((s, p) => s + p.pads.length, 0);
-  const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
+  const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || +long(b) - +long(a) || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
   for (const b of order) { settle(b); rebuildPads(); }
   for (let round = 0; round < 2; round++) for (const b of blocks.slice()) {
-    if (b.fixed) continue; const keep = { x: b.x, y: b.y, rot: b.rot }; const wasLegal = legal(b, keep.rot, keep.x, keep.y); b.placed = false; rebuildPads(); const before = costAt(blockPads(b), keep.rot, keep.x, keep.y);
+    if (b.fixed) continue; const keep = { x: b.x, y: b.y, rot: b.rot }; const wasLegal = legal(b, keep.rot, keep.x, keep.y); b.placed = false; rebuildPads(); hug = long(b) && !b.edge ? b : null; const before = costAt(blockPads(b), keep.rot, keep.x, keep.y);
     if (!put(b) || (wasLegal && costAt(blockPads(b), b.rot, b.x, b.y) > before - 1e-9)) Object.assign(b, keep); b.placed = true; rebuildPads();
   }
 
   // ---- out
   const placements: Placement[] = []; const finalBox = new Map<Part, Box>(); const finalGeo: Geo[] = []; const finalPads: { net: string; at: Pt }[] = [];
   for (const b of blocks) for (const p of b.parts) {
-    const [px, py] = rotv(b.rot, p.x, p.y); const x = r3(Math.round((b.x + px) / 0.05) * 0.05), y = r3(Math.round((b.y + py) / 0.05) * 0.05), rot = norm(p.rot + b.rot);
-    placements.push({ ref: p.ref, id: p.id, x, y, rot, side: p.back ? "back" : "front", group: b.name.startsWith("~") ? "" : b.name });
+    const [px, py] = rotv(b.rot, p.x, p.y); const exact = b.fixed && p === b.anchor && isFixed(p) ? (p.spec!.fixed as { x: number; y: number }) : null;
+    const x = exact ? exact.x : r3(Math.round((b.x + px) / 0.05) * 0.05), y = exact ? exact.y : r3(Math.round((b.y + py) / 0.05) * 0.05), rot = norm(p.rot + b.rot);
+    placements.push({ ref: p.ref, id: p.id, x, y, rot, side: p.back ? "back" : "front", group: b.name.startsWith("~") ? "" : b.name.replace(/~\d+$/, "") });
     finalBox.set(p, shift(turnBox(p.box, rot), x, y)); finalGeo.push(geo(p, rot, x, y)); for (const d of p.pads) if (d.net) { const [dx, dy] = rotv(rot, d.x, d.y); finalPads.push({ net: d.net, at: [x + dx, y + dy] }); }
   }
   for (const t of stillBoxes) { finalBox.set(t.p, t.b); finalGeo.push(t); for (const d of t.p.pads) if (d.net) { const [dx, dy] = rotv(t.p.cur[2], d.x, d.y); finalPads.push({ net: d.net, at: [t.p.cur[0] + dx, t.p.cur[1] + dy] }); } }
-  const onEdge = new Set(blocks.filter((b) => b.edge).map((b) => b.anchor)); const score: PlaceScore = { ratsnest: r3(mstTotal(finalPads)), overlaps: 0, courtyardClashes: 0, outside: 0, area: 0 };
+  const onEdge = new Set(blocks.filter((b) => b.edge).map((b) => b.anchor)); const score: PlaceScore = { ratsnest: r3(mstTotal(finalPads)), overlaps: 0, courtyardClashes: 0, outside: 0, area: 0, clashes: [], outsideRefs: [] };
   for (let i = 0; i < finalGeo.length; i++) {
-    const a = finalGeo[i]; if (!onEdge.has(a.p) && (a.b[0] < O[0] - 1e-6 || a.b[1] < O[1] - 1e-6 || a.b[2] > O[2] + 1e-6 || a.b[3] > O[3] + 1e-6)) score.outside++;
-    for (let j = i + 1; j < finalGeo.length; j++) { if (clash(a, finalGeo[j], 0)) { score.courtyardClashes++; score.overlaps++; } else if (gap > 0 && clash(a, finalGeo[j], gap * 0.999)) score.overlaps++; }
+    const a = finalGeo[i]; const pq = shift(turnBox(a.p.padBox, a.rot), a.x, a.y); if (!onEdge.has(a.p) && a.p.pads.length && (pq[0] < O[0] - 1e-6 || pq[1] < O[1] - 1e-6 || pq[2] > O[2] + 1e-6 || pq[3] > O[3] + 1e-6)) { score.outside++; score.outsideRefs.push(a.p.ref); }
+    for (let j = i + 1; j < finalGeo.length; j++) { if (clash(a, finalGeo[j], 0)) { score.courtyardClashes++; score.overlaps++; score.clashes.push([a.p.ref, finalGeo[j].p.ref]); } else if (gap > 0 && clash(a, finalGeo[j], gap * 0.999)) score.overlaps++; }
   }
   score.area = r3((O[2] - O[0]) * (O[3] - O[1]));
   const groups = blocks.filter((b) => !b.name.startsWith("~") ? blocks.find((o) => o.name === b.name) === b : true).map((b0) => { const b = { name: b0.name, anchor: b0.anchor, parts: b0.name.startsWith("~") ? b0.parts : blocks.filter((o) => o.name === b0.name).flatMap((o) => o.parts) }; let box: Box = [Infinity, Infinity, -Infinity, -Infinity]; for (const p of b.parts) { const q = finalBox.get(p)!; box = [Math.min(box[0], q[0]), Math.min(box[1], q[1]), Math.max(box[2], q[2]), Math.max(box[3], q[3])]; } return { name: b.name.startsWith("~") ? b.anchor.ref : b.name, anchor: b.anchor.ref, refs: b.parts.map((p) => p.ref), box: box.map(r3) as Box }; });

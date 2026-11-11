@@ -239,3 +239,11 @@ test("fine-pitch pads: tracks neck down and leave the pads off the grid, within 
   assert.ok(w < 0.25 && w >= 0.15, `narrower than the class's 0.25 mm at these pads, as wide as their neighbours allow (${w} mm)`);
   apply(doc, res); assert.deepEqual(errors(doc, settings), []); assert.equal(P.ratsnest(doc).length, 0);
 });
+
+test("placement: two pinned parts in one group both land exactly where asked, unsnapped", () => {
+  const doc = placeBoard();
+  const res = R.place(K, P, doc, null, { footprints: SPEC.map((s) => s.ref === "U1" ? { ...s, fixed: { x: 100.013, y: 50.57, rot: 0 } } : s.ref === "L1" ? { ...s, fixed: { x: 121.57, y: 62.86, rot: 90 } } : s) });
+  const at = (ref) => res.placements.find((p) => p.ref === ref);
+  assert.deepEqual([at("U1").x, at("U1").y, at("U1").rot], [100.013, 50.57, 0]); assert.deepEqual([at("L1").x, at("L1").y, at("L1").rot], [121.57, 62.86, 90]);
+  assert.equal(at("L1").group, "buck"); assert.equal(res.score.courtyardClashes, 0);
+});
