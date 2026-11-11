@@ -15,6 +15,10 @@ GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
 export GH_TOKEN
 GH_ID="${REAL_GH_ID:-$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/user | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).id))')}"
 
+# Homebrew's Postgres refuses to start without a valid locale ("postmaster became
+# multithreaded during startup").
+export LC_ALL="${LC_ALL:-en_US.UTF-8}" LANG="${LANG:-en_US.UTF-8}"
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/kc-github-real.XXXXXX")"
 PGPORT="${PGPORT:-55439}"
 pids=()
