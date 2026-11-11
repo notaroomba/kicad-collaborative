@@ -5,7 +5,7 @@
 import { openBoardSetup } from "./board-setup";
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, openBoardStatistics, openClearance, openDrc, openNetInspector } from "./inspect";
-import { pcbItemDialog } from "./item-props";
+import { newTextDialog, pcbItemDialog } from "./item-props";
 import { padPropertiesDialog } from "./pad-props";
 import { openUpdatePcb, projectNetlist } from "./update-pcb";
 
@@ -21,6 +21,8 @@ export function installPcbDialogs(): void {
   if (typeof KDialogs !== "undefined" && KDialogs) (KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog }).pcbItemDialog = pcbItemDialog;   // KDialogs.openItem asks it first
   (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;   // DIALOG_PAD_PROPERTIES in place of the module's short form
   Object.assign(CollabTools.pcb as object, { drcReport, projectNetlist });   // the DRC dialog's run and the project's netlist as data (plugins' kicad-cli)
+  const nd = (CollabTools.pcb as ToolModule & { setNewItemDialogs?(d: Record<string, unknown>): void }).setNewItemDialogs;
+  if (nd) nd({ gr_text: newTextDialog });   // Add Text opens Text Properties before the text follows the cursor
   action("boardSetup", "Board Setup...", "", (ctx) => { void openBoardSetup(ctx); });
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
   action("editFootprintFields", "Bulk Edit Footprint Fields...", "", openFootprintFields);

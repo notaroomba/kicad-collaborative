@@ -59,17 +59,23 @@ function netField(doc: KDoc, node: SNode, ro: boolean): Field<string> {
 
 type Apply = (node: SNode) => string | void;
 /** The shell: a copy of the node, a builder that returns how to lay the controls into it, one change on OK. */
-function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, build: (node: SNode, body: HTMLElement, ro: boolean) => Apply): boolean {
+/**
+ * One item's properties dialog.  `create` makes it the dialog of a new item a drawing tool is about to place
+ * (DRAWING_TOOL::PlaceText): OK hands the edited node over instead of committing, Cancel hands over null.
+ */
+function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, build: (node: SNode, body: HTMLElement, ro: boolean) => Apply, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc; if (!doc) return false;
   const staged = (K().cloneNode as (n: SNode) => SNode)(item.node);
   let apply: Apply = () => undefined;
   const before = K().serialize(staged);
   return !!openDialog({ title, width, readOnly: !!ctx.viewOnly,
     build(body) { apply = build(staged, body, !!ctx.viewOnly); },
+    cancel: create ? () => create(null) : undefined,
     ok() {
       if (ctx.viewOnly) return true;
       const err = apply(staged);
       if (typeof err === "string" && err) { ctx.toast(err, 4000); return false; }
+      if (create) { create(staged); return true; }
       if (K().serialize(staged) === before) return true;
       ctx.commit([K().replaceChange(doc, { ...item, node: staged, geom: [], bbox: null })], "properties");
       return true;
@@ -197,7 +203,7 @@ function fontFlags(doc: KDoc, font: SNode, flag: "bold" | "italic", on: boolean)
   if (!on) return;
   if (modern) put(font, flag, `(${flag} yes)`, flag === "bold" ? ["italic", "color"] : ["color"]); else font.push(flag);
 }
-function textDialog(ctx: ToolCtx, item: KItem): boolean {
+function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc;
   return itemDialog(ctx, item, "Text Properties", 560, (node, body, ro) => {
     const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
@@ -231,7 +237,13 @@ function textDialog(ctx: ToolCtx, item: KItem): boolean {
       put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
       return undefined;
     };
-  });
+  }, create);
+}
+/** DIALOG_TEXT_PROPERTIES on a new text (DRAWING_TOOL::PlaceText): done gets the edited node, or null on Cancel. */
+export function newTextDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {
+  const ok = textDialog(ctx, { id: "", kind: "gr_text", node, geom: [], bbox: null } as unknown as KItem, done);
+  if (!ok) done(null);
+  return ok;
 }
 
 // ---------------------------------------------------------------- <Shape> Properties

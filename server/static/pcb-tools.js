@@ -2184,7 +2184,7 @@ function beginCarryMove(ctx, opts) {
   const mouse = opts.at ? opts.at.slice() : (ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
   // which already sits under the cursor.  A browser cannot warp the mouse onto the origin (GetMoveWarpsCursor), so a
   // drag made with the button held keeps KiCad's no-warp behaviour: the reference is the cursor where the drag began.
-  const at = opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
+  const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
   const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
   if (opts.drag) dragEnds(doc, m);
@@ -2467,6 +2467,27 @@ function drawStatusPopup(c, px) {
   c.fillStyle = css("--ink", "#e0e0e0"); c.textBaseline = "top"; c.fillText(p.text, x + m, y + m); c.restore();
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
+// the editor's dialogs for a new item (pcbdialogs/item-props.ts): kind -> (ctx, node, done(node | null))
+let newItemDialogs = {};
+/**
+ * DRAWING_TOOL::PlaceText: the click makes a PCB_TEXT on the active layer with the layer class's size and thickness
+ * (Board Setup's text defaults), left / bottom justified and mirrored on a back layer, and opens Text Properties on
+ * it.  OK with printable text: the text hangs on the cursor until the next click places it ("Draw Text", selected);
+ * placed at once when the dialog changed its position.  Cancel or blank text: nothing.
+ */
+function placeTextAt(ctx, at) {
+  if (ctx.viewOnly || S.move) return;
+  const dlg = newItemDialogs.gr_text;
+  if (!dlg) { askText(ctx, "Text", "", (v) => { if (v) placeText(ctx, at, v); }); return; }
+  applySelection(ctx, []);
+  dlg(ctx, textNode("", at[0], at[1], S.gfxLayer), (n) => {
+    if (!n || !/[^\s]/.test(K.str(n[1]).replace(/\\n/g, ""))) return;   // NoPrintableChars
+    const p = K.atOf(n); const moved = Math.abs(p[0] - at[0]) > 1e-9 || Math.abs(p[1] - at[1]) > 1e-9;
+    const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Text"); applySelection(ctx, [c.id]);
+    if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at });
+    ctx.requestRender();
+  });
+}
 function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); }
 
 // ================================================================ parity pass: the non-tool commands of pcbnew
@@ -5311,7 +5332,7 @@ const pcb = {
     else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
     else if (t === "via") placeVia(ctx, hv);
     else if (t === "drag") { if (S.drag) { dragMove(ctx, mm); if (S.drag.moved) finishDrag(ctx, true, !!(ev.ctrlKey || ev.metaKey)); } else ctx.setTool("select"); }   // a click after motion fixes the drag
-    else if (t === "gtext") { const at = [hv.x, hv.y]; askText(ctx, "Text", "", (v) => { if (v) placeText(ctx, at, v); }); }
+    else if (t === "gtext") placeTextAt(ctx, [hv.x, hv.y]);
     else if (t === "image") { if (S.image) placeImage(ctx, hv); else openImagePicker(); }
     else if (t === "delete") deleteAt(ctx, mm);   // an empty click is ours too: the tool stays armed
     else drawClick(ctx, hv, t);
@@ -5488,6 +5509,8 @@ const pcb = {
   },
   sizes: () => K.pcbSizes.state,
   setRoutingDialogs(d) { routingDialogs = Object.assign({}, routingDialogs, d || {}); },
+  /** The editor's properties dialogs for new items: { gr_text(ctx, node, done) } (done gets the edited node, or null). */
+  setNewItemDialogs(d) { newItemDialogs = Object.assign({}, newItemDialogs, d || {}); },
   /** The interactive router's settings (ROUTING_SETTINGS), and changing them (persisted per viewer). */
   routerSettings() { return Object.assign({}, S.rs); },
   setRouterSettings(patch) { setRouterSettings(patch || {}); },

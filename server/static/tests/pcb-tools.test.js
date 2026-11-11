@@ -1734,3 +1734,26 @@ test("grid helper: BestDragOrigin takes the moved items' anchor nearest the mous
   P.selectMoveTo(ctx, [104.1, 52.4]); assert.deepEqual([doc.items.get("fp-1").x, doc.items.get("fp-1").y], [104, 52.5]);
   pcb.cancel(); assert.deepEqual([doc.items.get("fp-1").x, doc.items.get("fp-1").y], [100, 50]);
 });
+
+test("Add Text: Text Properties first on a new text with the layer's defaults; OK carries it on the cursor, a click places it ('Draw Text'), Escape or a blank text adds nothing", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc); let seen = null, reply = null;
+  pcb.setNewItemDialogs({ gr_text: (c, node, done) => { seen = node; reply(node, done); return true; } });
+  pcb.onActivate("gtext", ctx); P.state.gfxLayer = "B.SilkS";
+  reply = (node, done) => { node[1] = "HELLO"; done(node); };
+  const n = log.commits.length; pcb.onPointerDown(ev(), [10, 20], ctx);
+  assert.equal(seen[0], "gr_text"); assert.deepEqual(K.atOf(seen).slice(0, 2), [10, 20]); assert.equal(K.kid(seen, "layer")[1], "B.SilkS");
+  assert.deepEqual(K.kid(K.kid(seen, "effects"), "justify").slice(1), ["left", "bottom", "mirror"], "left / bottom, mirrored on a back layer");
+  assert.equal(log.commits.at(-1).label, "Draw Text"); const id = log.commits.at(-1).changes[0].id; assert.deepEqual(log.selection, [id]);
+  assert.ok(P.state.move && P.state.move.placing[0] === id, "the text follows the cursor");
+  P.selectMoveTo(ctx, [15, 25]); P.finishSelectMove(ctx, true, false);
+  assert.deepEqual(K.atOf(doc.items.get(id).node).slice(0, 2), [15, 25]); assert.equal(doc.items.get(id).node[1], "HELLO");
+  // Escape while it follows the cursor: gone again
+  pcb.onPointerDown(ev(), [30, 30], ctx); const id2 = P.state.move.placing[0]; pcb.cancel(); assert.ok(!doc.items.has(id2));
+  // Cancel, or nothing printable: nothing at all
+  const m = log.commits.length; reply = (node, done) => done(null); pcb.onPointerDown(ev(), [40, 40], ctx);
+  reply = (node, done) => { node[1] = "  \\n "; done(node); }; pcb.onPointerDown(ev(), [40, 40], ctx); assert.equal(log.commits.length, m); assert.equal(P.state.move, null);
+  // a position changed in the dialog: placed there at once
+  reply = (node, done) => { node[1] = "AT"; K.setAt(node, 50, 60, 0); done(node); }; pcb.onPointerDown(ev(), [40, 40], ctx);
+  assert.equal(P.state.move, null); assert.deepEqual(K.atOf(doc.items.get(log.commits.at(-1).changes[0].id).node).slice(0, 2), [50, 60]);
+  pcb.setNewItemDialogs({ gr_text: null }); pcb.onActivate("select", ctx);
+});
