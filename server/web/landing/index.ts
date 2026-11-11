@@ -25,6 +25,23 @@ function nav(): void {
   set();
 }
 
+/** The hero window starts leaning back and straightens as it scrolls up into view. */
+function lean(): void {
+  const win = document.getElementById("hero");
+  if (!win || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  let raf = 0;
+  const set = () => {
+    raf = 0;
+    const r = win.getBoundingClientRect(), vh = window.innerHeight;
+    // 1 while its top edge is low in the viewport, 0 once the top is a third of the way up.
+    const k = Math.max(0, Math.min(1, (r.top - vh * 0.3) / (vh * 0.45)));
+    win.style.setProperty("--lean", k.toFixed(3));
+  };
+  window.addEventListener("scroll", () => { if (!raf) raf = requestAnimationFrame(set); }, { passive: true });
+  window.addEventListener("resize", set);
+  set();
+}
+
 function reveals(): void {
   const els = Array.from(document.querySelectorAll<HTMLElement>(".rv"));
   if (!("IntersectionObserver" in window)) { els.forEach((e) => e.classList.add("in")); return; }
@@ -77,7 +94,7 @@ function session(): void {
 }
 
 function start(): void {
-  theme(); nav(); reveals(); bom();
+  theme(); nav(); lean(); reveals(); bom();
   const hero = document.getElementById("hero"), story = document.getElementById("make");
   if (hero) startHero(hero);
   if (story) startStory(story);

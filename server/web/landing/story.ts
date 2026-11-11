@@ -98,7 +98,7 @@ function render(s: Stage, g: number, now: number, still: boolean, turn: number):
   }
 
   // ---- cameras
-  const pad = Math.min(W, H) * 0.06;
+  const pad = Math.min(W, H) * 0.045;
   const fit = (vw: number, vh: number) => Math.min((W - pad * 2) / vw, (H - pad * 2) / vh);
   const sSch = fit(SHEET.w, SHEET.h);
   const schX = (x: number) => W / 2 + (x - (SHEET.x + SHEET.w / 2)) * sSch, schY = (y: number) => H / 2 + (y - (SHEET.y + SHEET.h / 2)) * sSch;
@@ -107,7 +107,7 @@ function render(s: Stage, g: number, now: number, still: boolean, turn: number):
   // Before placement the parts sit in a pile beside the outline (wide canvas) or below it.
   const pile = (p: Part): Pt => wide ? p.cl : [p.cl[0] - 55 + 21, p.cl[1] + 27];
   const clusterView = wide ? { cx: 32.5, cy: 14.5, w: 71, h: 34 } : { cx: 21, cy: 28.5, w: 46, h: 62 };
-  const boardView = { cx: BOARD.w / 2, cy: BOARD.h / 2, w: BOARD.w + 5, h: BOARD.h + 5 };
+  const boardView = { cx: BOARD.w / 2, cy: BOARD.h / 2, w: BOARD.w + 3, h: BOARD.h + 3 };
   const s0 = fit(clusterView.w, clusterView.h), s1 = fit(boardView.w, boardView.h);
   const s3 = Math.min((W - pad * 2) / 50, (H - pad * 2) / 38);
   const cam: Cam = {

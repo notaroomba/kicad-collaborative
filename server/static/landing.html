@@ -87,6 +87,9 @@
 
   .win { margin-top: clamp(32px, 4.5vw, 56px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #001023;
          box-shadow: 0 1px 0 #ffffff14 inset, 0 30px 60px -28px #000a, 0 8px 18px -8px #0005; }
+  /* The window leans back a little until it is scrolled into full view (index.ts sets --lean). */
+  .js .win.rv, .js .win.rv.in { transition: opacity .8s cubic-bezier(.2, .7, .2, 1); transition-delay: calc(var(--i, 0) * 70ms); }
+  .js .win.rv, .js .win.rv.in { transform: perspective(1800px) rotateX(calc(var(--lean, 0) * 7deg)) scale(calc(1 - var(--lean, 0) * .03)); transform-origin: 50% 0; will-change: transform; }
   .win-bar, .win-status { display: flex; align-items: center; gap: 12px; background: var(--bench); color: var(--ink-2); font: 12px var(--mono); padding: 0 12px; }
   .win-bar { height: 38px; border-bottom: 1px solid var(--line); }
   .win-bar b { font-weight: 500; color: var(--ink); }
@@ -107,7 +110,7 @@
   .story { padding: 0; }
   .story-head { padding: clamp(40px, 6vw, 80px) 0 0; display: grid; gap: 18px; }
   .story-track { height: 560vh; position: relative; }
-  .story-pin { position: sticky; top: 0; height: 100vh; height: 100svh; display: grid; grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
+  .story-pin { position: sticky; top: 0; height: 100vh; height: 100svh; display: grid; grid-template-columns: minmax(270px, 330px) minmax(0, 1fr);
                gap: clamp(24px, 4vw, 64px); align-items: center; padding-top: 58px; }
   .steps { list-style: none; margin: 0; padding: 0; display: grid; }
   .steps li { position: relative; padding: 15px 0 15px 22px; cursor: pointer; border-left: 2px solid var(--line); }
@@ -122,7 +125,7 @@
   .steps .more > div { overflow: hidden; }
   .steps li.on .more { grid-template-rows: 1fr; opacity: 1; }
   .steps p { color: var(--ink-2); font-size: 15.5px; line-height: 1.55; padding-top: 8px; }
-  .scene { position: relative; height: min(76vh, 700px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #F5F4EF;
+  .scene { position: relative; height: min(80vh, 760px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #F5F4EF;
            box-shadow: 0 30px 60px -30px #0009, 0 8px 18px -10px #0004; }
   .scene canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .scene .chip { position: absolute; left: 12px; top: 12px; font: 500 11px var(--mono); padding: 3px 8px; border-radius: 3px; letter-spacing: .04em;
@@ -252,6 +255,7 @@
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .js .rv { opacity: 1; transform: none; transition: none; }
+    .js .win.rv, .js .win.rv.in { transform: none; }
     .live::before, .wiring .flow { animation: none; }
     .steps .more, .bom-r .d, .bom-view img, .bom-r::after { transition: none; }
   }
@@ -368,7 +372,7 @@
         <button class="bom-r" role="tab" aria-selected="false" data-shot="projects"><span class="ref">02</span><span><b>Online projects</b><span class="d"><span>Upload a project in the browser or publish it from the desktop app. Search, stars, thumbnails, and a Trash that keeps things for 30 days.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="share"><span class="ref">03</span><span><b>Sharing and roles</b><span class="d"><span>Invite by GitHub username or email, or send an editor or viewer link you can revoke. Role changes apply at once, also for people who have the project open.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="github"><span class="ref">04</span><span><b>GitHub sync</b><span class="d"><span>Link a project to a repository and pull or push from the browser. When both sides changed a file, items are merged by their UUID, and you pick which side wins where they truly conflict.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="parts"><span class="ref">05</span><span><b>Part search</b><span class="d"><span>Search LCSC with stock and prices, then place the symbol and footprint straight into the design. Save parts into libraries you share.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="parts"><span class="ref">05</span><span><b>Part search</b><span class="d"><span>Search LCSC with stock and prices, or Mouser, DigiKey and Farnell with your own API keys, then place the symbol and footprint straight into the design. Save parts into libraries you share.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="router"><span class="ref">06</span><span><b>Autorouter</b><span class="d"><span>Routes the connections that are left and shows the result as a preview. Keep it, stop part-way and keep what is done, or cancel and nothing changes.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="assistant"><span class="ref">07</span><span><b>Design assistant</b><span class="d"><span>Reads the sheet, runs the rule checks, looks up datasheets, and proposes edits on a card you preview and accept. Nothing is applied silently. It runs on the server's API key or your own.</span></span></span></button>
         <button class="bom-r" role="tab" aria-selected="false" data-shot="plugins"><span class="ref">08</span><span><b>Plugins</b><span class="d"><span>Sandboxed plugins ask for the permissions they need and add menu items, toolbar buttons and panels. BOM export, design statistics, snap to grid, field lint and placement import come with the editor.</span></span></span></button>
