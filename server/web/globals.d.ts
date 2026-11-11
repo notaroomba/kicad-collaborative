@@ -31,6 +31,8 @@ interface KDoc {
   nets: Map<number, string>;
   page: [number, number];
   bbox: [number, number, number, number];
+  /** (general (thickness …)) of a board, mm */
+  thickness?: number;
 }
 
 /** A collaboration op change (the item-level LWW protocol shared with the desktop). */
