@@ -146,7 +146,7 @@ await A.waitForFunction(() => !document.querySelector('#kp-bom .kp-spin'));
 const stmRow = await A.locator('#kp-bom tr.kp-row[data-id="C8734"]').innerText();
 check('the BOM lists the placed vendor part with its stock and price', /STM32F103C8T6/.test(stmRow) && /212,539/.test(stmRow) && /\$1\.41/.test(stmRow), stmRow.replace(/\s+/g, ' '));
 const sum1 = await A.locator('#kp-bom-sum').innerText();
-check('… and totals the sheet', /\d+ parts in \d+ lines on this sheet · 1 with a vendor part · \$1\.41 for one board/.test(sum1), sum1);
+check('… and totals the whole design, both sheets', /\d+ parts in \d+ lines on 2 sheets · 1 with a vendor part · \$1\.41 for one board/.test(sum1), sum1);
 await A.fill('#kp-boards', '100'); await A.waitForFunction(() => /100 boards/.test(document.querySelector('#kp-bom-sum').textContent));
 const stm100 = await A.locator('#kp-bom tr.kp-row[data-id="C8734"]').innerText();
 check('100 boards use the price break for 100', /\$1\.09/.test(stm100) && /\$108\.54/.test(stm100), stm100.replace(/\s+/g, ' '));

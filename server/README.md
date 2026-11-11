@@ -99,7 +99,7 @@ converted from it on each request (`src/parts/easyeda.rs`). A placed part is
 embedded in the sheet or board as KiCad does, with `LCSC` / `Mouser` /
 `DigiKey`, `MPN` and `Manufacturer` fields.
 
-The dialog's BOM tab lists the parts of the open sheet or board by the vendor
+The dialog's BOM tab lists the parts of the design (every sheet, or the board) by the vendor
 fields they carry, with stock and the price break for the number of boards,
 finds and assigns a vendor part to lines that have none, and downloads the BOM
 in JLCPCB's assembly format or in full.

@@ -6,6 +6,8 @@ export interface BomLine {
   key: string; refs: string[]; ids: string[]; value: string; footprint: string;
   vendor: string | null; vendorId: string; mpn: string; manufacturer: string;
   part: Part | null; err: string; loading: boolean;
+  /** Sheets other than the open one that hold some of this line's parts (they cannot be edited from here). */
+  elsewhere: string[];
 }
 
 /** Field names people and tools use for a vendor's part number. */
@@ -39,15 +41,15 @@ const flag = (K: KiCadCanvasApi, node: SNode, key: string, def: boolean) => { co
 const natural = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 
 /** The parts of a document that belong on a BOM, grouped into lines. */
-export function collect(K: KiCadCanvasApi, doc: KDoc, isSch: boolean): BomLine[] {
+export function collect(K: KiCadCanvasApi, doc: KDoc, isSch: boolean, others: { name: string; doc: KDoc }[] = []): BomLine[] {
   const lines = new Map<string, BomLine>(); const seen = new Set<string>();
-  for (const it of doc.items.values()) {
+  for (const src of [{ name: "", doc }, ...others]) for (const it of src.doc.items.values()) {
     if (it.kind !== (isSch ? "symbol" : "footprint")) continue;
     const f = fieldsOf(K, it.node); const ref = f.Reference || it.ref || "";
     if (!ref || ref.startsWith("#")) continue;                                   // power symbols and flags
     if (isSch) {
       if (!flag(K, it.node, "in_bom", true) || flag(K, it.node, "dnp", false)) continue;
-      if (seen.has(ref)) { const l = [...lines.values()].find((x) => x.refs.includes(ref)); if (l) l.ids.push(it.id); continue; }   // another unit of the same part
+      if (seen.has(ref)) { const l = [...lines.values()].find((x) => x.refs.includes(ref)); if (l && !src.name) l.ids.push(it.id); continue; }   // another unit of the same part
     } else {
       const attr = K.kid(it.node, "attr");
       if (attr && (attr.includes("exclude_from_bom") || attr.includes("dnp") || attr.includes("board_only"))) continue;
@@ -56,8 +58,9 @@ export function collect(K: KiCadCanvasApi, doc: KDoc, isSch: boolean): BomLine[]
     const v = vendorRef(f); const value = f.Value || it.value || ""; const footprint = isSch ? f.Footprint || "" : K.str(it.node[1]);
     const key = v.vendor ? `${v.vendor}:${v.vendorId}` : `?${value}|${footprint}|${v.mpn}`;
     let line = lines.get(key);
-    if (!line) { line = { key, refs: [], ids: [], value, footprint, ...v, part: null, err: "", loading: false }; lines.set(key, line); }
-    line.refs.push(ref); line.ids.push(it.id);
+    if (!line) { line = { key, refs: [], ids: [], value, footprint, ...v, part: null, err: "", loading: false, elsewhere: [] }; lines.set(key, line); }
+    line.refs.push(ref);
+    if (!src.name) line.ids.push(it.id); else if (!line.elsewhere.includes(src.name)) line.elsewhere.push(src.name);
   }
   const out = [...lines.values()];
   for (const l of out) l.refs.sort(natural);

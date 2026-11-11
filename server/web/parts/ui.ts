@@ -144,7 +144,7 @@ class PartsDialog {
   // libraries
   private lib: Library | null = null; private libBusy = ""; private libNote = "";
   // the bill of materials of the open document, and the line a search is looking for a part for
-  private bom: BomLine[] | null = null; private boards = 1; private assign: { ids: string[]; refs: string[] } | null = null;
+  private bom: BomLine[] | null = null; private boards = 1; private bomSheets = 1; private assign: { ids: string[]; refs: string[] } | null = null;
   private onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !ev.defaultPrevented && !document.querySelector(".kp-ask")) { ev.stopPropagation(); this.close(); } };
 
   constructor(opts: Opts) {
@@ -368,7 +368,18 @@ class PartsDialog {
   // ------------------------------------------------------------ bill of materials
   private async loadBom() {
     const ctx = this.ctx; if (!ctx || !ctx.doc) { this.bom = []; return; }
-    const lines = collect(ctx.K, ctx.doc, ctx.isSch); this.bom = lines;
+    this.bom = null; this.render();
+    // a schematic is several sheets: read the others as they are stored, so the BOM covers the design
+    const others: { name: string; doc: KDoc }[] = [];
+    if (ctx.isSch) {
+      const rest = (ctx.docs as { docId: string; docType?: string; path?: string }[] || []).filter((d) => d.docId !== ctx.docId && (d.docType === "sch" || /\.kicad_sch$/.test(d.path || "")));
+      await Promise.all(rest.map(async (d) => {
+        try { const r = await fetch(`/api/docs/${d.docId}/content`, { credentials: "same-origin" }); if (r.ok) others.push({ name: (d.path || "").split("/").pop()!.replace(/\.kicad_sch$/, ""), doc: ctx.K.parseDoc(await r.text(), "kicad_sch") }); } catch { /* that sheet is left out */ }
+      }));
+      if (this.tab !== "bom" || this.ctx !== ctx) return;
+    }
+    this.bomSheets = others.length + 1;
+    const lines = collect(ctx.K, ctx.doc, ctx.isSch, others); this.bom = lines;
     const todo = lines.filter((l) => l.vendor); for (const l of todo) l.loading = true;
     this.render();
     let next = 0;
@@ -405,7 +416,7 @@ class PartsDialog {
 
   private renderBom(): HTMLElement {
     const ctx = this.ctx; const lines = this.bom || []; const t = totals(lines, this.boards);
-    const what = ctx && ctx.isSch ? "this sheet" : "this board";
+    const what = ctx && ctx.isSch ? (this.bomSheets > 1 ? `${this.bomSheets} sheets` : "this sheet") : "this board";
     const stem = ((ctx && (ctx.project as { name?: string } | null)?.name) || "bom").replace(/[^\w.-]+/g, "_");
     const bar = h("div", { class: "kp-bar" },
       h("label", { style: "display:flex;align-items:center;gap:6px" }, "Boards", h("input", { type: "number", id: "kp-boards", min: "1", max: "100000", value: String(this.boards), style: "width:76px",
@@ -421,7 +432,7 @@ class PartsDialog {
       const on = !!(this.sel && l.vendor === this.sel.vendor && l.vendorId === this.sel.id);
       const part: Child[] = l.vendor
         ? [h("div", null, (p && p.mpn) || l.mpn || l.vendorId), h("div", { class: "kp-dim" }, this.vendorBadge(l.vendor, p ? p.vendor_name : l.vendor.toUpperCase()), " ", h("span", { class: "kp-mono" }, l.vendorId), l.loading ? h("span", { class: "kp-spin", style: "margin-left:6px" }) : null, l.err ? h("span", { style: "color:var(--err,#E6090D);margin-left:6px", title: l.err }, "not found") : null)]
-        : [h("button", { class: "kp-btn sm kp-find", type: "button", title: "Search the vendors for this part and write the choice onto " + l.refs.join(", "), onclick: (ev: Event) => { ev.stopPropagation(); this.findFor(l); } }, "Find a part…"), l.mpn ? h("span", { class: "kp-dim", style: "margin-left:6px" }, l.mpn) : null];
+        : !l.ids.length ? [h("span", { class: "kp-dim", title: "Open that sheet to give these parts a vendor part" }, "on " + l.elsewhere.join(", "))] : [h("button", { class: "kp-btn sm kp-find", type: "button", title: "Search the vendors for this part and write the choice onto " + l.refs.join(", "), onclick: (ev: Event) => { ev.stopPropagation(); this.findFor(l); } }, "Find a part…"), l.mpn ? h("span", { class: "kp-dim", style: "margin-left:6px" }, l.mpn) : null];
       body.append(h("tr", { class: "kp-row" + (on ? " on" : "") + (l.vendor ? "" : " kp-nopart"), "data-key": l.key, "data-vendor": l.vendor || "", "data-id": l.vendorId, onclick: () => { if (l.vendor) void this.select(l.vendor, l.vendorId); } },
         h("td", { title: l.refs.join(", ") }, refList(l.refs)), h("td", { class: "kp-num" }, String(need)),
         h("td", null, h("div", null, l.value), h("div", { class: "kp-dim", title: l.footprint }, l.footprint.includes(":") ? l.footprint.slice(l.footprint.indexOf(":") + 1) : l.footprint)),
@@ -430,8 +441,8 @@ class PartsDialog {
         h("td", { class: "kp-num" }, pr ? money(pr.price, pr.currency) : ""), h("td", { class: "kp-num" }, pr ? money(pr.price * need, pr.currency) : "")));
     }
     const empty = !lines.length ? h("div", { class: "kp-empty" }, h("b", null, `No parts on ${what}.`), h("p", null, "Symbols marked “exclude from BOM” or “do not populate”, and power symbols, are left out.")) : null;
-    return h("div", { class: "kp-main" }, bar, ctx && ctx.isSch && (ctx.docs || []).filter((d) => (d as { docType?: string }).docType === "sch").length > 1 ? h("div", { class: "kp-note" }, "This lists the open sheet. Open the board for the whole design.") : null,
-      h("div", { class: "kp-list" }, empty || table));
+    return h("div", { class: "kp-main" }, bar, this.bom === null ? h("div", { class: "kp-empty" }, h("span", { class: "kp-spin" }), "Reading the design…") : null,
+      this.bom === null ? null : h("div", { class: "kp-list" }, empty || table));
   }
 
   // ------------------------------------------------------------ libraries
