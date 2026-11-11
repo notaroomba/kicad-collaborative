@@ -15,6 +15,7 @@ const VENDOR_FIELDS: [string, RegExp][] = [
   ["lcsc", /^(lcsc|jlc|jlcpcb)(\s*(part|pn|p\/n))?\s*(#|no\.?|number)?$/i],
   ["mouser", /^mouser(\s*(part|pn|p\/n))?\s*(#|no\.?|number)?$/i],
   ["digikey", /^digi-?key(\s*(part|pn|p\/n))?\s*(#|no\.?|number)?$/i],
+  ["farnell", /^(farnell|newark|element14)(\s*(part|pn|p\/n|order\s*code))?\s*(#|no\.?|number)?$/i],
 ];
 const MPN_FIELD = /^(mpn|mfr\.?\s*(part|pn|p\/n)(\s*(#|no\.?|number))?|manufacturer\s*part(\s*(#|no\.?|number))?|part\s*number)$/i;
 const MAKER_FIELD = /^(manufacturer|mfr\.?|mfg\.?)$/i;

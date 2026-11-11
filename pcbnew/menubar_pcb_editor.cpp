@@ -204,6 +204,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( PCB_ACTIONS::collabFollow );
     fileMenu->Add( PCB_ACTIONS::collabHistory );
     fileMenu->Add( PCB_ACTIONS::collabGithub );
+    fileMenu->Add( PCB_ACTIONS::collabVendorParts );
     fileMenu->Add( PCB_ACTIONS::collabLeaveSession );
 
     fileMenu->AppendSeparator();

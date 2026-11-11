@@ -60,7 +60,7 @@ const CSS = `
 .kp-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .kp-desc{color:var(--ink-2,#5B5A55);max-width:340px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .kp-badge{display:inline-block;border-radius:3px;padding:0 5px;font-size:11px;line-height:17px;border:1px solid var(--line,#CFCDC5);color:var(--ink-2,#5B5A55);white-space:nowrap}
-.kp-badge.lcsc,.kp-badge.mouser{border-color:var(--blue,#1E63B8);color:var(--blue,#1E63B8)}.kp-badge.digikey{border-color:var(--err,#C00);color:var(--err,#C00)}
+.kp-badge.lcsc,.kp-badge.mouser,.kp-badge.farnell{border-color:var(--blue,#1E63B8);color:var(--blue,#1E63B8)}.kp-badge.digikey{border-color:var(--err,#C00);color:var(--err,#C00)}
 .kp-badge.basic{border-color:var(--wire,#009600);color:var(--wire,#009600)}.kp-badge.preferred{border-color:var(--teal,#006464);color:var(--teal,#006464)}
 .kp-badge.warn{border-color:var(--warn,#D19200);color:var(--warn,#D19200)}
 .kp-empty{padding:28px 20px;color:var(--ink-2,#5B5A55);text-align:center}

@@ -86,7 +86,8 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 
 ## Vendor parts and part libraries
 
-Parts can be found at LCSC / JLCPCB, Mouser and DigiKey and placed straight
+Parts can be found at LCSC / JLCPCB, Mouser, DigiKey and Farnell / Newark /
+element14 and placed straight
 into a schematic or a board (`src/parts/`, dialog in `web/parts/`, in the
 editor under Tools → Add Part from Vendor… and Part Libraries…).
 
@@ -104,11 +105,17 @@ fields they carry, with stock and the price break for the number of boards,
 finds and assigns a vendor part to lines that have none, and downloads the BOM
 in JLCPCB's assembly format or in full.
 
-LCSC needs no key. Mouser and DigiKey need API keys, either for the whole
-deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`) or
+LCSC needs no key. Mouser, DigiKey and Farnell need API keys, either for the
+whole deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`,
+`FARNELL_API_KEY` with `FARNELL_STORE`, default `uk.farnell.com`) or
 per person in the dialog's API Keys tab (stored encrypted in `vendor_keys`).
-Neither publishes drawings, so their parts use the LCSC drawing for the same
+None of them publishes drawings, so their parts use the LCSC drawing for the same
 manufacturer part number when there is one.
+
+`/p/{id}/edit?parts=search|libraries|bom` and `/?parts=libraries` open the
+dialog from a link. The desktop editors' File → Vendor Parts… opens that link:
+in a session a part placed in the browser arrives in the desktop app like any
+collaborator's edit; without one it opens the library manager.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -250,8 +257,16 @@ stale, a second client seeing an accepted edit, undo, errors, own keys, access.
 `server/scripts/parts-e2e.mjs` (API) and `parts-ui.mjs` (two people in
 Chromium) test vendor parts against `fake-vendors.mjs`, which replays answers
 recorded from LCSC, JLCPCB and EasyEDA (`tests/fixtures/vendor/`, refreshed
-with `capture-vendor-fixtures.sh`) and stands in for Mouser and DigiKey from
+with `capture-vendor-fixtures.sh`) and stands in for Mouser, DigiKey and Farnell from
 their API documentation.
+
+Against the real vendors (network, and keys for all but LCSC; a vendor without
+a key is reported as skipped):
+
+```bash
+MOUSER_API_KEY=… DIGIKEY_CLIENT_ID=… DIGIKEY_CLIENT_SECRET=… FARNELL_API_KEY=… \
+  cargo test -- --ignored --nocapture live_
+```
 
 `server/scripts/e2e.mjs` goes further: it drives two WebSocket clients through
 the real join → op → ack → broadcast flow and checks sharing, role enforcement,

@@ -24,6 +24,11 @@ import { fileURLToPath } from 'node:url';
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tests', 'fixtures', 'vendor');
 const PORT = +(process.env.FAKE_VENDORS_PORT || 8097);
 export const MOUSER_KEY = 'test-mouser-key';
+export const FARNELL_KEY = 'test-farnell-key';
+const farnellParts = [
+  { sku: '1447637', mpn: 'STM32F103C8T6', mfr: 'STMicroelectronics', desc: 'ARM MCU, STM32 Family STM32F1 Series Microcontrollers, ARM Cortex-M3, 32 bit, 72 MHz, 64 KB', stock: 4521, ds: 'https://www.farnell.com/datasheets/1681173.pdf', prices: [[1, 4.12], [10, 3.21], [100, 2.87]], attrs: { 'IC Case / Package': 'LQFP', 'No. of Pins': '48Pins', 'CPU Speed': '72MHz' } },
+  { sku: '2447227', mpn: 'RC0603FR-0710KL', mfr: 'Yageo', desc: 'SMD Chip Resistor, 10 kohm, ± 1%, 100 mW, 0603 [1608 Metric]', stock: 1250000, ds: 'https://www.farnell.com/datasheets/2860630.pdf', prices: [[10, 0.0114], [100, 0.0064], [1000, 0.0031]], attrs: { 'Resistor Case / Package': '0603 [1608 Metric]', Resistance: '10kohm' } },
+];
 export const DIGIKEY_ID = 'test-digikey-id', DIGIKEY_SECRET = 'test-digikey-secret';
 
 const read = (f) => fs.readFileSync(path.join(DIR, f));
@@ -129,6 +134,25 @@ const server = http.createServer(async (req, res) => {
     if (m[1] === 'keyword') { const kw = String(j.SearchByKeywordRequest?.keyword || '').toLowerCase(); parts = mouserParts.filter((x) => `${x.mpn} ${x.mfr} ${x.desc} ${x.no}`.toLowerCase().includes(kw)); }
     else { const no = String(j.SearchByPartRequest?.mouserPartNumber || ''); parts = mouserParts.filter((x) => x.no === no); }
     return send(res, 200, { Errors: [], SearchResults: { NumberOfResult: parts.length, Parts: parts.map(mouserJson) } });
+  }
+  // ---- Farnell / Newark / element14 (shapes from the Product Search API documentation)
+  if (p === '/catalog/products') {
+    hit('farnell');
+    if (down.farnell) return send(res, 503, 'upstream down', 'text/plain');
+    const q = url.searchParams;
+    if (q.get('callInfo.apiKey') !== FARNELL_KEY) return send(res, 403, '<h1>Developer Inactive</h1>', 'text/html');
+    const store = q.get('storeInfo.id') || '';
+    if (!/^[a-z0-9.-]+\.(farnell|newark|element14)\.com$/.test(store)) return send(res, 400, { Fault: { Code: 'Client', Reason: 'Bad request', Detail: { searchException: { exceptionCode: '200003', exceptionString: 'Store not found' } } } });
+    const term = q.get('term') || ''; const [kind, ...rest] = term.split(':'); const value = rest.join(':').toLowerCase();
+    const usd = store.includes('newark');
+    const json = (x) => ({ sku: x.sku, displayName: `${x.mfr.toUpperCase()} - ${x.mpn} - ${x.desc}`, productStatus: 'STOCKED', rohsStatusCode: 'YES', packSize: 1, unitOfMeasure: 'EACH', id: 'pf_UK1_' + x.sku + '_0',
+      image: { baseName: `/${x.sku}-40.jpg`, vrntPath: 'farnell/' }, datasheets: [{ type: 'T', description: 'Technical Data Sheet EN', url: x.ds }],
+      prices: x.prices.map(([from, cost], i) => ({ from, to: x.prices[i + 1] ? x.prices[i + 1][0] - 1 : 1000000000, cost: usd ? +(cost * 1.3).toFixed(4) : cost })),
+      vendorName: x.mfr.toUpperCase(), brandName: x.mfr.toUpperCase(), translatedManufacturerPartNumber: x.mpn, translatedMinimumOrderQuality: 1,
+      stock: { level: x.stock, leastLeadTime: 0, status: 1, shipsFromMrktCountry: true }, attributes: Object.entries(x.attrs).map(([attributeLabel, attributeValue]) => ({ attributeLabel, attributeValue })) });
+    const found = kind === 'id' ? farnellParts.filter((x) => x.sku === value) : kind === 'manuPartNum' ? farnellParts.filter((x) => x.mpn.toLowerCase() === value) : farnellParts.filter((x) => `${x.mpn} ${x.mfr} ${x.desc} ${x.sku}`.toLowerCase().includes(value));
+    const wrap = kind === 'id' ? 'premierFarnellPartNumberReturn' : kind === 'manuPartNum' ? 'manufacturerPartNumberSearchReturn' : 'keywordSearchReturn';
+    return send(res, 200, { [wrap]: { numberOfResults: found.length, products: found.slice(0, +(q.get('resultsSettings.numberOfResults') || 10)).map(json) } });
   }
   // ---- DigiKey
   if (p === '/v1/oauth2/token') {

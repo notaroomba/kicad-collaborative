@@ -601,6 +601,39 @@ COLLAB_HISTORY_PANEL* PCB_COLLAB_TOOL::historyPanel()
 }
 
 
+int PCB_COLLAB_TOOL::OpenVendorParts( const TOOL_EVENT& aEvent )
+{
+    // Vendor search, saved part libraries and the vendor BOM live on the server's pages.
+    // In a session the page is this project's web editor with the parts dialog open: a part
+    // placed there arrives here through the session, like any collaborator's edit.  Without
+    // one it is the library manager, where a library downloads as a KiCad library.
+    wxString url = COLLAB_SESSION::ServerUrl();
+
+    while( url.EndsWith( wxS( "/" ) ) )
+        url.RemoveLast();
+
+    if( m_projectId.IsEmpty() )
+    {
+        url << wxS( "/?parts=libraries" );
+    }
+    else
+    {
+        url << wxS( "/p/" ) << m_projectId << wxS( "/edit?parts=search" );
+
+        if( !m_docId.IsEmpty() )
+            url << wxS( "&doc=" ) << m_docId;
+    }
+
+    if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                wxString::Format( _( "Could not open the browser; the page is %s" ), url ) );
+    }
+
+    return 0;
+}
+
+
 int PCB_COLLAB_TOOL::OpenGithubSync( const TOOL_EVENT& aEvent )
 {
     if( m_projectId.IsEmpty() )
@@ -1853,6 +1886,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::CopyShareLink,     PCB_ACTIONS::collabCopyLink.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::OpenGithubSync,    PCB_ACTIONS::collabGithub.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::OpenVendorParts,   PCB_ACTIONS::collabVendorParts.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::FollowNextPeer,    PCB_ACTIONS::collabFollow.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );

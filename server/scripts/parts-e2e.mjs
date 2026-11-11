@@ -72,7 +72,7 @@ const aliceId = await mkUser(`parts-alice-${tag}`), bobId = await mkUser(`parts-
 const alice = mintJwt(aliceId, `parts-alice-${tag}`), bob = mintJwt(bobId, `parts-bob-${tag}`), carol = mintJwt(carolId, `parts-carol-${tag}`);
 const projectId = (await db.query(`INSERT INTO projects (owner_id, name) VALUES ($1, $2) RETURNING id`, [aliceId, `parts project ${tag}`])).rows[0].id;
 await db.query(`INSERT INTO permissions (project_id, user_id, role) VALUES ($1, $2, 'viewer')`, [projectId, bobId]);
-await db.query(`DELETE FROM parts WHERE vendor IN ('lcsc','mouser','digikey')`);
+await db.query(`DELETE FROM parts WHERE vendor IN ('lcsc','mouser','digikey','farnell')`);
 await db.query(`DELETE FROM part_models`);
 await ctl('reset', {});
 
@@ -81,8 +81,8 @@ await ctl('reset', {});
   const anon = await fetch(`${BASE}/api/parts/search?q=STM32F103C8T6`);
   eq('search needs a signed-in user', anon.status, 401);
   const v = (await call(alice, 'GET', '/api/parts/vendors')).j.vendors;
-  eq('three vendors are offered', v.map((x) => x.id), ['lcsc', 'mouser', 'digikey']);
-  eq('LCSC works without a key; Mouser and DigiKey wait for one', v.map((x) => x.configured), [true, false, false]);
+  eq('four vendors are offered', v.map((x) => x.id), ['lcsc', 'mouser', 'digikey', 'farnell']);
+  eq('LCSC works without a key; Mouser and DigiKey wait for one', v.map((x) => x.configured), [true, false, false, false]);
 }
 
 // ---------------------------------------------------------------- LCSC search
@@ -141,7 +141,7 @@ let stm;
 
   eq('an unknown LCSC number is a 404', [(await part(alice, 'lcsc', 'C999999999')).status, (await part(alice, 'lcsc', 'C999999999')).j.error], [404, 'part_not_found']);
   eq('a malformed number is refused', (await part(alice, 'lcsc', 'STM32')).status, 400);
-  eq('an unknown vendor is refused', (await part(alice, 'farnell', '123')).status, 400);
+  eq('an unknown vendor is refused', (await part(alice, 'arrow', '123')).status, 400);
 
   const direct = await call(alice, 'GET', '/api/parts/search?q=C25804');
   eq('searching an LCSC number returns exactly that part', [direct.j.results.length, direct.j.results[0]?.vendor_id, direct.j.results[0]?.mpn], [1, 'C25804', '0603WAF1002T5E']);
@@ -188,8 +188,24 @@ let stm;
   eq('a wrong DigiKey secret is refused', (await call(alice, 'PUT', '/api/parts/keys/digikey', { client_id: 'test-digikey-id', client_secret: 'bad' })).j.error, 'vendor_rejected_key');
   eq('the right DigiKey credentials are stored', (await call(alice, 'PUT', '/api/parts/keys/digikey', { client_id: 'test-digikey-id', client_secret: 'test-digikey-secret' })).j, { ok: true, verified: true });
   const v = (await call(alice, 'GET', '/api/parts/vendors')).j.vendors;
-  eq('both now show as configured with the user\'s own keys', v.map((x) => [x.configured, x.key_source]), [[true, null], [true, 'yours'], [true, 'yours']]);
-  eq('another user still has no keys', (await call(bob, 'GET', '/api/parts/vendors')).j.vendors.map((x) => x.configured), [true, false, false]);
+  eq('both now show as configured with the user\'s own keys', v.map((x) => [x.configured, x.key_source]), [[true, null], [true, 'yours'], [true, 'yours'], [false, null]]);
+  eq('another user still has no keys', (await call(bob, 'GET', '/api/parts/vendors')).j.vendors.map((x) => x.configured), [true, false, false, false]);
+}
+
+// ---------------------------------------------------------------- Farnell / Newark / element14
+{
+  eq('Farnell without a key says so', (await call(alice, 'GET', '/api/parts/search?q=STM32F103C8T6&vendor=farnell')).j.errors[0]?.code, 'vendor_not_configured');
+  eq('a wrong Farnell key is refused', (await call(alice, 'PUT', '/api/parts/keys/farnell', { api_key: 'nope' })).status >= 400, true);
+  eq('a store that is not a host name is refused', (await call(alice, 'PUT', '/api/parts/keys/farnell', { api_key: 'test-farnell-key', store: 'not a host/../x' })).status, 400);
+  eq('the right key is stored; the store defaults to uk.farnell.com', (await call(alice, 'PUT', '/api/parts/keys/farnell', { api_key: 'test-farnell-key' })).j, { ok: true, verified: true });
+  const f = await call(alice, 'GET', '/api/parts/search?q=STM32F103C8T6&vendor=farnell'); const hit = f.j.results[0];
+  eq('Farnell search', [f.status, hit.vendor, hit.vendor_name, hit.vendor_id, hit.mpn, hit.manufacturer, hit.stock, hit.package, hit.prices[1]], [200, 'farnell', 'Farnell', '1447637', 'STM32F103C8T6', 'STMICROELECTRONICS', 4521, 'LQFP', { qty: 10, price: 3.21, currency: 'GBP' }]);
+  const p = await part(alice, 'farnell', '1447637');
+  eq('a Farnell part borrows the LCSC drawings with the same MPN', [p.status, p.j.cad?.source, p.j.cad?.symbol?.pins], [200, { vendor: 'lcsc', vendor_id: 'C8734' }, 48]);
+  eq('its fields name Farnell', [p.j.fields.Farnell, p.j.fields.MPN], ['1447637', 'STM32F103C8T6']);
+  eq('an order code Farnell does not have is a 404', (await part(alice, 'farnell', '9999999')).status, 404);
+  eq('another store answers in its own currency', [(await call(alice, 'PUT', '/api/parts/keys/farnell', { api_key: 'test-farnell-key', store: 'https://www.Newark.com/' })).j.ok, (await call(alice, 'GET', '/api/parts/search?q=STM32F103C8T6&vendor=farnell')).j.results[0].prices[0].currency], [true, 'USD']);
+  eq('the key can be removed again', (await call(alice, 'DELETE', '/api/parts/keys/farnell')).j.ok, true);
 }
 
 // ---------------------------------------------------------------- Mouser and DigiKey: parts, with LCSC drawings by MPN

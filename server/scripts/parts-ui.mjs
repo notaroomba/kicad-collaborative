@@ -215,15 +215,26 @@ await A.waitForFunction(() => /Your key/.test(document.querySelector('.kp-card[d
 await A.fill('.kp-card[data-vendor="digikey"] input[data-field="client_id"]', 'test-digikey-id'); await A.fill('.kp-card[data-vendor="digikey"] input[data-field="client_secret"]', 'test-digikey-secret');
 await A.click('.kp-card[data-vendor="digikey"] .kp-btn.primary');
 await A.waitForFunction(() => /Your key/.test(document.querySelector('.kp-card[data-vendor="digikey"]').innerText));
+await A.fill('.kp-card[data-vendor="farnell"] input[data-field="api_key"]', 'test-farnell-key'); await A.click('.kp-card[data-vendor="farnell"] .kp-btn.primary');
+await A.waitForFunction(() => /Your key/.test(document.querySelector('.kp-card[data-vendor="farnell"]').innerText));
 check('the right keys are saved', true);
 await shot(A, '13-api-keys');
 await A.click('.kp-tab[data-tab="search"]'); await search(A, 'STM32F103C8T6');
 const vendorsSeen = await A.evaluate(() => [...new Set([...document.querySelectorAll('#kp-results tr.kp-row')].map((r) => r.dataset.vendor))].sort().join());
-check('a search now covers all three vendors', vendorsSeen === 'digikey,lcsc,mouser', vendorsSeen);
+check('a search now covers all four vendors', vendorsSeen === 'digikey,farnell,lcsc,mouser', vendorsSeen);
 await pick(A, '511-STM32F103C8T6');
 check('a Mouser part shows LCSC\'s drawings for the same manufacturer part number', await drawn(A, '#kp-sym') && /from LCSC\s*C8734/.test(await A.locator('#kp-side').innerText()));
 await shot(A, '14-mouser-part');
 await A.keyboard.press('Escape');
+
+// ---------------------------------------------------------------- links that open the dialog (what the desktop app's menu entry opens)
+await A.goto(`${BASE}/p/${proj.projectId}/edit?parts=bom&doc=${SCH}`); await A.waitForSelector('#kp-bom tr.kp-row', { timeout: 20000 });
+check('a link opens the editor with the BOM showing', await A.locator('.kp-tab.on').innerText() === 'BOM');
+await A.goto(`${BASE}/p/${proj.projectId}/edit?parts=search&doc=${PCB}`); await A.waitForSelector('#kp-q', { timeout: 20000 });
+await search(A, 'C25804'); await A.waitForFunction(() => document.querySelector('#kp-place') && !document.querySelector('#kp-side .kp-spin'));
+check('… and on the board with the search ready to place a footprint', (await A.locator('#kp-place').innerText()) === 'Place Footprint' && await A.locator('#kp-place').isEnabled());
+await A.goto(`${BASE}/?parts=libraries`); await A.waitForSelector('#kp-items tr.kp-row', { timeout: 20000 });
+check('… and the project manager with the libraries', /Motor Board/.test(await A.locator('#kp-libname').innerText()));
 
 // ---------------------------------------------------------------- the project manager page
 await A.goto(BASE + '/'); await A.waitForSelector('#homeParts'); await A.click('#homeParts'); await A.waitForSelector('#kp-items tr.kp-row'); await pick(A, 'C8734');
