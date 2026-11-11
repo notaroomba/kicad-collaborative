@@ -391,7 +391,8 @@ function terminalsOf(doc, it) {
   if (k === "hierarchical_label") return [{ p: at(), net: "any", key: "hier:" + str(n[1]) }];
   if (k === "symbol") {
     const libId = str((kid(n, "lib_id") || [])[1]), value = kids(n, "property").find((p) => str(p[1]) === "Value");
-    const key = isPowerSymbol(doc, libId) && value ? "global:" + str(value[2]) : undefined;
+    // a power symbol names its net through its power input pin; PWR_FLAG (a power output) names none
+    const key = isPowerSymbol(doc, libId) && value && symbolPins(doc, it).some((q) => q.type === "power_in") ? "global:" + str(value[2]) : undefined;
     return K.pinPoints(doc, it).map((q) => ({ p: [r4(q.x), r4(q.y)], net: "wire", key }));
   }
   if (k === "sheet") return kids(n, "pin").map((pin) => ({ p: atOf(pin).slice(0, 2).map(r4), net: "any" }));
@@ -2185,7 +2186,7 @@ function ercNets(doc) {
     if (it.kind === "symbol") {
       const power = symbolIsPower(doc, it), value = kids(it.node, "property").find((p) => str(p[1]) === "Value");
       for (const pin of symbolPins(doc, it)) {
-        let key; if (power && value) key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
+        let key; if (power && value && pin.type === "power_in") key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
         terms.push({ item: it, p: [pin.x, pin.y], net: "wire", key, pin, power });
       }
     } else if (it.kind === "sheet") { for (const pin of kids(it.node, "pin")) terms.push({ item: it, p: atOf(pin).slice(0, 2).map(r4), net: "any", sheetPin: str(pin[1]) }); }

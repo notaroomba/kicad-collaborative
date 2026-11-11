@@ -29,6 +29,8 @@ export interface Proposal {
   connectivity?: string[];
   /** extra facts for the model about what an edit did (the autorouter's summary) */
   details?: unknown[];
+  /** board rules to write into the project file when accepted (set_rules) */
+  rules?: Record<string, number | string>;
 }
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -136,7 +138,26 @@ function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: s
     if (p) p[2] = String(value);
     else { const [x, y] = k.atOf(node); const np = ["property", name, String(value), ["at", r4(x), r4(y), 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]]; const at = node.findIndex((c: any) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, np); else node.push(np); }
   }
-  return { change: added(doc, node), ref };
+  // a turned symbol keeps its library's field positions turned with it, which lays text over its
+  // own wires; KiCad's field autoplace puts them beside the body instead
+  let out = node;
+  if (((rot % 360) + 360) % 360 !== 0 && s._.autoplaceNode) { try { const placed = s._.autoplaceNode(doc, { node, id: "__new", kind: "symbol" }, { manual: false }); if (placed) out = placed; } catch { /* keep the library's positions */ } }
+  // a power symbol turned on its side reads best with its name on its own row, beyond its tip,
+  // where it cannot land on the label of the pin above or below
+  const turn = ((rot % 360) + 360) % 360;
+  if ((turn === 90 || turn === 270) && s._.isPowerSymbol(doc, libId) && s._.bodyBox && k.symbolTransform) {
+    try {
+      const box = s._.bodyBox(doc, { node: out, id: "__new", kind: "symbol" }); const [x, y] = k.atOf(out); const T = k.symbolTransform(turn, e.mirror || "");
+      const left = (box[0] + box[2]) / 2 < x, v = k.kids(out, "property").find((q: any) => k.str(q[1]) === "Value");
+      if (v) {
+        const at = k.kid(v, "at"); if (at) { at[1] = r4(left ? box[0] - 0.635 : box[2] + 0.635); at[2] = r4(y); }
+        const flip = (T[1] !== 0 ? T[1] : T[0]) < 0, hj = left ? "right" : "left", stored = flip ? (hj === "left" ? "right" : "left") : hj;
+        let ef = k.kid(v, "effects"); if (!ef) { ef = ["effects", ["font", ["size", 1.27, 1.27]]]; v.push(ef); }
+        const j = ef.findIndex((c: any) => Array.isArray(c) && c[0] === "justify"); if (j >= 0) ef.splice(j, 1); ef.push(["justify", stored]);
+      }
+    } catch { /* keep the autoplaced position */ }
+  }
+  return { change: added(doc, out), ref };
 }
 
 function points(e: Edit): number[][] {
@@ -264,7 +285,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
   const edits = input.edits; if (!Array.isArray(edits) || !edits.length) throw new ToolError("edits must be a non-empty list.");
   if (edits.length > 400) throw new ToolError("That is too many edits for one proposal; split it into steps a person can review.");
   const isSch = doc.type === "sch"; const k = K();
-  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = []; const details: unknown[] = [];
+  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = []; const details: unknown[] = []; let rules: Record<string, number | string> | undefined;
   const touched = new Map<string, string>(); const taken = new Set<string>();
   const touch = (it: any, op: string) => { const prev = touched.get(it.id); if (prev) throw new ToolError(`${nameOf(it)} is already changed by an earlier edit (${prev}); combine them or split the proposal`); touched.set(it.id, op); basis[it.id] = k.serialize(it.node); };
   const schOnly = (op: string) => { if (!isSch) throw new ToolError(`${op} is a schematic edit and the board is open`); };
@@ -393,7 +414,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           }
           const order = Array.isArray(e.order) ? e.order.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined;
           const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q: any) => q && Array.isArray(q.box) && q.box.length === 4).map((q: any) => ({ layers: Array.isArray(q.layers) ? q.layers : undefined, box: q.box })) : undefined;
-          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: 15000, order, netOpts, keepouts });
+          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: Math.round(1000 * Math.min(120, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts });
           const failed = (res.failed || []).map((f: any) => ({ net: f.net, from: f.a.map(r4), to: f.b.map(r4) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
@@ -405,6 +426,15 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             longest_detours: conns.filter((c) => c.routed && c.detourRatio > 1.6).sort((a, b) => b.detourRatio - a.detourRatio).slice(0, 12).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, length_mm: r4(c.length), detour_ratio: r4(c.detourRatio), vias: c.vias, layers: c.layers })),
             note: "Judge this before the person does: a net left unrouted, a power net with a long detour or many vias, or a sensitive net crossing the board is a reason to change the placement or the net order and options and propose again instead." } });
           lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
+          break;
+        }
+        case "set_rules": {
+          const out: Record<string, number | string> = {}; const said: string[] = [];
+          for (const [key, label] of RULE_KEYS) { const v = (e as any)[key]; if (v === undefined) continue; const n = num(v, key); if (n < 0 || n > 10) throw new ToolError(`${key} is in millimetres, between 0 and 10`); out[key] = n; said.push(`${label} ${fmt(n)} mm`); }
+          if (!said.length) throw new ToolError("set_rules needs at least one of: " + RULE_KEYS.map((r) => r[0]).join(", "));
+          const cls = typeof e.net_class === "string" && e.net_class ? e.net_class : "Default"; out.net_class = cls;
+          rules = Object.assign(rules || {}, out);
+          lines.push({ kind: "modify", text: `Board rules (net class ${cls}): ${said.join(", ")}`, ids: [] });
           break;
         }
         case "add_item": {
@@ -429,7 +459,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
   });
   if (problems.length) throw new ToolError(`No proposal was shown, because ${problems.length === 1 ? "an edit is" : "some edits are"} invalid:\n- ${problems.join("\n- ")}`);
   return { id: "p" + Math.random().toString(36).slice(2, 9), title: String(input.title || "Proposed change").slice(0, 120), rationale: String(input.rationale || "").slice(0, 600),
-    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", details: details.length ? details : undefined, connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
+    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", rules, details: details.length ? details : undefined, connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
 }
 
 /**
@@ -473,12 +503,29 @@ export function staleReason(p: Proposal): string | null {
   return null;
 }
 
+const RULE_KEYS: [string, string][] = [["clearance", "clearance"], ["track_width", "track width"], ["via_diameter", "via diameter"], ["via_drill", "via drill"],
+  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"]];
+/** The rules of a set_rules edit written into a .kicad_pro: the net class's own values, and the board-wide minimums. */
+function writeRules(pro: any, r: Record<string, number | string>): void {
+  const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } }; if (!Array.isArray(ns.classes)) ns.classes = [];
+  const name = String(r.net_class || "Default"); let c = ns.classes.find((x: any) => x && x.name === name);
+  if (!c) { c = { bus_width: 12, clearance: 0.2, diff_pair_gap: 0.25, diff_pair_via_gap: 0.25, diff_pair_width: 0.2, line_style: 0, microvia_diameter: 0.3, microvia_drill: 0.1, name,
+    pcb_color: "rgba(0, 0, 0, 0.000)", schematic_color: "rgba(0, 0, 0, 0.000)", track_width: 0.2, via_diameter: 0.6, via_drill: 0.3, wire_width: 6 }; ns.classes.push(c); }
+  for (const key of ["clearance", "track_width", "via_diameter", "via_drill"]) if (typeof r[key] === "number") c[key] = r[key];
+  const board = pro.board = pro.board || {}; const ds = board.design_settings = board.design_settings || {}; const rules = ds.rules = ds.rules || {};
+  if (typeof r.min_track_width === "number") rules.min_track_width = r.min_track_width;
+  if (typeof r.min_clearance === "number") rules.min_clearance = r.min_clearance;
+  if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
+}
+
 /** Apply an accepted proposal through the editor's own commit path: local apply, op to the server, one undo step. */
 export function applyProposal(p: Proposal): { ok: boolean; reason?: string } {
   const ed = ED();
   if (ed.viewOnly) return { ok: false, reason: "You have view-only access to this project." };
   const stale = staleReason(p); if (stale) return { ok: false, reason: stale };
-  ed.api.commitChanges(p.changes, "AI: " + p.title);
+  if (p.rules) { const r = p.rules; const save = ed.dialogs && ed.dialogs.saveProject; if (!save) return { ok: false, reason: "This editor cannot change the project's board rules." };
+    save((pro: any) => writeRules(pro, r), "board rules").catch((err: unknown) => console.warn("board rules were not saved:", err)); }
+  if (p.changes.length) ed.api.commitChanges(p.changes, "AI: " + p.title);
   clearPreview();
   return { ok: true };
 }

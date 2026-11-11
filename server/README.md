@@ -199,11 +199,28 @@ with Claude that can read the open design and propose edits to it.
   net, and the card says so. On a board, an `autoroute` edit runs the board
   autorouter and proposes its tracks and vias like any other change.
 
+- **A board from a description.** The assistant can take a design from a prompt
+  to a routed board, each stage a proposal: it finds parts in KiCad's symbol and
+  footprint libraries (`find_parts`, `get_library_part`, served and cached by
+  this server from the KiCad library repositories) and at the parts vendors,
+  draws the schematic one functional block at a time (`add_symbol`, `add_wire`,
+  `add_label`, power symbols, no-connects), runs ERC, brings the parts to the
+  board (`update_from_schematic`), places them (`auto_place`, or explicit
+  positions), and routes in stages it orders itself (`autoroute` with a net
+  order, per-net widths and layers), judging each stage from the engine's
+  report of what was left unrouted and why.
+  `scripts/ai-rp2040.mjs` runs that whole flow for an RP2040 dev board through
+  the same tool calls, with the plan written out by hand so it needs no key.
+
 | Endpoint | |
 |---|---|
 | `GET /api/ai` | whether the assistant is available to the caller, the model, today's usage |
 | `PUT/DELETE /api/ai/key` | store / remove the caller's own API key (AES-GCM encrypted at rest) |
 | `POST /api/projects/{id}/ai/chat` | `{messages}` in, the Messages API event stream out; project members only |
+| `GET /api/kicad-lib/search?kind=symbol\|footprint&q=` | search KiCad's libraries by name (index built on first use, cached a day) |
+| `GET /api/kicad-lib/list?kind=&lib=` | libraries, or the items of one |
+| `GET /api/kicad-lib/item?kind=&lib=&name=` | one symbol (`.kicad_sym`) or footprint (`.kicad_mod`) |
+| `GET /api/docs/{id}/ops?since=N` | the ops applied to a document after snapshot `N`, so another document of the project is read as it is now |
 
 | Variable | |
 |---|---|
@@ -212,6 +229,7 @@ with Claude that can read the open design and propose edits to it.
 | `AI_DAILY_REQUESTS` | model calls per person per day on the server's key (default 300) |
 | `AI_WEB_TOOLS=0` | turn off web search and fetch |
 | `ANTHROPIC_API_URL` | another endpoint (a gateway, or the test stand-in) |
+| `KICAD_LIBS_URL`, `KICAD_LIBS_REF` | where KiCad's libraries are read from (default `https://gitlab.com`, `master`); `scripts/kicad-libs-mirror.mjs` is a caching mirror for machines whose outbound traffic goes through a proxy |
 
 ## Running
 
