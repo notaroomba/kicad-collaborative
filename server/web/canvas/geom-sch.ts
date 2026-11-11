@@ -4,7 +4,7 @@ import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, bboxAdd, boxUnion, textGeom, textLines, transformedText } from "./geom";
 import { arcFrom3, atOf, bezierPts, colorOf, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
-import { MIL, SCH_PEN, parseMarkup, textPen, textWidth } from "./text";
+import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth } from "./text";
 // ---- schematic ----
 // KiCad TRANSFORM matrices on library (Y up) coordinates: screen = T·lib + origin (x' = T0·x + T1·y, y' = T2·x + T3·y)
 export const ORIENT = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
@@ -62,7 +62,7 @@ export function labelFields(item, n, color, layer, z) {
   for (const p of kids(n, "property")) {
     const ef = effectsOf(p); const val = str(p[2]); if (ef.hide || !val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
-    textLines(item, px, py, val, ef.size, color, pr, ef.just, layer, { z, w: textPen(ef, ef.size), defH: "left", defV: "bottom" });
+    textLines(item, px, py, val, ef.size, color, pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
   }
 }
 
@@ -96,7 +96,7 @@ export function buildSchGeom(doc, item) {
   } else if (k === "text") {
     const [x, y, rot] = atOf(n); const ef = effectsOf(n);
     // SCH_TEXT::GetSchematicTextOffset: a fixed 0.25 mm lift; angles are kept upright (KeepUpright)
-    textLines(item, x, y - 0.25, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), defH: "left", defV: "bottom" });
+    textLines(item, x, y - 0.25, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
   } else if (k === "text_box") {
     const [x, y, rot] = atOf(n); const s = kid(n, "size"); const w = s ? num(s[1]) : 10, h = s ? num(s[2]) : 5; const ef = effectsOf(n);
     const x0 = Math.min(x, x + w), y0 = Math.min(y, y + h), x1 = Math.max(x, x + w), y1 = Math.max(y, y + h);
@@ -110,7 +110,7 @@ export function buildSchGeom(doc, item) {
     let tx, ty;
     if (vert) { ty = j.h === "left" ? y1 - bm : j.h === "right" ? y0 + tm : (y0 + y1) / 2; tx = j.v === "top" ? x0 + lm : j.v === "bottom" ? x1 - rm : (x0 + x1) / 2; }
     else { tx = j.h === "left" ? x0 + lm : j.h === "right" ? x1 - rm : (x0 + x1) / 2; ty = j.v === "top" ? y0 + tm : j.v === "bottom" ? y1 - bm : (y0 + y1) / 2; }
-    textLines(item, tx, ty, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size) });
+    textLines(item, tx, ty, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
   } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier") {
     shapeGeom(item, n, k, (x, y) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
   } else if (k === "rule_area") {
@@ -162,21 +162,21 @@ export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill) {
 export function buildLabelGeom(item, n, k) {
   const [x, y, rot] = atOf(n); const ef = effectsOf(n); const text = str(n[1]); const size = ef.size;
   const spin = SPIN[((Math.round(rot) % 360) + 360) % 360] || "R"; const st = spinText(spin);
-  const pen = textPen(ef, size); const off = 0.15 * size;   // DEFAULT_TEXT_OFFSET_RATIO
+  const pen = textPen(ef, size), lpen = layoutPen(ef, size); const off = 0.15 * size;   // DEFAULT_TEXT_OFFSET_RATIO
   const shapeN = kid(n, "shape"); const shape = shapeN ? str(shapeN[1]) : "";
   if (k === "label") {
-    const d = off + pen; const tx = st.rot ? x - d : x, ty = st.rot ? y : y - d;
-    textGeom(item, tx, ty, text, size, colorOf(n) || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen });
+    const d = off + lpen; const tx = st.rot ? x - d : x, ty = st.rot ? y : y - d;
+    textGeom(item, tx, ty, text, size, colorOf(n) || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, sizeX: ef.sizeX });
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
   } else if (k === "global_label") {
     const color = colorOf(n) || SCH.glabel; const margin = 0.375 * size;   // DEFAULT_LABEL_SIZE_RATIO
     let horiz = margin; if (shape === "input" || shape === "bidirectional" || shape === "tri_state") horiz += size * 0.75;
     const vert = size * 0.0715;
     const to = spin === "L" ? [-horiz, vert] : spin === "U" ? [vert, -horiz] : spin === "R" ? [horiz, vert] : [vert, horiz];
-    textGeom(item, x + to[0], y + to[1], text, size, color, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.globlabel, w: pen });
+    textGeom(item, x + to[0], y + to[1], text, size, color, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.globlabel, w: pen, italic: ef.italic, sizeX: ef.sizeX });
     // outline: SCH_GLOBALLABEL::CreateGraphicShape
-    const halfSize = size / 2 + margin; const symbLen = textWidth(parseMarkup(text).text, size, pen) + 2 * margin;
-    const bx = symbLen + pen, by = halfSize + pen;
+    const halfSize = size / 2 + margin; const symbLen = textWidth(parseMarkup(text).text, size, lpen) + 2 * margin;
+    const bx = symbLen + lpen, by = halfSize + lpen;
     let pts = [[0, 0], [0, -by], [-bx, -by], [-bx, 0], [-bx, by], [0, by]]; let xo = 0;
     if (shape === "input") { xo = -halfSize; pts[0][0] += halfSize; }
     else if (shape === "output") pts[3][0] -= halfSize;
@@ -187,7 +187,7 @@ export function buildLabelGeom(item, n, k) {
   } else if (k === "hierarchical_label") {
     const color = colorOf(n) || SCH.hlabel; const d = off + ef.sizeX;
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
-    textGeom(item, x + to[0], y + to[1], text, size, color, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.hierlabel, w: pen });
+    textGeom(item, x + to[0], y + to[1], text, size, color, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.hierlabel, w: pen, italic: ef.italic, sizeX: ef.sizeX });
     G(item, { t: "poly", pts: hierShape(x, y, size, shape || "input", spin), close: false, w: pen, color, layer: "Labels", z: SCH_Z.hierlabel });
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
   } else {
@@ -204,7 +204,7 @@ export function buildLabelGeom(item, n, k) {
       G(item, { t: "line", x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1], w, color, layer: "Labels", z: SCH_Z.netclass });
       G(item, { t: "circle", x: pts[2][0], y: pts[2][1], r: Math.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1]), w, color, fill: kind === "dot" ? color : null, layer: "Labels", z: SCH_Z.netclass });
     } else G(item, { t: "poly", pts, close: false, w, color, layer: "Labels", z: SCH_Z.netclass });
-    if (text) textGeom(item, x, y, text, size, color, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.netclass, w: pen });
+    if (text) textGeom(item, x, y, text, size, color, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.netclass, w: pen, italic: ef.italic, sizeX: ef.sizeX });
     labelFields(item, n, SCH.netclass, "Labels", SCH_Z.netclass);
   }
 }
@@ -226,7 +226,7 @@ export function buildSheetGeom(item, n) {
     if (ef.hide || !val) continue;
     const [px, py, pr] = atOf(p);
     const color = name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields;
-    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), defH: "left", defV: "bottom" });
+    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
   }
   for (const pin of kids(n, "pin")) {
     const [px, py, pr] = atOf(pin); const ef = effectsOf(pin); const size = ef.size; const pen = textPen(ef, size);
@@ -236,8 +236,15 @@ export function buildSheetGeom(item, n) {
     G(item, { t: "poly", pts: hierShape(px, py, size, shape, spin), close: false, w: SCH_PEN, color: SCH.sheetLabel, layer: "Sheets", z: SCH_Z.sheet });
     const d = 0.15 * size + ef.sizeX; const st = spinText(spin);
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
-    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, SCH.sheetLabel, st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen });
+    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, SCH.sheetLabel, st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, sizeX: ef.sizeX });
   }
+}
+
+/** LIB_SYMBOL::LetterSubReference( unit, 'A' ): A..Z, then AA.. */
+export function unitLetter(unit) {
+  let u, suffix = "";
+  do { u = (unit - 1) % 26; suffix = String.fromCharCode(65 + u) + suffix; unit = (unit - u) / 26 | 0; } while (unit > 0);
+  return suffix;
 }
 
 export const PIN_TEXT_OFFSET = Math.round(24 * 0.15) * MIL, PIN_TEXT_MARGIN = 4 * MIL, TARGET_PIN_RADIUS = 15 * MIL;
@@ -259,7 +266,8 @@ export function buildSymbolGeom(doc, item) {
   const col = dnp ? (c) => dimColor(c, SCH.bg) : (c) => c;
   const alpha = noSim ? 0.5 : undefined;
   const bodyLayer = "Symbols";
-  let bodyBox = null, pinBox = null;
+  let bodyBox = null, pinBox = null, unitCount = 1;
+  if (lib) for (const sub of kids(lib, "symbol")) { const m = str(sub[1]).match(/_(\d+)_(\d+)$/); if (m && +m[1] > unitCount) unitCount = +m[1]; }
   const take = (g0) => { const b = item.bbox; if (!b) return; if (g0 === "pin") pinBox = boxUnion(pinBox, b[0], b[1], b[2], b[3]); else bodyBox = boxUnion(bodyBox, b[0], b[1], b[2], b[3]); };
   if (lib) {
     const pn = kid(lib, "pin_names"); const nameOff = pn && kid(pn, "offset") ? num(kid(pn, "offset")[1]) : 0.508;
@@ -273,7 +281,7 @@ export function buildSymbolGeom(doc, item) {
     const geomStart = item.geom.length;
     for (const sub of subs) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
-      if ((u !== 0 && u !== unit) || s !== style) continue;
+      if ((u !== 0 && u !== unit) || (s !== 0 && s !== style)) continue;   // unit 0 / body style 0 = common to all (LIB_SYMBOL)
       for (let j = 2; j < sub.length; j++) {
         const g = sub[j]; if (!isList(g)) continue;
         const gk = g[0];
@@ -284,10 +292,10 @@ export function buildSymbolGeom(doc, item) {
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g);
-          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(strokeColorOf(g) || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), alpha }); take("body"); }
+          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(strokeColorOf(g) || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, alpha }); take("body"); }
         } else if (gk === "text_box") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g); const sz = kid(g, "size"); const [px, py] = tf(tx, ty);
-          if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), alpha, defH: "left", defV: "top" }); take("body"); }
+          if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, alpha, defH: "left", defV: "top" }); take("body"); }
         } else if (gk === "pin") {
           if (pinHidden(g)) {
             // kept aside, untouched bbox: drawn only under the showHiddenPins render option, in KiCad's hidden-item colour
@@ -314,7 +322,9 @@ export function buildSymbolGeom(doc, item) {
     const [px, py, pr] = atOf(p);
     const isRef = name === "Reference", isVal = name === "Value";
     const color = col(isRef || isVal ? SCH.ref : SCH.field);
-    transformedText(item, Ti, px, py, val, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), alpha, field: name });
+    // SCH_FIELD::GetShownText: the reference of a multi-unit symbol carries its unit letter (U2 → U2A)
+    const shown = isRef && unitCount > 1 ? val + unitLetter(unit) : val;
+    transformedText(item, Ti, px, py, shown, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, alpha, field: name });
   }
   if (dnp) {
     // SCH_PAINTER: body box grown toward the pins, crossed at 3× the default line width

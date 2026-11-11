@@ -56,7 +56,9 @@ export const PCB_COLORS = {
 
 export const USER_COLORS = ["#C2C2C2", "#5994DC", "#B4DBD2", "#D8C852"];
    // User.1.. cycle (User.9 = B.SilkS colour in the theme)
-export const PCB_BG = "#001023", PCB_GRID = "#848484", VIA_HOLE = "#E3B72E", HOLE_WALL = "#ECECEC", NPTH = "#1AC4D2", PAD_TEXT = "rgba(255,255,255,0.9)";
+export const PCB_BG = "#001023", PCB_GRID = "#848484", VIA_HOLE = "#E3B72E", HOLE_WALL = "#ECECEC", NPTH = "#1AC4D2",
+  // pad labels: PCB_RENDER_SETTINGS::LoadColors overwrites LAYER_PAD_NETNAMES with NETNAMES_LAYER_ID_START (white @ 0.7), inverted on bright copper
+  PAD_TEXT = "rgba(255,255,255,0.7)", PAD_TEXT_DARK = "rgba(0,0,0,0.7)";
 
 // The board's drawing sheet and page outline: LAYER_DRAWINGSHEET / LAYER_PAGE_LIMITS
 // (builtin_color_themes.h:178-179).  pcbnew draws the same sheet as eeschema, in these colours.
@@ -85,7 +87,7 @@ export const PCB_ZMAP = new Map(PCB_ORDER.map((l, i) => [l, i * 10]));
 
 export function pcbZ(layer) { const z = PCB_ZMAP.get(layer); return z === undefined ? 5 : z; }
 
-export const Z_PAD = 2, Z_VIA = 3, Z_TEXT = 4, Z_ZONE = -1, Z_BITMAP = -20;
+export const Z_PAD = 2, Z_VIA = 1, Z_TEXT = 4, Z_ZONE = -1, Z_BITMAP = -20;
    // BITMAP_LAYER_FOR(…) sits below every board layer
 export function padLayers(doc, names) {
   // expand *.Cu / F&B.Cu etc. against the board's copper layers (front→back order)

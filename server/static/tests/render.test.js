@@ -790,10 +790,12 @@ test("netNames: track labels sized to the track, skipped when short or too thin 
   const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 12 0) (width 1) (layer "F.Cu") (net 1) (uuid "s1")) (segment (start 0 3) (end 12 3) (width 0.25) (layer "F.Cu") (net 2) (uuid "s2")) (segment (start 0 6) (end 2 6) (width 1) (layer "F.Cu") (net 2) (uuid "s3")) (segment (start 14 0) (end 14 10) (width 1) (layer "B.Cu") (net 1) (uuid "s4")) (segment (start 0 8) (end 4 12) (width 1) (layer "F.Cu") (net 0) (uuid "s5")) ' +
     '(via (at 8 8) (size 2) (drill 1) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1")) (via blind (at 12 8) (size 2) (drill 1) (layers "F.Cu" "In1.Cu") (net 2) (uuid "v2")) (via (at 16 8) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v3")) ' +
     '(footprint "T:X" (layer "F.Cu") (uuid "fp1") (at 18 2) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 2 "VCC") (uuid "p1"))))');
-  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { frame: false });   // frame: false — the drawing sheet's title block is text too
-  assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1", "VCC"], "without the option only the pad number and pad net name");
+  let ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: false, frame: false });   // frame: false — the drawing sheet's title block is text too
+  assert.deepStrictEqual(textOps(ctx).map((o) => o.args[0]).sort(), ["1"], "net names off (pcb_display.net_names_mode 0): only the pad number");
+  ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { frame: false });
+  assert(textOps(ctx).some((o) => o.args[0] === "VCC") && textOps(ctx).some((o) => o.args[0] === "GND"), "pcbnew's default shows net names on pads and tracks");
   ctx = fullCtx(1000, 800); K.render(doc, ctx, V40, { netNames: true, frame: false });
-  const labels = textOps(ctx).filter((o) => !o.args[0].match(/^(1|VCC)$/) || o.fill !== "rgba(255,255,255,0.9)");
+  const labels = textOps(ctx).filter((o) => !o.args[0].match(/^(1|VCC)$/) || o.fill !== "rgba(255,255,255,0.7)");
   const gnd = labels.filter((o) => o.args[0] === "GND"); assert.strictEqual(gnd.length, 3, "s1 (1 mm wide), s4 (vertical), and the 2 mm via; not the 0.6 mm via: " + JSON.stringify(labels.map((o) => o.args[0])));
   assert(gnd.some((o) => o.fill === "rgba(255,255,255,0.7)"), "NETNAMES_LAYER_ID_START white @ 0.7 on the dark copper"); assert(gnd.some((o) => o.fill === K.VIA_NETNAME_COLOR), "LAYER_VIA_NETNAMES on the via"); assert.strictEqual(K.VIA_NETNAME_COLOR, "rgba(50,50,50,0.9)");
   assert(!labels.some((o) => o.args[0] === "VCC" && o.fill === "rgba(255,255,255,0.7)"), "0.25 mm track is 10 px wide: under the 4 mm-at-zoom-1 LOD; 2 mm-long s3 is shorter than width × 3 chars");
@@ -814,7 +816,7 @@ test("netColors: NET_COLOR_MODE::ALL colours copper of the net — tracks, vias,
   const green = ctx.ops.filter((o) => (o.op === "stroke" && o.stroke === "#00ff00") || (o.op === "fill" && o.fill === "#00ff00"));
   assert.strictEqual(green.length, 1 + 3 + 1 + 1, "track stroke, three via rings, zone fill, pad fill: " + green.length);
   assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#C83434"), "net 2 keeps the layer colour"); assert(ctx.ops.some((o) => o.op === "fill" && o.fill === "#E3B72E"), "via hole keeps its colour");
-  assert(!ctx.ops.some((o) => o.op === "fill" && o.fill === "#00ff00" && o.alpha < 1)); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#4D7FC4"), "zone outline / hatch on B.Cu keep the layer colour");
+  assert.deepStrictEqual(ctx.ops.filter((o) => o.op === "fill" && o.fill === "#00ff00" && o.alpha < 1).map((o) => o.alpha), [0.6], "only the zone fill is translucent (m_zoneOpacity)"); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#4D7FC4"), "zone outline / hatch on B.Cu keep the layer colour");
 });
 test("zoneFill: unfilled zones get a preview at the zone opacity minus the clearance rings, on an offscreen canvas", () => {
   const doc = K.parseDoc(NET_HEAD + '(zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.3)) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))) (zone (net 1) (net_name "GND") (layer "B.Cu") (uuid "z2") (hatch edge 0.5) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))) (filled_polygon (layer "B.Cu") (pts (xy 1 1) (xy 9 1) (xy 9 9) (xy 1 9)))) ' +

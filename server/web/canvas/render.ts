@@ -3,8 +3,10 @@
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
+import { displayNetName } from "./geom-pcb";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
+import { drawStrokeText, strokeLine, strokeOrigin } from "./stroke-font";
 // ---------------------------------------------------------------- rendering
 export const HAS_PATH2D = typeof Path2D !== "undefined";
 
@@ -118,6 +120,8 @@ export function tracePad(ctx, g) {
  *                                readable), text on the other layers keeps its box but is re-mirrored to stay
  *                                readable; pad labels and net names are always kept readable;
  *   padNumbers     (board)     — default true; false hides the pad numbers (pad net names stay);
+ *   gridStyle      (both)      — "dots" (default), "lines" or "crosses" (KiCad's grid.style 0 / 1 / 2); gridMinSpacing
+ *                                is the minimum spacing of drawn grid marks in px (default 10);
  *   showHiddenText (board)     — draw the hidden fp_text / properties (kept in item.hiddenGeom, tagged
  *                                hiddenText, outside the hit boxes) at HIDDEN_TEXT_ALPHA; KiCad has no
  *                                painter rule for this (this version dropped LAYER_HIDDEN_TEXT).
@@ -126,6 +130,8 @@ export function tracePad(ctx, g) {
  * line width.  Knockout text (knockout on the geometry) fills its inflated box in the layer colour and
  * cuts the glyphs out in the background colour.
  */
+export const GRID_MIN_SPACING = 10, GRID_TICK = 10;   // "grid.min_spacing" (px), GAL::SetCoarseGrid( 10 )
+
 export const HC_DIM = 0.2, HL_DIM = 0.25, HIDDEN_TEXT_ALPHA = 0.5;
 
 export const ZONE_OPACITY = 0.6;
@@ -143,7 +149,7 @@ export const MARKER_COLORS = {
 
 export const PX_PER_MM_ZOOM1 = 91 * 1e6 * 1e-9 / 0.0254;
                 // GAL world scale at zoom factor 1: screen DPI (ADVANCED_CFG 91) × 1 nm in inches, per mm
-export const TRACK_NETNAME_MM = 4, VIA_NETNAME_MM = 10;
+export const TRACK_NETNAME_MM = 4, VIA_NETNAME_MM = 10, PAD_NETNAME_MM = 0.5;
                  // PCB_TRACK / PCB_VIA::ViewGetLOD netname thresholds
 export const VIA_NETNAME_COLOR = "rgba(50,50,50,0.9)", TRACK_NETNAME_LIGHT = "rgba(255,255,255,0.7)", TRACK_NETNAME_DARK = "rgba(0,0,0,0.7)";
 
@@ -252,7 +258,8 @@ export function render(doc, ctx, view, opts) {
   const hlColor = (c) => highlightColor(c, isPcb);
   const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
   const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
-  const netNames = isPcb && !!opts.netNames, zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
+  const netNames = isPcb && opts.netNames !== false,   // pcbnew default: net names on pads and tracks ("pcb_display.net_names_mode" 3)
+   zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
   const rats = isPcb && opts.ratsnest && opts.ratsnest.length ? opts.ratsnest : null, ratsNets = opts.ratsnestNets || null;
   const markers = opts.markers && opts.markers.length ? opts.markers : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
@@ -268,18 +275,44 @@ export function render(doc, ctx, view, opts) {
   ctx.setTransform(A, 0, 0, s, E, ty);
   const dx0 = -E / A, dx1 = (W - E) / A;
   const vx0 = Math.min(dx0, dx1), vx1 = Math.max(dx0, dx1), vy0 = -ty / s, vy1 = vy0 + H / s;   // visible mm rect
-  // grid (dots), thinned so dots stay >= 9 device px apart; one path, one fill
+  // grid: GAL::DrawGrid.  The pitch is multiplied by the coarse tick (10) until grid marks are more than
+  // grid.min_spacing (10 px; 20 for small crosses) apart; every 10th row / column of the drawn grid is major:
+  // twice the dot size, line width or cross size.  Styles: "dots" (KiCad's default), "lines", "crosses".
   if (opts.grid > 0) {
-    let pitch = opts.grid; const mult = [1, 2, 5, 10, 20, 50, 100];
-    let m = 0; while (pitch * mult[m] * s < 9 && m < mult.length - 1) m++;
-    pitch *= mult[m];
-    const gx0 = Math.floor(vx0 / pitch) * pitch, gy0 = Math.floor(vy0 / pitch) * pitch;
-    const nx = Math.ceil((vx1 - gx0) / pitch), ny = Math.ceil((vy1 - gy0) / pitch);
-    if (nx * ny < 80000) {
-      ctx.fillStyle = doc.type === "sch" ? SCH.grid : PCB_GRID; const d = Math.max(1, dpr) / s;
-      ctx.beginPath();
-      for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) ctx.rect(gx0 + i * pitch - d / 2, gy0 + j * pitch - d / 2, d, d);
-      ctx.fill();
+    const style = opts.gridStyle === "lines" || opts.gridStyle === "crosses" ? opts.gridStyle : "dots";
+    const minSpacing = (opts.gridMinSpacing > 0 ? opts.gridMinSpacing : GRID_MIN_SPACING) * (style === "crosses" ? 2 : 1) / sCss;
+    let pitch = opts.grid; let guard = 0;
+    while (pitch <= minSpacing && guard++ < 12) pitch *= GRID_TICK;
+    const i0 = Math.floor(vx0 / pitch), i1 = Math.ceil(vx1 / pitch), j0 = Math.floor(vy0 / pitch), j1 = Math.ceil(vy1 / pitch);
+    const px1 = Math.max(1, dpr) / s;   // one device pixel (grid.line_width 1.0)
+    const gridColor = isPcb ? PCB_GRID : SCH.grid;
+    if ((i1 - i0) * (j1 - j0) < 400000) {
+      if (style === "dots") {
+        ctx.fillStyle = gridColor; ctx.beginPath();
+        for (let i = i0; i <= i1; i++) {
+          const wdt = i % GRID_TICK === 0 ? 2 * px1 : px1, x = i * pitch - wdt / 2;
+          for (let j = j0; j <= j1; j++) { const hgt = j % GRID_TICK === 0 ? 2 * px1 : px1; ctx.rect(x, j * pitch - hgt / 2, wdt, hgt); }
+        }
+        ctx.fill();
+      } else if (style === "lines") {
+        ctx.strokeStyle = gridColor; ctx.lineCap = "butt";
+        for (const major of [false, true]) {
+          ctx.lineWidth = major ? 2 * px1 : px1; ctx.beginPath();
+          for (let i = i0; i <= i1; i++) if ((i % GRID_TICK === 0) === major) { ctx.moveTo(i * pitch, vy0); ctx.lineTo(i * pitch, vy1); }
+          for (let j = j0; j <= j1; j++) if ((j % GRID_TICK === 0) === major) { ctx.moveTo(vx0, j * pitch); ctx.lineTo(vx1, j * pitch); }
+          ctx.stroke();
+        }
+      } else {
+        ctx.strokeStyle = gridColor; ctx.lineCap = "butt";
+        for (const major of [false, true]) {
+          const wdt = major ? 2 * px1 : px1, len = 2 * wdt; ctx.lineWidth = wdt; ctx.beginPath();
+          for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+            if ((i % GRID_TICK === 0 && j % GRID_TICK === 0) !== major) continue;
+            const x = i * pitch, y = j * pitch; ctx.moveTo(x - len, y); ctx.lineTo(x + len, y); ctx.moveTo(x, y - len); ctx.lineTo(x, y + len);
+          }
+          ctx.stroke();
+        }
+      }
     }
   }
   // the drawing sheet (frame, tick band, title block) and, above it, the page outline.  Under the
@@ -302,8 +335,15 @@ export function render(doc, ctx, view, opts) {
     const isHl = hl ? hl.has(it.id) : false;
     const isSel = selPcb ? selPcb.has(it.id) : false;
     for (const g of it.geom) {
-      if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
-      if (!padNumbers && g.padNum) continue;
+      if (g.padText) {
+        // PAD::ViewGetLOD (netname layer): the pad must be flashed on a visible layer (the high-contrast one in
+        // that mode) and its smaller side at least 0.5 mm at zoom 1; pad net names follow the net-names option
+        if (g.padNum ? !padNumbers : !netNames) continue;
+        if (g.padMin * sCss < PAD_NETNAME_MM * PX_PER_MM_ZOOM1) continue;
+        const pl = g.padLayers; let vis = false;
+        if (hcLayer) vis = pl.indexOf(hcLayer) >= 0; else for (let i = 0; i < pl.length; i++) if (!hidden.has(pl[i])) { vis = true; break; }
+        if (!vis) continue;
+      } else if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
       const z = g.z === undefined ? 0 : g.z;
       bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
@@ -350,7 +390,8 @@ export function render(doc, ctx, view, opts) {
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
-      if (hcLayer && g.layer !== hcLayer && g.layer !== "holes") alpha *= HC_DIM;
+      if (hcLayer && g.layer !== hcLayer && g.layer !== "holes" && !g.padText) alpha *= HC_DIM;
+      if (g.zoneFill) alpha *= ZONE_OPACITY;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity
       if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
       if (netColors && g.net > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net); if (nc) { color = nc; if (fill) fill = nc; } }
@@ -375,6 +416,8 @@ export function render(doc, ctx, view, opts) {
         }
         continue;
       }
+      // LAYER_VIA_HOLEWALLS under the hole; PCB_PAINTER underpaints it filled in the outline mode too
+      if (g.wallR) { setFill(g.wallColor); ctx.beginPath(); ctx.arc(g.x, g.y, g.wallR, 0, Math.PI * 2); ctx.fill(); }
       if ((sketchPads && g.pad) || (sketchVias && g.via)) {   // sketch mode: the shape's outline in a hairline, nothing filled
         if (t === "poly" && g.pts.length < 2) continue;
         setStroke(color); setWidth(minW); setCap("butt"); strokeG(g); continue;
@@ -472,7 +515,12 @@ export function markerAt(markers, x, y, tolMm, scale) {
 }
 
 /** One net-name label: KiCad's glyph size is the cap height here too; the label is always kept readable (re-mirrored under flip). */
-export function drawLabel(ctx, x, y, text, size, rot, color, pen, base, flip) {
+export function drawLabel(ctx, x, y, text, size, rot, color, pen, base, flip, sizeX) {
+  if (textMode() === "stroke") {
+    // GAL::BitmapText falls back to the stroke font: centred both ways, un-mirrored under the flipped view
+    drawStrokeText(ctx, base, { x, y, text, size, sizeX, rot, mirror: !!flip, h: "center", v: "middle", pen }, color, 1 / Math.abs(base[0]));
+    return;
+  }
   const a = -(rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a); const mx = flip ? -1 : 1;
   ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * x + base[4], base[3] * y + base[5]);
   let font = FONT_CACHE.get(size); if (!font) { font = `${size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(size, font); }
@@ -483,7 +531,7 @@ export function drawLabel(ctx, x, y, text, size, rot, color, pen, base, flip) {
 
 /** PCB_PAINTER::renderNetNameForSegment for a track segment / arc geometry. */
 export function drawTrackName(ctx, g, doc, s, sCss, vr, base, flip) {
-  const name = doc.nets.get(g.net); if (!name) return;
+  const name = displayNetName(doc.nets.get(g.net)); if (!name) return;
   const width = g.w || 0; if (width * sCss < TRACK_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 4 mm at zoom 1
   const chars = name.length; const size = width * 0.55, pen = width / 12; const color = trackNameColor(g.color);
   const vw = vr[2] - vr[0], vh = vr[3] - vr[1];
@@ -510,7 +558,7 @@ export function drawTrackName(ctx, g, doc, s, sCss, vr, base, flip) {
 
 /** PCB_PAINTER::draw(PCB_VIA) netname layer: the net name (and the layer pair of blind / micro vias) centred on the via. */
 export function drawViaName(ctx, g, doc, s, sCss, base, flip) {
-  const name = doc.nets.get(g.net) || ""; const showLayers = g.viaType && g.viaType !== "through";
+  const name = displayNetName(doc.nets.get(g.net)); const showLayers = g.viaType && g.viaType !== "through";
   if (!name && !showLayers) return;
   if (g.viaSize * sCss < VIA_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 10 mm at zoom 1
   const size = Math.min(g.viaSize, 10);
@@ -613,6 +661,49 @@ export function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
   ctx.restore();
 }
 
+/** Text shorter than this on screen (device px of glyph height) is not drawn. */
+export const MIN_TEXT_PX = 2;
+
+/**
+ * Which text painter runs: "stroke" — KiCad's own stroke font (web/canvas/stroke-font.ts), the default wherever
+ * Path2D exists — or "native", the canvas font fallback (headless contexts).  KiCadCanvas.textMode forces one.
+ */
+export function textMode() {
+  const m = root.KiCadCanvas && root.KiCadCanvas.textMode;
+  return m === "stroke" || m === "native" ? m : (HAS_PATH2D ? "stroke" : "native");
+}
+
+/**
+ * One text geometry in KiCad's stroke font.  The glyphs, the advance widths, ~{overbar} / _{sub} / ^{super}
+ * runs, the italic tilt and the anchor fudges are the ones FONT::Draw uses, so text lands where eeschema and
+ * pcbnew put it.  Under the flipped board view, text that is not side-specific — and every pad label — is
+ * re-mirrored with its justification swapped so it stays readable inside the same (mirrored) box.
+ */
+export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
+  let mirror = !!g.mirror, h = g.h;
+  if (flip && (g.padText || !SIDE_SPECIFIC.test(g.layer || ""))) { mirror = !mirror; h = flipH(h); }
+  const pen = g.w > 0 ? g.w : g.size / 8;
+  const text = g.raw || g.text || "";
+  const spec = { x: g.x, y: g.y, text, size: g.size, sizeX: g.sizeX, rot: g.rot || 0, mirror, h, v: g.v, pen, italic: !!g.italic, dy: 0 };
+  if (g.knockout) {
+    // PCB_TEXT knockout: the text box, inflated by GetKnockoutTextMargin, in the layer colour; the glyphs cut out in the background colour
+    const sx = g.sizeX > 0 ? g.sizeX : g.size, line = strokeLine(text, !!g.italic);
+    const [ox, oy] = strokeOrigin(line.width, h, g.v, pen / sx, pen / g.size); const m = Math.max(pen / 2, g.size / 9);
+    const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = mirror ? -1 : 1;
+    ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
+    ctx.fillStyle = color; ctx.fillRect(ox * sx - m, (oy - 1) * g.size - m, line.width * sx + 2 * m, g.size + 2 * m);
+    drawStrokeText(ctx, base, spec, bgColor || PCB_BG, minW);
+    return;
+  }
+  if (g.multiline && text.indexOf("\n") >= 0) {
+    // a drawing-sheet field carrying a \n: lines an interline apart, the block placed per EDA_TEXT::GetLinePositions
+    const lines = text.split("\n"), step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
+    for (let i = 0; i < lines.length; i++) { spec.text = lines[i]; spec.dy = offs[i] * step; drawStrokeText(ctx, base, spec, color, minW); }
+    return;
+  }
+  drawStrokeText(ctx, base, spec, color, minW);
+}
+
 /**
  * One text run: KiCad's size is the cap height; the baseline sits size/2 below a "middle" anchor.  The text's
  * local frame (anchor, rotation, mirror) is composed with `base` (the document → device matrix) into a single
@@ -620,8 +711,13 @@ export function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
  * re-mirrored with its justification swapped so it stays readable inside the same (mirrored) box.
  */
 export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bgColor) {
-  const px = g.size * s; if (px < (g.minPx || 3)) return;
+  const px = g.size * s; if (px < (g.minPx || MIN_TEXT_PX)) return;
   const color = colorOverride || g.color;
+  if (textMode() === "stroke") {
+    let b = base;
+    if (!b && typeof ctx.getTransform === "function") { const m = ctx.getTransform(); b = [m.a, m.b, m.c, m.d, m.e, m.f]; }
+    if (b) { drawTextStroke(ctx, g, minW, color, b, flip, bgColor); return; }
+  }
   const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
   let mx = g.mirror ? -1 : 1, h = g.h;
   if (flip && (g.padText || !SIDE_SPECIFIC.test(g.layer || ""))) { mx = -mx; h = flipH(h); }

@@ -54,6 +54,7 @@ export function textGeom(item, x, y, text, size, color, rot, just, layer, extra)
   }
   const m = parseMarkup(text);
   const g = { t: "text", x, y, text: m.text, bars: m.bars, size: size || 1.27, w: 0, color, rot: r, h: j.h, v: j.v, layer };
+  if (m.text !== text) g.raw = text;   // the marked-up source: the stroke painter lays out ~{} _{} ^{} itself
   for (const k in extra) if (k !== "defH" && k !== "defV" && k !== "pcb" && k !== "upright") g[k] = extra[k];
   return G(item, g);
 }

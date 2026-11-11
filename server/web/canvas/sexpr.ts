@@ -180,7 +180,7 @@ export function effectsOf(node) {
   if (e) {
     const f = kid(e, "font");
     if (f) {
-      const s = kid(f, "size"); if (s) { r.size = num(s[2], num(s[1], 1.27)); r.sizeX = num(s[1], r.size); }
+      const s = kid(f, "size"); if (s) { r.size = num(s[1], 1.27); r.sizeX = num(s[2], r.size); }   // (size HEIGHT WIDTH): the parser reads "text height" first
       const t = kid(f, "thickness"); if (t) r.thick = num(t[1]);
       r.bold = yesNo(f, "bold"); r.italic = yesNo(f, "italic");
     }

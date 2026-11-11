@@ -1,11 +1,49 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { NPTH, PAD_TEXT, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
+import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, fillOf, has, isList, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth } from "./text";
 // ---- board ----
+/**
+ * Net code of a board item.  Files up to 2025 carry (net N) or (net N "name"); KiCad 10 names the net only —
+ * (net "GND") — and has no net table, so those get a code from the document's own table, assigned on first
+ * sight (doc.nets: code → name, doc.netCodes: name → code).  No net / the empty name is 0, a missing node -1.
+ */
+export function netCode(doc, node) {
+  const nn = node && kid(node, "net"); if (!nn) return -1;
+  const v = nn[1];
+  if (typeof v === "number") { if (nn.length > 2 && doc && doc.nets && !doc.nets.has(v)) doc.nets.set(v, str(nn[2])); return v; }
+  const name = str(v); if (!name) return 0;
+  if (!doc || !doc.nets) return -1;
+  const codes = doc.netCodes || (doc.netCodes = new Map());
+  let c = codes.get(name);
+  if (c === undefined) {
+    let next = doc.netSeq || 0; if (!next) for (const k of doc.nets.keys()) if (k > next) next = k;
+    c = next + 1; doc.netSeq = c; codes.set(name, c); doc.nets.set(c, name);
+  }
+  return c;
+}
+
+const DISPLAY_NAMES = new Map();
+const ESCAPES = { slash: "/", backslash: "\\", dblquote: '"', lt: "<", gt: ">", colon: ":", space: " ", tab: "\t", return: "\n", brace: "{" };
+/** NETINFO_ITEM::GetDisplayNetname: the short net name (after the last sheet-path slash), unescaped ({slash} → /). */
+export function displayNetName(name) {
+  if (!name) return "";
+  let v = DISPLAY_NAMES.get(name);
+  if (v === undefined) {
+    const i = name.lastIndexOf("/");
+    v = (i >= 0 ? name.slice(i + 1) : name).replace(/\{(slash|backslash|dblquote|lt|gt|colon|space|tab|return|brace)\}/g, (m, k) => ESCAPES[k]);
+    if (DISPLAY_NAMES.size > 20000) DISPLAY_NAMES.clear();
+    DISPLAY_NAMES.set(name, v);
+  }
+  return v;
+}
+
+/** PrintableCharCount: the characters of a marked-up string that take room (markup braces and tabs do not). */
+export function printableCharCount(t) { return parseMarkup(t.replace(/\t/g, "")).text.length; }
+
 export function layerOf(node, def) { const l = kid(node, "layer"); return l ? str(l[1]) : def; }
 
 export function padCopperLayer(pad) {
@@ -26,7 +64,7 @@ export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
   const color = pcbColor(layer); const z = pcbZ(layer) + Z_TEXT;
   const thick = ef.thick > 0 ? ef.thick : (ef.bold ? ef.size / 5 : ef.size / 8);
   const ln = kid(n, "layer"); const knockout = (ln && has(ln, "knockout")) || yesNo(n, "knockout");
-  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true }, knockout ? { knockout: true } : null, extra || {});
+  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, sizeX: ef.sizeX }, knockout ? { knockout: true } : null, extra || {});
   if (ef.hide) {
     const shadow = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
     for (const g of shadow.geom) g.hiddenText = true;
@@ -39,10 +77,10 @@ export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
 export function buildPcbGeom(doc, item) {
   const n = item.node, k = item.kind;
   if (k === "segment") {
-    const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu"); const net = netOf(n); item.net = net;
+    const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu"); const net = netCode(doc, n); item.net = net;
     G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net });
   } else if (k === "arc") {
-    const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu"); const net = netOf(n); item.net = net;
+    const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu"); const net = netCode(doc, n); item.net = net;
     const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
     if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net }, a));
     else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net });
@@ -75,6 +113,16 @@ export function buildPcbGeom(doc, item) {
   // groups, gr_bbox, generated items: nothing to draw
 }
 
+// m_HoleWallThickness (0.020 mm) × m_HoleWallPaintingMultiplier (1.5): how wide the plating is painted
+export const HOLE_WALL = 0.020 * 1.5;
+
+/** Pad label colour on a copper layer: the netname layer colour, inverted on bright copper (PCB_RENDER_SETTINGS::LoadColors). */
+export function padNameColor(layer) {
+  const m = /^#([0-9a-f]{6})$/i.exec(pcbColor(layer)); if (!m) return PAD_TEXT;
+  const v = parseInt(m[1], 16); const br = (0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
+  return br > 0.5 ? PAD_TEXT_DARK : PAD_TEXT;
+}
+
 export function buildViaGeom(doc, item, n) {
   const [x, y] = atOf(n); const sz = kid(n, "size"), dr = kid(n, "drill"); const size = sz ? num(sz[1]) : 0.8, drill = dr ? num(dr[1]) : 0.4;
   const vtype = has(n, "blind") ? "blind" : has(n, "micro") ? "micro" : "through";
@@ -82,13 +130,16 @@ export function buildViaGeom(doc, item, n) {
   const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   let layers = copper;
   if (vtype !== "through") { const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]); if (i0 >= 0 && i1 >= 0) layers = copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1); else layers = pair; }
-  const net = netOf(n); item.net = net;
+  const net = netCode(doc, n); item.net = net;
   for (const layer of layers) G(item, { t: "circle", x, y, r: size / 2, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_VIA, via: true, net, viaSize: size, viaType: vtype, viaLayers: pair, viaLabel: layer === layers[0] || undefined });
   const zh = pcbZ("holes");
-  if (vtype === "through") G(item, { t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true, hole: true, net });
+  // LAYER_VIA_HOLEWALLS: the plating, a ring just outside the drill clamped to the via's copper.  It rides on
+  // the hole geometry (wallR / wallColor) and is painted right under it, so a via stays rings + hole.
+  const wallR = Math.min(drill / 2 + HOLE_WALL, size / 2); const wall = wallR > drill / 2 ? { wallR, wallColor: HOLE_WALL_COLOR } : null;
+  if (vtype === "through") G(item, Object.assign({ t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true, hole: true, net }, wall));
   else {
     // blind/buried and micro vias show their layer pair in the hole: top-colour upper half, bottom-colour lower half
-    G(item, { t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true, hole: true, net });
+    G(item, Object.assign({ t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true, hole: true, net }, wall));
     G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true, via: true, hole: true, net });
   }
   item.viaType = vtype;
@@ -100,7 +151,7 @@ export function buildZoneGeom(doc, item, n) {
   layersZ = padLayers(doc, layersZ);
   const keepout = !!kid(n, "keepout");
   const hatchN = kid(n, "hatch"); const hatchStyle = hatchN ? str(hatchN[1]) : "edge"; const pitch = hatchN ? num(hatchN[2], 0.5) : 0.5;
-  const net = netOf(n); if (item.kind === "zone") item.net = net;
+  const net = netCode(doc, n); if (item.kind === "zone") item.net = net;
   // (connect_pads [yes|no|thru_hole_only] (clearance c)): the copper clearance the fill keeps from other nets (0.5 mm default)
   const cp = kid(n, "connect_pads"); const clN = cp && kid(cp, "clearance"); const clearance = clN ? num(clN[1], 0.5) : 0.5;
   const unfilled = !keepout && !kids(n, "filled_polygon").length;
@@ -322,7 +373,8 @@ export function padPolygon(pad, shape, w, h) {
 
 export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
   const number = str(pad[1]), type = str(pad[2]); let shape = str(pad[3]);
-  const netN = kid(pad, "net"); const net = netN ? num(netN[1], -1) : -1, netname = netN ? str(netN[2]) : "";
+  const netN = kid(pad, "net"); const net = netCode(doc, pad);
+  const netname = netN ? (typeof netN[1] === "number" ? (netN.length > 2 ? str(netN[2]) : str((doc && doc.nets && doc.nets.get(netN[1])) || "")) : str(netN[1])) : "";
   const [px, py, prot] = atOf(pad); const sz = kid(pad, "size"); const w = sz ? num(sz[1]) : 1, h = sz ? num(sz[2], num(sz[1])) : 1;
   const [cx, cy] = tf(px, py);
   const ls = kid(pad, "layers"); const layers = padLayers(doc || { copper: [] }, ls ? ls.slice(1).map(str) : [side]);
@@ -364,18 +416,63 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
     if (npth) G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: NPTH, fill: NPTH, layer: "holes", z: zh, hole: true, npth: true, padIndex, net });
     else {
       // plated: hole in the background colour with a thin plating wall (LAYER_PAD_HOLEWALLS uses the via hole colour)
-      G(item, { t: "pad", x: hx, y: hy, w: dw + 0.04, h: dh + 0.04, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, hole: true, padIndex, net });
+      G(item, { t: "pad", x: hx, y: hy, w: dw + 2 * Math.min(HOLE_WALL, w / 2, h / 2), h: dh + 2 * Math.min(HOLE_WALL, w / 2, h / 2), rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, hole: true, padIndex, net });
       G(item, { t: "pad", x: hx, y: hy, w: dw, h: dh, rot: prot, shape: oval ? "oval" : "circle", rr: 0, color: PCB_BG, fill: PCB_BG, layer: "holes", z: zh, hole: true, padIndex, net });
     }
   }
-  // pad number + net name (PCB_PAINTER netname layer): sized to fit, drawn only when legible
-  if (number || netname) {
-    let pw = w, ph = h; const rotated = pw < ph * 0.95; if (rotated) { const t = pw; pw = ph; ph = t; }
-    let size = Math.min(ph, 2.5);   // MAX_FONT_SIZE
-    const textLayer = copper || layers[0] || side; const z = pcbZ("holes") + 1; const rot = rotated ? 90 : 0;
+  // pad number + net name: PCB_PAINTER::draw( const PAD*, netname layer )
+  const pinType = str((kid(pad, "pintype") || [])[1]);
+  let shownNet = displayNetName(netname);
+  if (pinType.indexOf("no_connect") >= 0) shownNet = "x";                                                   // PAD::IsNoConnectPad
+  else if (pinType === "free" && shownNet.indexOf("unconnected-(") === 0) shownNet = "*";                  // PAD::IsFreePad
+  if (number || shownNet) {
+    // the pad's bounding box on the board decides the room and the reading direction
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    const grow = (x, y, r) => { if (x - r < bx0) bx0 = x - r; if (y - r < by0) by0 = y - r; if (x + r > bx1) bx1 = x + r; if (y + r > by1) by1 = y + r; };
+    const firstLayer = shapes.length ? shapes[0].layer : null;
+    if (shape === "custom" && firstLayer) {
+      for (const sg of item.geom) {
+        if (!sg.pad || sg.padIndex !== padIndex || sg.layer !== firstLayer || sg.hole) continue;
+        if (sg.t === "poly") for (const q of sg.pts) grow(q[0], q[1], (sg.w || 0) / 2);
+        else if (sg.t === "circle" || sg.t === "arc") grow(sg.x, sg.y, sg.r + (sg.w || 0) / 2);
+        else if (sg.t === "line") { grow(sg.x1, sg.y1, (sg.w || 0) / 2); grow(sg.x2, sg.y2, (sg.w || 0) / 2); }
+        else if (sg.t === "pad") { const ca = Math.abs(Math.cos(sg.rot * Math.PI / 180)), sa = Math.abs(Math.sin(sg.rot * Math.PI / 180)); const ex = (sg.w * ca + sg.h * sa) / 2, ey = (sg.w * sa + sg.h * ca) / 2; grow(sg.x - ex, sg.y - ey, 0); grow(sg.x + ex, sg.y + ey, 0); }
+      }
+    }
+    if (!isFinite(bx0)) {
+      const ca = Math.abs(Math.cos(prot * Math.PI / 180)), sa = Math.abs(Math.sin(prot * Math.PI / 180));
+      let ex, ey;
+      if (shape === "circle") ex = ey = w / 2;
+      else if (shape === "oval") { const r = Math.min(w, h) / 2, hx = w > h ? (w - h) / 2 : 0, hy = h > w ? (h - w) / 2 : 0; ex = hx * ca + hy * sa + r; ey = hx * sa + hy * ca + r; }
+      else { ex = (w * ca + h * sa) / 2; ey = (w * sa + h * ca) / 2; }
+      bx0 = cx - ex; bx1 = cx + ex; by0 = cy - ey; by1 = cy + ey;
+    }
+    const tcx = (bx0 + bx1) / 2, tcy = (by0 + by1) / 2;
+    let pw = bx1 - bx0, ph = by1 - by0; const padMin = Math.min(pw, ph);
+    if (shape !== "custom") { const limit = Math.min(w, h) * 1.1; if (pw > limit && ph > limit) { pw = limit; ph = limit; } }   // a 45° rotation must not bloat the box
+    let size = ph; let rot = 0;
+    if (pw < ph * 0.95) { rot = 90; size = pw; const t = pw; pw = ph; ph = t; }
+    if (size > 10) size = 10;   // PCB_RENDER_SETTINGS::MAX_FONT_SIZE
     let yNet = 0, yNum = 0;
-    if (number && netname) { size = size / 2.5; yNet = size / 1.4; yNum = size / 1.7; }
-    if (netname) { let ts = Math.min(1.5 * pw / Math.max(netname.length + 1, 5), size) * 0.85; const [dx, dy] = rotPt(0, Math.min(ts * 1.4, yNet), rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: netname, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padNet: true, minPx: 7, noBox: true }); }
-    if (number) { const ts = Math.min(1.5 * pw / Math.max(number.length, 3), size) * 0.85; const [dx, dy] = rotPt(0, -yNum, rot); G(item, { t: "text", x: cx + dx, y: cy + dy, text: number, size: ts, w: 0, color: PAD_TEXT, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padNum: true, minPx: 7, noBox: true }); }
+    if (number && shownNet) { size = size / 2.5; yNet = size / 1.4; yNum = size / 1.7; }
+    // LAYER_PAD_NETNAMES (through-hole, above the holes) or the copper layer's own netname layer (SMD)
+    const pth = type === "thru_hole" || (copper !== "F.Cu" && copper !== "B.Cu");
+    const textLayer = copper || layers[0] || side; const z = pth ? pcbZ("holes") + 1 : pcbZ(textLayer) + 3.6;
+    const color = pth ? PAD_TEXT : padNameColor(textLayer);
+    const padCu = layers.filter((l) => /\.Cu$/.test(l));
+    const label = (text, ts, dyLocal, tag) => {
+      const [dx, dy] = rotPt(0, dyLocal, rot);
+      const g = { t: "text", x: tcx + dx, y: tcy + dy, text, size: ts, sizeX: ts * 0.9, w: ts * 0.9 / 6, color, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padMin, padLayers: padCu.length ? padCu : [textLayer], noBox: true };
+      g[tag] = true; G(item, g);
+    };
+    if (shownNet) {
+      let ts = Math.min(1.5 * pw / Math.max(printableCharCount(shownNet) + 1, 5), size) * 0.85;
+      if (shape === "circle" || shape === "oval") ts *= 0.9;   // round pads have less room
+      label(shownNet, ts, Math.min(ts * 1.4, yNet), "padNet");
+    }
+    if (number) {
+      const ts = Math.min(Math.min(1.5 * pw / Math.max(printableCharCount(number), 3), size) * 0.85, size);
+      label(number, ts, -yNum, "padNum");
+    }
   }
 }

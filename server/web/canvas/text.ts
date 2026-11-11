@@ -1,5 +1,6 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { strokeAdvance } from "./stroke-font";
 // ---------------------------------------------------------------- text metrics
 // Newstroke advance widths (units of 1/21 of the text size) for ASCII 32..126, read
 // from common/newstroke_font.cpp; KiCad's string width = Σadvance·size − 0.2·size + 3·thickness.
@@ -25,8 +26,9 @@ export function lineOffsets(n, vjust) {
 }
 
 export function textWidth(text, size, thick) {
+  // Σ glyph advances from KiCad's own font table (web/canvas/stroke-font.ts), so non-ASCII text measures right too
   let w = 0;
-  for (const ch of text) { const c = ch.charCodeAt(0) - 32; w += (c >= 0 && c < 95 ? STROKE_ADV[c] : 21) / 21; }
+  for (const ch of text) w += strokeAdvance(ch);
   return text.length ? Math.max(0, w - 0.2) * size + 3 * (thick || 0) : 0;
 }
 
@@ -50,7 +52,17 @@ export const SCH_PEN = 0.1524;
 export const MIL = 0.0254;
 
 export function textPen(ef, size) {
-  // EDA_TEXT::GetEffectiveTextPenWidth with the schematic default pen (0): size/8, bold size/5, clamped to size/4
-  let pen = ef.thick > 0.001 ? ef.thick : (ef.bold ? size / 5 : size / 8);
+  // EDA_TEXT::GetEffectiveTextPenWidth( default pen ): SCH_PAINTER::getTextThickness passes the schematic's
+  // default line width (6 mil), so plain text is drawn with that pen whatever its size; bold text is
+  // size/5 (GetPenSizeForBold of the smaller glyph dimension), an explicit thickness is kept (×1.6 when
+  // bold, BOLD_STROKE_MULTIPLIER); everything is clamped to a quarter of the size (ClampTextPenSize).
+  const minSize = Math.min(size, ef.sizeX > 0 ? ef.sizeX : size);
+  let pen = ef.thick > 0.001 ? (ef.bold ? ef.thick * 1.6 : ef.thick) : (ef.bold ? minSize / 5 : SCH_PEN);
+  return Math.min(pen, minSize * 0.25);
+}
+
+/** GetEffectiveTextPenWidth() with no default pen — what the label shapes and offsets are computed with (SCH_LABEL_BASE::GetPenWidth): size/8, bold size/5, clamped to size/4. */
+export function layoutPen(ef, size) {
+  const pen = ef.thick > 0.001 ? ef.thick : (ef.bold ? size / 5 : size / 8);
   return Math.min(pen, size * 0.25);
 }
