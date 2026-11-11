@@ -121,12 +121,53 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | PATCH/DELETE | `/api/projects/{id}/invites/{inviteId}` | change the role a pending invite grants · revoke it |
 | GET | `/api/projects/{id}/members` | who has access: owner, members, `canManage`, `canShare`, `myRole`, `permissions`; any member may read it, pending invites are shown to whoever sent them and to the owner |
 | PATCH/DELETE | `/api/projects/{id}/members/{userId}` | change a member's role · revoke access (owner); both reach sessions that are already connected |
-| POST/GET | `/api/projects/{id}/checkpoints` | name · list version checkpoints |
-| POST | `/api/projects/{id}/restore` | restore a checkpoint (hard reset + resync) |
+| GET/POST | `/api/projects/{id}/versions` | list versions · save one `{name, description, at?}` |
+| PATCH/DELETE | `/api/projects/{id}/versions/{vid}` | rename or describe · delete a version |
+| POST | `/api/projects/{id}/versions/{vid}/restore` | restore a version |
+| POST | `/api/projects/{id}/restore` | restore `{versionId}`, `{name}` or any point `{at:{docId,seq}, scope, label}` |
+| GET | `/api/projects/{id}/timeline` | versions, runs of edits, branches: what the History pane shows |
+| GET | `/api/docs/{id}/at/{seq\|head}` | the document at that point: `{file, ops}` (`?span=1` adds the ops up to the next snapshot) |
+| GET | `/api/docs/{id}/history` | the document's runs of edits |
+| GET/POST | `/api/projects/{id}/branches` | list branches · start one `{name, from?}` |
+| PATCH/DELETE | `/api/projects/{id}/branches/{bid}` | rename · delete a branch |
+| POST | `/api/projects/{branchId}/merge` | merge `{direction: into_main\|from_main, mode, prefer, dryRun}` |
+| POST/GET | `/api/projects/{id}/checkpoints` | the older names for saving and listing versions (older desktop builds) |
 | POST | `/api/docs/{id}/snapshots?seq=N` | upload a snapshot |
 | GET | `/api/docs/{id}/snapshots/{seq}` | fetch a historical file |
 | DELETE | `/api/links/{token}` | revoke a share link |
 | GET | `/ws` | the sync WebSocket |
+
+## Version history and branches
+
+The server keeps a document as whole-file snapshots (written by the editors)
+and a journal of ops after them. Any **point** of a document is a snapshot plus
+the ops up to a sequence number, so nothing has to be stored to make history
+scrubbable: `GET /api/docs/{id}/at/{seq}` hands a client the snapshot and the
+ops to lay over it.
+
+- A **version** pins one point per document of the project (`versions`,
+  `version_docs`). Somebody saves one with a name; the server keeps one by
+  itself before every restore, merge and GitHub pull, so each of those can be
+  taken back. Two versions may share a name; each has its own author and time.
+- **Restore** never rewrites history. It appends: the restored content becomes
+  a new snapshot at the head, marked by an op from the client id
+  `server:reset`, and every connected editor is told to reload. Anyone who can
+  edit can restore.
+- A **branch** is a child project (`projects.parent_id`) with copies of the
+  documents, edited apart from the main line. It shares the parent's access
+  and never shows in a project list. **Merging** replays what one side did
+  since the two last met onto the other, as ops from `branch:<docId>`. Items
+  changed on both sides are reported first (`dryRun`), and the caller chooses
+  whose version to keep; `mode: replace` makes one side read exactly as the
+  other. A side whose history was restored or pulled since they last met can
+  only be replaced, which the dry run says.
+- Every change to the list is announced to all connected clients (`versions`
+  message), so the History pane never needs a refresh.
+- Tests: `scripts/versions-e2e.mjs` (81 checks over the API with two live
+  clients) and `scripts/versions-ui.mjs` (two browsers through the web editor;
+  takes `BOARD`, a folder with a KiCad project, and `SHOTS` for screenshots).
+- The full op history is kept for 30 days. Snapshots and ops that a version or
+  a branch needs are kept for as long as it exists.
 
 ## Vendor parts and part libraries
 

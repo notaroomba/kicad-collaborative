@@ -24,14 +24,30 @@
 #include <collab/collab_session.h>
 #include <eda_base_frame.h>
 
-#include <map>
-
 #include <wx/app.h>
 #include <wx/button.h>
 #include <wx/dataview.h>
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
+#include <wx/datetime.h>
 #include <wx/textdlg.h>
+#include <wx/utils.h>
+
+
+/// "2026-11-11T20:38:04.123+00:00" as local time, "2026-11-11 15:38".
+static wxString localTime( const std::string& aIso )
+{
+    wxDateTime when;
+    wxString   text = wxString::FromUTF8( aIso ).Left( 19 );
+
+    if( !when.ParseISOCombined( text ) )
+    {
+        text.Replace( wxS( "T" ), wxS( " " ) );
+        return text.Left( 16 );
+    }
+
+    return when.MakeFromTimezone( wxDateTime::UTC ).Format( wxS( "%Y-%m-%d %H:%M" ) );
+}
 
 
 COLLAB_HISTORY_PANEL::COLLAB_HISTORY_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) :
@@ -42,32 +58,42 @@ COLLAB_HISTORY_PANEL::COLLAB_HISTORY_PANEL( wxWindow* aParent, EDA_BASE_FRAME* a
     wxBoxSizer* top = new wxBoxSizer( wxVERTICAL );
 
     m_list = new wxDataViewListCtrl( this, wxID_ANY );
-    m_list->AppendTextColumn( _( "Checkpoint" ), wxDATAVIEW_CELL_INERT, 140 );
+    m_list->AppendTextColumn( _( "Version" ), wxDATAVIEW_CELL_INERT, 150 );
+    m_list->AppendTextColumn( _( "By" ), wxDATAVIEW_CELL_INERT, 80 );
     m_list->AppendTextColumn( _( "When" ), wxDATAVIEW_CELL_INERT, 110 );
-    m_list->AppendTextColumn( _( "Docs" ), wxDATAVIEW_CELL_INERT, 44 );
     top->Add( m_list, 1, wxEXPAND | wxALL, 4 );
 
     wxBoxSizer* buttons = new wxBoxSizer( wxHORIZONTAL );
-    m_checkpointBtn = new wxButton( this, wxID_ANY, _( "Checkpoint..." ) );
-    m_restoreBtn = new wxButton( this, wxID_ANY, _( "Restore" ) );
-    m_refreshBtn = new wxButton( this, wxID_ANY, _( "Refresh" ) );
+    m_checkpointBtn = new wxButton( this, wxID_ANY, _( "Save Version..." ) );
+    m_restoreBtn = new wxButton( this, wxID_ANY, _( "Restore..." ) );
+    m_timelineBtn = new wxButton( this, wxID_ANY, _( "Timeline and Branches..." ) );
+    m_timelineBtn->SetToolTip( _( "Open this project's history in the web editor: scrub through "
+                                  "every edit, restore any point, and work with branches" ) );
     buttons->Add( m_checkpointBtn, 0, wxRIGHT, 4 );
     buttons->Add( m_restoreBtn, 0, wxRIGHT, 4 );
     buttons->AddStretchSpacer();
-    buttons->Add( m_refreshBtn, 0 );
+    buttons->Add( m_timelineBtn, 0 );
     top->Add( buttons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4 );
 
     SetSizer( top );
 
     m_checkpointBtn->Bind( wxEVT_BUTTON, [this]( wxCommandEvent& ) { onCheckpoint(); } );
     m_restoreBtn->Bind( wxEVT_BUTTON, [this]( wxCommandEvent& ) { onRestore(); } );
-    m_refreshBtn->Bind( wxEVT_BUTTON, [this]( wxCommandEvent& ) { RefreshHistory(); } );
+    m_timelineBtn->Bind( wxEVT_BUTTON, [this]( wxCommandEvent& ) { onOpenTimeline(); } );
 
     m_list->Bind( wxEVT_DATAVIEW_SELECTION_CHANGED,
                   [this]( wxDataViewEvent& )
                   {
-                      m_restoreBtn->Enable( !selectedName().IsEmpty() );
+                      m_restoreBtn->Enable( selectedRow() >= 0 );
                   } );
+
+    // Somebody (here, in another editor or in the browser) saved, restored, branched or
+    // merged: the list follows without anyone pressing a button.
+    COLLAB_SESSION::Get().AddVersionsListener( this,
+            [this]( const wxString& )
+            {
+                RefreshHistory();
+            } );
 
     SetProject( wxEmptyString );
 }
@@ -76,6 +102,7 @@ COLLAB_HISTORY_PANEL::COLLAB_HISTORY_PANEL( wxWindow* aParent, EDA_BASE_FRAME* a
 COLLAB_HISTORY_PANEL::~COLLAB_HISTORY_PANEL()
 {
     *m_alive = false;
+    COLLAB_SESSION::Get().RemoveVersionsListener( this );
 }
 
 
@@ -86,10 +113,11 @@ void COLLAB_HISTORY_PANEL::SetProject( const wxString& aProjectId )
     bool active = !m_projectId.IsEmpty();
 
     m_checkpointBtn->Enable( active );
-    m_refreshBtn->Enable( active );
+    m_timelineBtn->Enable( active );
     m_restoreBtn->Enable( false );
 
     m_list->DeleteAllItems();
+    m_rowIds.clear();
     m_rowNames.clear();
 
     if( active )
@@ -102,6 +130,16 @@ void COLLAB_HISTORY_PANEL::RefreshHistory()
     if( m_projectId.IsEmpty() )
         return;
 
+    // The notice arrives once per open document; one fetch at a time, and one more after it
+    // if anything was announced meanwhile.
+    if( m_fetching )
+    {
+        m_fetchAgain = true;
+        return;
+    }
+
+    m_fetching = true;
+
     std::shared_ptr<bool> alive = m_alive;
     std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
     std::string token =
@@ -111,24 +149,30 @@ void COLLAB_HISTORY_PANEL::RefreshHistory()
     COLLAB_SESSION::Get().RunAsync(
             [this, alive, server, token, projectId]()
             {
-                std::optional<nlohmann::json> listing = COLLAB_REST::ListCheckpoints(
+                std::optional<nlohmann::json> listing = COLLAB_REST::ListVersions(
                         wxString::FromUTF8( server ), wxString::FromUTF8( token ),
                         wxString::FromUTF8( projectId ) );
 
-                nlohmann::json checkpoints = listing && listing->contains( "checkpoints" )
-                                                     ? ( *listing )[ "checkpoints" ]
-                                                     : nlohmann::json::array();
+                bool           ok = listing && listing->contains( "versions" );
+                nlohmann::json versions = ok ? ( *listing )[ "versions" ] : nlohmann::json::array();
 
                 wxTheApp->CallAfter(
-                        [this, alive, checkpoints, projectId]()
+                        [this, alive, ok, versions, projectId]()
                         {
-                            if( !*alive
-                                || m_projectId.ToStdString( wxConvUTF8 ) != projectId )
-                            {
+                            if( !*alive )
                                 return;
-                            }
 
-                            populate( checkpoints );
+                            m_fetching = false;
+
+                            // A failed fetch leaves the list as it was rather than emptying it.
+                            if( ok && m_projectId.ToStdString( wxConvUTF8 ) == projectId )
+                                populate( versions );
+
+                            if( m_fetchAgain )
+                            {
+                                m_fetchAgain = false;
+                                RefreshHistory();
+                            }
                         } );
             } );
 }
@@ -136,79 +180,89 @@ void COLLAB_HISTORY_PANEL::RefreshHistory()
 
 void COLLAB_HISTORY_PANEL::populate( const nlohmann::json& aListing )
 {
+    // Keep the selection across a refresh: the list refills whenever anyone saves a version.
+    wxString selected;
+    int      was = selectedRow();
+
+    if( was >= 0 )
+        selected = m_rowIds[ was ];
+
     m_list->DeleteAllItems();
+    m_rowIds.clear();
     m_rowNames.clear();
-    m_restoreBtn->Enable( false );
 
-    // The server returns one row per document per checkpoint; the panel shows
-    // one row per checkpoint name with its newest timestamp and doc count.
-    struct GROUP
+    // The server lists versions newest first.  Two versions may carry the same name; each is
+    // a row of its own with its own author and time.
+    for( const nlohmann::json& v : aListing )
     {
-        wxString newest;
-        int      docs = 0;
-    };
-
-    std::map<wxString, GROUP>  groups;
-    std::vector<wxString>      order;
-
-    for( const nlohmann::json& row : aListing )
-    {
-        if( !row.is_object() )
+        if( !v.is_object() || !v.contains( "id" ) || !v[ "id" ].is_string() )
             continue;
 
-        wxString name = wxString::FromUTF8( row.value( "name", "" ) );
+        wxString id = wxString::FromUTF8( v[ "id" ].get<std::string>() );
+        wxString name;
+
+        if( v.contains( "name" ) && v[ "name" ].is_string() )
+            name = wxString::FromUTF8( v[ "name" ].get<std::string>() );
 
         if( name.IsEmpty() )
-            continue;
+            name = _( "Kept automatically" );
 
-        wxString when = wxString::FromUTF8( row.value( "createdAt", "" ) ).Left( 16 );
-        when.Replace( wxS( "T" ), wxS( " " ) );
+        wxString by;
 
-        auto [it, inserted] = groups.try_emplace( name );
+        if( v.contains( "author" ) && v[ "author" ].is_object() )
+        {
+            const nlohmann::json& author = v[ "author" ];
 
-        if( inserted )
-            order.push_back( name );
+            if( author.contains( "name" ) && author[ "name" ].is_string() )
+                by = wxString::FromUTF8( author[ "name" ].get<std::string>() );
 
-        it->second.docs++;
+            if( by.IsEmpty() && author.contains( "login" ) && author[ "login" ].is_string() )
+                by = wxString::FromUTF8( author[ "login" ].get<std::string>() );
+        }
 
-        if( when > it->second.newest )
-            it->second.newest = when;
-    }
-
-    // Newest checkpoint first.
-    std::sort( order.begin(), order.end(),
-               [&]( const wxString& a, const wxString& b )
-               {
-                   return groups[ a ].newest > groups[ b ].newest;
-               } );
-
-    for( const wxString& name : order )
-    {
         wxVector<wxVariant> row;
         row.push_back( wxVariant( name ) );
-        row.push_back( wxVariant( groups[ name ].newest ) );
-        row.push_back( wxVariant( wxString::Format( wxS( "%d" ), groups[ name ].docs ) ) );
+        row.push_back( wxVariant( by ) );
+        row.push_back( wxVariant( localTime( v.value( "createdAt", "" ) ) ) );
 
         m_list->AppendItem( row );
+        m_rowIds.push_back( id );
         m_rowNames.push_back( name );
+
+        if( id == selected )
+            m_list->SelectRow( (unsigned) m_rowIds.size() - 1 );
     }
+
+    m_restoreBtn->Enable( selectedRow() >= 0 );
 }
 
 
-wxString COLLAB_HISTORY_PANEL::selectedName() const
+int COLLAB_HISTORY_PANEL::selectedRow() const
 {
     int row = m_list->GetSelectedRow();
 
-    if( row == wxNOT_FOUND || row < 0 || row >= (int) m_rowNames.size() )
-        return wxEmptyString;
+    if( row == wxNOT_FOUND || row < 0 || row >= (int) m_rowIds.size() )
+        return -1;
 
-    return m_rowNames[ row ];
+    return row;
+}
+
+
+void COLLAB_HISTORY_PANEL::onOpenTimeline()
+{
+    if( m_projectId.IsEmpty() )
+        return;
+
+    wxString url = COLLAB_SESSION::ServerUrl() + wxS( "/p/" ) + m_projectId + wxS( "/edit" );
+
+    if( !wxLaunchDefaultBrowser( url ) )
+        m_frame->ShowInfoBarError( wxString::Format( _( "Could not open %s in a browser." ), url ) );
 }
 
 
 void COLLAB_HISTORY_PANEL::onCheckpoint()
 {
-    wxTextEntryDialog dlg( this, _( "Name this checkpoint:" ), _( "Create Checkpoint" ) );
+    wxTextEntryDialog dlg( this, _( "Name the project as it is now:" ), _( "Save Version" ) );
 
     if( dlg.ShowModal() != wxID_OK )
         return;
@@ -243,7 +297,7 @@ void COLLAB_HISTORY_PANEL::onCheckpoint()
                             if( !ok )
                             {
                                 m_frame->ShowInfoBarError(
-                                        _( "The checkpoint could not be created." ) );
+                                        _( "The version could not be saved." ) );
                             }
 
                             RefreshHistory();
@@ -254,18 +308,22 @@ void COLLAB_HISTORY_PANEL::onCheckpoint()
 
 void COLLAB_HISTORY_PANEL::onRestore()
 {
-    wxString name = selectedName();
+    int row = selectedRow();
 
-    if( name.IsEmpty() )
+    if( row < 0 )
         return;
+
+    wxString id = m_rowIds[ row ];
+    wxString name = m_rowNames[ row ];
 
     wxMessageDialog confirm(
             this,
-            wxString::Format( _( "Restore the project to checkpoint '%s'?\n\n"
-                                 "Every connected editor will synchronize to the restored "
-                                 "version automatically." ),
+            wxString::Format( _( "Restore the project to '%s'?\n\n"
+                                 "The project as it is now is kept in the history first, so "
+                                 "this can be taken back. Every connected editor synchronizes "
+                                 "to the restored version automatically." ),
                               name ),
-            _( "Restore Checkpoint" ), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING );
+            _( "Restore Version" ), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION );
 
     if( confirm.ShowModal() != wxID_YES )
         return;
@@ -275,14 +333,14 @@ void COLLAB_HISTORY_PANEL::onRestore()
     std::string token =
             COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
     std::string projectId = m_projectId.ToStdString( wxConvUTF8 );
-    std::string nameStd = name.ToStdString( wxConvUTF8 );
+    std::string idStd = id.ToStdString( wxConvUTF8 );
 
     COLLAB_SESSION::Get().RunAsync(
-            [this, alive, server, token, projectId, nameStd]()
+            [this, alive, server, token, projectId, idStd]()
             {
-                std::optional<nlohmann::json> result = COLLAB_REST::RestoreCheckpoint(
+                std::optional<nlohmann::json> result = COLLAB_REST::RestoreVersion(
                         wxString::FromUTF8( server ), wxString::FromUTF8( token ),
-                        wxString::FromUTF8( projectId ), wxString::FromUTF8( nameStd ) );
+                        wxString::FromUTF8( projectId ), wxString::FromUTF8( idStd ) );
 
                 bool ok = result.has_value();
 
@@ -295,14 +353,13 @@ void COLLAB_HISTORY_PANEL::onRestore()
                             if( ok )
                             {
                                 m_frame->ShowInfoBarMsg(
-                                        _( "Checkpoint restored; editors are "
-                                           "synchronizing." ) );
+                                        _( "Version restored; editors are synchronizing." ) );
                             }
                             else
                             {
                                 m_frame->ShowInfoBarError(
-                                        _( "The restore was refused (only the project "
-                                           "owner can restore)." ) );
+                                        _( "The restore was refused. Only people who can edit "
+                                           "the project can restore a version." ) );
                             }
 
                             RefreshHistory();

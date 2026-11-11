@@ -433,6 +433,22 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
         return;
     }
 
+    // The project's version list changed.  It is about the project, not one document, and
+    // the server sends it once per joined document, so listeners must tolerate repeats.
+    if( type == "versions" )
+    {
+        const wxString projectId = wxString::FromUTF8( aMsg.value( "projectId", "" ) );
+        auto           listeners = m_versionsListeners;   // a listener may remove itself
+
+        for( auto& [owner, listener] : listeners )
+        {
+            if( listener && m_versionsListeners.count( owner ) )
+                listener( projectId );
+        }
+
+        return;
+    }
+
     const wxString docId = wxString::FromUTF8( aMsg.value( "docId", "" ) );
     auto docIt = m_docs.find( docId );
 

@@ -203,6 +203,16 @@ public:
     void SetProjectDocs( const nlohmann::json& aDocs ) { m_projectDocs = aDocs; }
     const nlohmann::json& ProjectDocs() const { return m_projectDocs; }
 
+    /// Somebody saved, renamed, deleted or restored a version, or made or merged a branch
+    /// (the server's "versions" notice).  The listener is called on the UI thread with the
+    /// project id; aOwner is only the key RemoveVersionsListener() takes it out by.
+    void AddVersionsListener( void* aOwner, std::function<void( const wxString& )> aListener )
+    {
+        m_versionsListeners[ aOwner ] = std::move( aListener );
+    }
+
+    void RemoveVersionsListener( void* aOwner ) { m_versionsListeners.erase( aOwner ); }
+
     /// Test seams: feed a server message through the real router, observe what would go
     /// out on the socket, and force the connection state.  The QA suites drive the
     /// reconnect ordering rules with these; production code never calls them.
@@ -251,6 +261,7 @@ private:
     wxString                          m_selfLogin;
     long long                         m_selfUserId = 0;
     std::map<wxString, JOINED_DOC>    m_docs;
+    std::map<void*, std::function<void( const wxString& )>> m_versionsListeners;
 
     /// Bumped on every Connect/Disconnect so wx events queued by a torn-down
     /// connection are recognised as stale and their payloads freed.

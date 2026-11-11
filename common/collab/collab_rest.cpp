@@ -698,6 +698,34 @@ std::optional<nlohmann::json> COLLAB_REST::CreateCheckpoint( const wxString& aSe
 }
 
 
+std::optional<nlohmann::json> COLLAB_REST::ListVersions( const wxString& aServerUrl,
+                                                          const wxString& aToken,
+                                                          const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/versions" ),
+                  aToken );
+
+    return performJson( curl );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::RestoreVersion( const wxString& aServerUrl,
+                                                            const wxString& aToken,
+                                                            const wxString& aProjectId,
+                                                            const wxString& aVersionId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/restore" ),
+                  aToken );
+
+    nlohmann::json body = { { "versionId", aVersionId.ToStdString( wxConvUTF8 ) } };
+    setJsonBody( curl, body );
+
+    return performJson( curl );
+}
+
+
 std::optional<nlohmann::json> COLLAB_REST::RestoreCheckpoint( const wxString& aServerUrl,
                                                               const wxString& aToken,
                                                               const wxString& aProjectId,

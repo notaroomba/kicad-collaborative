@@ -257,8 +257,22 @@ KICOMMON_API std::optional<nlohmann::json> CreateCheckpoint( const wxString& aSe
                                                              const wxString& aProjectId,
                                                              const wxString& aName );
 
-/// POST /api/projects/{id}/restore { name } — owner only; live editors
-/// reconcile automatically from the reset broadcast.
+/// GET /api/projects/{id}/versions -> { versions: [ { id, name, kind, author, createdAt, docs } ] }
+/// Saved versions (kind "named") and the ones the server keeps by itself before a restore
+/// or a merge (kind "auto"), newest first.
+KICOMMON_API std::optional<nlohmann::json> ListVersions( const wxString& aServerUrl,
+                                                         const wxString& aToken,
+                                                         const wxString& aProjectId );
+
+/// POST /api/projects/{id}/restore { versionId } — editors; the project as it is now is
+/// kept as a version first, and live editors reconcile from the reset broadcast.
+KICOMMON_API std::optional<nlohmann::json> RestoreVersion( const wxString& aServerUrl,
+                                                           const wxString& aToken,
+                                                           const wxString& aProjectId,
+                                                           const wxString& aVersionId );
+
+/// POST /api/projects/{id}/restore { name } — the newest version with this name.  Kept for
+/// callers that only know a name; live editors reconcile from the reset broadcast.
 KICOMMON_API std::optional<nlohmann::json> RestoreCheckpoint( const wxString& aServerUrl,
                                                               const wxString& aToken,
                                                               const wxString& aProjectId,
