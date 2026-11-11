@@ -78,11 +78,6 @@ function moduleGhost(mod) {
 // wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
 // Installed before every other stage listener so it sees each event first.
 installGestures(openContextMenu);
-stage.addEventListener("wheel", (ev) => {
-  ev.preventDefault();
-  const r = stage.getBoundingClientRect();
-  zoomBy(Math.pow(E.zoomStep || 1.0018, -ev.deltaY), ev.clientX - r.left, ev.clientY - r.top);   // Preferences > Mouse and Touchpad > Zoom speed
-}, { passive: false });
 
    // until the user pans/zooms, resizes just refit
 new ResizeObserver(() => {

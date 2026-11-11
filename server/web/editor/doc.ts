@@ -199,10 +199,10 @@ export function setGridPitch(v) { E.gridPitch = Number(v) || E.gridPitch; update
 
 export function snapMm(mm) {
   if (!E.snapOn) return mm;
-  if (!isSch()) return KiCadCanvas.pcbSizes.state.snapToGrid(mm, E.gridPitch);   // the board's grid starts at its grid origin
-  return [KiCadCanvas.snap(mm[0], E.gridPitch), KiCadCanvas.snap(mm[1], E.gridPitch)];
+  const p = E.gridFor ? E.gridFor() : E.gridPitch;   // E.gridFor: the grid override of the active tool (Preferences > Grids)
+  if (!isSch()) return KiCadCanvas.pcbSizes.state.snapToGrid(mm, p);   // the board's grid starts at its grid origin
+  return [KiCadCanvas.snap(mm[0], p), KiCadCanvas.snap(mm[1], p)];
 }
-export function snapMm(mm) { const p = E.gridFor ? E.gridFor() : E.gridPitch; return E.snapOn ? [KiCadCanvas.snap(mm[0], p), KiCadCanvas.snap(mm[1], p)] : mm; }   // E.gridFor: the grid override of the active tool (Preferences > Grids)
 
 
 export function leaveEditor() {
