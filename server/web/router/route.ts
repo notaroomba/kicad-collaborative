@@ -94,13 +94,13 @@ export class Router {
     const { K, P, doc, s } = this; const copper: string[] = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const L = copper.length;
     const nl = P.netlist(doc); const all = copper.map((_, i) => i);
     const obstacles = this.collectObstacles(nl);
-    const pads: Pt[] = []; let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    const pads: number[][] = []; let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
     const hv = copper.map(() => [0, 0]); const smd: Shape[] = [];
     for (const c of nl.conductors) {
       if (c.kind === "zone") continue;
       const layers = Array.from(c.layers as Set<string>).map((l) => copper.indexOf(l)).filter((i) => i >= 0); if (!layers.length) continue;
       if (c.bbox[0] < bx0) bx0 = c.bbox[0]; if (c.bbox[1] < by0) by0 = c.bbox[1]; if (c.bbox[2] > bx1) bx1 = c.bbox[2]; if (c.bbox[3] > by1) by1 = c.bbox[3];
-      if (c.kind === "pad") { pads.push([c.pad.x, c.pad.y]); if (layers.length < L || L === 1) smd.push(c.shape); }
+      if (c.kind === "pad") { const fine = c.pad.type === "smd" && Math.min(c.pad.w, c.pad.h) <= 0.35 ? 25 : 1; const ax = padAxis(c.pad); const along = Math.abs(ax[0]) > 0.7; pads.push([c.pad.x, c.pad.y, fine > 1 && along ? 0.2 : fine, fine > 1 && !along ? 0.2 : fine]); if (layers.length < L || L === 1) smd.push(c.shape); }
       if (c.kind === "segment") { const [a, b] = c.anchors; const dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]); if (dy < dx * 0.2) hv[layers[0]][0] += dx; else if (dx < dy * 0.2) hv[layers[0]][1] += dy; }
     }
     const outline: Pt[] | null = P.boardOutline(doc).outline;
@@ -276,9 +276,9 @@ export class Router {
     }
     return null;
   }
-  private cur: Conn | null = null; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
+  private cur: Conn | null = null; private curSoft = false; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
   /** Exact: does a piece of track keep its clearance to the board's copper, holes and edges, and to this run's routes? */
-  private clearOf(shape: Shape, layer: number, net: string, clr: number): boolean {
+  private clearOf(shape: Shape, layer: number, net: string, clr: number, why?: { net: string; gap: number; need: number }): boolean {
     const G = this.G, P = this.P, B = 2; const bbOf = (s: Shape): number[] => s.t === "circle" ? [s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r] : s.t === "seg" ? [Math.min(s.a[0], s.b[0]) - s.r, Math.min(s.a[1], s.b[1]) - s.r, Math.max(s.a[0], s.b[0]) + s.r, Math.max(s.a[1], s.b[1]) + s.r] : null as any;
     if (!this.oidx) {
       const idx = this.oidx = new Map(); const full = (s: Shape): number[] => { const b = bbOf(s); if (b) return b; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; const pts: Pt[] = s.pts || [[s.x - Math.hypot(s.w, s.h) / 2, s.y - Math.hypot(s.w, s.h) / 2], [s.x + Math.hypot(s.w, s.h) / 2, s.y + Math.hypot(s.w, s.h) / 2]]; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); } const o = s.r || 0; return [x0 - o, y0 - o, x1 + o, y1 + o]; };
@@ -289,9 +289,9 @@ export class Router {
     for (let y = Math.floor((bb[1] - m) / B); y <= Math.floor((bb[3] + m) / B); y++) for (let x = Math.floor((bb[0] - m) / B); x <= Math.floor((bb[2] + m) / B); x++) for (const e of this.oidx.get(x + "," + y) || []) {
       if (seen.has(e)) continue; seen.add(e); if (e.o.net && e.o.net === net) continue; if (!e.o.layers.includes(layer)) continue;
       const need = (e.o.edge ? G.edgeClr : Math.max(e.o.clr, clr)) + 1e-3; if (e.bb[0] > bb[2] + need || e.bb[2] < bb[0] - need || e.bb[1] > bb[3] + need || e.bb[3] < bb[1] - need) continue;
-      if (P.shapeGap(e.o.shape, shape) < need) return false;
+      const gap = P.shapeGap(e.o.shape, shape); if (gap < need) { if (why) { why.net = e.o.net; why.gap = gap; why.need = need - 1e-3; } return false; }
     }
-    for (const c of this.conns) {
+    if (!this.curSoft) for (const c of this.conns) {
       if (!c.nodes || c.net === net) continue; const need = Math.max(c.cls.clr, clr) + 1e-3;
       for (const o of c.shapes) { if (!o.layers.includes(layer)) continue; const ob = bbOf(o.shape); if (ob[0] > bb[2] + need || ob[2] < bb[0] - need || ob[1] > bb[3] + need || ob[3] < bb[1] - need) continue; if (P.shapeGap(o.shape, shape) < need) return false; }
     }
@@ -315,7 +315,7 @@ export class Router {
   // ------------------------------------------------------------------ one connection
   /** Search a route for the connection in the given maps (the net's own copper is lifted while it runs). */
   find(conn: Conn, soft: boolean, collect?: Features[]): Found | null {
-    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1, conn.cls); this.cur = conn;
+    const G = this.G, net = this.netOf(conn.net); this.lift(net, 1, conn.cls); this.cur = conn; this.curSoft = soft;
     try {
       const maps = soft ? conn.cls.fixed : conn.cls.full, vmaps = soft ? conn.cls.vfixed : conn.cls.vfull;
       const comp = this.components(net); const owner = new Map<number, number>();
@@ -529,8 +529,13 @@ export class Router {
       if (c.why === "budget") { rep.reason = "budget"; rep.detail = "the run stopped before this connection was tried"; continue; }
       if (c.why === "rule") { rep.reason = "rule"; const o = this.ruleHit.get(c.id); rep.blockedBy = { nets: o ? [o] : [], items: [] }; rep.detail = "the route found did not keep its clearance in the exact check"; continue; }
       const net = this.netOf(c.net); let ends: boolean[] = []; const gd = net.guide;
-      this.lift(net, 1, c.cls); this.cur = c; try { ends = [c.a, c.b].map((e) => !!this.access(e, c.cls.fixed)); } finally { this.lift(net, -1, c.cls); }
+      this.lift(net, 1, c.cls); this.cur = c; this.curSoft = true; try { ends = [c.a, c.b].map((e) => !!this.access(e, c.cls.fixed)); } finally { this.lift(net, -1, c.cls); }
       const soft = this.find(c, true);
+      if (!soft && (!ends[0] || !ends[1])) {   // is it the rules themselves that close the pad in?
+        const e = !ends[0] ? c.a : c.b; const why = { net: "", gap: 0, need: 0 }; let shut = !!e.axis;
+        if (e.axis) for (const sgn of [1, -1]) for (const l of e.layers) if (this.G.routable[l]) { this.cur = c; this.curSoft = true; if (this.clearOf({ t: "seg", a: e.p, b: [e.p[0] + e.axis[0] * 0.3 * sgn, e.p[1] + e.axis[1] * 0.3 * sgn], r: c.cls.width / 2 }, l, c.net, c.cls.clr, why)) shut = false; }
+        if (shut && why.need) { rep.reason = "rule"; rep.blockedBy = { nets: why.net ? [why.net] : [], items: [] }; rep.detail = `a ${c.cls.width} mm track cannot leave ${this.padName(e.p)}: it would pass ${why.gap.toFixed(3)} mm from ${why.net || "its neighbour"} where ${why.need.toFixed(3)} mm is required — relax that clearance or the minimum track width`; continue; }
+      }
       if (!soft) { rep.reason = "no-room"; rep.detail = !ends[0] || !ends[1] ? `no free way out of ${this.padName(!ends[0] ? c.a.p : c.b.p)}` : "no path past the copper, holes, keep-outs and edges already on the board" + (gd.allowed || gd.avoid.length || gd.maxVias < Infinity || !gd.allowVias ? " within the plan's limits for this net" : ""); continue; }
       const bl = this.blockers(c, soft.res); rep.reason = "blocked"; rep.blockedBy = { nets: Array.from(new Set(bl.map((b) => b.net))), items: [] };
       rep.detail = bl.length ? "routes laid earlier in this run are in the way" : "too tight for a track of this width between the routes laid earlier";
