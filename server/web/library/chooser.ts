@@ -108,8 +108,9 @@ let openDialog: { close(): void } | null = null;
 export function chooserOpen(): boolean { return !!openDialog; }
 export function closeChooser(): void { if (openDialog) openDialog.close(); }
 
-// what the previous dialog left ticked, like KiCad's remembered checkbox state
-const remembered = { keep: false, allUnits: false };
+// DIALOG_SYMBOL_CHOOSER is built afresh for every placement: "Place repeated copies" starts off and
+// "Place all units" starts on (m_useUnits->SetValue( true )); neither is remembered
+const CHOOSER_DEFAULTS = { keep: false, allUnits: true } as const;
 
 /** Open the chooser; resolves with the chosen item (its s-expression fetched) or null on Cancel. */
 export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOptions = {}): Promise<Chosen | null> {
@@ -152,8 +153,8 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     const fpCanvas = isSym ? $<HTMLCanvasElement>(".klib-pane-fp canvas") : null, fpMsg = isSym ? $<HTMLElement>(".klib-pane-fp .klib-msg") : null;
     const fpSelect = isSym ? $<HTMLSelectElement>(".klib-fpsel select") : null;
     const okBtn = $<HTMLButtonElement>(".klib-ok"), keepBox = dlg.querySelector<HTMLInputElement>(".klib-keep"), unitsBox = dlg.querySelector<HTMLInputElement>(".klib-units");
-    if (keepBox) keepBox.checked = remembered.keep;
-    if (unitsBox) unitsBox.checked = remembered.allUnits;
+    if (keepBox) keepBox.checked = CHOOSER_DEFAULTS.keep;
+    if (unitsBox) unitsBox.checked = CHOOSER_DEFAULTS.allUnits;
     if (opts.viewOnly) { okBtn.disabled = true; okBtn.title = "This document is read-only"; }
     if (opts.filter) { input.value = opts.filter; filterBox.classList.add("has-text"); }
 
@@ -381,8 +382,6 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     // ---- finishing
     function close(result: Chosen | null): void {
       if (closed) return; closed = true;
-      if (keepBox) remembered.keep = keepBox.checked;
-      if (unitsBox) remembered.allUnits = unitsBox.checked;
       offSources(); window.removeEventListener("keydown", onKey, true); window.clearTimeout(refreshTimer); window.clearTimeout(sourceTimer); for (const t of retryTimers) window.clearTimeout(t); ro.disconnect();
       ov.remove(); if (openDialog === handle) openDialog = null;
       resolve(result);
