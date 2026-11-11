@@ -4,7 +4,13 @@
 // macOS defaults on a Mac, the Linux / Windows ones elsewhere).  The toolbar spec (spec.ts) only keeps the actions a toolbar shows; the menus, the key handling and
 // Help > List Hotkeys need all of them, looked up per editor because eeschema and pcbnew reuse short ids
 // ("properties", "mirrorH", "highlightNet", …) for different actions.
-import raw from "./generated/kicad-menu-spec.json";
+import bundled from "./generated/kicad-menu-spec.json";
+
+// One copy of the table on the app page: editor.js (loaded first) carries it and publishes it; ui.js is built
+// with MENU_SPEC_SHARED=true (package.json), which drops its own copy and reads the published one.
+declare const MENU_SPEC_SHARED: boolean;
+const G = globalThis as { KiCadMenuSpec?: unknown };
+const raw = typeof MENU_SPEC_SHARED !== "undefined" && MENU_SPEC_SHARED ? G.KiCadMenuSpec || { actions: {} } : (G.KiCadMenuSpec = bundled);
 
 export type EditorKind = "sch" | "pcb";
 export interface MenuActionMeta { id: string; label: string; tip: string | null; icon: string | null; key: string | null; alt?: string }

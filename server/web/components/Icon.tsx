@@ -1,16 +1,18 @@
 // Icon.tsx — KiCad's own icons (light + dark variants from resources/bitmaps_png, chosen by
 // the `dark:` variant on the .lt / .dk groups) and the stroke glyphs of the collab tools.
-import { SPEC, type IconSpec } from "../spec";
-import menuIcons from "../generated/kicad-menu-icons.json";
+import { SPEC } from "../spec";
+import { loadIconPack, packIcon, useIconPack } from "../iconpack";
 
-// the icons of the menu entries the toolbars do not use (server/scripts/gen_kicad_menus.py)
-const MENU_ICONS = (menuIcons as unknown as { icons: Record<string, IconSpec> }).icons;
+loadIconPack();
 
 /* `kicon` / `lt` / `dk` stay as plain hooks; the sizing and the light/dark swap are the utilities. */
 const ICON = "kicon block w-6 h-6";
 
 export function KIcon({ name, size }: { name: string | null | undefined; size?: number }) {
-  const ic = name ? SPEC.icons[name] || MENU_ICONS[name] : undefined;
+  // the icons of the menu entries the toolbars do not use come from the lazily fetched pack (iconpack.ts)
+  const ready = useIconPack();
+  const ic = name ? SPEC.icons[name] || packIcon(name) : undefined;
+  if (!ic && name && !ready) return <svg className={size ? "kicon block" : ICON} viewBox="0 0 24 24" aria-hidden="true" width={size} height={size} />;
   if (!ic) {
     return (
       <svg className={ICON} viewBox="0 0 24 24" aria-hidden="true" width={size} height={size}>

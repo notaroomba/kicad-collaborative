@@ -1,9 +1,10 @@
 // ctxspec.ts — the context menus' share of KiCad's icons (server/web/generated/kicad-context-spec.json,
-// produced by server/scripts/gen_kicad_context.py): the ones the toolbars do not already carry are
-// added to the icon table KIcon draws from.
-import { icons } from "./generated/kicad-context-spec.json";
-import { SPEC, type IconSpec } from "./spec";
+// produced by server/scripts/gen_kicad_context.py): the ones the toolbars do not already carry are served
+// with the menu icon pack (scripts/gen-icon-pack.js → static/dist/kicad-icons.json, web/iconpack.ts).
+import { SPEC } from "./spec";
+import { loadIconPack, packIcon } from "./iconpack";
 
-for (const [name, ic] of Object.entries(icons as unknown as Record<string, IconSpec>)) if (!SPEC.icons[name]) SPEC.icons[name] = ic;
+// the context menus' icons now arrive with the menu icon pack (static/dist/kicad-icons.json); start fetching it now
+loadIconPack();
 
-export const hasIcon = (name: string | undefined): name is string => !!name && !!SPEC.icons[name];
+export const hasIcon = (name: string | undefined): name is string => !!name && !!(SPEC.icons[name] || packIcon(name));
