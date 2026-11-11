@@ -15,7 +15,9 @@ export function openSelectionProperties() {
   const ctx = toolCtx();
   if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (it) { KDialogs.openField(ctx, it, E.selField.name); return true; } }
   const modSel = isSch() ? (CollabTools.sch && CollabTools.sch.state && CollabTools.sch.state.sel) : (CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel);
-  const id = E.selected ? E.selected.id : modSel;
+  // the board module keeps a Set of ids (tracks, vias, graphics, zones), the schematic module one id
+  const first = (s) => (s && typeof s === "object" && typeof s[Symbol.iterator] === "function" ? s.values().next().value : s) || null;
+  const id = E.selected ? E.selected.id : (first(modSel) || first(E.selection));
   const it = id && E.kdoc.items.get(id); if (!it) return false;
   KDialogs.openItem(ctx, it); return true;
 }

@@ -121,6 +121,9 @@ stage.addEventListener("dblclick", (ev) => {
     let pad = null;
     try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(E.kdoc, x, y) : null; if (!pad && CollabTools.pcb.padAt) pad = CollabTools.pcb.padAt(E.kdoc, x, y); } catch (e) { pad = null; }
     if (pad && pad.item && pad.index !== undefined) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
+    // the first click picked a track, via, graphic or zone (the board module's selection): its dialog, as pcbnew's double-click
+    const ps = CollabTools.pcb.state && CollabTools.pcb.state.sel;
+    if (ps && ps.size === 1 && !E.selected && openSelectionProperties()) return;
   }
   if (isSch() && CollabTools.sch && CollabTools.sch.enterGroupAt) {         // a double-click on a group enters it (KiCad), it does not open a dialog
     const g = hitAny([x, y]); try { if (g && CollabTools.sch.enterGroupAt(ctx, g.id)) return; } catch (e) { console.warn(e); }
