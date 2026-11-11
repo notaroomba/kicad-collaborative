@@ -2,9 +2,11 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
-import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, fillOf, has, isList, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
+import { expandDocVars } from "./geom-sch";
+import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
-import { parseMarkup, textWidth } from "./text";
+import { parseMarkup, textWidth, unescapeText } from "./text";
+import { linebreakText } from "./stroke-font";
 // ---- board ----
 /**
  * Net code of a board item.  Files up to 2025 carry (net N) or (net N "name"); KiCad 10 names the net only —
@@ -27,14 +29,13 @@ export function netCode(doc, node) {
 }
 
 const DISPLAY_NAMES = new Map();
-const ESCAPES = { slash: "/", backslash: "\\", dblquote: '"', lt: "<", gt: ">", colon: ":", space: " ", tab: "\t", return: "\n", brace: "{" };
 /** NETINFO_ITEM::GetDisplayNetname: the short net name (after the last sheet-path slash), unescaped ({slash} → /). */
 export function displayNetName(name) {
   if (!name) return "";
   let v = DISPLAY_NAMES.get(name);
   if (v === undefined) {
     const i = name.lastIndexOf("/");
-    v = (i >= 0 ? name.slice(i + 1) : name).replace(/\{(slash|backslash|dblquote|lt|gt|colon|space|tab|return|brace)\}/g, (m, k) => ESCAPES[k]);
+    v = unescapeText(i >= 0 ? name.slice(i + 1) : name);
     if (DISPLAY_NAMES.size > 20000) DISPLAY_NAMES.clear();
     DISPLAY_NAMES.set(name, v);
   }
@@ -91,7 +92,7 @@ export function buildPcbGeom(doc, item) {
   } else if (k === "gr_line" || k === "gr_rect" || k === "gr_circle" || k === "gr_arc" || k === "gr_poly" || k === "gr_curve") {
     graphicGeom(item, n, k.replace("gr_", ""), (x, y) => [x, y], layerOf(n, "Dwgs.User"));
   } else if (k === "gr_text") {
-    const [x, y, rot] = atOf(n); pcbTextGeom(item, n, x, y, str(n[1]), rot, layerOf(n, "Dwgs.User"));
+    const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
   } else if (k === "gr_text_box") {
     buildTextBoxGeom(item, n, (x, y) => [x, y], layerOf(n, "Dwgs.User"), 0);
   } else if (k === "dimension") {
@@ -244,9 +245,21 @@ export function buildTextBoxGeom(item, n, tf, layer, rotBase) {
   const w = widthOf(n, 0); const color = pcbColor(layer); const z = pcbZ(layer);
   if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly", pts, close: true, w, color, layer, z }, dashOf(n)));
   const angN = kid(n, "angle"); const ang = angN ? num(angN[1]) : rotBase;
-  const mg = kid(n, "margins"); const m = mg ? num(mg[1]) : w / 2 + ef.size * 0.75;
-  const R = rotator(ang); const [dx, dy] = R(m, m);
-  pcbTextGeom(item, n, pts[0][0] + dx, pts[0][1] + dy, str(n[1]), ang, layer, { defH: "left", defV: "top" });
+  const mg = kid(n, "margins"); const dm = w / 2 + ef.size * 0.75;
+  const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2], lm) : dm, rm = mg ? num(mg[3], lm) : dm, bm = mg ? num(mg[4], tm) : dm;
+  // PCB_TEXTBOX::GetDrawPos: the corner / edge mid-point matching the justification (file default centre / centre),
+  // moved in by the margins along the box's own axes
+  const j = justOf(ef.just); const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  const anchor = j.v === "top" ? (j.h === "left" ? pts[0] : j.h === "right" ? pts[1] : mid(pts[0], pts[1]))
+    : j.v === "bottom" ? (j.h === "left" ? pts[3] : j.h === "right" ? pts[2] : mid(pts[3], pts[2]))
+    : (j.h === "left" ? mid(pts[0], pts[3]) : j.h === "right" ? mid(pts[1], pts[2]) : mid(pts[0], pts[2]));
+  const ex = [pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]], ey = [pts[3][0] - pts[0][0], pts[3][1] - pts[0][1]];
+  const el = Math.hypot(ex[0], ex[1]) || 1, yl = Math.hypot(ey[0], ey[1]) || 1;
+  const ox = j.h === "left" ? lm : j.h === "right" ? -rm : 0, oy = j.v === "top" ? tm : j.v === "bottom" ? -bm : 0;
+  // PCB_TEXTBOX::GetShownText: wrapped to the box's first edge less the side margins, with the effective pen
+  const col = el - lm - rm;
+  const pen = ef.thick > 0 ? ef.thick : (ef.bold ? ef.size / 5 : ef.size / 8);
+  pcbTextGeom(item, n, anchor[0] + ex[0] / el * ox + ey[0] / yl * oy, anchor[1] + ex[1] / el * ox + ey[1] / yl * oy, linebreakText(unescapeText(str(n[1])), col, ef.sizeX, pen, ef.italic), ang, layer);
 }
 
 export function buildDimensionGeom(item, n) {
@@ -462,7 +475,7 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
     const padCu = layers.filter((l) => /\.Cu$/.test(l));
     const label = (text, ts, dyLocal, tag) => {
       const [dx, dy] = rotPt(0, dyLocal, rot);
-      const g = { t: "text", x: tcx + dx, y: tcy + dy, text, size: ts, sizeX: ts * 0.9, w: ts * 0.9 / 6, color, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padMin, padLayers: padCu.length ? padCu : [textLayer], noBox: true };
+      const g = { t: "text", x: tcx + dx, y: tcy + dy, text, size: ts, sizeX: ts * 0.9, w: ts * 0.9 / 6, color, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padMin, padLayers: padCu.length ? padCu : [textLayer], noBox: true, minPx: 3.5 };   // below 3.5 px the label is a smudge: skipped (KiCad would still paint it)
       g[tag] = true; G(item, g);
     };
     if (shownNet) {

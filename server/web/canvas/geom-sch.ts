@@ -4,7 +4,14 @@ import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, bboxAdd, boxUnion, textGeom, textLines, transformedText } from "./geom";
 import { arcFrom3, atOf, bezierPts, colorOf, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
-import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth } from "./text";
+import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth, unescapeText } from "./text";
+import { linebreakText } from "./stroke-font";
+import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
+/** ${VAR} in free text: the title-block / sheet / project variables GetShownText resolves; unknown ones stay as written. */
+export function expandDocVars(doc, text) {
+  if (!text || text.indexOf("${") < 0) return text;
+  try { return expandTextVars(text, varResolver(sheetTextVars(doc), { project: (doc && doc.projectVars) || null })); } catch (e) { return text; }
+}
 // ---- schematic ----
 // KiCad TRANSFORM matrices on library (Y up) coordinates: screen = T·lib + origin (x' = T0·x + T1·y, y' = T2·x + T3·y)
 export const ORIENT = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
@@ -62,7 +69,7 @@ export function labelFields(item, n, color, layer, z) {
   for (const p of kids(n, "property")) {
     const ef = effectsOf(p); const val = str(p[2]); if (ef.hide || !val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
-    textLines(item, px, py, val, ef.size, color, pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
+    textLines(item, px, py, val, ef.size, color, pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
   }
 }
 
@@ -96,7 +103,7 @@ export function buildSchGeom(doc, item) {
   } else if (k === "text") {
     const [x, y, rot] = atOf(n); const ef = effectsOf(n);
     // SCH_TEXT::GetSchematicTextOffset: a fixed 0.25 mm lift; angles are kept upright (KeepUpright)
-    textLines(item, x, y - 0.25, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
+    textLines(item, x, y - 0.25, expandDocVars(doc, str(n[1])), ef.size, colorOf(n) || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
   } else if (k === "text_box") {
     const [x, y, rot] = atOf(n); const s = kid(n, "size"); const w = s ? num(s[1]) : 10, h = s ? num(s[2]) : 5; const ef = effectsOf(n);
     const x0 = Math.min(x, x + w), y0 = Math.min(y, y + h), x1 = Math.max(x, x + w), y1 = Math.max(y, y + h);
@@ -105,12 +112,15 @@ export function buildSchGeom(doc, item) {
     if (fill) G(item, { t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: 0, color: fill, fill, layer: "Notes", z: SCH_Z.notesBg, noStroke: true });
     if (border > 0) G(item, Object.assign({ t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: border, color: strokeColorOf(n) || SCH.notes, fill: null, layer: "Notes", z: SCH_Z.notes }, dashOf(n)));
     const mg = kid(n, "margins"); const lm = mg ? num(mg[1]) : border / 2 + ef.size * 0.75, tm = mg ? num(mg[2]) : lm, rm = mg ? num(mg[3]) : lm, bm = mg ? num(mg[4]) : lm;
-    const j = justOf(ef.just, "left", "top"); const vert = ((rot % 180) + 180) % 180 === 90;
+    const j = justOf(ef.just);   // the file default is centre / centre (parseEDA_TEXT)
+    const vert = ((rot % 180) + 180) % 180 === 90;
     // SCH_TEXTBOX::GetDrawPos: anchor on the box edge matching the justification
     let tx, ty;
     if (vert) { ty = j.h === "left" ? y1 - bm : j.h === "right" ? y0 + tm : (y0 + y1) / 2; tx = j.v === "top" ? x0 + lm : j.v === "bottom" ? x1 - rm : (x0 + x1) / 2; }
     else { tx = j.h === "left" ? x0 + lm : j.h === "right" ? x1 - rm : (x0 + x1) / 2; ty = j.v === "top" ? y0 + tm : j.v === "bottom" ? y1 - bm : (y0 + y1) / 2; }
-    textLines(item, tx, ty, str(n[1]), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
+    // SCH_TEXTBOX::GetShownText: wrapped to the box's inner width (its height when the text runs vertically)
+    const col = vert ? (y1 - y0) - tm - bm : (x1 - x0) - lm - rm;
+    textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
   } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier") {
     shapeGeom(item, n, k, (x, y) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
   } else if (k === "rule_area") {
@@ -226,7 +236,7 @@ export function buildSheetGeom(item, n) {
     if (ef.hide || !val) continue;
     const [px, py, pr] = atOf(p);
     const color = name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields;
-    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, defH: "left", defV: "bottom" });
+    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
   }
   for (const pin of kids(n, "pin")) {
     const [px, py, pr] = atOf(pin); const ef = effectsOf(pin); const size = ef.size; const pen = textPen(ef, size);
@@ -323,7 +333,14 @@ export function buildSymbolGeom(doc, item) {
     const isRef = name === "Reference", isVal = name === "Value";
     const color = col(isRef || isVal ? SCH.ref : SCH.field);
     // SCH_FIELD::GetShownText: the reference of a multi-unit symbol carries its unit letter (U2 → U2A)
-    const shown = isRef && unitCount > 1 ? val + unitLetter(unit) : val;
+    let shown = isRef && unitCount > 1 ? val + unitLetter(unit) : val;
+    // SCH_SYMBOL::ResolveTextVar: ${REFERENCE}, ${VALUE}, ${UNIT} and the symbol's other fields by name
+    if (shown.indexOf("${") >= 0) shown = expandTextVars(shown, (tok) => {
+      const up = tok.toUpperCase();
+      if (up === "UNIT") return unitCount > 1 ? unitLetter(unit) : "";
+      for (const q of kids(n, "property")) if (str(q[1]).toUpperCase() === up && q !== p) return str(q[2]);
+      return null;
+    });
     transformedText(item, Ti, px, py, shown, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX, alpha, field: name });
   }
   if (dnp) {

@@ -3,7 +3,7 @@
 import { buildPcbGeom } from "./geom-pcb";
 import { buildSchGeom } from "./geom-sch";
 import { flipH, flipV, justOf, rotator, str } from "./sexpr";
-import { INTERLINE, parseMarkup, textWidth } from "./text";
+import { INTERLINE, parseMarkup, textWidth, unescapeText } from "./text";
 // ---------------------------------------------------------------- geometry builders
 export function bboxAdd(item, x, y, pad) {
   pad = pad || 0;
@@ -52,6 +52,7 @@ export function textGeom(item, x, y, text, size, color, rot, just, layer, extra)
     r = ((Math.round(r) % 360) + 360) % 360;
     if (r === 180 || r === 270) { r -= 180; j.h = flipH(j.h); j.v = flipV(j.v); }
   }
+  text = unescapeText(str(text));
   const m = parseMarkup(text);
   const g = { t: "text", x, y, text: m.text, bars: m.bars, size: size || 1.27, w: 0, color, rot: r, h: j.h, v: j.v, layer };
   if (m.text !== text) g.raw = text;   // the marked-up source: the stroke painter lays out ~{} _{} ^{} itself

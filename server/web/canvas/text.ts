@@ -66,3 +66,8 @@ export function layoutPen(ef, size) {
   const pen = ef.thick > 0.001 ? ef.thick : (ef.bold ? size / 5 : size / 8);
   return Math.min(pen, size * 0.25);
 }
+
+const UNESCAPE = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "\t", return: "\n", brace: "{" };
+const UNESCAPE_RE = /\{(dblquote|quote|lt|gt|backslash|slash|bar|comma|colon|space|dollar|tab|return|brace)\}/g;
+/** UnescapeString (common/string_utils.cpp): {slash} → /, {colon} → :, … as every GetShownText does before drawing. */
+export function unescapeText(s) { return s && s.indexOf("{") >= 0 ? s.replace(UNESCAPE_RE, (m, k) => UNESCAPE[k]) : s; }

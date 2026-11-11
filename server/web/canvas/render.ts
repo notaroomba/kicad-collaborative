@@ -4,6 +4,7 @@ import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
 import { displayNetName } from "./geom-pcb";
+import { geomBox } from "./hit";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 import { drawStrokeText, strokeLine, strokeOrigin } from "./stroke-font";
@@ -329,12 +330,20 @@ export function render(doc, ctx, view, opts) {
   const obstacles = zoneFill ? [] : null, previews = zoneFill ? [] : null;
   const copperZ = isPcb ? (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]) : null;
   const zHoles = isPcb ? pcbZ("holes") : 0, zRats = zHoles + 2, zViaName = zHoles + 1.5;
+  const cullM = 4 * Math.max(1, dpr) / s + 0.1; const cx0 = vx0 - cullM, cx1 = vx1 + cullM, cy0 = vy0 - cullM, cy1 = vy1 + cullM;   // per-geometry cull rect: the view plus 4 px
   for (const it of doc.items.values()) {
     if (ids && !ids.has(it.id)) continue;
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
     const isSel = selPcb ? selPcb.has(it.id) : false;
+    // an item that only partly shows (a long connector, a zone's hatch, a big footprint when zoomed in) is
+    // culled geometry by geometry; the boxes are cached on the geometry records (rebuilt with the item)
+    const partial = !zoneFill && b && it.geom.length > 6 && (b[0] < cx0 || b[2] > cx1 || b[1] < cy0 || b[3] > cy1);
     for (const g of it.geom) {
+      if (partial && g.t !== "image") {
+        const bb = g._bb === undefined ? (g._bb = geomBox(g)) : g._bb;
+        if (bb && (bb[2] < cx0 || bb[0] > cx1 || bb[3] < cy0 || bb[1] > cy1)) continue;
+      }
       if (g.padText) {
         // PAD::ViewGetLOD (netname layer): the pad must be flashed on a visible layer (the high-contrast one in
         // that mode) and its smaller side at least 0.5 mm at zoom 1; pad net names follow the net-names option
@@ -417,7 +426,7 @@ export function render(doc, ctx, view, opts) {
         continue;
       }
       // LAYER_VIA_HOLEWALLS under the hole; PCB_PAINTER underpaints it filled in the outline mode too
-      if (g.wallR) { setFill(g.wallColor); ctx.beginPath(); ctx.arc(g.x, g.y, g.wallR, 0, Math.PI * 2); ctx.fill(); }
+      if (g.wallR && ((g.wallR - g.r) * s > 0.35)) { setFill(g.wallColor); ctx.beginPath(); ctx.arc(g.x, g.y, g.wallR, 0, Math.PI * 2); ctx.fill(); }
       if ((sketchPads && g.pad) || (sketchVias && g.via)) {   // sketch mode: the shape's outline in a hairline, nothing filled
         if (t === "poly" && g.pts.length < 2) continue;
         setStroke(color); setWidth(minW); setCap("butt"); strokeG(g); continue;
@@ -691,7 +700,8 @@ export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
     const [ox, oy] = strokeOrigin(line.width, h, g.v, pen / sx, pen / g.size); const m = Math.max(pen / 2, g.size / 9);
     const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = mirror ? -1 : 1;
     ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
-    ctx.fillStyle = color; ctx.fillRect(ox * sx - m, (oy - 1) * g.size - m, line.width * sx + 2 * m, g.size + 2 * m);
+    // the glyph cell: capitals span 20/21 above the layout baseline and 1/21 below it (FONT_OFFSET)
+    ctx.fillStyle = color; ctx.fillRect(ox * sx - m, (oy - 20 / 21) * g.size - m, line.width * sx + 2 * m, g.size + 2 * m);
     drawStrokeText(ctx, base, spec, bgColor || PCB_BG, minW);
     return;
   }

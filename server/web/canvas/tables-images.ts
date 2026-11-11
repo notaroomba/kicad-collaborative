@@ -6,6 +6,8 @@ import { G, bboxAdd, textLines } from "./geom";
 import { layerOf, pcbTextGeom } from "./geom-pcb";
 import { atOf, boolOf, boxOf, colorOf, cornersInSequence, effectsOf, fillOf, justOf, kid, kids, num, rotPt, str, strokeOf } from "./sexpr";
 import { SCH_PEN, textPen } from "./text";
+import { linebreakText } from "./stroke-font";
+import { unescapeText } from "./text";
 // ---------------------------------------------------------------- tables and images
 /**
  * (table (column_count N) (border (external yes) (header yes) (stroke …)) (separators (rows yes) (cols yes) (stroke …))
@@ -48,9 +50,12 @@ export function buildTableGeom(doc, item, n) {
       const f = fillOf(cn); const fill = f.type === "color" ? f.color : f.type === "background" ? SCH.body : f.type === "solid" || f.type === "outline" ? SCH.notes : null;
       if (fill) G(item, { t: "rect", x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0, wd: 0, color: fill, fill, layer, z: zBg, noStroke: true });
     }
-    const text = str(cn[1]); if (ef.hide || !text) continue;
+    let text = str(cn[1]); if (ef.hide || !text) continue;
     const mg = kid(cn, "margins"); const dm = ef.size * 0.75;
     const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2]) : dm, rm = mg ? num(mg[3]) : dm, bm = mg ? num(mg[4]) : dm;
+    // a cell is a text box: its text wraps to the cell's inner width (GetShownText → FONT::LinebreakText)
+    { const cv = ((Math.round(b.rot) % 180) + 180) % 180 === 90; const col = cv ? (b.y1 - b.y0) - tm - bm : (b.x1 - b.x0) - lm - rm;
+      text = linebreakText(unescapeText(text), col, ef.sizeX, isPcb ? (ef.thick > 0 ? ef.thick : ef.size / 8) : ef.thick, ef.italic); }
     const j = justOf(ef.just, "center", "middle");   // parseEDA_TEXT resets to centre before reading (justify …)
     if (isPcb) {
       // PCB_TEXTBOX::GetDrawPos: the corner / mid-point matching the justification, offset by the margins in the text frame

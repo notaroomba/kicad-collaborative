@@ -231,3 +231,27 @@ export function drawStrokeText(ctx: StrokeCtx, base: number[], t: StrokeTextSpec
   }
   ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
 }
+
+/**
+ * FONT::LinebreakText: word-wrap a (possibly multi-line) string to a column.  Words are split at spaces; a
+ * line breaks before the word that would pass `colWidth − thickness`, and the spaces at the break are dropped.
+ * A single word wider than the column is left whole, as in KiCad.
+ */
+export function linebreakText(text: string, colWidth: number, sizeX: number, thickness: number, italic?: boolean): string {
+  if (!(colWidth > 0) || !text) return text;
+  const space = (strokeGlyph(32) as StrokeGlyph).adv * sizeX;
+  const out: string[] = [];
+  for (const src of text.split("\n")) {
+    let cur = "", width = 0, pending = 0;
+    for (const tok of src.split(/( )/)) {
+      if (tok === "") continue;
+      if (tok === " ") { pending++; continue; }
+      const w = (strokeLine(tok, italic).width + INTER_CHAR) * sizeX;   // the cursor advance of the word
+      if (pending > 0 && width + pending * space + w > colWidth - thickness) { out.push(cur); cur = tok; width = w; }
+      else { cur += " ".repeat(pending) + tok; width += pending * space + w; }
+      pending = 0;
+    }
+    out.push(cur);
+  }
+  return out.join("\n");
+}
