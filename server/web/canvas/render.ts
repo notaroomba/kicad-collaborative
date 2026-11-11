@@ -61,6 +61,8 @@ export function tracePad(ctx, g) {
  *   outlinePads, outlineTracks, outlineVias (board) — KiCad's sketch display modes: the pad shapes,
  *                                the track/arc stadium outlines and the via rings are stroked with a
  *                                hairline instead of filled;
+ *   activeLayer    (board)     — the layer being worked on is drawn on top, with the other layers of its side
+ *                                (PCB_DRAW_PANEL_GAL::SetTopLayer); holes, pad / via names and the ratsnest stay above;
  *   highContrast + activeLayer (board) — high-contrast mode: everything not on `activeLayer` is
  *                                dimmed to HC_DIM alpha (holes stay visible), the active layer is
  *                                drawn at full colour;
@@ -239,6 +241,8 @@ export function scratchCanvas(w, h) {
   return SCRATCH;
 }
 
+export const TOP_Z = 100000, TOP_CACHE = new Map();
+   // draw-order offset of the layers brought to the top with the active layer
 export const BUCKETS = new Map(), NAME_BUCKETS = new Map();
    // z → geometry, reused frame to frame (cleared, never reallocated)
 export const ZS = [];
@@ -329,7 +333,22 @@ export function render(doc, ctx, view, opts) {
   for (const arr of NAME_BUCKETS.values()) arr.length = 0;
   const obstacles = zoneFill ? [] : null, previews = zoneFill ? [] : null;
   const copperZ = isPcb ? (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]) : null;
-  const zHoles = isPcb ? pcbZ("holes") : 0, zRats = zHoles + 2, zViaName = zHoles + 1.5;
+  // PCB_DRAW_PANEL_GAL::SetTopLayer: the active layer is brought to the top — a copper layer together with its
+  // zone / pad / via / netname layers, and with it every layer of its side (F.* or B.*); the holes, the pad and
+  // via names and the ratsnest are always on top.  A non-copper active layer goes above those too.  The layers
+  // keep their order among themselves (VIEW::TOP_LAYER_MODIFIER), so this is one offset per layer.
+  const act = isPcb && opts.activeLayer ? String(opts.activeLayer) : null;
+  const actSide = act ? (act.indexOf("F.") === 0 ? "F." : act.indexOf("B.") === 0 ? "B." : null) : null, actCu = !!act && /\.Cu$/.test(act);
+  const zHoles0 = isPcb ? pcbZ("holes") : 0;
+  TOP_CACHE.clear();
+  const topOf = (layer) => {
+    if (!act) return 0;
+    let v = TOP_CACHE.get(layer);
+    if (v === undefined) { v = layer === "holes" ? TOP_Z : layer === act ? (actCu ? TOP_Z : 2 * TOP_Z) : actSide && layer && layer.indexOf(actSide) === 0 ? TOP_Z : 0; TOP_CACHE.set(layer, v); }
+    return v;
+  };
+  const zOf = (g) => { const z = g.z === undefined ? 0 : g.z; return isPcb ? z + topOf(z >= zHoles0 && z < zHoles0 + 10 ? "holes" : g.layer) : z; };
+  const zHoles = zHoles0 + topOf("holes"), zRats = zHoles + 2, zViaName = zHoles + 1.5;
   const cullM = 4 * Math.max(1, dpr) / s + 0.1; const cx0 = vx0 - cullM, cx1 = vx1 + cullM, cy0 = vy0 - cullM, cy1 = vy1 + cullM;   // per-geometry cull rect: the view plus 4 px
   for (const it of doc.items.values()) {
     if (ids && !ids.has(it.id)) continue;
@@ -353,12 +372,12 @@ export function render(doc, ctx, view, opts) {
         if (hcLayer) vis = pl.indexOf(hcLayer) >= 0; else for (let i = 0; i < pl.length; i++) if (!hidden.has(pl[i])) { vis = true; break; }
         if (!vis) continue;
       } else if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
-      const z = g.z === undefined ? 0 : g.z;
+      const z = zOf(g);
       bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
       if (isSel) selGeoms.add(g);
       if (netNames && g.net > 0) {
-        if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5).push(g);
+        if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
       }
       if (zoneFill) {
@@ -368,7 +387,7 @@ export function render(doc, ctx, view, opts) {
     }
     if (it.hiddenGeom && (showHiddenPins || showHiddenText)) for (const g of it.hiddenGeom) {
       if (hidden.has(g.layer) || (g.hiddenText ? !showHiddenText : !showHiddenPins)) continue;
-      const z = g.z === undefined ? 0 : g.z;
+      const z = zOf(g);
       bucket(BUCKETS, z).push(g);
       if (isHl) hlGeoms.add(g);
     }
@@ -377,7 +396,7 @@ export function render(doc, ctx, view, opts) {
   for (const [z, arr] of BUCKETS) if (arr.length) ZS.push(z);
   for (const [z, arr] of NAME_BUCKETS) if (arr.length && !BUCKETS.has(z)) ZS.push(z);
   if (rats) ZS.push(zRats);
-  if (previews && previews.length) { previews.sort((a, b) => a.z - b.z); for (const g of previews) { const z = g.z - 1.5 - 0.01; if (ZS.indexOf(z) < 0) ZS.push(z); } }
+  if (previews && previews.length) { previews.sort((a, b) => zOf(a) - zOf(b)); for (const g of previews) { const z = zOf(g) - 1.5 - 0.01; if (ZS.indexOf(z) < 0) ZS.push(z); } }
   ZS.sort((a, b) => a - b);
   const minW = Math.max(1, dpr) / s;
   ctx.lineJoin = "round"; ctx.lineCap = "round";
@@ -395,7 +414,7 @@ export function render(doc, ctx, view, opts) {
   for (const z of ZS) {
     // overlay passes that sit at this depth
     if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
-    if (previews) while (previewIdx < previews.length && previews[previewIdx].z - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1)); dirty(); }
+    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1)); dirty(); }
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
