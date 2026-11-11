@@ -16,7 +16,7 @@
 // sub-menu of the menu it names (default Edit) rather than as a flat list.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { HOME_MENUS, LINKS, MENUS, MENU_CHECKS, MODULE_ACTION_MENUS, MODULE_ALIAS, MODULE_DUPLICATES, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
-import { useApp, type AppState, type Editor, type ModuleAction } from "../store";
+import { dispatch, useApp, type AppState, type Editor, type ModuleAction } from "../store";
 import { iconFor, isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
 import { AssistantToggle } from "../ai/Assistant";
@@ -276,6 +276,7 @@ export function MenuBar() {
   const me = useApp((s) => s.me);
   const project = useApp((s) => s.project);
   const role = useApp((s) => s.role);
+  const branch = useApp((s) => s.versions.branchName);
   const moduleActions = useApp((s) => s.tool.moduleActions);
   const toggles = useApp((s) => s.toggles);
   const panes = useApp((s) => s.panes);
@@ -459,6 +460,8 @@ export function MenuBar() {
         <>
           <span className="name ml-3.5 font-semibold min-w-0 truncate max-[700px]:hidden" id="projName" title={project.name}>{project.name}</span>
           <span className={cx("pill", role, "ml-1.5 flex-none max-[700px]:hidden")} id="roleChip">{role || "guest"}</span>
+          {branch ? <button type="button" className="pill info ml-1.5 flex-none max-w-48 truncate bg-transparent cursor-pointer max-[700px]:hidden" id="branchChip" title={`You are on the branch "${branch}", not the main line. Click for branches.`}
+            onClick={() => dispatch({ type: "versions", cmd: "dialog", dialog: { kind: "branches" } })}>branch: {branch}</button> : null}
         </>
       ) : null}
       <div className="spacer flex-1" />

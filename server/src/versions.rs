@@ -724,12 +724,22 @@ async fn readable(state: &AppState, viewer: Option<User>, project_id: Uuid) -> A
     member(state, &user, project_id).await.map(|_| ())
 }
 
+#[derive(Deserialize, Default)]
+pub struct AtQuery {
+    /// Also hand out the ops that follow, up to the document's next snapshot (or its
+    /// head): a reader scrubbing forward then needs no second request.  `upto` in
+    /// the answer says how far they reach.
+    #[serde(default)]
+    span: Option<String>,
+}
+
 /// A document at a point of its history: the snapshot text and the ops to lay over
 /// it.  `seq` is a number or `head`.
 pub async fn doc_at(
     State(state): State<AppState>,
     MaybeAuthUser(viewer): MaybeAuthUser,
     Path((doc_id, seq)): Path<(Uuid, String)>,
+    axum::extract::Query(q): axum::extract::Query<AtQuery>,
 ) -> AppResult<Response> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
     readable(&state, viewer, doc.project_id).await?;
@@ -742,10 +752,30 @@ pub async fn doc_at(
         .await?
         .ok_or_else(|| gone("That point in the history is no longer kept."))?;
     let content = persist::snapshot_at(&state.pool, doc_id, point.snap_seq).await?.ok_or(AppError::NotFound)?;
+    let mut upto = seq;
+    if q.span.is_some() {
+        let next: Option<i64> = sqlx::query_scalar("SELECT MIN(seq) FROM snapshots WHERE doc_id = $1 AND seq > $2")
+            .bind(doc_id)
+            .bind(seq)
+            .fetch_one(&state.pool)
+            .await?;
+        let limit = next.map(|n| n - 1).unwrap_or(head);
+        // as far as the ops go on without a hole
+        let reach: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(seq) FROM (SELECT seq, seq - row_number() OVER (ORDER BY seq) AS g FROM ops
+                                   WHERE doc_id = $1 AND seq > $2 AND seq <= $3) t WHERE g = $2",
+        )
+        .bind(doc_id)
+        .bind(seq)
+        .bind(limit)
+        .fetch_one(&state.pool)
+        .await?;
+        upto = reach.unwrap_or(seq);
+    }
     let ops = sqlx::query("SELECT seq, changes FROM ops WHERE doc_id = $1 AND seq > $2 AND seq <= $3 ORDER BY seq")
         .bind(doc_id)
         .bind(point.snap_seq)
-        .bind(seq)
+        .bind(upto)
         .fetch_all(&state.pool)
         .await?;
     let ops: Vec<Value> = ops
@@ -753,7 +783,7 @@ pub async fn doc_at(
         .map(|r| json!({ "seq": r.get::<i64, _>("seq"), "changes": r.get::<Value, _>("changes") }))
         .collect();
     Ok(Json(json!({
-        "docId": doc_id, "path": doc.path, "docType": doc.doc_type, "seq": seq, "head": head,
+        "docId": doc_id, "path": doc.path, "docType": doc.doc_type, "seq": seq, "head": head, "upto": upto,
         "snapSeq": point.snap_seq, "file": String::from_utf8_lossy(&content), "ops": ops,
     }))
     .into_response())

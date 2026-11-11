@@ -43,6 +43,7 @@ export const store = (() => {
     document: { editor: null, docType: null, docId: null, doc: null, docs: [], rootDocId: null, sheets: [], layers: [], hiddenLayers: [], copperLayers: [], items: [], hasDoc: false, notice: null, version: 0 },
     selection: { ids: [], primary: null, field: null, version: 0 },
     peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
+    versions: { loading: false, error: null, busy: false, list: [], runs: [], docs: [], branches: [], main: null, parentId: null, branchName: null, view: null, dialog: null },   // version history and branches (editor/versions.ts)
     tool: { current: "select", appTools: APP_TOOLS, moduleTools: [], moduleActions: [], handled: [] },
     // the board's net names and pad numbers are on by default (pcbnew "pcb_display.net_names_mode" 3), so their checks start on
     toggles: { showNetNames: true, showPadNumbers: true }, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,

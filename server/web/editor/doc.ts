@@ -5,6 +5,7 @@ import { centerOn, drawComments, loadComments, renderThreads } from "./comments"
 import { $ } from "./dom";
 import { pruneSelection, resetInteraction } from "./gestures";
 import { loadHistory } from "./history";
+import { dropHistoryView } from "./versions";
 import { navigate, showView } from "./home";
 import { connect, requestResync, setConn } from "./net";
 import { setupEditorChrome } from "./panes";
@@ -287,6 +288,7 @@ export function setDocNotice(text) { store.slice("document", { notice: text || n
 
 
 export function leaveDoc() {
+  dropHistoryView();    // the timeline belongs to the document being left
   resetInteraction();   // no drag, menu, hover or tool survives into the next document
   E.connectGen++;   // any connect() still waiting for its ticket must give up
   if (E.ws) { E.ws.onclose = null; E.ws.close(); E.ws = null; }

@@ -8,23 +8,26 @@ import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { setTool } from "./tools";
 import { api, toast } from "./util";
+import { historyActive, holdViewOnly, noteEdit, onVersionsNotice } from "./versions";
 import { dragG, drawPeers, peersG, scheduleRenderRefresh } from "./view";
 // ---- websocket / presence / ops ----
 export function setConn(cls, text) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
 
-export function setViewOnly(v) { E.viewOnly = !!v; store.set({ viewOnly: E.viewOnly }); }
+export function setViewOnly(v) { if (holdViewOnly(v)) return; E.viewOnly = !!v; store.set({ viewOnly: E.viewOnly }); }
 /** The role the server says we hold on the open document: what the tools and the comment box follow. */
 export function setRole(role) {
   const was = state.role;
   state.role = role;
-  E.viewOnly = !state.me || role !== "editor";
+  // While an earlier version is on screen (editor/versions.ts) the canvas stays read-only; the role is put back on leaving.
+  const vo = !state.me || role !== "editor";
+  if (!holdViewOnly(vo)) E.viewOnly = vo;
   E.canComment = !!state.me && (role === "editor" || role === "commenter");
   const can = { ...(store.get().can || { copy: true, share: false, manage: false }), edit: !E.viewOnly, comment: E.canComment };
   store.set({ role, viewOnly: E.viewOnly, canComment: E.canComment, can });
   return was;
 }
 /** How the status bar words the access: "live", "live · comment-only", "live · view-only". */
-export function liveLabel() { return E.viewOnly ? (E.canComment ? "live · comment-only" : "live · view-only") : "live"; }
+export function liveLabel() { return (E.history ? E.history.viewOnly : E.viewOnly) ? (E.canComment ? "live · comment-only" : "live · view-only") : "live"; }
 
    // bumped by every connect()/leaveDoc(); a stale socket's events are ignored
 export async function connect() {
@@ -127,6 +130,13 @@ export async function connect() {
       if (was !== msg.role) toast(msg.role === "editor" ? "You can now edit this project" : msg.role === "commenter" ? "You can now comment on this project, but not change it" : "You now have view-only access to this project", 4500);
     }
     if (msg.type === "comment") noteCommentMsg(msg);
+    if (msg.type === "versions") onVersionsNotice(msg);       // somebody saved, restored, branched or merged
+    // An earlier version is on screen (editor/versions.ts): the live stream is not laid over it.  Leaving the
+    // timeline asks for the document again, so nothing that arrives meanwhile is lost.
+    if (historyActive() && (msg.type === "snapshot" || msg.type === "op" || msg.type === "ops" || msg.type === "reset")) {
+      if (msg.type === "op") { E.editsSeen++; bumpEdits(); }
+      return;
+    }
     if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
       if (setDocFromText(msg.file)) {
         E.lastSeq = Number(msg.seq) || 0;
@@ -230,7 +240,7 @@ export function reapplyPending(remote) {
   }
 }
 
-export function bumpEdits() { store.slice("connection", { edits: E.editsSeen }); }
+export function bumpEdits() { store.slice("connection", { edits: E.editsSeen }); noteEdit(); }
 
 export function noteRemoteOp(msg) {
   for (const c of msg.changes || []) {
@@ -254,6 +264,7 @@ export function noteRemoteOp(msg) {
  *                  authoritative change, so these must not pile up in the journal or be replayed.
  */
 export function sendOp(changes, transient) {
+  if (historyActive()) { if (!transient) toast("This is an earlier version. Leave the timeline to edit."); return; }
   const clientOpId = `web:${++E.opN}`;
   // Journal first, send second.  Anything still here when the socket comes back is replayed,
   // so an edit made during a blip (or before the join lands) survives instead of being wiped

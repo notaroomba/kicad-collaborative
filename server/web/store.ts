@@ -43,6 +43,67 @@ export interface Comment {
 
 export interface CheckpointGroup { name: string; at: string; docs: number }
 
+// ---- version history and branches (web/editor/versions.ts, server/src/versions.rs) ----
+/** A document inside a kept version: its snapshot and the last op laid over it. */
+export interface VersionDoc { docId: string; path: string; snapSeq: number; seq: number }
+/** A point of the project's history that is kept for good.  `auto` ones the server kept by itself before a restore or a merge. */
+export interface VersionInfo { id: string; name: string | null; description: string; kind: "named" | "auto"; createdAt: string; author: User | null; docs: VersionDoc[] }
+/** One person working on one file without a long pause (or a restore / merge that rewrote it). */
+export interface HistoryRun { docId: string; path: string; from: number; to: number; count: number; kind: "edit" | "restore" | "merge"; author: User; startedAt: string; endedAt: string }
+export interface BranchInfo {
+  projectId: string; name: string; description: string; createdAt: string; updatedAt: string; mergedAt: string | null;
+  createdBy: User | null; ahead: number; behind: number; docs: DocEntry[];
+}
+/** A point in one document's history. */
+export interface HistoryAt { docId: string; seq: number }
+/** The earlier state on screen while the timeline is open. */
+export interface HistoryView {
+  docId: string; seq: number; head: number; floor: number; loading: boolean; playing: boolean; error: string | null;
+  /** when that edit was made (ms) and by whom, once the document's edit index has loaded */
+  at: number | null; who: string | null;
+  /** the kept version that sits exactly here, if any */
+  versionId: string | null;
+  /** kept versions of this document, for the ticks on the scrubber */
+  marks: { seq: number; name: string; named: boolean }[];
+}
+export type VersionDialog =
+  | { kind: "save"; at?: HistoryAt }
+  | { kind: "rename"; versionId: string; name: string; description: string }
+  | { kind: "restore"; versionId?: string; at?: HistoryAt; label: string }
+  | { kind: "deleteVersion"; versionId: string; label: string }
+  | { kind: "branches" }
+  | { kind: "newBranch"; versionId?: string; at?: HistoryAt; from: string }
+  | { kind: "renameBranch"; projectId: string; name: string; description: string }
+  | { kind: "deleteBranch"; projectId: string; name: string }
+  | { kind: "merge"; projectId: string; name: string; direction: "into_main" | "from_main" };
+export interface VersionsState {
+  loading: boolean; error: string | null; busy: boolean;
+  list: VersionInfo[]; runs: HistoryRun[];
+  docs: { docId: string; path: string; docType: string; head: number; floor: number }[];
+  branches: BranchInfo[]; main: { projectId: string; name: string } | null;
+  /** set when the open project is a branch */
+  parentId: string | null; branchName: string | null;
+  view: HistoryView | null; dialog: VersionDialog | null;
+}
+export type VersionsCmd =
+  | { cmd: "refresh" }
+  | { cmd: "dialog"; dialog: VersionDialog | null }
+  | { cmd: "view"; docId: string; seq: number }
+  | { cmd: "viewVersion"; versionId: string }
+  | { cmd: "step"; by: number }
+  | { cmd: "play"; on: boolean }
+  | { cmd: "exit" }
+  | { cmd: "save"; name: string; description: string; at?: HistoryAt }
+  | { cmd: "rename"; versionId: string; name: string; description: string }
+  | { cmd: "delete"; versionId: string }
+  | { cmd: "restore"; versionId?: string; at?: HistoryAt; label: string }
+  | { cmd: "newBranch"; name: string; description: string; versionId?: string; at?: HistoryAt; open: boolean }
+  | { cmd: "openBranch"; projectId: string }
+  | { cmd: "renameBranch"; projectId: string; name: string; description: string }
+  | { cmd: "deleteBranch"; projectId: string }
+  | { cmd: "merge"; projectId: string; direction: "into_main" | "from_main"; replace: boolean; prefer: "incoming" | "current" }
+  | { cmd: "compare" };
+
 /** A tool a module (CollabTools.sch / .pcb) registers: icon is inline SVG markup for a 24×24 stroke glyph. */
 export interface ModuleTool { id: string; label: string; key?: string; icon?: string; cursor?: string }
 
@@ -131,6 +192,7 @@ export interface AppState {
   peers: { list: Peer[]; follow: string | null };
   comments: Comment[];
   history: { groups: CheckpointGroup[]; loading: boolean; error: string | null };
+  versions: VersionsState;
   tool: { current: string; appTools: string[]; moduleTools: ModuleTool[]; moduleActions: ModuleAction[]; handled: string[] };
   /** KiCad toggle actions that are "on" (toggleGrid, togglePolarCoords, showProperties, …) */
   toggles: Record<string, boolean>;
@@ -166,6 +228,7 @@ export type AppAction =
   | { type: "openThread"; id: number }
   | { type: "selectItem"; id: string }
   | { type: "restore"; name: string }
+  | ({ type: "versions" } & VersionsCmd)
   | { type: "find"; query: string }
   | { type: "popover"; popover: PopoverState | null }
   /** the right-click menu: run a row (then it closes), brighten a row's item, or just close */
@@ -195,6 +258,7 @@ const EMPTY: AppState = {
   document: { editor: null, docType: null, docId: null, doc: null, docs: [], rootDocId: null, sheets: [], layers: [], hiddenLayers: [], copperLayers: [], items: [], hasDoc: false, notice: null, version: 0 },
   selection: { ids: [], primary: null, field: null, version: 0 },
   peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
+  versions: { loading: false, error: null, busy: false, list: [], runs: [], docs: [], branches: [], main: null, parentId: null, branchName: null, view: null, dialog: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
   toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
   routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },

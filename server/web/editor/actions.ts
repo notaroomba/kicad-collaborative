@@ -2,6 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setGroupCurrent, setToggle, setToggles, state, store } from "./appstore";
 import { centerOn, openThreadAction } from "./comments";
+import { saveVersionDialog, versionsCommand } from "./versions";
 import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
@@ -50,10 +51,7 @@ export async function runAction(act, el) {
     // to see who has access, and only the owner can change anything.
     case "share": if (!id) break; if (!state.me) { toast("Sign in to share"); break; }
       if (window.CollabHome) window.CollabHome.openShare(id, state.project.name); break;
-    case "checkpoint": if (!id) break; if (E.viewOnly) { toast("Only editors can save versions"); break; }
-      { const name = prompt("Checkpoint name", `checkpoint ${new Date().toLocaleString()}`); if (!name) break;
-        try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); showPane("history", true); }
-        catch (e) { toast("Checkpoint failed: " + e.message, 4000); } } break;
+    case "checkpoint": if (!id) break; saveVersionDialog(); showPane("history", true); break;   // the Save Version dialog (components/VersionHistory.tsx)
     case "kicad": showPopover("kicad", null, el); break;
   }
 }
@@ -264,6 +262,7 @@ export function dispatchAction(a) {
       case "openThread": openThreadAction(a.id); return;
       case "selectItem": selectItemAction(a.id); return;
       case "restore": restoreCheckpoint(a.name); return;
+      case "versions": versionsCommand(a); return;
       case "find": findAction(a.query); return;
       case "popover": store.set({ popover: a.popover || null }); return;
       case "contextMenu": contextMenuAction(a); return;

@@ -16,6 +16,7 @@ import { Home } from "./home/Home";
 import { Toasts } from "./home/ui";
 import { PluginDialogs, PluginDock } from "./plugins/PluginUi";
 import { ContextMenu } from "./components/ContextMenu";
+import { HistoryBar, VersionDialogs } from "./components/VersionHistory";
 import { installToolbarTooltips } from "./tooltip";
 
 function mount(id: string, node: ReactNode) {
@@ -36,5 +37,5 @@ mount("ui-dockPlugins", <PluginDock />);
 mount("ui-dockB", <DockBottom />);
 mount("ui-statusbar", <StatusBar />);
 mount("ui-home", <><Home /><Toasts /></>);
-mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /></>);
+mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /><HistoryBar /><VersionDialogs /></>);
 installToolbarTooltips();
