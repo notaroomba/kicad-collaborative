@@ -14,6 +14,8 @@ import type { RoutingState } from "../store";
 import { setToggles, state, store } from "./appstore";
 import { E } from "./state";
 import { runModuleAction } from "./tools";
+import { saveProjectFile as writeProjectFile } from "./projectfile";
+import type { Plain } from "../canvas/project-file";
 import { api, esc, toast } from "./util";
 import { isSch, requestRender } from "./view";
 
@@ -149,43 +151,9 @@ export function pcbLayerKey(ev: KeyboardEvent): boolean {
 }
 
 // ---------------------------------------------------------------- the project file on the server
-let saveSeq = 0;
-/**
- * Store a new .kicad_pro.  A document's content on the server is its newest snapshot, and a snapshot can only
- * be added above the newest one — so the edit goes the way every edit does: an op on the project-file
- * document (journalled, attributed, and what moves its head), followed by the new file as the snapshot at
- * that op's sequence number.  The desktop reads the same snapshot when it next syncs the project.
- */
-export function saveProjectFile(text: string, what: Record<string, unknown>): Promise<boolean> {
-  const pro = proDoc();
-  if (!pro || E.viewOnly || !state.me) return Promise.resolve(false);
-  return new Promise<boolean>((resolve) => {
-    let done = false, sock: WebSocket | null = null;
-    const finish = (ok: boolean) => { if (done) return; done = true; clearTimeout(timer); try { if (sock) sock.close(); } catch (e) { /* closed */ } resolve(ok); };
-    const timer = setTimeout(() => finish(false), 10000);
-    (api("/api/ws-ticket") as Promise<{ token?: string }>).then((ticket) => {
-      sock = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-      const clientOpId = `web-pro:${Date.now().toString(36)}:${++saveSeq}`;
-      sock.onopen = () => { if (sock) sock.send(JSON.stringify({ type: "hello", proto: 1, token: ticket.token || "", clientId: "web-pro-" + Math.random().toString(36).slice(2, 10), linkToken: null, client: "web" })); };
-      sock.onerror = () => finish(false);
-      sock.onclose = () => finish(false);
-      sock.onmessage = (ev) => {
-        let msg: { type?: string; role?: string; clientOpId?: string; seq?: number; docId?: string };
-        try { msg = JSON.parse(String(ev.data)); } catch (e) { return; }
-        if (!sock) return;
-        if (msg.type === "hello_ok") sock.send(JSON.stringify({ type: "join_doc", docId: pro.docId }));
-        else if (msg.type === "doc_info") {
-          if (msg.role !== "editor") { finish(false); return; }
-          sock.send(JSON.stringify({ type: "op", docId: pro.docId, clientOpId, baseSeq: null,
-            changes: [{ id: "project", kind: "MODIFIED", typeName: "PROJECT_FILE", properties: Object.entries(what).map(([name, v]) => ({ name, after: { type: "json", v } })) }] }));
-        } else if (msg.type === "ack" && msg.clientOpId === clientOpId) {
-          fetch(`/api/docs/${pro.docId}/snapshots?seq=${Number(msg.seq) || 0}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: text })
-            .then((r) => finish(r.ok)).catch(() => finish(false));
-        } else if (msg.type === "error") finish(false);
-      };
-    }).catch(() => finish(false));
-  });
-}
+/** Store a new .kicad_pro through the one writer (projectfile.ts); `what` maps dotted paths to the values that changed. */
+const saveProjectFile = (text: string, what: Record<string, unknown>): Promise<boolean> =>
+  writeProjectFile(text, Object.entries(what).map(([path, value]) => ({ path: path.split("."), value: value as Plain })));
 
 // ---------------------------------------------------------------- dialogs
 interface DialogSpec { title: string; width?: number; build(body: HTMLElement): void; ok?(): boolean | void; okLabel?: string; readOnly?: boolean }
