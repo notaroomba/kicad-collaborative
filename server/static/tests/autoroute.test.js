@@ -214,3 +214,14 @@ test("placement honours fixed parts and makes an outline when the board has none
   const r2 = R.place(K, P, bare, null, {}); assert.equal(r2.outlineFromBoard, false); assert.equal(r2.placements.length, 3); assert.equal(r2.score.overlaps, 0); assert.equal(r2.score.outside, 0);
   assert.equal(r2.groups.length, 1, "small parts join the larger part they connect to");
 });
+
+test("the Auto Place command commits the moves once as ordinary edits; view-only sessions cannot place", () => {
+  const doc = placeBoard(); const commits = [];
+  const ctx = { K, doc, viewOnly: false, designSettings: null, commit(ch, label) { commits.push([ch, label]); }, toast() {}, requestRender() {} };
+  const s = R.autoplace(ctx, { refs: ["C1", "C2", "L1", "R1"] });
+  assert.equal(commits.length, 1); assert.equal(commits[0][1], "auto place"); assert.equal(s.parts, 4); assert.equal(s.moved, 4);
+  assert.deepEqual(commits[0][0].map((c) => c.id).sort(), ["fp-C1", "fp-C2", "fp-L1", "fp-R1"]); for (const c of commits[0][0]) assert.match(c.sexpr, /\(footprint /);
+  assert.equal(s.score.overlaps, 0); assert.match(R.placeSummaryText(s), /4 footprints moved/);
+  const ro = R.autoplace(Object.assign({}, ctx, { viewOnly: true }), {}); assert.equal(ro.moved, 0); assert.equal(commits.length, 1);
+  assert.ok(P.ACTIONS.autoplace && P.ACTIONS.autoroute, "both commands are in the editor's action table");
+});

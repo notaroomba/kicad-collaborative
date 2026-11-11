@@ -2223,6 +2223,7 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
 });
 // The autorouter is its own bundle (web/router → dist/autoroute.js); this is its entry in the Route menu.
 act("autoroute", "Autoroute…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.open) { ctx.toast("The autorouter is not loaded"); return true; } return r.open(ctx); }, { menu: "Route" });
+act("autoplace", "Auto Place Footprints…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.openPlace) { ctx.toast("The placer is not loaded"); return true; } return r.openPlace(ctx); }, { menu: "Tools" });
 // library access (web/editor/library.ts, window.KiCadLibrary): KiCad's footprint chooser and the footprint library browser
 const libraryAction = (opts) => (ctx) => { const L = root.KiCadLibrary; if (!L || !L.chooseAndPlace) { ctx.toast("The library module is not loaded"); return true; } L.chooseAndPlace("footprint", opts); return true; };
 act("placeFootprint", "Place Footprints", "A", libraryAction());

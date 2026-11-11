@@ -300,3 +300,8 @@ plan — the assistant's model, or a person. Everything here is pure (nothing is
   pull. Without groups, small parts join the larger part they connect to. It returns positions, a score (ratsnest,
   overlaps, courtyard clashes, parts outside) and the outline it used; `placementChanges` turns the positions into
   ordinary edits.
+
+**Tools ▸ Auto Place Footprints…** runs the same placement from the editor without a model: all unlocked footprints
+or the selected ones, committed as one undo step like any other edit. `scripts/place-bench.mjs` forgets a finished
+board's placement and tracks, places and routes it again and compares with the hand layout;
+`scripts/autoplace-ui.mjs` is the two-browser test.
