@@ -25,8 +25,15 @@ export async function connect() {
   try {
     ticket = (await api("/api/ws-ticket")).token || "";
   } catch (e) {
-    if (gen === E.connectGen) setConn("err", "sign-in expired — reload to reconnect");
-    return;   // a bad ticket would just loop; wait for a reload/re-auth
+    if (gen !== E.connectGen) return;
+    // Only a refused ticket means the sign-in is gone (a bad ticket would just loop; wait for a
+    // reload).  A server that is down or redeploying (network error, 5xx) comes back, so retry
+    // with the same backoff as a dropped socket — the desktop reconnects on its own too.
+    if (/^40[13] /.test(String(e && e.message))) { setConn("err", "sign-in expired — reload to reconnect"); return; }
+    const delay = Math.min(15000, 1000 * Math.pow(2, E.retries++));
+    setConn("err", `reconnecting in ${Math.round(delay / 1000)}s`);
+    setTimeout(() => { if (state.view === "editor" && gen === E.connectGen) connect().catch(() => {}); }, delay);
+    return;
   }
   if (gen !== E.connectGen || state.view !== "editor") return;   // the document changed while we waited
   E.wsToken = ticket;
