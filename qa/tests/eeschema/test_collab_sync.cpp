@@ -1094,6 +1094,16 @@ BOOST_AUTO_TEST_CASE( DocumentAndFragmentBothParse )
     BOOST_CHECK_EQUAL( loadInto( *m_receiving, document, &error ), 1u );
     BOOST_CHECK( error.IsEmpty() );
 
+    // Exactly as KiCad 10 saves a file: the token on a line of its own, tab indented.  The
+    // first two-desktop run found every snapshot of such a file rejected.
+    error.clear();
+    const std::string saved =
+            "(kicad_sch\n\t(version 20260101)\n\t(generator \"eeschema\")\n"
+            "\t(uuid \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\")\n\t(paper \"A4\")\n"
+            "\t(lib_symbols)\n\t" + wire + "\n\t(sheet_instances (path \"/\" (page \"1\")))\n)\n";
+    BOOST_CHECK_EQUAL( loadInto( *m_receiving, saved, &error ), 1u );
+    BOOST_CHECK( error.IsEmpty() );
+
     // And a fragment wrapped in a document, which is what an older web client sends.
     error.clear();
     const std::string wrapped =

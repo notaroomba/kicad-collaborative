@@ -153,7 +153,11 @@ bool looksLikeDocument( const std::string& aText )
 
     i = aText.find_first_not_of( " \t\r\n", i + 1 );
 
-    return i != std::string::npos && aText.compare( i, 10, "kicad_sch " ) == 0;
+    // The token may be followed by any whitespace: KiCad 10 writes "(kicad_sch" and then a
+    // newline, so testing for a space missed every file it saved.
+    return i != std::string::npos && aText.compare( i, 9, "kicad_sch" ) == 0
+           && i + 9 < aText.size() && ( isspace( static_cast<unsigned char>( aText[i + 9] ) )
+                                        || aText[i + 9] == ')' );
 }
 
 } // namespace
