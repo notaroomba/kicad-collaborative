@@ -80,6 +80,7 @@ struct PCB_COLLAB_SYNC_FIXTURE
 
         PCB_TRACK* twin = static_cast<PCB_TRACK*>( track->Clone() );
         const_cast<KIID&>( twin->m_Uuid ) = track->m_Uuid;
+        twin->SetParent( m_receiving.get() );   // net codes resolve against the item's board
         twin->SetNetCode( 2 );      // GND under the receiver's numbering
         m_receiving->Add( twin );
 

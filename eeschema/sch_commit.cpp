@@ -312,17 +312,23 @@ void SCH_COMMIT::pushSchEdit( const wxString& aMessage, int aCommitFlags )
             };
 
     stageRemovedGroups();
-    // Remote collaboration applies (SKIP_CLEANUP) must not run the cleanup: the receiver would mint
-    // junction/merge KIIDs that differ from the author's and the documents would diverge.
-    bool cleanupPending = !( aCommitFlags & SKIP_CLEANUP );
+    bool cleanupPending = true;
     std::set<SCH_SCREEN*> touchedScreens;
 
     for( size_t index = 0; ; )
     {
         if( index == m_entries.size() )
         {
-            if( !cleanupPending || !dirtyConnectivity || ( aCommitFlags & SKIP_CONNECTIVITY ) || !schematic )
+            // Remote collaboration applies (SKIP_CLEANUP) must not run the cleanup: the receiver
+            // would mint junction/merge KIIDs that differ from the author's and the documents
+            // would diverge.  cleanupPending itself stays set for them, because it also decides
+            // who owns the items a SKIP_UNDO commit removes, and the collaboration apply frees
+            // those itself.
+            if( !cleanupPending || !dirtyConnectivity || ( aCommitFlags & SKIP_CONNECTIVITY )
+                || ( aCommitFlags & SKIP_CLEANUP ) || !schematic )
+            {
                 break;
+            }
 
             cleanupPending = false;
             notifyModel();
