@@ -64,13 +64,16 @@ DIALOG_COLLAB_COMMENTS::DIALOG_COLLAB_COMMENTS(
 
     m_input = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize( -1, 54 ),
                               wxTE_MULTILINE );
-    m_input->SetHint( _( "Write a reply, or a new comment pinned at the crosshair position" ) );
+    m_input->SetHint( _( "Write a reply, or a new comment on the selected part or net (or the crosshair position)" ) );
     top->Add( m_input, 0, wxEXPAND | wxALL, 8 );
 
     wxBoxSizer* buttons = new wxBoxSizer( wxHORIZONTAL );
     m_replyBtn = new wxButton( this, wxID_ANY, _( "Reply" ) );
     m_resolveBtn = new wxButton( this, wxID_ANY, _( "Resolve" ) );
-    m_newBtn = new wxButton( this, wxID_ANY, _( "New Comment at Crosshair" ) );
+    m_newBtn = new wxButton( this, wxID_ANY, _( "New Comment" ) );
+    m_newBtn->SetToolTip( _( "Starts a thread on the selected footprint or symbol, or on the net of the "
+                             "selected track, wire or label. With nothing selected it is pinned to "
+                             "the crosshair position." ) );
     m_showBtn = new wxButton( this, wxID_ANY, _( "Show on Board" ) );
     buttons->Add( m_replyBtn, 0, wxRIGHT, 5 );
     buttons->Add( m_resolveBtn, 0, wxRIGHT, 5 );
