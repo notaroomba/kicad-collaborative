@@ -1355,3 +1355,55 @@ test("item descriptions as pcbnew's GetItemDescription (Clarify Selection rows)"
   const named = K.parseDoc(FIXTURE.replace('(2 "B.Cu" signal)', '(2 "B.Cu" signal "bottom_layer")'), "kicad_pcb");
   assert.equal(P.itemDescription(named, "v-1", "mm"), "Via [GND] on F.Cu - bottom_layer", "the board's layer names");
 });
+
+const PE_FIXTURE = FIXTURE.replace(/\)\s*$/, `
+  (gr_rect (start 10 10) (end 20 16) (stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS") (uuid "r-1"))
+  (gr_circle (center 30 30) (end 32 30) (stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS") (uuid "c-1"))
+  (gr_arc (start 40 40) (mid 41 41) (end 42 40) (stroke (width 0.1) (type default)) (layer "F.SilkS") (uuid "ar-1"))
+  (gr_poly (pts (xy 0 0) (xy 4 0) (xy 4 4) (xy 0 4)) (stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS") (uuid "pl-1"))
+  (zone (net 0) (net_name "") (layer "F.Cu") (uuid "z-1") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy 50 50) (xy 60 50) (xy 60 60) (xy 50 60))))
+)`);
+
+test("point editor: KiCad's edit points per shape, and dragging one reshapes only that coordinate", () => {
+  const doc = K.parseDoc(PE_FIXTURE, "kicad_pcb"); const keys = (id) => P.editPoints(doc.items.get(id)).map((h) => h.key);
+  assert.deepEqual(keys("g-1"), ["start", "end"]);
+  assert.deepEqual(keys("r-1"), ["r0", "r1", "r2", "r3", "e0", "e1", "e2", "e3"], "rectangle: corners, then edge midpoints");
+  assert.deepEqual(keys("c-1"), ["center", "end"]);
+  assert.deepEqual(keys("ar-1"), ["start", "mid", "end"]);
+  assert.deepEqual(keys("z-1"), ["c0", "c1", "c2", "c3", "m0", "m1", "m2", "m3"]);
+  assert.ok(P.editPoints(doc.items.get("z-1")).filter((h) => h.key[0] === "m").every((h) => h.circle), "midpoints are drawn as circles");
+  assert.deepEqual(P.editPoints(doc.items.get("s-1")), [], "tracks have no point editor (the router drags them)");
+  const pt = (n, k) => { const x = K.kid(n, k); return [K.num(x[1]), K.num(x[2])]; };
+  const rect = doc.items.get("r-1").node;
+  let n = P.editPointNode(rect, "gr_rect", "r2", [25, 18]); assert.deepEqual([pt(n, "start"), pt(n, "end")], [[10, 10], [25, 18]]);
+  n = P.editPointNode(rect, "gr_rect", "e0", [99, 7]); assert.deepEqual([pt(n, "start"), pt(n, "end")], [[10, 7], [20, 16]], "the top edge moves only Y");
+  n = P.editPointNode(doc.items.get("c-1").node, "gr_circle", "center", [31, 31]); assert.deepEqual([pt(n, "center"), pt(n, "end")], [[31, 31], [33, 31]], "the centre carries the radius along");
+  n = P.editPointNode(doc.items.get("c-1").node, "gr_circle", "end", [30, 35]); assert.deepEqual(pt(n, "center"), [30, 30]);
+  n = P.editPointNode(doc.items.get("z-1").node, "zone", "m1", [62, 55]);
+  assert.deepEqual(K.kids(K.kid(K.kid(n, "polygon"), "pts"), "xy").map((x) => [K.num(x[1]), K.num(x[2])]), [[50, 50], [62, 50], [62, 60], [50, 60]], "a midpoint drags the whole edge");
+  assert.equal(K.serialize(n).replace(/\(pts[^]*$/, ""), K.serialize(doc.items.get("z-1").node).replace(/\(pts[^]*$/, ""), "everything but the outline is untouched");
+  assert.ok(roundTrips(n));
+});
+
+test("point editor: Create Corner and Remove Corner (PCB_POINT_EDITOR::addCorner / removeCorner)", () => {
+  const doc = K.parseDoc(PE_FIXTURE, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx); P.state.sel.clear();
+  const zpts = () => K.kids(K.kid(K.kid(doc.items.get("z-1").node, "polygon"), "pts"), "xy").map((x) => [K.num(x[1]), K.num(x[2])]);
+  ctx.selection = new Set(["z-1"]); ctx.cursor = [55, 49.9];
+  assert.equal(P.canAddCorner(doc.items.get("z-1")), true); assert.equal(P.canAddCorner(doc.items.get("c-1")), false);
+  assert.equal(pcb.runAction("pointEditorAddCorner", ctx), true); assert.equal(log.commits.at(-1).label, "add corner");
+  assert.deepEqual(zpts(), [[50, 50], [55, 50], [60, 50], [60, 60], [50, 60]], "the corner lands on the nearest edge, after its first corner");
+  assert.equal(P.canRemoveCorner(doc, "z-1", [55, 50]), true); assert.equal(P.canRemoveCorner(doc, "z-1", [57, 55]), false, "nothing under the cursor");
+  ctx.cursor = [60, 60]; assert.equal(pcb.runAction("pointEditorRemoveCorner", ctx), true);
+  assert.deepEqual(zpts(), [[50, 50], [55, 50], [60, 50], [50, 60]]);
+  ctx.cursor = [50, 60]; pcb.runAction("pointEditorRemoveCorner", ctx); assert.deepEqual(zpts(), [[50, 50], [55, 50], [60, 50]]);
+  const before = log.commits.length; ctx.cursor = [50, 50]; pcb.runAction("pointEditorRemoveCorner", ctx);
+  assert.equal(log.commits.length, before, "a triangle keeps its three corners"); assert.equal(P.canRemoveCorner(doc, "z-1", null), false);
+  // a line splits in two at the cursor
+  ctx.selection = new Set(["g-1"]); ctx.cursor = [100, 40]; assert.equal(pcb.runAction("pointEditorAddCorner", ctx), true);
+  const ch = log.commits.at(-1).changes; assert.equal(ch.length, 2);
+  const lines = [...doc.items.values()].filter((it) => it.kind === "gr_line" && K.str(K.kid(it.node, "layer")[1]) === "Edge.Cuts").map((it) => [K.num(K.kid(it.node, "start")[1]), K.num(K.kid(it.node, "end")[1])]).sort((a, b) => a[0] - b[0]);
+  assert.deepEqual(lines, [[90, 100], [100, 140]]);
+  assert.notEqual(ch[1].id, "g-1", "the new half has its own uuid");
+  ctx.selection = null;
+});

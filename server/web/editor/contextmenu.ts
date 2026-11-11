@@ -6,6 +6,7 @@ import { netLabel } from "../review/names";
 // either a run token or the reason it is dimmed) and publishes the tree on the store; the React
 // ContextMenu component renders it and answers with dispatch({ type: "contextMenu", run }).
 import { actions as CTX_ACTIONS } from "../generated/kicad-context-spec.json";
+import { menuMeta } from "../menuspec";
 import type { AppAction, CtxItem, Editor } from "../store";
 import { toolFor } from "../tables";
 import { HANDLERS } from "./actions";
@@ -22,6 +23,8 @@ type Mm = [number, number];
 type Run = () => void;
 interface Meta { id: string; label: string; tip: string | null; icon: string | null; key: string | null }
 const META = CTX_ACTIONS as unknown as Record<string, Meta>;
+/** The context spec holds what the generator saw in context menus; entries added by hand (PCB_POINT_EDITOR) fall back to the action table. */
+const metaOf = (act: string): Meta | null => META[act] || (menuMeta(act.startsWith("SCH_") ? "sch" : act.startsWith("PCB_") ? "pcb" : null, act.split("::").pop() as string) as Meta | null);
 
 // KiCad's zoom presets (include/zoom_defines.h ZOOM_LIST_EESCHEMA / ZOOM_LIST_PCBNEW)
 const ZOOM_LIST: Record<Editor, number[]> = {
@@ -67,9 +70,15 @@ function menuCtx(): MenuCtx {
   const drawingLine = sch && !!s && (!!s.wire || (!!s.draw && s.draw.shape === "lines"));
   const routing = !sch && !!p && !!p.route;
   const root = sch ? rootSchematic() : null;
+  // PCB_POINT_EDITOR's corner conditions, asked of the module for the one selected item at the cursor
+  const P = (window as unknown as { PcbTools?: { canAddCorner?: (it: unknown) => boolean; canRemoveCorner?: (d: KDoc, id: string, at: number[] | null) => boolean } }).PcbTools;
+  const one = !sch && items.length === 1 ? items[0] : null;
+  const canAddCorner = !!(one && P && P.canAddCorner && P.canAddCorner(one));
+  const canRemoveCorner = !!(one && P && P.canRemoveCorner && E.kdoc && P.canRemoveCorner(E.kdoc as KDoc, one.id, (E.lastCursorMm as number[] | null) || null));
   return {
     editor: editor(), kinds, tool: E.tool, drawingLine, routing,
     busy: interactionBusy() || drawingLine || routing || !!draw || (sch && !!s && !!s.carry),
+    canAddCorner, canRemoveCorner,
     canClose: outline && n >= 3, canUndoPoint: (outline || (!!draw && (draw.shape === "lines" || draw.shape === "gcurve"))) && n >= 1,
     highlight: !!E.highlightIds, belowRoot: !!root && (state as { doc?: unknown }).doc !== root,
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
@@ -170,7 +179,7 @@ function gridRows(c: MenuCtx): CtxItem[] {
   return rows;
 }
 function row(act: string, check: boolean, c: MenuCtx): CtxItem {
-  const meta = META[act], r = resolve(act, c);
+  const meta = metaOf(act), r = resolve(act, c);
   const it: CtxItem = { act, label: meta ? meta.label.replace(/\.\.\.$/, "…") : (act.split("::").pop() as string), icon: meta && meta.icon ? meta.icon : undefined, key: r.key || (meta && meta.key) || undefined };
   if (check) { it.check = true; it.checked = !!c.checks[act]; }
   if (r.run) it.run = runRow(r.run); else it.why = r.why || DESKTOP;

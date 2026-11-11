@@ -46,7 +46,7 @@ const BOARD_VERSION = 20260728;
 
 const S = {
   layer: "F.Cu", gfxLayer: "F.Cu",   // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
-  sel: new Set(), padSel: null, route: null,   // padSel: a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T)
+  sel: new Set(), padSel: null, pedit: null, mmPerPx: 0, route: null,   // padSel: a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T)
   drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
@@ -496,6 +496,140 @@ function connectedRun(doc, seedIds) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------- point editor (PCB_POINT_EDITOR)
+// A single selected zone, rule area, polygon, line, rectangle, circle or arc carries KiCad's edit handles: squares on
+// the corners / ends (EDIT_POINT), circles on the edge midpoints (EDIT_LINE centre points).  Dragging a handle reshapes
+// the item; a zone or polygon edge midpoint drags the whole edge; Ins (Create Corner) adds a corner on the edge under
+// the cursor, Remove Corner takes the corner under it out.  Only the edited coordinates are rewritten.
+const PE_KINDS = new Set(["zone", "gr_poly", "gr_line", "gr_rect", "gr_circle", "gr_arc"]);
+/** The (pts) list a polygon edit works on: the zone's first outline, the polygon's own points. */
+function pePtsNode(node) { const host = node[0] === "zone" ? K.kid(node, "polygon") : node; return host ? K.kid(host, "pts") : null; }
+function pePolyPts(node) { const p = pePtsNode(node); return p ? K.kids(p, "xy").map((x) => [K.num(x[1]), K.num(x[2])]) : []; }
+/** EDIT_POINTS of an item: [{ key, p, circle }] in drawing order. */
+function editPoints(it) {
+  if (!it || !PE_KINDS.has(it.kind)) return [];
+  const n = it.node, out = [];
+  if (it.kind === "zone" || it.kind === "gr_poly") {
+    const pts = pePolyPts(n); pts.forEach((p, i) => out.push({ key: "c" + i, p }));
+    if (pts.length > 1) pts.forEach((p, i) => { const q = pts[(i + 1) % pts.length]; out.push({ key: "m" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true }); });
+  } else if (it.kind === "gr_line") { for (const k of ["start", "end"]) { const p = pt(n, k); if (p) out.push({ key: k, p }); } }
+  else if (it.kind === "gr_rect") {
+    const a = pt(n, "start"), b = pt(n, "end"); if (!a || !b) return out;
+    const c = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+    c.forEach((p, i) => out.push({ key: "r" + i, p }));
+    c.forEach((p, i) => { const q = c[(i + 1) % 4]; out.push({ key: "e" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true }); });
+  } else if (it.kind === "gr_circle") { const c = pt(n, "center"), e = pt(n, "end"); if (c) out.push({ key: "center", p: c }); if (e) out.push({ key: "end", p: e }); }
+  else if (it.kind === "gr_arc") { for (const k of ["start", "mid", "end"]) { const p = pt(n, k); if (p) out.push({ key: k, p }); } }
+  return out;
+}
+const setXY = (node, key, p) => { const k = K.kid(node, key); if (k) { k[1] = r6(p[0]); k[2] = r6(p[1]); } };
+/** The node with handle `key` moved to `p` (from the original node `orig`). */
+function editPointNode(orig, kind, key, p) {
+  const node = clone(orig);
+  if (kind === "zone" || kind === "gr_poly") {
+    const pn = pePtsNode(node); const xs = pn ? K.kids(pn, "xy") : []; const nn = xs.length; if (!nn) return node;
+    const i = +key.slice(1);
+    if (key[0] === "c") { xs[i][1] = r6(p[0]); xs[i][2] = r6(p[1]); }
+    else {   // an edge midpoint drags the edge: both its corners move by the same offset
+      const j = (i + 1) % nn; const a = [K.num(xs[i][1]), K.num(xs[i][2])], b = [K.num(xs[j][1]), K.num(xs[j][2])];
+      const d = [p[0] - (a[0] + b[0]) / 2, p[1] - (a[1] + b[1]) / 2];
+      xs[i][1] = r6(a[0] + d[0]); xs[i][2] = r6(a[1] + d[1]); xs[j][1] = r6(b[0] + d[0]); xs[j][2] = r6(b[1] + d[1]);
+    }
+  } else if (kind === "gr_line" || kind === "gr_arc") setXY(node, key, p);
+  else if (kind === "gr_rect") {
+    const a = pt(orig, "start"), b = pt(orig, "end"); let x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
+    // corners TL TR BR BL as start / end coordinates; an edge moves one coordinate
+    const sx = (v) => { x0 = v; }, sy = (v) => { y0 = v; }, ex = (v) => { x1 = v; }, ey = (v) => { y1 = v; };
+    ({ r0: () => { sx(p[0]); sy(p[1]); }, r1: () => { ex(p[0]); sy(p[1]); }, r2: () => { ex(p[0]); ey(p[1]); }, r3: () => { sx(p[0]); ey(p[1]); },
+      e0: () => sy(p[1]), e1: () => ex(p[0]), e2: () => ey(p[1]), e3: () => sx(p[0]) })[key]();
+    setXY(node, "start", [x0, y0]); setXY(node, "end", [x1, y1]);
+  } else if (kind === "gr_circle") {
+    if (key === "center") { const c = pt(orig, "center"), e = pt(orig, "end"); setXY(node, "center", p); setXY(node, "end", [e[0] + p[0] - c[0], e[1] + p[1] - c[1]]); }
+    else setXY(node, "end", p);
+  }
+  return node;
+}
+/** The one selected item's id (the module's own selection or the app's), or null. */
+function peSingleId(ctx) { const c = ctx || lastCtx; const ids = c && c.doc ? selectionIds(c) : S.sel; return ids.size === 1 ? ids.values().next().value : null; }
+/** The handle of the single selected editable item within `tol` mm of (x, y), or null. */
+function editHandleAt(doc, x, y, tol) {
+  const id = peSingleId(); const it = id ? doc.items.get(id) : null; if (!it || isLocked(it.node)) return null;
+  let best = null, bd = tol;
+  for (const h of editPoints(it)) { const d = Math.max(Math.abs(h.p[0] - x), Math.abs(h.p[1] - y)); if (d <= bd) { bd = d; best = h; } }
+  return best ? { it, h: best } : null;
+}
+/** PCB_POINT_EDITOR::addCorner: a corner on the zone / polygon edge nearest the cursor, or a line split there. */
+function addCornerChanges(doc, id, at) {
+  const it = doc.items.get(id); if (!it) return [];
+  if (it.kind === "zone" || it.kind === "gr_poly") {
+    const pts = pePolyPts(it.node); if (pts.length < 2) return [];
+    let bi = -1, bd = Infinity, bp = null;
+    for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; const q = closestOnSeg(at, a, b); const d = Math.hypot(q[0] - at[0], q[1] - at[1]); if (d < bd) { bd = d; bi = i; bp = q; } }
+    const node = clone(it.node); const pn = pePtsNode(node); const xs = K.kids(pn, "xy"); const after = xs[bi];
+    pn.splice(pn.indexOf(after) + 1, 0, ["xy", r6(bp[0]), r6(bp[1])]);
+    return [replacedChange(it, node)];
+  }
+  if (it.kind === "gr_line") {   // the segment splits in two at the cursor's projection
+    const a = pt(it.node, "start"), b = pt(it.node, "end"); const q = closestOnSeg(at, a, b); if (samePt(q, a) || samePt(q, b)) return [];
+    const first = clone(it.node); setXY(first, "end", q);
+    const second = clone(it.node); setXY(second, "start", q); const u = K.kid(second, "uuid"); if (u) u[1] = K.newUuid ? K.newUuid() : u[1] + "-1";
+    return [replacedChange(it, first), addedChange(doc, second)];
+  }
+  return [];
+}
+/** PCB_POINT_EDITOR::canAddCorner: zones, polygons and plain lines. */
+function canAddCorner(it) { return !!it && (it.kind === "zone" || it.kind === "gr_poly" || it.kind === "gr_line"); }
+/** PCB_POINT_EDITOR::canRemoveCorner: a zone or polygon with more than three corners, one of them under the cursor. */
+function canRemoveCorner(doc, id, at) { const it = doc.items.get(id); if (!it || (it.kind !== "zone" && it.kind !== "gr_poly") || pePolyPts(it.node).length <= 3) return false; return !at || removeCornerChanges(doc, id, at, handleTol()).length > 0; }
+function closestOnSeg(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy; if (!L) return a.slice(); const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L)); return [a[0] + t * dx, a[1] + t * dy]; }
+/** PCB_POINT_EDITOR::removeCorner: the zone / polygon corner under the cursor, while more than three remain. */
+function removeCornerChanges(doc, id, at, tol) {
+  const it = doc.items.get(id); if (!it || (it.kind !== "zone" && it.kind !== "gr_poly")) return [];
+  const pts = pePolyPts(it.node); if (pts.length <= 3) return [];
+  let bi = -1, bd = tol; pts.forEach((p, i) => { const d = Math.max(Math.abs(p[0] - at[0]), Math.abs(p[1] - at[1])); if (d <= bd) { bd = d; bi = i; } });
+  if (bi < 0) return [];
+  const node = clone(it.node); const pn = pePtsNode(node); pn.splice(pn.indexOf(K.kids(pn, "xy")[bi]), 1);
+  return [replacedChange(it, node)];
+}
+const handleTol = () => 6 * (S.mmPerPx || 0.05);   // a few screen pixels around the 8 px handle
+function onHandlePointerDown(ev) {
+  const ctx = lastCtx; if (!ctx || !isPcbDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
+  if (S.route || S.draw || S.drag || S.move || S.pedit || ctx.viewOnly) return;
+  const stage = ctx.stage; if (!stage || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
+  const doc = liveDoc(); if (!doc) return; const mm = ctx.worldMm(ev);
+  const hit = editHandleAt(doc, mm[0], mm[1], handleTol()); if (!hit) return;
+  ev.stopImmediatePropagation(); ev.preventDefault();
+  S.pedit = { id: hit.it.id, kind: hit.it.kind, key: hit.h.key, orig: clone(hit.it.node), start: mm, moved: false };
+  try { stage.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic event */ }
+}
+function editHandleMove(ctx, mm) {
+  const pe = S.pedit; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) { S.pedit = null; return; }
+  if (!pe.moved && Math.hypot(mm[0] - pe.start[0], mm[1] - pe.start[1]) < 1e-3) return;
+  const p = ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;
+  pe.moved = true; pe.node = editPointNode(pe.orig, pe.kind, pe.key, p);
+  it.node.length = 0; it.node.push(...clone(pe.node)); K.replaceChange(ctx.doc, it); ctx.requestRender();
+}
+function editHandleUp(ctx, commit) {
+  const pe = S.pedit; S.pedit = null; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) return;
+  it.node.length = 0; it.node.push(...clone(pe.orig)); K.replaceChange(ctx.doc, it);   // the original back first: commit records the inverse
+  if (commit && pe.moved && pe.node && K.serialize(pe.node) !== K.serialize(pe.orig)) ctx.commit([replacedChange(it, pe.node)], "edit points");
+  ctx.requestRender();
+}
+function drawEditPoints(c, ctx, px) {
+  if (S.route || S.draw || S.drag || S.move || S.modTool) return;
+  const id = peSingleId(ctx); const it = id ? ctx.doc.items.get(id) : null; if (!it || isLocked(it.node)) return; const hs = editPoints(it); if (!hs.length) return;
+  const cur = ctx.cursor || null; const size = 4 * px;   // POINT_SIZE 8 px
+  const hotKey = S.pedit ? S.pedit.key : (cur ? ((editHandleAt(ctx.doc, cur[0], cur[1], handleTol()) || {}).h || {}).key : null);
+  c.save(); c.globalAlpha = 1; c.setLineDash([]);
+  for (const h of hs) {
+    const on = h.key === hotKey;
+    c.lineWidth = (on ? 5 : 2) * px; c.strokeStyle = on ? "rgba(128,128,128,0.8)" : "rgba(77,77,77,0.8)"; c.fillStyle = "#FFFFFF";   // LAYER_AUX_ITEMS, border Darkened(0.7) / hover Darkened(0.5)
+    c.beginPath(); if (h.circle) c.arc(h.p[0], h.p[1], size, 0, Math.PI * 2); else c.rect(h.p[0] - size, h.p[1] - size, 2 * size, 2 * size);
+    c.fill(); c.stroke();
+  }
+  c.restore();
 }
 
 // ---------------------------------------------------------------- footprint rotate / flip (file-level)
@@ -1397,6 +1531,7 @@ function startPendingDrag(ctx, pd) {
 }
 function onStagePointerMove(ev) {
   const ctx = lastCtx; if (!ctx || !isPcbDoc()) return;
+  if (S.pedit) { ev.stopImmediatePropagation(); editHandleMove(ctx, ctx.worldMm(ev)); return; }
   if (S.pending) {
     const pd = S.pending;
     // the drag starts past KiCad's drag threshold in screen pixels (gestures.ts DRAG_THRESHOLD_PX)
@@ -1408,6 +1543,7 @@ function onStagePointerMove(ev) {
 }
 function onStagePointerUp(ev) {
   const ctx = lastCtx; S.pending = null; if (!ctx) return;
+  if (S.pedit) { if (ev) { ev.stopImmediatePropagation(); editHandleMove(ctx, ctx.worldMm(ev)); } editHandleUp(ctx, !!ev && ev.type === "pointerup"); return; }
   if (S.stickyUp) { S.stickyUp = false; if (ev) { ev.stopImmediatePropagation(); ev.preventDefault(); } return; }   // the release of the click that dropped a Move
   if (S.drag && S.drag.bySelect) { if (ev) dragMove(ctx, ctx.worldMm(ev)); finishDrag(ctx, true, !!(ev && (ev.ctrlKey || ev.metaKey))); }   // Ctrl on release commits a drag in violation
   else if (S.move && !S.move.sticky) finishSelectMove(ctx, true);
@@ -1542,7 +1678,7 @@ function deleteAt(ctx, mm) {
   return it;
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
-function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; closeTextPrompt(); }
+function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); }
 
 // ================================================================ parity pass: the non-tool commands of pcbnew
 // Everything below is DOM-free geometry and node editing (the dialogs at the end are swappable) so the node
@@ -3382,6 +3518,15 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
 // Filling is the desktop application's job: its filler is what the fabrication output comes from, so the
 // browser never approximates one.  It asks a desktop editor in the document to refill; the result arrives
 // as an ordinary edit.
+// PCB_POINT_EDITOR::addCorner / removeCorner on the single selected item, at the cursor
+act("pointEditorAddCorner", "Create Corner", "Ins", (ctx) => {
+  const id = peSingleId(ctx); if (!id || !canAddCorner(ctx.doc.items.get(id))) return false;
+  if (!canEdit(ctx)) return true; const ch = addCornerChanges(ctx.doc, id, cursorPoint(ctx)); if (ch.length) ctx.commit(ch, "add corner"); return true;
+});
+act("pointEditorRemoveCorner", "Remove Corner", "", (ctx) => {
+  const id = peSingleId(ctx); if (!id) return false;
+  if (!canEdit(ctx)) return true; const ch = removeCornerChanges(ctx.doc, id, ctx.cursor || cursorPoint(ctx), handleTol()); if (ch.length) ctx.commit(ch, "remove corner"); return true;
+});
 act("zoneFillAll", "Fill All Zones", "B", (ctx) => { if (ctx.viewOnly) { ctx.toast("View only"); return true; } if (!ctx.requestDesktop || !ctx.requestDesktop("fill_zones")) { ctx.toast("Not connected"); return true; } ctx.toast("Asked the desktop app to refill zones"); return true; });
 // ZONE::UnFill (ZONE_FILLER_TOOL::ZoneUnfill / ZoneUnfillAll): the filled areas go and the zone is no longer marked
 // filled — exactly what pcbnew writes after an unfill, so the browser can do it itself.
@@ -3414,6 +3559,7 @@ function ensureDom(ctx) {
   // select tool listens on the stage after app.js has had its turn with the footprints.
   ctx.stage.addEventListener("pointerdown", onStagePointerDown);
   window.addEventListener("pointerdown", onStickyPointerDown, true);   // before every stage listener: the click that drops a Move is nobody else's
+  window.addEventListener("pointerdown", onHandlePointerDown, true);   // a press on an edit point belongs to the point editor
   ctx.stage.addEventListener("pointermove", onStagePointerMove, true);
   ctx.stage.addEventListener("pointerup", onStagePointerUp, true);
   ctx.stage.addEventListener("pointercancel", onStagePointerUp, true);
@@ -3466,6 +3612,7 @@ function onCaptureKey(ev) {
     return;
   }
   if (k === "Escape") {
+    if (S.pedit && lastCtx) { editHandleUp(lastCtx, false); ev.stopImmediatePropagation(); ev.preventDefault(); return; }
     if (S.route || S.draw || S.drag || S.text || S.image || (S.move && S.move.sticky)) {   // first Escape only cancels the operation, KiCad style; the next one leaves the tool
       const dragTool = S.drag && S.drag.tool;
       cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
@@ -3592,7 +3739,7 @@ function drawDimPreview(c, d, px) {
 }
 function drawOverlay(c, view, ctx) {
   bind(ctx); const doc = ctx.doc; if (!doc) return;
-  const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
+  const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)); S.mmPerPx = px * (view.dpr || 1);
   c.lineCap = "round"; c.lineJoin = "round";
   // the selection is not drawn here: the document pass repaints selected items in their layer's selected colour
   // (PCB_PAINTER::getColor, m_layerColorsSel), with no outline
@@ -3629,6 +3776,7 @@ function drawOverlay(c, view, ctx) {
   }
   // drag in progress (ROUTER::moveDragging): the rebuilt lines over the hidden originals
   drawDragPreview(c, ctx, view, px);
+  drawEditPoints(c, ctx, px);   // PCB_POINT_EDITOR's EDIT_POINTS over the selected item
   // route in progress: fixed legs are already in the document, the current one lives here
   // ROUTER::markViolations: obstacles in violation (a refused start or via) in pure green over their clearance halo
   if (S.violations) for (const ob of S.violations.obs) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
@@ -3949,7 +4097,7 @@ const pcb = {
   setRoutingDialogs(d) { routingDialogs = d || {}; },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
-  clipboardText, pasteChanges, cursorPoint, selectionIds, selMode,
+  clipboardText, pasteChanges, cursorPoint, selectionIds, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner,
   get markers() { return S.markers; },
   runDRC(ctx) { return runAction("runDRC", ctx); },
   setDesignSettings(src) { S.settings = src ? designSettings(src) : null; S.settingsSrc = null; },
@@ -3970,7 +4118,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
-  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, connectedCopperIds,
+  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

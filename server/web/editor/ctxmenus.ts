@@ -29,6 +29,8 @@ export interface MenuCtx {
   routing: boolean;
   /** a shape with an outline is being drawn and has enough corners to close / a corner to take back */
   canClose: boolean; canUndoPoint: boolean;
+  /** PCB_POINT_EDITOR::addCornerCondition / removeCornerCondition for the single selected item at the cursor */
+  canAddCorner?: boolean; canRemoveCorner?: boolean;
   highlight: boolean;
   belowRoot: boolean;
   hasLocked: boolean; hasUnlocked: boolean;
@@ -309,6 +311,8 @@ function pcbSelectionMenu(): CondMenu {
   m.item("PCB_ACTIONS::drag45Degree", and(count(1), onlyTypes(PCB_DRAGGABLE))).item("PCB_ACTIONS::dragFreeAngle", and(count(1), onlyTypes(PCB_DRAGGABLE), not(onlyTypes(PCB_FOOTPRINT))));
   m.item("PCB_ACTIONS::flip", notEmpty).item("PCB_ACTIONS::swap", moreThan(1)).sep();
   m.item("PCB_ACTIONS::breakTrack", and(count(1), onlyTypes(PCB_TRACKS))).item("PCB_ACTIONS::filletTracks", onlyTypes(PCB_TRACKS)).sep();
+  // PCB_POINT_EDITOR::Init
+  m.item("PCB_ACTIONS::pointEditorAddCorner", and(count(1), (c) => !!c.canAddCorner)).item("PCB_ACTIONS::pointEditorRemoveCorner", and(count(1), (c) => !!c.canRemoveCorner)).sep();
   m.item("PCB_ACTIONS::packAndMoveFootprints", and(moreThan(1), hasTypes(PCB_FOOTPRINT))).item("PCB_ACTIONS::assignNetClass", onlyTypes(PCB_CONNECTED)).item("PCB_ACTIONS::inspectClearance", count(2));
   m.sep();
   m.item("PCB_ACTIONS::editFpInFpEditor", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprint", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprints", pcbMultipleFootprints);
