@@ -12,6 +12,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as design from "./design";
+import * as library from "./library";
 import { ToolError } from "./design";
 import { applyProposal, buildProposal, clearPreview, previewing, showPreview, staleReason, type Proposal } from "./proposals";
 
@@ -179,6 +180,8 @@ const TOOLS: Record<string, { run: ToolFn; label: (input: any) => string; summar
   get_items: { run: (i) => design.getItems(i), label: (i) => `Read ${i.kinds ? i.kinds.join(", ") + " items" : i.net ? `the items on ${i.net}` : "items"}${i.near ? " around a point" : ""}`, summary: (o) => `${o.count} found` },
   find_datasheets: { run: (i) => design.findDatasheets(i), label: () => "Looked up datasheet links", summary: (o) => `${o.with_datasheet_link} linked, ${o.without} without` },
   focus_view: { run: (i) => design.focusView(i), label: (i) => `Showed ${i.refs && i.refs.length ? i.refs.join(", ") : "a point"} on the canvas` },
+  find_parts: { run: (i) => library.findParts(i), label: (i) => (i.library ? `Listed the ${i.library} library` : `Looked for ${i.kind === "footprint" ? "footprints" : "parts"} matching “${i.query || ""}”`) },
+  get_library_part: { run: (i) => library.getLibraryPart(i), label: (i) => `Read ${i.vendor ? `${i.vendor} part ` : ""}${i.id}` },
   open_document: { run: (i) => design.openDocument(i), label: (i) => `Opened ${i.doc}` },
   // Tools of the plugins this person installed (web/plugins/host.ts): the tool list the model is given never
   // changes, so plugin tools are reached through these two rather than being added to it.
@@ -204,7 +207,7 @@ function serverToolLabel(name: string, input: any): string | null {
 async function runTool(name: string, input: any, ui: UiMessage): Promise<{ content: string; is_error?: boolean }> {
   try {
     if (name === "propose_changes") {
-      const p = buildProposal(input || {});
+      const p = await buildProposal(input || {});
       S = Object.assign({}, S, { proposals: Object.assign({}, S.proposals, { [p.id]: p }) });
       ui.blocks.push({ t: "proposal", proposalId: p.id });
       const viewOnly = !!design.ED()?.viewOnly;
@@ -366,4 +369,9 @@ export async function send(text: string): Promise<void> {
 function clean(b: any): any { if (b && b.__bad !== undefined) { const c = Object.assign({}, b); delete c.__bad; return c; } return b; }
 
 /** For the browser test and the console: run one design tool against the open document. */
-(window as any).KcAssistant = { tool: (name: string, input: unknown) => { const t = TOOLS[name]; if (!t) throw new Error(`unknown tool ${name}`); return t.run(input || {}); }, state: () => S };
+/** Also for tests: build a proposal outside a conversation and, with accept, apply it as a person would. */
+async function proposeDirect(input: any, acceptIt?: boolean): Promise<unknown> {
+  const p = await buildProposal(input || {}); const r = acceptIt ? applyProposal(p) : null;
+  return { edits: p.lines.map((l) => l.text), changes: p.changes.length, connectivity: p.connectivity, details: p.details, applied: r ? r.ok : undefined, reason: r ? r.reason : undefined };
+}
+(window as any).KcAssistant = { tool: (name: string, input: unknown) => { const t = TOOLS[name]; if (!t) throw new Error(`unknown tool ${name}`); return t.run(input || {}); }, propose: proposeDirect, state: () => S };

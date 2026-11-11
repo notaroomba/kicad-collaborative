@@ -44,6 +44,8 @@ pub struct OpRow {
     pub author_id: i64,
     pub client_id: String,
     pub changes: Value,
+    /// The author's login (empty when the account is gone).
+    pub login: String,
 }
 
 pub async fn get_user(pool: &PgPool, id: i64) -> DbResult<Option<User>> {
@@ -825,8 +827,9 @@ pub async fn min_op_seq(pool: &PgPool, doc_id: Uuid) -> DbResult<Option<i64>> {
 
 pub async fn ops_since(pool: &PgPool, doc_id: Uuid, since: i64) -> DbResult<Vec<OpRow>> {
     sqlx::query_as::<_, OpRow>(
-        "SELECT seq, author_id, client_id, changes FROM ops
-         WHERE doc_id = $1 AND seq > $2 ORDER BY seq",
+        "SELECT o.seq, o.author_id, o.client_id, o.changes, COALESCE(u.login, '') AS login
+         FROM ops o LEFT JOIN users u ON u.id = o.author_id
+         WHERE o.doc_id = $1 AND o.seq > $2 ORDER BY o.seq",
     )
     .bind(doc_id)
     .bind(since)
@@ -834,11 +837,53 @@ pub async fn ops_since(pool: &PgPool, doc_id: Uuid, since: i64) -> DbResult<Vec<
     .await
 }
 
+/// True when an op insert failed because another writer already holds that seq: with
+/// several replicas the `(doc_id, seq)` primary key is what puts their ops in one order.
+pub fn is_seq_taken(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.is_unique_violation() && d.constraint() == Some("ops_pkey"))
+}
+
 /// Insert an op at the given seq. Returns Ok(None) on success; if the
 /// (client_id, client_op_id) pair was already used, returns the existing seq
 /// (idempotent resubmit after reconnect).
 pub async fn insert_op(
     pool: &PgPool,
+    doc_id: Uuid,
+    seq: i64,
+    author_id: i64,
+    client_id: &str,
+    client_op_id: &str,
+    base_seq: Option<i64>,
+    changes: &Value,
+) -> DbResult<Option<i64>> {
+    let mut conn = pool.acquire().await?;
+    insert_op_on(&mut conn, doc_id, seq, author_id, client_id, client_op_id, base_seq, changes).await
+}
+
+/// Take the document's sequencing lock for the length of a transaction and read the
+/// newest seq in the op table.
+///
+/// With one replica the document's actor is the only writer and needs no lock.  With
+/// several, each replica's actor would otherwise race for the next seq, and under a
+/// burst the same one can lose every time; the lock queues them in arrival order, so
+/// whoever holds it knows the head it read is the head it will write after.
+pub async fn lock_sequence(pool: &PgPool, doc_id: Uuid) -> DbResult<(sqlx::Transaction<'static, sqlx::Postgres>, i64)> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(doc_id)
+        .execute(&mut *tx)
+        .await?;
+    let head: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM ops WHERE doc_id = $1")
+        .bind(doc_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    Ok((tx, head))
+}
+
+/// [`insert_op`] on a connection the caller holds (inside [`lock_sequence`]'s transaction).
+pub async fn insert_op_on(
+    conn: &mut sqlx::PgConnection,
     doc_id: Uuid,
     seq: i64,
     author_id: i64,
@@ -859,7 +904,7 @@ pub async fn insert_op(
     .bind(client_op_id)
     .bind(base_seq)
     .bind(changes)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     if res.rows_affected() > 0 {
@@ -876,7 +921,7 @@ pub async fn insert_op(
     .bind(client_id)
     .bind(client_op_id)
     .bind(author_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     match row {

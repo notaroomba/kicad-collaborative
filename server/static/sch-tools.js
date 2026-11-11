@@ -34,8 +34,8 @@ const TOOLS = [
   { id: "junction", label: "Junction", key: "J", cursor: "crosshair", icon: '<path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="3" fill="currentColor"/>' },
   { id: "noconnect", label: "No connect", key: "Q", cursor: "crosshair", icon: '<path d="M12 3v9M7 7l10 10M17 7L7 17"/>' },
   { id: "label", label: "Net label", key: "L", kind: "label", cursor: "crosshair", icon: '<path d="M6 17l5-11 5 11M8.5 13h5M4 21h16"/>' },
-  { id: "glabel", label: "Global label", key: "Shift+L", kind: "global_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3z"/>' },
-  { id: "hlabel", label: "Hierarchical label", key: "Shift+H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
+  { id: "glabel", label: "Global label", key: "Ctrl+L", kind: "global_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3z"/>' },
+  { id: "hlabel", label: "Hierarchical label", key: "H", kind: "hierarchical_label", cursor: "crosshair", icon: '<path d="M3 8h13l4 4-4 4H3zM7 12h6"/>' },
   { id: "text", label: "Text", key: "T", kind: "text", cursor: "crosshair", icon: '<path d="M5 6h14M12 6v13M9 19h6"/>' },
   { id: "place", label: "Place symbol", key: "A", cursor: "crosshair", icon: '<rect x="7" y="5" width="10" height="14"/><path d="M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
   { id: "power", label: "Power symbol", key: "P", cursor: "crosshair", icon: '<path d="M12 21v-9M6 12h12M12 12l-5-7M12 12l5-7"/>' },
@@ -391,7 +391,8 @@ function terminalsOf(doc, it) {
   if (k === "hierarchical_label") return [{ p: at(), net: "any", key: "hier:" + str(n[1]) }];
   if (k === "symbol") {
     const libId = str((kid(n, "lib_id") || [])[1]), value = kids(n, "property").find((p) => str(p[1]) === "Value");
-    const key = isPowerSymbol(doc, libId) && value ? "global:" + str(value[2]) : undefined;
+    // a power symbol names its net through its power input pin; PWR_FLAG (a power output) names none
+    const key = isPowerSymbol(doc, libId) && value && symbolPins(doc, it).some((q) => q.type === "power_in") ? "global:" + str(value[2]) : undefined;
     return K.pinPoints(doc, it).map((q) => ({ p: [r4(q.x), r4(q.y)], net: "wire", key }));
   }
   if (k === "sheet") return kids(n, "pin").map((pin) => ({ p: atOf(pin).slice(0, 2).map(r4), net: "any" }));
@@ -602,6 +603,7 @@ function hitNonSymbol(doc, x, y, tol) {
 // Our pick for the select tool; null hands the click back to app.js (symbols, empty space).
 function pickNonSymbol(ctx, mm) {
   const hit = hitNonSymbol(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (!hit) return null;
+  const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(hit)) return null;   // the Selection Filter pane
   const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
   if (symId && !LINE_KINDS.has(hit.kind)) { const sym = ctx.doc.items.get(symId); if (sym && area(sym.bbox) < area(rectOf(hit))) return null; }
   return hit;
@@ -1562,6 +1564,7 @@ function onKey(key, ev, ctx) {
   case "i": case "I": return armTool("lines");
   case "l": return armTool("label", "label");
   case "L": return armTool("glabel", "global_label");
+  case "h": case "H": return armTool("hlabel", "hierarchical_label");   // KiCad's default for Add Hierarchical Label
   case "t": case "T": return armTool("text", "text");
   case "a": case "A": return armTool("place");
   case "r": return orientSelected(ctx, "ccw");
@@ -1901,7 +1904,7 @@ function symbolPins(doc, item) {
   const tf = (lx, ly) => [r4(ax + T[0] * lx + T[1] * ly), r4(ay + T[2] * lx + T[3] * ly)];
   for (const sub of kids(lib, "symbol")) {
     const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
-    if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+    if ((u !== 0 && u !== unit) || (m && s !== 0 && s !== style)) continue;   // unit 0 / body style 0 = common to all
     for (const g of kids(sub, "pin")) {
       const [px, py, pr] = atOf(g), lenN = kid(g, "length"), len = lenN ? num(lenN[1]) : 2.54;
       const dir = ((Math.round(pr) % 360) + 360) % 360, d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
@@ -1942,7 +1945,7 @@ function bodyBox(doc, item) {
     const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1, styleN = kid(n, "body_style") || kid(n, "convert"), style = styleN ? num(styleN[1], 1) : 1;
     for (const sub of kids(lib, "symbol")) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
-      if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+      if ((u !== 0 && u !== unit) || (m && s !== 0 && s !== style)) continue;   // unit 0 / body style 0 = common to all
       for (const g of sub.slice(2)) {
         if (!Array.isArray(g)) continue;
         const gk = g[0];
@@ -2183,7 +2186,7 @@ function ercNets(doc) {
     if (it.kind === "symbol") {
       const power = symbolIsPower(doc, it), value = kids(it.node, "property").find((p) => str(p[1]) === "Value");
       for (const pin of symbolPins(doc, it)) {
-        let key; if (power && value) key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
+        let key; if (power && value && pin.type === "power_in") key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
         terms.push({ item: it, p: [pin.x, pin.y], net: "wire", key, pin, power });
       }
     } else if (it.kind === "sheet") { for (const pin of kids(it.node, "pin")) terms.push({ item: it, p: atOf(pin).slice(0, 2).map(r4), net: "any", sheetPin: str(pin[1]) }); }
@@ -2244,7 +2247,7 @@ function ercCheck(doc, opts) {
       if (DRIVEN.has(a.pin.type) && (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in"))) needs = a;
       for (let j = i + 1; j < visible.length; j++) {
         const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
-        const e = PIN_MATRIX[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];
+        const e = (opts.pinMap || PIN_MATRIX)[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];   // the project's Pin Conflicts Map when given
         if (e && (!worst || e > worst.e)) worst = { e, a, b };
       }
     }

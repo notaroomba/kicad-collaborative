@@ -6,13 +6,21 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use std::sync::Arc;
+
 use crate::persist::{self, Document};
+use crate::relay::Relay;
 
 const PRESENCE_FLUSH: Duration = Duration::from_millis(50);
 const PRESENCE_STALE: Duration = Duration::from_secs(30);
 const REAP_AFTER: Duration = Duration::from_secs(60);
 const SNAPSHOT_LAG_OPS: i64 = 500;
 const SNAPSHOT_REQUEST_COOLDOWN: Duration = Duration::from_secs(60);
+/// With other replicas around, how often an open document checks the op table for ops a
+/// lost notification would have announced.
+const REMOTE_POLL: Duration = Duration::from_secs(3);
+/// How many times an op is retried at the next seq when other replicas keep taking it.
+const SEQ_RETRIES: usize = 50;
 
 /// With any un-snapshotted ops at all, ask for a fresh snapshot this often —
 /// it is what keeps gallery previews and clones close to the live document.
@@ -28,7 +36,7 @@ fn snapshot_fresh_interval() -> Duration {
     })
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PeerInfo {
     #[serde(rename = "clientId")]
     pub client_id: String,
@@ -37,6 +45,10 @@ pub struct PeerInfo {
     pub login: String,
     pub name: String,
     pub color: String,
+    /// What kind of client this is ("web" for the browser editor, otherwise a desktop
+    /// editor).  Desktop clients use it to decide who refills zones after a browser edit.
+    #[serde(rename = "client", default)]
+    pub kind: String,
 }
 
 #[derive(Debug)]
@@ -82,6 +94,40 @@ pub enum DocMsg {
     /// Something is about to read the document's file (a GitHub push or pull): ask a
     /// client that can write one for a snapshot now, whatever the cooldown says.
     SnapshotNow,
+    /// A client asks a desktop editor in the document to do something (fill zones).
+    Request {
+        client_id: String,
+        action: String,
+    },
+    /// Something another replica published about this document (relay.rs).
+    Relay(Value),
+    /// A replica stopped answering: its clients are no longer in the document.
+    ReplicaGone {
+        replica: String,
+    },
+}
+
+/// Somebody in the document through another replica.
+/// Whether the user may still edit the document's project, asked of the database.
+async fn still_editor(pool: &PgPool, user_id: i64, doc_id: Uuid) -> bool {
+    let project: Option<Uuid> = sqlx::query_scalar("SELECT project_id FROM documents WHERE id = $1")
+        .bind(doc_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    match project {
+        Some(p) => matches!(persist::effective_role(pool, user_id, p).await, Ok(Some(r)) if r == "editor"),
+        None => false,
+    }
+}
+
+struct RemotePeer {
+    peer: PeerInfo,
+    replica: String,
+    presence: Option<Value>,
+    /// Whether it can be asked to do desktop work: an editor that is a desktop client.
+    capable: bool,
 }
 
 struct ClientState {
@@ -95,13 +141,13 @@ struct ClientState {
     can_snapshot: bool,
 }
 
-pub fn spawn(pool: PgPool, doc: Document) -> mpsc::Sender<DocMsg> {
+pub fn spawn(pool: PgPool, doc: Document, relay: Arc<Relay>) -> mpsc::Sender<DocMsg> {
     let (tx, rx) = mpsc::channel(1024);
-    tokio::spawn(run(pool, doc, rx));
+    tokio::spawn(run(pool, doc, relay, rx));
     tx
 }
 
-async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
+async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Receiver<DocMsg>) {
     let doc_id = doc.id;
     let mut head_seq = match persist::head_seq(&pool, doc_id).await {
         Ok(s) => s,
@@ -112,6 +158,13 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
     };
 
     let mut clients: HashMap<String, ClientState> = HashMap::new();
+    // People in the document through other replicas, and which of our own clients the
+    // other replicas have been told about.
+    let mut remote: HashMap<String, RemotePeer> = HashMap::new();
+    let mut announced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut last_remote_poll = Instant::now();
+    // Ask who is already here elsewhere.
+    relay.publish(json!({ "t": "who", "d": doc_id }));
     // clientId -> Some(state) = changed, None = left. Flushed every 50ms.
     let mut presence_dirty: HashMap<String, Option<Value>> = HashMap::new();
     let mut empty_since = Some(Instant::now());
@@ -132,7 +185,7 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                         // would leave the client receiving ops with no base
                         // state, so it is all-or-nothing: on failure the client
                         // is not registered and its join simply times out.
-                        if handle_join(&pool, &doc, head_seq, &mut clients, &peer, &role,
+                        if handle_join(&pool, &doc, head_seq, &mut clients, &remote, &peer, &role,
                                        since_seq, can_snapshot, tx).await
                         {
                             // Announce to everyone else and share existing presence with the joiner.
@@ -141,6 +194,9 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                             let existing: serde_json::Map<String, Value> = clients.iter()
                                 .filter(|( id, c )| **id != peer.client_id && c.presence.is_some())
                                 .map(|( id, c )| (id.clone(), json!({ "user": c.peer, "state": c.presence })))
+                                .chain(remote.iter()
+                                    .filter(|( _, r )| r.presence.is_some())
+                                    .map(|( id, r )| (id.clone(), json!({ "user": r.peer, "state": r.presence }))))
                                 .collect();
                             if !existing.is_empty() {
                                 if let Some(c) = clients.get(&peer.client_id) {
@@ -168,21 +224,65 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                     }
                     DocMsg::SubmitOp { client_id, user_id, login, client_op_id, base_seq, changes } => {
                         touch(&mut clients, &client_id);
-                        let next = head_seq + 1;
-                        match persist::insert_op(&pool, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await {
-                            Ok(None) => {
+                        // Another replica may take the seq we were about to use: the
+                        // table's primary key refuses ours, we hand our clients what
+                        // they missed and try the next one.
+                        let mut attempt = 0;
+                        let outcome = loop {
+                            // With other replicas writing, queue for the document's
+                            // sequencing lock and bring ourselves up to the head first.
+                            let mut locked = None;
+                            if relay.others_alive() {
+                                match persist::lock_sequence(&pool, doc_id).await {
+                                    Ok((tx, db_head)) => {
+                                        if db_head > head_seq {
+                                            catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
+                                        }
+                                        locked = Some(tx);
+                                    }
+                                    Err(e) => tracing::warn!("doc {doc_id}: sequencing lock failed, writing without it: {e}"),
+                                }
+                            }
+                            let next = head_seq + 1;
+                            let inserted = match locked {
+                                Some(mut tx) => {
+                                    match persist::insert_op_on(&mut tx, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await {
+                                        Ok(dup) => tx.commit().await.map(|_| dup),
+                                        Err(e) => Err(e),
+                                    }
+                                }
+                                None => persist::insert_op(&pool, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await,
+                            };
+                            match inserted {
+                                Err(e) if persist::is_seq_taken(&e) && attempt < SEQ_RETRIES => {
+                                    attempt += 1;
+                                    let before = head_seq;
+                                    catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
+                                    if head_seq == before {
+                                        // The seq is taken by something we cannot read as
+                                        // an op (a restore's snapshot): move past it.
+                                        head_seq = persist::head_seq(&pool, doc_id).await.unwrap_or(head_seq).max(head_seq);
+                                    }
+                                }
+                                other => break other.map(|dup| (next, dup)),
+                            }
+                        };
+                        match outcome {
+                            Ok((next, None)) => {
                                 head_seq = next;
                                 ack(&clients, &client_id, doc_id, &client_op_id, next);
+                                let kind = clients.get(&client_id).map(|c| c.peer.kind.clone()).unwrap_or_default();
                                 let msg = json!({
                                     "type": "op", "docId": doc_id, "seq": next,
-                                    "author": { "clientId": client_id, "userId": user_id, "login": login },
+                                    "author": { "clientId": client_id, "userId": user_id, "login": login, "client": kind },
                                     "changes": changes,
                                 }).to_string();
                                 broadcast_except(&mut clients, &mut presence_dirty, doc_id, &client_id, &msg);
+                                relay.publish(json!({ "t": "op", "d": doc_id, "seq": next }));
                                 maybe_request_snapshot(&pool, doc_id, head_seq, &clients,
                                                        &mut last_snapshot_request).await;
                             }
-                            Ok(Some(existing_seq)) => {
+                            Ok((_, Some(existing_seq))) => {
                                 // Idempotent resubmit after reconnect: re-ack, no re-broadcast.
                                 head_seq = head_seq.max(existing_seq);
                                 ack(&clients, &client_id, doc_id, &client_op_id, existing_seq);
@@ -224,15 +324,163 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                         broadcast_all(&mut clients, &mut presence_dirty, doc_id, &msg);
                     }
                     DocMsg::SnapshotNow => {
-                        let editor = clients
-                            .iter()
-                            .filter(|(_, c)| c.role == "editor" && c.can_snapshot)
-                            .min_by(|a, b| a.0.cmp(b.0));
-                        if let Some((_, c)) = editor {
-                            last_snapshot_request = Instant::now();
-                            let _ = c.tx.try_send(
-                                json!({ "type": "snapshot_request", "docId": doc_id }).to_string(),
-                            );
+                        request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
+                    }
+                    DocMsg::Request { client_id, action } => {
+                        touch(&mut clients, &client_id);
+                        let from = clients.get(&client_id).map(|c| c.peer.clone());
+                        let out = json!({ "type": "request", "docId": doc_id, "action": action, "from": from }).to_string();
+                        // A desktop editor here, else one on another replica, else nobody.
+                        // The role an actor holds for a client is the one it joined with, so
+                        // the choice is checked against the database: a desktop whose owner
+                        // was demoted since would have its fill refused.
+                        let mut desktops: Vec<_> = clients.iter()
+                            .filter(|(id, c)| **id != client_id && c.role == "editor" && c.can_snapshot)
+                            .collect();
+                        desktops.sort_by(|a, b| a.0.cmp(b.0));
+                        let mut local = None;
+                        for (_, c) in desktops {
+                            if still_editor(&pool, c.peer.user_id, doc_id).await {
+                                local = Some(c);
+                                break;
+                            }
+                        }
+                        if let Some(c) = local {
+                            let _ = c.tx.try_send(out);
+                        } else if let Some(id) = remote.iter().filter(|(_, r)| r.capable).map(|(id, _)| id).min() {
+                            relay.publish(json!({ "t": "request", "d": doc_id, "to": id, "action": action, "from": from }));
+                        } else if let Some(c) = clients.get(&client_id) {
+                            let _ = c.tx.try_send(json!({
+                                "type": "error", "code": "no_desktop", "docId": doc_id, "action": action,
+                            }).to_string());
+                        }
+                    }
+                    DocMsg::Relay(msg) => {
+                        match msg.get("t").and_then(Value::as_str).unwrap_or("") {
+                            "request" => {
+                                let to = msg["to"].as_str().and_then(|id| clients.get(id));
+                                let ok = match to {
+                                    Some(c) => still_editor(&pool, c.peer.user_id, doc_id).await,
+                                    None => false,
+                                };
+                                if let Some(c) = to.filter(|_| ok) {
+                                    let _ = c.tx.try_send(json!({
+                                        "type": "request", "docId": doc_id, "action": msg["action"], "from": msg["from"],
+                                    }).to_string());
+                                }
+                            }
+                            "op" => {
+                                catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
+                            }
+                            "presence" => {
+                                if let Some(peers) = msg.get("peers").and_then(Value::as_object) {
+                                    let from = msg["r"].as_str().unwrap_or("").to_string();
+                                    for (id, entry) in peers {
+                                        if clients.contains_key(id) {
+                                            continue;
+                                        }
+                                        match (entry.get("state"), entry.get("user")) {
+                                            (Some(state), Some(user)) => {
+                                                if let Some(r) = remote.get_mut(id) {
+                                                    r.presence = Some(state.clone());
+                                                } else if let Ok(peer) = serde_json::from_value::<PeerInfo>(user.clone()) {
+                                                    // A join we never heard of (we started later).
+                                                    let joined = json!({ "type": "peer_joined", "docId": doc_id, "peer": peer }).to_string();
+                                                    broadcast_all(&mut clients, &mut presence_dirty, doc_id, &joined);
+                                                    remote.insert(id.clone(), RemotePeer { peer, replica: from.clone(), presence: Some(state.clone()), capable: false });
+                                                }
+                                            }
+                                            _ => {
+                                                if let Some(r) = remote.get_mut(id) {
+                                                    r.presence = None;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let out = json!({ "type": "presence", "docId": doc_id, "peers": peers }).to_string();
+                                    broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
+                                }
+                            }
+                            "joined" => {
+                                if let Ok(peer) = serde_json::from_value::<PeerInfo>(msg["peer"].clone()) {
+                                    if !clients.contains_key(&peer.client_id) {
+                                        let joined = json!({ "type": "peer_joined", "docId": doc_id, "peer": peer }).to_string();
+                                        broadcast_all(&mut clients, &mut presence_dirty, doc_id, &joined);
+                                        remote.insert(peer.client_id.clone(), RemotePeer {
+                                            peer, replica: msg["r"].as_str().unwrap_or("").to_string(), presence: None,
+                                            capable: msg["capable"].as_bool().unwrap_or(false),
+                                        });
+                                    }
+                                }
+                            }
+                            "left" => {
+                                if let Some(id) = msg.get("clientId").and_then(Value::as_str) {
+                                    // Only the replica that holds a client can say it left: the
+                                    // same person reconnecting through another replica is
+                                    // announced there first, and this must not undo that.
+                                    let theirs = remote.get(id).is_some_and(|r| Some(r.replica.as_str()) == msg["r"].as_str());
+                                    if theirs {
+                                        remote.remove(id);
+                                        remote_left(&mut clients, &mut presence_dirty, doc_id, id);
+                                    }
+                                }
+                            }
+                            "who" => {
+                                if !clients.is_empty() {
+                                    let roster: Vec<Value> = clients.values()
+                                        .map(|c| json!({ "peer": c.peer, "presence": c.presence,
+                                                         "capable": c.role == "editor" && c.can_snapshot }))
+                                        .collect();
+                                    relay.publish(json!({ "t": "roster", "d": doc_id, "to": msg["r"], "peers": roster }));
+                                }
+                            }
+                            "roster" => {
+                                if msg["to"].as_str() == Some(relay.replica.as_str()) {
+                                    let from = msg["r"].as_str().unwrap_or("").to_string();
+                                    for entry in msg["peers"].as_array().cloned().unwrap_or_default() {
+                                        let Ok(peer) = serde_json::from_value::<PeerInfo>(entry["peer"].clone()) else { continue };
+                                        if clients.contains_key(&peer.client_id) {
+                                            continue;
+                                        }
+                                        let presence = Some(entry["presence"].clone()).filter(|p| !p.is_null());
+                                        if !remote.contains_key(&peer.client_id) {
+                                            let joined = json!({ "type": "peer_joined", "docId": doc_id, "peer": peer }).to_string();
+                                            broadcast_all(&mut clients, &mut presence_dirty, doc_id, &joined);
+                                        }
+                                        if let Some(state) = &presence {
+                                            let out = json!({ "type": "presence", "docId": doc_id,
+                                                              "peers": { peer.client_id.clone(): { "user": peer, "state": state } } }).to_string();
+                                            broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
+                                        }
+                                        let capable = entry["capable"].as_bool().unwrap_or(false);
+                                        remote.insert(peer.client_id.clone(), RemotePeer { peer, replica: from.clone(), presence, capable });
+                                    }
+                                }
+                            }
+                            "comment" => {
+                                let out = json!({ "type": "comment", "docId": doc_id, "comment": msg["comment"] }).to_string();
+                                broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
+                            }
+                            "reset" => {
+                                let seq = msg["seq"].as_i64().unwrap_or(0);
+                                head_seq = head_seq.max(seq);
+                                let out = json!({ "type": "reset", "docId": doc_id, "seq": seq }).to_string();
+                                broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
+                            }
+                            "snapshot_now" => {
+                                request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
+                            }
+                            _ => {}
+                        }
+                    }
+                    DocMsg::ReplicaGone { replica } => {
+                        let gone: Vec<String> = remote.iter()
+                            .filter(|(_, r)| r.replica == replica)
+                            .map(|(id, _)| id.clone())
+                            .collect();
+                        for id in gone {
+                            remote.remove(&id);
+                            remote_left(&mut clients, &mut presence_dirty, doc_id, &id);
                         }
                     }
                     DocMsg::Resync { client_id } => {
@@ -256,6 +504,14 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                 }
             }
             _ = flush.tick() => {
+                // Notifications are not durable; the op table is.  While other replicas
+                // exist, look at it now and then so a lost one costs seconds, not a resync.
+                if !clients.is_empty() && relay.others_alive() && last_remote_poll.elapsed() >= REMOTE_POLL {
+                    last_remote_poll = Instant::now();
+                    if persist::head_seq(&pool, doc_id).await.is_ok_and(|h| h > head_seq) {
+                        catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
+                    }
+                }
                 if last_snapshot_check.elapsed() >= Duration::from_secs(60)
                     .min(snapshot_fresh_interval())
                 {
@@ -281,6 +537,9 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                             (id, entry)
                         })
                         .collect();
+                    if relay.others_alive() {
+                        relay.publish(json!({ "t": "presence", "d": doc_id, "peers": peers }));
+                    }
                     let msg = json!({ "type": "presence", "docId": doc_id, "peers": peers }).to_string();
                     let mut dirty = HashMap::new();
                     broadcast_all(&mut clients, &mut dirty, doc_id, &msg);
@@ -308,6 +567,27 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                 }
             }
         }
+
+        // Keep the other replicas' picture of who is here in step with ours, however a
+        // client came or went (a join, a leave, a closed socket found while broadcasting).
+        for (id, c) in clients.iter() {
+            if announced.insert(id.clone()) {
+                relay.publish(json!({ "t": "joined", "d": doc_id, "peer": c.peer,
+                                      "capable": c.role == "editor" && c.can_snapshot }));
+            }
+        }
+        if announced.len() != clients.len() {
+            announced.retain(|id| {
+                let here = clients.contains_key(id);
+                if !here {
+                    relay.publish(json!({ "t": "left", "d": doc_id, "clientId": id }));
+                }
+                here
+            });
+        }
+    }
+    for id in announced {
+        relay.publish(json!({ "t": "left", "d": doc_id, "clientId": id }));
     }
     tracing::info!("doc actor {doc_id} stopped");
 }
@@ -319,6 +599,7 @@ async fn handle_join(
     doc: &Document,
     head_seq: i64,
     clients: &mut HashMap<String, ClientState>,
+    remote: &HashMap<String, RemotePeer>,
     peer: &PeerInfo,
     role: &str,
     since_seq: Option<i64>,
@@ -372,7 +653,12 @@ async fn handle_join(
         return false;
     }
 
-    let peers: Vec<&PeerInfo> = clients.values().map(|c| &c.peer).collect();
+    let peers: Vec<&PeerInfo> = clients
+        .values()
+        .map(|c| &c.peer)
+        .chain(remote.values().map(|r| &r.peer))
+        .filter(|p| p.client_id != peer.client_id)
+        .collect();
     let info = json!({
         "type": "doc_info", "docId": doc_id, "path": doc.path, "docType": doc.doc_type,
         "role": role, "headSeq": head_seq, "peers": peers,
@@ -404,11 +690,67 @@ fn ops_to_json(rows: Vec<persist::OpRow>) -> Vec<Value> {
         .map(|r| {
             json!({
                 "seq": r.seq,
-                "author": { "clientId": r.client_id, "userId": r.author_id },
+                "author": { "clientId": r.client_id, "userId": r.author_id, "login": r.login },
                 "changes": r.changes,
             })
         })
         .collect()
+}
+
+/// Hand our clients the ops other replicas committed since `head_seq`, in order.
+async fn catch_up(
+    pool: &PgPool,
+    doc_id: Uuid,
+    head_seq: &mut i64,
+    clients: &mut HashMap<String, ClientState>,
+    presence_dirty: &mut HashMap<String, Option<Value>>,
+) {
+    let rows = match persist::ops_since(pool, doc_id, *head_seq).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("doc {doc_id}: catch-up failed: {e}");
+            return;
+        }
+    };
+    for r in rows {
+        *head_seq = (*head_seq).max(r.seq);
+        // The author's own replica acked it; here it is somebody else's op to everyone,
+        // except a client that wrote it through the other replica and has since
+        // reconnected to this one.
+        let msg = json!({
+            "type": "op", "docId": doc_id, "seq": r.seq,
+            "author": { "clientId": r.client_id, "userId": r.author_id, "login": r.login },
+            "changes": r.changes,
+        })
+        .to_string();
+        let author = r.client_id.clone();
+        broadcast_except(clients, presence_dirty, doc_id, &author, &msg);
+    }
+}
+
+/// Somebody on another replica left: say so to our clients and clear their cursor.
+fn remote_left(
+    clients: &mut HashMap<String, ClientState>,
+    presence_dirty: &mut HashMap<String, Option<Value>>,
+    doc_id: Uuid,
+    client_id: &str,
+) {
+    let left = json!({ "type": "peer_left", "docId": doc_id, "clientId": client_id }).to_string();
+    broadcast_all(clients, presence_dirty, doc_id, &left);
+    let gone = json!({ "type": "presence", "docId": doc_id, "peers": { client_id: Value::Null } }).to_string();
+    broadcast_all(clients, presence_dirty, doc_id, &gone);
+}
+
+/// Ask one of our clients that can write the real file for a snapshot.
+fn request_snapshot_now(clients: &HashMap<String, ClientState>, doc_id: Uuid, last_request: &mut Instant) {
+    let editor = clients
+        .iter()
+        .filter(|(_, c)| c.role == "editor" && c.can_snapshot)
+        .min_by(|a, b| a.0.cmp(b.0));
+    if let Some((_, c)) = editor {
+        *last_request = Instant::now();
+        let _ = c.tx.try_send(json!({ "type": "snapshot_request", "docId": doc_id }).to_string());
+    }
 }
 
 /// The `ops` tail frame, or None when it could not be loaded.

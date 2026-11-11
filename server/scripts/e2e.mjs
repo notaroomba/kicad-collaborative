@@ -23,6 +23,10 @@ import pg from 'pg';
 
 const BASE = (process.env.E2E_BASE || 'http://127.0.0.1:8099').replace(/\/$/, '');
 const WS = BASE.replace(/^http/, 'ws') + '/ws';
+// With E2E_BASE_B set, everything Bob does over the socket goes through a second replica
+// of the server (same database), so every exchange below also crosses replicas.
+const BASE_B = (process.env.E2E_BASE_B || BASE).replace(/\/$/, '');
+const WS_B = BASE_B.replace(/^http/, 'ws') + '/ws';
 const SECRET = process.env.E2E_JWT_SECRET;
 const PG_URL = process.env.E2E_PG_URL;
 
@@ -105,7 +109,7 @@ check('link claim grants access', claim.status === 200, `got ${claim.status}`);
 // Sends `hello` from the open handler rather than awaiting open separately, so
 // the socket is never left idle against the server's handshake timeout.
 function connect(token, clientId, label) {
-  const ws = new WebSocket(WS);
+  const ws = new WebSocket(label === 'alice' ? WS : WS_B);
   const inbox = [];
   const waiters = [];
   let closed = null;
@@ -377,9 +381,61 @@ check('owner can remove a collaborator', rm.status === 200, `got ${rm.status}`);
 const bobAfter = await fetch(`${BASE}/api/projects/${project.projectId}`,
   { headers: { Authorization: `Bearer ${bob}` } });
 check('removed collaborator loses access', bobAfter.status === 403, `got ${bobAfter.status}`);
-V.send({ type: 'presence', docId: doc.docId, state: { cursor: [1, 2] } });
-const kicked = await V.wait(m => m.type === 'error' && m.code === 'permission_denied' && !m.clientOpId).catch(() => null);
-check('…and their open session is cut off from the document', !!kicked);
+// The removed session stays silent on purpose: it must be cut off without sending anything.
+const kicked = await V.wait(m => m.type === 'error' && m.code === 'permission_denied' && !m.clientOpId, 6000).catch(() => null);
+check('…and their open session is cut off without it saying a word', !!kicked);
+const seenBefore = V.inbox.length;
+A.send({ type: 'op', docId: doc.docId, clientOpId: 'alice-1:after-removal', baseSeq: 0,
+  changes: [{ id: 'aaaa-after', typeName: 'SCH_LINE', kind: 'ADDED', sexpr: '(wire)' }] });
+await A.wait(m => m.type === 'ack' && m.clientOpId === 'alice-1:after-removal');
+V.send({ type: 'resync', docId: doc.docId });
+await new Promise(r => setTimeout(r, 800));
+const leaked = V.inbox.slice(seenBefore).filter(m => m.type === 'op' || m.type === 'snapshot' || m.type === 'doc_info');
+check('…later edits and a resync give them nothing', leaked.length === 0, JSON.stringify(leaked).slice(0, 200));
+
+// --- a watcher of a project that goes to the Trash is cut off too ---
+{
+  const r = await fetch(`${BASE}/api/projects/blank`, { method: 'POST', headers: jsonA, body: JSON.stringify({ name: 'E2E trash watch' }) });
+  const p = await r.json();
+  const d = p.docs.find(x => x.path.endsWith('.kicad_sch'));
+  await fetch(`${BASE}/api/projects/${p.projectId}/invites`, { method: 'POST', headers: jsonA, body: JSON.stringify({ login: 'e2e-bob', role: 'viewer' }) });
+  const W = connect(bob, 'bob-watch', 'bob');
+  await W.wait(m => m.type === 'hello_ok');
+  W.send({ type: 'join_doc', docId: d.docId, sinceSeq: 0 });
+  const joinedW = await W.wait(m => m.type === 'doc_info' && m.docId === d.docId).catch(() => null);
+  await fetch(`${BASE}/api/projects/${p.projectId}`, { method: 'DELETE', headers: authA });
+  const cut = await W.wait(m => m.type === 'error' && m.code === 'permission_denied', 6000).catch(() => null);
+  check('trashing a project cuts off someone silently watching it', !!joinedW && !!cut);
+  W.close();
+
+  for (const days of [0, -5, 4000, 9e15]) {
+    const lr = await fetch(`${BASE}/api/projects/${project.projectId}/links`, { method: 'POST', headers: jsonA, body: JSON.stringify({ role: 'viewer', expiresInDays: days }) });
+    check(`a share link expiring in ${days} days is refused`, lr.status === 400, `got ${lr.status}`);
+  }
+  const okLink = await fetch(`${BASE}/api/projects/${project.projectId}/links`, { method: 'POST', headers: jsonA, body: JSON.stringify({ role: 'viewer', expiresInDays: 7 }) });
+  check('a share link expiring in 7 days is accepted', okLink.status === 200, `got ${okLink.status}`);
+
+  const noName = new FormData();
+  noName.append('file', new Blob(['{}']), ' .kicad_pro');
+  noName.append('file', new Blob([sch]), 'a.kicad_sch');
+  const nn = await fetch(`${BASE}/api/projects`, { method: 'POST', headers: authA, body: noName });
+  const nnp = await nn.json();
+  let nnName = null;
+  if (nn.status === 200) nnName = (await (await fetch(`${BASE}/api/projects/${nnp.projectId}`, { headers: authA })).json()).name;
+  check('an upload whose project file has no name is called "untitled"', nn.status === 200 && nnName === 'untitled', `${nn.status} ${JSON.stringify(nnName)}`);
+
+  const b2 = await (await fetch(`${BASE}/api/projects/blank`, { method: 'POST', headers: jsonA, body: JSON.stringify({ name: 'e2edocs' }) })).json();
+  const existing = b2.docs.find(x => x.path.endsWith('.kicad_sch')).path;
+  const mk = (path) => fetch(`${BASE}/api/projects/${b2.projectId}/docs`, { method: 'POST', headers: jsonA, body: JSON.stringify({ path }) });
+  const same = await mk(existing);
+  check('adding an existing file returns it', same.status === 200 && (await same.json()).existing === true);
+  const caseDup = await mk(existing.toUpperCase().replace('.KICAD_SCH', '.kicad_sch'));
+  check('adding a file that differs only in case is refused', caseDup.status === 400, `got ${caseDup.status}`);
+  const state = await mk('x.collab/base/y.kicad_pcb');
+  check('adding a sync-state path is refused', state.status === 400, `got ${state.status}`);
+  const fresh = await mk('sheets/new.kicad_sch');
+  check('adding a new sheet still works', fresh.status === 200 && (await fresh.json()).existing === false);
+}
 
 A.close(); V.close();
 

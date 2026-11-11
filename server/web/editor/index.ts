@@ -1,5 +1,6 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { installDialogs } from "../dialogs/index";
 import "./dom";
 import "./appstore";
 import "./util";
@@ -15,6 +16,7 @@ import "./history";
 import "./net";
 import "./actions";
 import "./panes";
+import "./pcbdialogs";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
 import { placeComment } from "./comments";
@@ -30,6 +32,7 @@ import { breakFollow, sendPresence } from "./peers";
 import { drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
 import { clearSelection, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto } from "./selection";
 import { E } from "./state";
+import "./panels/index";
 import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack } from "./tools";
 import { closePopover, toast } from "./util";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
@@ -41,7 +44,9 @@ import { HANDLERS, dispatchAction } from "./actions";
 import { applyChanges, enterSheet, openDoc, snapMm } from "./doc";
 import { state, store } from "./appstore";
 import { E } from "./state";
-window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el) };
+import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
+import { selectionCount } from "./menu-actions";
+window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
 
 
 // ---------- home navigation (the home view is still rendered here) ----------
@@ -124,7 +129,7 @@ stage.addEventListener("pointerdown", (ev) => {
 
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay")) return;
-  if (ev.button === 2 || ev.button === 1 || (ev.button === 0 && E.tool === "pan")) {
+  if ((ev.button === 2 && E.rightDragPan !== false) || (ev.button === 1 && E.middleDragPan !== false) || (ev.button === 0 && E.tool === "pan")) {
     E.pan = { x: ev.clientX - E.panX, y: ev.clientY - E.panY };
     stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
   }
@@ -157,6 +162,7 @@ stage.addEventListener("pointerdown", (ev) => {
     return;
   }
   if (ev.shiftKey) {                                   // KiCad: Shift+click adds to / removes from the selection
+    if (E.selected) E.selection.add(E.selected.id);   // the single selection joins the set it is being extended to
     if (E.selection.has(best.id)) E.selection.delete(best.id); else E.selection.add(best.id);
     E.selected = E.selection.has(best.id) ? best : (E.selected && E.selected.id === best.id ? null : E.selected);
     drawSelection(); renderProps(); renderObjects(); return;
@@ -164,7 +170,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!E.selection.has(best.id)) E.selection.clear();
   E.selected = best; drawSelection(); renderProps(); renderObjects();
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
-  if (!isSch()) { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
+  { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
   E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
   // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
@@ -287,11 +293,10 @@ registerPointerUp(onPointerUp);   // a click drops an item that follows the curs
 
 
 document.addEventListener("keydown", (ev) => {
-  if (["TEXTAREA", "INPUT", "SELECT"].includes(ev.target.tagName) || ev.target.isContentEditable || state.view !== "editor") return;
+  if (state.view !== "editor" || typingTarget(ev)) return;              // a field, a dialog or an open menu owns the keyboard
   // A dialog or menu of the project UI (Share…) is open over the editor: it owns the keyboard.
   if (document.querySelector(".hp-scrim, .hp-menu-scrim")) return;
   const k = ev.key;
-  if (window.KDialogs && KDialogs.isOpen()) return;                     // the dialog owns the keyboard
   if (k === "Escape") { if (store.get().popover) { closePopover(); return; }
     // KiCad's order: Esc first cancels what is in flight (the item goes back, the selection stays),
     // then leaves the tool, and only then clears the selection.
@@ -301,29 +306,30 @@ document.addEventListener("keydown", (ev) => {
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
-  if (k === "f" || k === "F") { fitView(); return; }
+  if ((ev.metaKey || ev.ctrlKey) && (k === "g" || k === "G")) { ev.preventDefault(); HANDLERS.showSearch(); return; }   // ACTIONS::showSearch
   if (pcbLayerKey(ev)) { ev.preventDefault(); return; }               // the board editor's + / - step the active copper layer, as in pcbnew
-  if (k === "+" || k === "=") { zoomBy(1.25); return; }
-  if (k === "-" || k === "_") { zoomBy(0.8); return; }
-  if (k === "s" || k === "S") { setTool("select"); return; }
-  if (k === "h" || k === "H") { setTool("pan"); return; }
-  if (k === "c" || k === "C") { setTool("comment"); return; }
-  if ((ev.metaKey || ev.ctrlKey) && (k === "z" || k === "Z")) { ev.preventDefault(); if (ev.shiftKey) redoLast(); else undoLast(); return; }
+  // KiCad binds no key to these on a sheet, so the web keeps +/- for zooming there (on a board they switch layers)
+  if (isSch() && !ev.ctrlKey && !ev.metaKey && !ev.altKey && (k === "+" || k === "=")) { zoomBy(1.25); return; }
+  if (isSch() && !ev.ctrlKey && !ev.metaKey && !ev.altKey && (k === "-" || k === "_")) { zoomBy(0.8); return; }
+  if (comboOf(ev) === "Alt+C") { ev.preventDefault(); setTool("comment"); return; }   // the collab comment tool (C is KiCad's Unfold from Bus)
+  // Ctrl+Shift+Z is redo on a Mac; elsewhere KiCad's redo is Ctrl+Y and a board has Add Filled Zone on Ctrl+Shift+Z
+  if ((ev.metaKey || ev.ctrlKey) && (k === "z" || k === "Z")) { ev.preventDefault(); if (!ev.shiftKey) undoLast(); else if (!runSpecHotkey(ev)) redoLast(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "y" || k === "Y")) { ev.preventDefault(); redoLast(); return; }
   // The module's menu actions ({id: {label, key, run(ctx) -> handled}}) bind KiCad's default hotkeys after the
-  // editor's own fixed keys (F, S, H, C, ±, undo); an action that reports "not handled" lets the key fall through.
+  // editor's own fixed keys (undo / redo, select all); an action that reports "not handled" lets the key fall through.
   if (runModuleHotkey(ev)) { ev.preventDefault(); return; }
   const modK = activeModule();
   if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); syncSchModes(); return; } } catch (e) { console.warn(e); } }
-  if (k === " " && !ev.shiftKey) { ev.preventDefault(); E.localOrigin = E.lastCursorMm.slice(); store.slice("viewport", { origin: E.localOrigin.slice() }); return; }
-  if ((k === "e" || k === "E") && !ev.metaKey && !ev.ctrlKey) { if (openSelectionProperties()) { ev.preventDefault(); return; } }
-  if (k === "g" || k === "G") { E.gridOn = !E.gridOn; updateGridStatus(); requestRender(); return; }
-  if (k === "n" || k === "N") { E.snapOn = !E.snapOn; updateGridStatus(); return; }
+  if ((k === "e" || k === "E") && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { if (openSelectionProperties()) { ev.preventDefault(); return; } }
+  // KiCad's default hotkey table (hotkeys.ts): whichever handler, module action or tool implements the action bound to this key
+  if (runSpecHotkey(ev)) { ev.preventDefault(); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   if (!E.selected || E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
   if ((k === "r" || k === "R") && !isSch()) rotateSelected();
   if (k === "Delete" || k === "Backspace") deleteSelected();
 });
 
+installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();
 installLibrary();   // window.KiCadLibrary + the placeFootprint / library browser actions (editor/library.ts)
@@ -335,4 +341,5 @@ applyTheme();
 (async () => { await loadMe(); route(); })();
 
 // exposed for tests and tooling (window.CollabEditor.api)
+E.hotkeys = { comboOf, runKicadAction, kicadActionAvailable };
 E.api = { HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, state, store, toolCtx, undoLast, worldMm };

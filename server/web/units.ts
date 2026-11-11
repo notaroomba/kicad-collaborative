@@ -12,4 +12,9 @@ export function fmtLen(mm: number, units: Units): string {
   const u = UNITS[units] || UNITS.mm;
   return u.f(mm).toFixed(u.d).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 }
+/** A coordinate the way the status bar prints it: fixed decimals per unit ("%.4f" mm and inches, "%.2f" mils), never "-0". */
+export function fmtCoord(mm: number, units: Units): string {
+  const u = UNITS[units] || UNITS.mm; const s = u.f(mm).toFixed(u.d);
+  return /^-0\.?0*$/.test(s) ? s.slice(1) : s;
+}
 export function unitName(units: Units): string { return (UNITS[units] || UNITS.mm).name; }

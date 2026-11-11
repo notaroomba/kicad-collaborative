@@ -89,9 +89,9 @@ sch.onDocChanged(ctx);
 
 test("module registers tools with KiCad-style hotkeys", () => {
   assert.strictEqual(sch.id, "sch");
-  assert.deepStrictEqual(Object.fromEntries(sch.tools.map((t) => [t.id, t.key])), { wire: "W", bus: "B", busentry: "Z", junction: "J", noconnect: "Q", label: "L", glabel: "Shift+L", hlabel: "Shift+H", text: "T", place: "A",
+  assert.deepStrictEqual(Object.fromEntries(sch.tools.map((t) => [t.id, t.key])), { wire: "W", bus: "B", busentry: "Z", junction: "J", noconnect: "Q", label: "L", glabel: "Ctrl+L", hlabel: "H", text: "T", place: "A",
     power: "P", classlabel: "", lines: "I", rect: "", circle: "", arc: "", textbox: "", delete: "",
-    sheet: "", sheetpin: "", table: "", bezier: "", polygon: "", rulearea: "", image: "", highlight: "`" });   // drawSheet's S is app.js's select key
+    sheet: "", sheetpin: "", table: "", bezier: "", polygon: "", rulearea: "", image: "", highlight: "`" });
   for (const t of sch.tools) assert.ok(t.icon.includes("<") && t.label && t.id && t.cursor);
   assert.ok(sch.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "the delete tool carries KiCad's delete cursor");
 });

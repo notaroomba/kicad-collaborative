@@ -4,6 +4,8 @@
 //!              search (a public index of it as the fallback); a part's data and its drawings (symbol,
 //!              footprint, 3D model) come from EasyEDA, which shares LCSC's catalogue.
 //!   mouser   — Mouser Search API v1.  Needs an API key.  Part data only.
+//!   farnell  — Farnell / Newark / element14 Product Search API.  Needs an API key;
+//!              the store (uk.farnell.com, www.newark.com, …) picks stock and currency.
 //!   digikey  — DigiKey Product Information API v4.  Needs a client id and secret
 //!              (OAuth2 client credentials).  Part data only.
 //!
@@ -21,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const VENDORS: [&str; 3] = ["lcsc", "mouser", "digikey"];
+pub const VENDORS: [&str; 4] = ["lcsc", "mouser", "digikey", "farnell"];
 
 pub struct VendorCfg {
     pub easyeda_url: String,
@@ -31,6 +33,9 @@ pub struct VendorCfg {
     pub mouser_url: String,
     pub mouser_key: Option<String>,
     pub digikey_url: String,
+    pub farnell_url: String,
+    pub farnell_key: Option<String>,
+    pub farnell_store: String,
     pub digikey_client_id: Option<String>,
     pub digikey_client_secret: Option<String>,
 }
@@ -51,6 +56,9 @@ pub fn cfg() -> &'static VendorCfg {
         jlcpcb_url: env_url("JLCPCB_API_URL", "https://jlcpcb.com"),
         mouser_url: env_url("MOUSER_API_URL", "https://api.mouser.com"),
         mouser_key: env_opt("MOUSER_API_KEY"),
+        farnell_url: env_url("FARNELL_API_URL", "https://api.element14.com"),
+        farnell_key: env_opt("FARNELL_API_KEY"),
+        farnell_store: env_opt("FARNELL_STORE").unwrap_or_else(|| FARNELL_DEFAULT_STORE.to_string()),
         digikey_url: env_url("DIGIKEY_API_URL", "https://api.digikey.com"),
         digikey_client_id: env_opt("DIGIKEY_CLIENT_ID"),
         digikey_client_secret: env_opt("DIGIKEY_CLIENT_SECRET"),
@@ -74,6 +82,8 @@ fn http() -> &'static reqwest::Client {
 pub struct Keys {
     pub mouser: Option<String>,
     pub digikey: Option<(String, String)>,
+    /// API key and store host.
+    pub farnell: Option<(String, String)>,
 }
 
 impl Keys {
@@ -81,6 +91,11 @@ impl Keys {
         let c = cfg();
         if self.mouser.is_none() {
             self.mouser = c.mouser_key.clone();
+        }
+        if self.farnell.is_none() {
+            if let Some(k) = &c.farnell_key {
+                self.farnell = Some((k.clone(), c.farnell_store.clone()));
+            }
         }
         if self.digikey.is_none() {
             if let (Some(id), Some(secret)) = (&c.digikey_client_id, &c.digikey_client_secret) {
@@ -94,6 +109,7 @@ impl Keys {
             "lcsc" => true,
             "mouser" => self.mouser.is_some(),
             "digikey" => self.digikey.is_some(),
+            "farnell" => self.farnell.is_some(),
             _ => false,
         }
     }
@@ -163,6 +179,7 @@ pub fn vendor_label(vendor: &str) -> &'static str {
         "lcsc" => "LCSC",
         "mouser" => "Mouser",
         "digikey" => "DigiKey",
+        "farnell" => "Farnell",
         _ => "Vendor",
     }
 }
@@ -702,6 +719,154 @@ async fn digikey_get(creds: &(String, String), id: &str) -> VResult<PartInfo> {
     Ok(part)
 }
 
+// ------------------------------------------------------------------ Farnell / Newark / element14
+//
+// One API (api.element14.com) serves every storefront of the group; `storeInfo.id` is the
+// store's host name and decides stock, prices and their currency.
+
+pub const FARNELL_DEFAULT_STORE: &str = "uk.farnell.com";
+
+/// A store host as the API wants it: bare, lower case.  Empty when it is not a host name.
+pub fn farnell_store(raw: &str) -> String {
+    let t = raw.trim().to_ascii_lowercase();
+    let t = t.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+    if t.is_empty() {
+        return FARNELL_DEFAULT_STORE.to_string();
+    }
+    if t.len() > 64 || !t.contains('.') || !t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return String::new();
+    }
+    t.to_string()
+}
+
+fn farnell_currency(store: &str) -> &'static str {
+    match store {
+        "uk.farnell.com" | "onecall.farnell.com" => "GBP",
+        "www.newark.com" | "mexico.newark.com" => "USD",
+        "sg.element14.com" => "SGD",
+        "canada.newark.com" => "CAD",
+        "au.element14.com" => "AUD",
+        "nz.element14.com" => "NZD",
+        "in.element14.com" => "INR",
+        "cn.element14.com" => "CNY",
+        "hk.element14.com" => "HKD",
+        "my.element14.com" => "MYR",
+        "ch.farnell.com" => "CHF",
+        "se.farnell.com" => "SEK",
+        "dk.farnell.com" => "DKK",
+        "no.farnell.com" => "NOK",
+        "pl.farnell.com" => "PLN",
+        "cz.farnell.com" => "CZK",
+        "hu.farnell.com" => "HUF",
+        _ if store.ends_with(".farnell.com") => "EUR",
+        _ => "",
+    }
+}
+
+fn farnell_part(p: &Value, store: &str) -> Option<PartInfo> {
+    let id = s(p, "sku");
+    if id.is_empty() {
+        return None;
+    }
+    let mut attributes = BTreeMap::new();
+    if let Some(a) = p.get("attributes").and_then(Value::as_array) {
+        for at in a {
+            let (k, v, u) = (s(at, "attributeLabel"), s(at, "attributeValue"), s(at, "attributeUnit"));
+            if !k.is_empty() && !v.is_empty() {
+                attributes.insert(k.trim().to_string(), if u.is_empty() { v } else { format!("{v} {u}") });
+            }
+        }
+    }
+    let package = ["IC Case / Package", "Case / Package", "Resistor Case / Package", "Capacitor Case / Package", "Transistor Case Style", "Diode Case Style"]
+        .iter()
+        .find_map(|k| attributes.iter().find(|(name, _)| name.eq_ignore_ascii_case(k)).map(|(_, v)| v.clone()))
+        .unwrap_or_default();
+    let currency = farnell_currency(store);
+    let prices = p
+        .get("prices")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|b| Some(PriceBreak { qty: int(b.get("from"))?, price: money(b.get("cost"))?, currency: currency.to_string() })).collect())
+        .unwrap_or_default();
+    let datasheet = p
+        .get("datasheets")
+        .and_then(Value::as_array)
+        .and_then(|a| a.iter().map(|d| s(d, "url")).find(|u| !u.is_empty()))
+        .unwrap_or_default();
+    let image = p
+        .get("image")
+        .map(|i| (s(i, "vrntPath"), s(i, "baseName")))
+        .filter(|(_, b)| !b.is_empty())
+        .map(|(v, b)| format!("https://{store}/productimages/standard/{}{}", if v.is_empty() { "en_GB/".to_string() } else { v }, b.trim_start_matches('/')))
+        .unwrap_or_default();
+    let brand = s(p, "brandName");
+    Some(PartInfo {
+        vendor: "farnell".into(),
+        vendor_id: id.clone(),
+        mpn: s(p, "translatedManufacturerPartNumber"),
+        manufacturer: if brand.is_empty() { s(p, "vendorName") } else { brand },
+        description: s(p, "displayName"),
+        package,
+        datasheet,
+        image,
+        url: format!("https://{store}/search?st={id}"),
+        stock: p.get("stock").and_then(|st| int(st.get("level"))).or_else(|| int(p.get("inv"))),
+        prices,
+        attributes,
+        lifecycle: s(p, "productStatus"),
+        ..Default::default()
+    })
+}
+
+/// `term` is the API's own query form: `any:<keywords>`, `id:<order code>`, `manuPartNum:<mpn>`.
+async fn farnell_call(key: &(String, String), term: &str, limit: usize) -> VResult<Vec<PartInfo>> {
+    let (api_key, store) = key;
+    let store = farnell_store(store);
+    if store.is_empty() {
+        return Err(VendorErr::new(ErrKind::Rejected, "The Farnell store must be a host name such as uk.farnell.com or www.newark.com."));
+    }
+    let url = format!("{}/catalog/products", cfg().farnell_url);
+    let n = limit.clamp(1, 50).to_string();
+    let query = [
+        ("term", term),
+        ("storeInfo.id", store.as_str()),
+        ("resultsSettings.offset", "0"),
+        ("resultsSettings.numberOfResults", n.as_str()),
+        ("resultsSettings.responseGroup", "large"),
+        ("callInfo.responseDataFormat", "JSON"),
+        ("callInfo.apiKey", api_key.as_str()),
+    ];
+    let (status, v) = read_json("Farnell", http().get(&url).query(&query).send().await).await?;
+    if status == 401 || status == 403 {
+        return Err(VendorErr::new(ErrKind::Rejected, "Farnell did not accept the API key."));
+    }
+    if status == 429 {
+        return Err(VendorErr::new(ErrKind::Unreachable, "Farnell's request limit for this API key is used up for now."));
+    }
+    if let Some(f) = v.get("Fault") {
+        let msg = f.get("Detail").and_then(|d| d.get("searchException")).map(|e| s(e, "exceptionString")).filter(|m| !m.is_empty()).unwrap_or_else(|| s(f, "Reason"));
+        return Err(VendorErr::new(ErrKind::Other, format!("Farnell answered: {}", if msg.is_empty() { status.to_string() } else { msg })));
+    }
+    if status >= 400 {
+        return Err(VendorErr::new(ErrKind::Other, format!("Farnell answered: {status}")));
+    }
+    // the wrapper is named after the kind of search: keywordSearchReturn, premierFarnellPartNumberReturn, …
+    Ok(v.as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+        .filter_map(|r| r.get("products").and_then(Value::as_array))
+        .flat_map(|a| a.iter().filter_map(|p| farnell_part(p, &store)))
+        .collect())
+}
+
+async fn farnell_search(key: &(String, String), q: &str, limit: usize) -> VResult<Vec<PartInfo>> {
+    farnell_call(key, &format!("any:{q}"), limit).await
+}
+
+async fn farnell_get(key: &(String, String), id: &str) -> VResult<PartInfo> {
+    let hits = farnell_call(key, &format!("id:{id}"), 1).await?;
+    hits.into_iter().find(|p| p.vendor_id.eq_ignore_ascii_case(id)).ok_or_else(|| VendorErr::new(ErrKind::NotFound, format!("Farnell has no part {id}.")))
+}
+
 // ------------------------------------------------------------------ dispatch
 
 fn not_configured(vendor: &str) -> VendorErr {
@@ -710,6 +875,7 @@ fn not_configured(vendor: &str) -> VendorErr {
         match vendor {
             "mouser" => "Mouser needs an API key. Add yours under API keys.",
             "digikey" => "DigiKey needs a client id and secret. Add yours under API keys.",
+            "farnell" => "Farnell needs an API key. Add yours under API keys.",
             _ => "This vendor is not set up.",
         },
     )
@@ -720,6 +886,7 @@ pub async fn search(vendor: &str, keys: &Keys, q: &str, limit: usize) -> VResult
         "lcsc" => lcsc_search(q, limit).await,
         "mouser" => mouser_search(keys.mouser.as_deref().ok_or_else(|| not_configured(vendor))?, q, limit).await,
         "digikey" => digikey_search(keys.digikey.as_ref().ok_or_else(|| not_configured(vendor))?, q, limit).await,
+        "farnell" => farnell_search(keys.farnell.as_ref().ok_or_else(|| not_configured(vendor))?, q, limit).await,
         _ => Err(VendorErr::new(ErrKind::NotFound, "Unknown vendor.")),
     }
 }
@@ -729,6 +896,7 @@ pub async fn fetch_info(vendor: &str, keys: &Keys, id: &str) -> VResult<PartInfo
     match vendor {
         "mouser" => mouser_get(keys.mouser.as_deref().ok_or_else(|| not_configured(vendor))?, id).await,
         "digikey" => digikey_get(keys.digikey.as_ref().ok_or_else(|| not_configured(vendor))?, id).await,
+        "farnell" => farnell_get(keys.farnell.as_ref().ok_or_else(|| not_configured(vendor))?, id).await,
         _ => Err(VendorErr::new(ErrKind::NotFound, "Unknown vendor.")),
     }
 }
@@ -747,6 +915,95 @@ mod tests {
         assert_eq!(tiers[2], PriceBreak { qty: 1000, price: 0.98, currency: "USD".into() });
         assert!(is_lcsc_id("C8734") && !is_lcsc_id("CAP") && !is_lcsc_id("C"));
         assert_eq!(norm_mpn("stm32f103c8t6-tr"), "STM32F103C8T6TR");
+    }
+
+    // ---- against the real vendors.  Not run by default: they need the network and, apart
+    // from LCSC, API keys in the environment.
+    //   MOUSER_API_KEY=… DIGIKEY_CLIENT_ID=… DIGIKEY_CLIENT_SECRET=… FARNELL_API_KEY=… \
+    //     cargo test -- --ignored --nocapture live_
+    // A vendor whose key is not set is reported as skipped, not failed.
+
+    fn live_check(vendor: &str, hits: &[PartInfo]) {
+        let hit = hits.iter().find(|p| norm_mpn(&p.mpn).starts_with("STM32F103C8T6")).unwrap_or_else(|| panic!("{vendor}: no STM32F103C8T6 among {} results", hits.len()));
+        println!("{vendor}: {} {} by {} · stock {:?} · {} price breaks · {}", hit.vendor_id, hit.mpn, hit.manufacturer, hit.stock, hit.prices.len(), hit.url);
+        assert!(!hit.vendor_id.is_empty() && !hit.manufacturer.is_empty(), "{vendor}: the part number or manufacturer did not parse");
+        assert!(!hit.prices.is_empty() && hit.prices[0].price > 0.0, "{vendor}: prices did not parse");
+        assert!(hit.stock.is_some(), "{vendor}: stock did not parse");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_lcsc() {
+        let hits = search("lcsc", &Keys::default(), "STM32F103C8T6", 10).await.expect("LCSC search");
+        live_check("lcsc", &hits);
+        let raw = easyeda_component("C8734").await.expect("EasyEDA component C8734");
+        let c = super::super::easyeda::convert(&raw).expect("convert C8734");
+        println!("lcsc: C8734 converts to {} with symbol {} and footprint {}", c.name, c.symbol.is_some(), c.footprint.is_some());
+        assert!(c.symbol.is_some() && c.footprint.is_some());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_mouser() {
+        let keys = Keys::default().with_server_defaults();
+        if keys.mouser.is_none() {
+            println!("mouser: skipped, MOUSER_API_KEY is not set");
+            return;
+        }
+        let hits = search("mouser", &keys, "STM32F103C8T6", 10).await.expect("Mouser search");
+        live_check("mouser", &hits);
+        let id = hits.iter().find(|p| norm_mpn(&p.mpn) == "STM32F103C8T6").map(|p| p.vendor_id.clone()).expect("an exact Mouser hit");
+        let one = fetch_info("mouser", &keys, &id).await.expect("Mouser part by number");
+        assert_eq!(one.vendor_id, id);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_digikey() {
+        let keys = Keys::default().with_server_defaults();
+        if keys.digikey.is_none() {
+            println!("digikey: skipped, DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET are not set");
+            return;
+        }
+        let hits = search("digikey", &keys, "STM32F103C8T6", 10).await.expect("DigiKey search");
+        live_check("digikey", &hits);
+        let id = hits.iter().find(|p| norm_mpn(&p.mpn).starts_with("STM32F103C8T6")).map(|p| p.vendor_id.clone()).unwrap();
+        let one = fetch_info("digikey", &keys, &id).await.expect("DigiKey part by number");
+        assert_eq!(one.vendor_id, id);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_farnell() {
+        let keys = Keys::default().with_server_defaults();
+        if keys.farnell.is_none() {
+            println!("farnell: skipped, FARNELL_API_KEY is not set");
+            return;
+        }
+        let hits = search("farnell", &keys, "STM32F103C8T6", 10).await.expect("Farnell search");
+        live_check("farnell", &hits);
+        let one = fetch_info("farnell", &keys, &hits[0].vendor_id).await.expect("Farnell part by order code");
+        assert_eq!(one.vendor_id, hits[0].vendor_id);
+    }
+
+    #[test]
+    fn reads_a_farnell_part() {
+        let p = json!({
+            "sku": "1447637", "displayName": "STMICROELECTRONICS - STM32F103C8T6 - ARM MCU, 32bit, 72MHz, LQFP-48", "productStatus": "STOCKED",
+            "brandName": "STMICROELECTRONICS", "translatedManufacturerPartNumber": "STM32F103C8T6",
+            "datasheets": [{ "type": "T", "url": "https://www.farnell.com/datasheets/1681173.pdf" }],
+            "prices": [{ "from": 1, "to": 9, "cost": 4.12 }, { "from": 10, "to": 99, "cost": 3.21 }],
+            "stock": { "level": 4521 },
+            "attributes": [{ "attributeLabel": "IC Case / Package", "attributeValue": "LQFP" }, { "attributeLabel": "CPU Speed", "attributeUnit": "MHz", "attributeValue": "72" }]
+        });
+        let part = farnell_part(&p, "uk.farnell.com").unwrap();
+        assert_eq!((part.vendor_id.as_str(), part.mpn.as_str(), part.stock), ("1447637", "STM32F103C8T6", Some(4521)));
+        assert_eq!((part.prices.len(), part.prices[1].qty, part.prices[1].currency.as_str()), (2, 10, "GBP"));
+        assert_eq!(part.package, "LQFP");
+        assert_eq!(part.attributes.get("CPU Speed").map(String::as_str), Some("72 MHz"));
+        assert_eq!(farnell_store(" https://WWW.Newark.com/ "), "www.newark.com");
+        assert_eq!(farnell_store(""), "uk.farnell.com");
+        assert_eq!(farnell_store("evil host/../x"), "");
     }
 
     #[test]

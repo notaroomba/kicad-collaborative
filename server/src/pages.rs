@@ -119,7 +119,8 @@ fn asset_version() -> &'static str {
     V.get_or_init(|| {
         let mut h: u64 = 0xcbf29ce484222325;
         let all = [include_str!("../static/dist/editor.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
-                   include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html")];
+                   include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html"),
+                   include_str!("../static/dist/viewer3d.js")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
@@ -186,25 +187,67 @@ pub async fn autoroute_js() -> Response { js_response(include_str!("../static/di
 pub async fn autoroute_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/autoroute.js.map")).into_response()
 }
+// The 3D viewer (server/web/viewer3d, three.js bundled): fetched by the editor on first use of
+// View → 3D Viewer, with the same ?v= as the editor bundle (asset_version covers it).
+pub async fn viewer3d_js() -> Response { js_response(include_str!("../static/dist/viewer3d.js")) }
 pub async fn editor_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/editor.js.map")).into_response()
 }
 
-pub async fn index() -> Html<String> {
-    Html(format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KiCad Collaborative</title>{STYLE}</head><body>
-<div class="dialog">
-  <div class="titlebar"><span class="mark">{MARK}</span>KiCad Collaborative<span class="host">kicad.notaroomba.dev</span></div>
-  <div class="body">
-    <h1>Real-time collaboration for KiCad</h1>
-    <p>Shared cursors, live edits, comments and history — in the desktop app and in the browser. Edits made offline merge back when you reconnect.</p>
-    <p class="muted">To join a project, open the invite link someone shared with you, or paste it into
-       KiCad Collaborative &rarr; <b>File &rarr; Join Session from URL…</b></p>
-  </div>
-  <div class="actions"><a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases">Get the desktop app</a><a class="btn primary" href="/">Open the web app</a></div>
-</div></body></html>"#
-    ))
+/// `/`: the projects home for someone signed in, the public home page for everyone else.
+pub async fn home(State(state): State<AppState>, jar: CookieJar) -> Response {
+    if auth::user_from_jar(&state, &jar).await.is_some() {
+        app_page().await
+    } else {
+        landing(false)
+    }
+}
+
+/// `/welcome`: the public home page whether or not you are signed in.
+pub async fn landing_page(State(state): State<AppState>, jar: CookieJar) -> Response {
+    landing(auth::user_from_jar(&state, &jar).await.is_some())
+}
+
+/// The public home page (static/landing.html, drawn by web/landing).  It takes its colours
+/// from the app, like the GitHub page.
+fn landing(signed_in: bool) -> Response {
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let page = PAGE.get_or_init(|| {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in include_str!("../static/dist/landing.js").bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        include_str!("../static/landing.html")
+            .replace("{{THEME}}", crate::github::theme_tokens())
+            .replace("{{MARK}}", MARK)
+            .replace("/static/dist/landing.js\"", &format!("/static/dist/landing.js?v={h:x}\""))
+    });
+    // Signed in: the page swaps its sign-in buttons for a way back to the projects.
+    let body = if signed_in { page.replacen("<html lang=\"en\">", "<html lang=\"en\" data-me=\"1\">", 1) } else { page.clone() };
+    ([(header::CACHE_CONTROL, "no-cache")], Html(body)).into_response()
+}
+
+pub async fn landing_js() -> Response { js_response(include_str!("../static/dist/landing.js")) }
+pub async fn landing_js_map() -> Response {
+    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/landing.js.map")).into_response()
+}
+
+/// Product screenshots shown on the home page (static/landing/*.webp).
+pub async fn landing_image(Path(name): Path<String>) -> Response {
+    let bytes: &'static [u8] = match name.as_str() {
+        "editor.webp" => include_bytes!("../static/landing/editor.webp"),
+        "schematic.webp" => include_bytes!("../static/landing/schematic.webp"),
+        "projects.webp" => include_bytes!("../static/landing/projects.webp"),
+        "share.webp" => include_bytes!("../static/landing/share.webp"),
+        "github.webp" => include_bytes!("../static/landing/github.webp"),
+        "parts.webp" => include_bytes!("../static/landing/parts.webp"),
+        "autoroute.webp" => include_bytes!("../static/landing/autoroute.webp"),
+        "assistant.webp" => include_bytes!("../static/landing/assistant.webp"),
+        "plugins.webp" => include_bytes!("../static/landing/plugins.webp"),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    ([(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response()
 }
 
 pub async fn join_page(
@@ -244,11 +287,15 @@ pub async fn join_page(
     };
 
     let url = format!("{}/j/{}", state.cfg.site_url, token);
+    // The server this link is on, not a fixed name: the card says where you are joining.
+    let host = esc(
+        state.cfg.site_url.split("://").nth(1).unwrap_or(&state.cfg.site_url).trim_end_matches('/'),
+    );
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
 <div class="dialog">
-  <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">kicad.notaroomba.dev</span></div>
+  <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">{host}</span></div>
   <div class="body">
     <h1>{name}</h1>
     <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>You join as</dt><dd>{role}</dd></dl>
@@ -1114,4 +1161,20 @@ loadComments();
         join_note = join_note,
     ))
     .into_response())
+}
+
+#[cfg(test)]
+mod landing_tests {
+    #[test]
+    fn the_home_page_is_complete() {
+        let html = include_str!("../static/landing.html");
+        // Colours come from the app, never from a palette of its own.
+        assert!(html.contains("{{THEME}}") && !html.contains("--bench: #"));
+        // Every screenshot it shows is one the server can serve.
+        for name in ["editor", "schematic", "projects", "share", "github", "parts", "autoroute", "assistant", "plugins"] {
+            assert!(html.contains(&format!("/static/landing/{name}.webp")), "{name}");
+        }
+        assert!(html.contains("/auth/github/login?next=/"), "sign-in hands off to the projects home");
+        assert!(html.contains("<html lang=\"en\">"), "the signed-in marker is added to this tag");
+    }
 }

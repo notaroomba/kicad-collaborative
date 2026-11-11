@@ -56,6 +56,14 @@ export async function resolveDoc(name?: string): Promise<DocRef> {
   if (!r.ok) throw new ToolError(`Could not read ${entry.path} (${r.status}).`);
   let doc: any;
   try { doc = K().parseDoc(await r.text(), entry.docType); } catch { throw new ToolError(`${entry.path} could not be parsed.`); }
+  // the snapshot is as old as the last save: bring it up to now with the edits made since
+  const seq = Number(r.headers.get("x-snapshot-seq"));
+  if (isFinite(seq)) {
+    try {
+      const o = await fetch(`/api/docs/${entry.docId}/ops?since=${seq}`, { credentials: "same-origin" });
+      if (o.ok) for (const op of (await o.json()).ops || []) for (const c of op.changes || []) { try { K().applyChange(doc, c, ED()?.IU); } catch (e) { console.warn("assistant: an edit could not be replayed on", entry.path, e); } }
+    } catch { /* the snapshot alone is still better than nothing */ }
+  }
   cache.set(entry.docId, { at: Date.now(), doc });
   return { doc, path: entry.path, docId: entry.docId, open: false };
 }
@@ -218,7 +226,8 @@ export async function boardInfo(): Promise<unknown> {
     if (it.kind === "via") { const sz = k.kid(it.node, "size"), dr = k.kid(it.node, "drill"); const key = `${sz ? r3(k.num(sz[1])) : "?"}/${dr ? r3(k.num(dr[1])) : "?"}`; vias.set(key, (vias.get(key) || 0) + 1); }
   }
   let unrouted = 0; for (const n of nl.nets.values()) unrouted += n.unconnected || 0;
-  return { document: path, size_mm: { width: st.width, height: st.height, area_mm2: st.area }, copper_layers: doc.copper.slice(), statistics: st,
+  let layout: unknown; try { const R = W.PcbAutoRouter; if (R && R.evaluate) { const ev = R.evaluate(K(), P, doc, s, {}); layout = { ratsnest_mm: r3(ev.ratsnest), unrouted: ev.unrouted, vias: ev.vias, track_length_mm: r3(ev.trackLength), routed_nets: ev.routedNets, worst_detours: (ev.worstDetours || []).slice(0, 10) }; } } catch { /* engine not loaded */ }
+  return { document: path, size_mm: { width: st.width, height: st.height, area_mm2: st.area }, copper_layers: doc.copper.slice(), statistics: st, layout,
     track_widths_in_use_mm: Object.fromEntries(Array.from(widths.entries()).sort((a, b) => a[0] - b[0]).map(([w, n]) => [String(w), n])),
     via_sizes_in_use_mm: Object.fromEntries(vias), nets: nl.nets.size, unrouted_connections: unrouted,
     design_rules: { clearance: s.clearance, edge_clearance: s.edgeClearance, min_track_width: s.minTrackWidth, min_via_diameter: s.minViaDiameter, min_via_drill: s.minViaDrill, net_classes: s.netclasses } };

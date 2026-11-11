@@ -85,3 +85,34 @@
 .plg-card .perms { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .plg-consent h2 { margin-bottom: 4px; }
 .plg-manager .btn.danger:hover { border-color: var(--err); color: var(--err); }
+.plg-manager.consenting { height: auto; max-height: 88vh; width: 620px; }
+.plg-manager.consenting .kd-body { flex: 0 1 auto; }
+.plg-status { margin-left: 6px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.plg-status.run { color: var(--wire); border-color: color-mix(in srgb, var(--wire) 50%, var(--line)); }
+.plg-status.bad { color: var(--err); border-color: var(--err); }
+
+/* the community registry, sharing, and what a project recommends */
+.plg-warn { margin: 0 0 8px; padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line)); border-radius: 3px; background: color-mix(in srgb, var(--warn) 9%, var(--panel)); color: var(--ink); }
+.plg-community { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.plg-community-head { margin: 0; }
+.plg-community-head h3 { margin: 0; }
+.plg-community-head input { width: 240px; max-width: 60%; }
+.plg-community > p { margin: 0; }
+.plg-meta { margin: 0 0 6px; font-family: var(--mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plg-none { padding: 22px 14px; border: 1px dashed var(--line); border-radius: 4px; color: var(--ink-2); text-align: center; }
+.plg-share { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+.plg-share p { margin: 0; }
+.plg-share .plg-row { margin: 0; }
+#editorBody > #stage { grid-row: 1; }
+.plg-infobar { grid-column: 3; grid-row: 1; align-self: start; position: relative; z-index: 6; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; background: color-mix(in srgb, var(--blue) 14%, var(--paper)); border-bottom: 1px solid color-mix(in srgb, var(--blue) 45%, var(--line)); color: var(--ink); font-size: 12px; cursor: default; }
+.plg-infobar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plg-infobar > svg { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.plg-jump { margin: 0; }
+.plg-warn.bad { border-color: color-mix(in srgb, var(--err) 55%, var(--line)); background: color-mix(in srgb, var(--err) 8%, var(--panel)); }
+.plg-report { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.plg-report textarea { width: 100%; resize: vertical; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+.plg-report .plg-row { margin: 0; }
+.plg-link { align-self: flex-start; padding: 0; border: 0; background: transparent; color: var(--ink-3); font: inherit; font-size: 11px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.plg-link:hover { color: var(--ink); }
+.plg-reports { list-style: none; margin: 0 0 8px; padding: 0; border-left: 2px solid var(--warn); }
+.plg-reports li { padding: 3px 0 3px 9px; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -33,6 +33,7 @@ const PATHS: Record<string, string> = {
   star: '<path d="M12 4l2.4 5 5.4.7-4 3.8 1 5.4L12 16.3 7.2 18.9l1-5.4-4-3.8 5.4-.7z"/>',
   restore: '<path d="M4.5 12a7.5 7.5 0 102.3-5.4"/><path d="M4.5 4.5v5h5"/>',
   branch: '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="8.5" r="2.2"/><path d="M7 8.2v7.6M17 10.7c0 3.3-4.5 2.6-8 4.6"/>',
+  plugin: '<path d="M9 4.5a2 2 0 014 0V6h4v4h1.5a2 2 0 010 4H17v5h-4.2v-1.2a1.8 1.8 0 00-3.6 0V19H5v-4.5h1.3a2 2 0 000-4H5V6h4z"/>',
   signout: '<path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9.5"/>',
 };
 export function Ic({ name, size = 16 }: { name: keyof typeof PATHS | string; size?: number }) {
@@ -61,7 +62,7 @@ export function useMedia(query: string): boolean {
 export const PHONE = "(max-width: 760px)";
 
 // ---------------------------------------------------------------- toasts
-export interface ToastItem { id: number; text: string; kind: "ok" | "err"; action?: { label: string; run: () => void } }
+export interface ToastItem { id: number; text: string; kind: "ok" | "err"; action?: { label: string; run: () => void }; out?: boolean }
 let toasts: ToastItem[] = [];
 let toastN = 0;
 const toastSubs = new Set<() => void>();
@@ -70,7 +71,13 @@ export function toast(text: string, opts: { kind?: "ok" | "err"; action?: ToastI
   const item: ToastItem = { id: ++toastN, text, kind: opts.kind || "ok", action: opts.action };
   // The same message again replaces the one on screen instead of stacking under it.
   toasts = [...toasts.filter((t) => t.text !== text).slice(-2), item]; emitToasts();
-  setTimeout(() => { toasts = toasts.filter((t) => t !== item); emitToasts(); }, opts.ms || (opts.kind === "err" ? 5000 : opts.action ? 6000 : 2600));
+  setTimeout(() => dismissToast(item), opts.ms || (opts.kind === "err" ? 5000 : opts.action ? 6000 : 2600));
+}
+/** A toast leaves the way it came: it fades down for a moment, then it is gone. */
+function dismissToast(item: ToastItem) {
+  if (item.out || !toasts.includes(item)) return;
+  item.out = true; toasts = [...toasts]; emitToasts();
+  setTimeout(() => { toasts = toasts.filter((t) => t !== item); emitToasts(); }, 160);
 }
 export const toastError = (e: unknown) => toast(e instanceof Error ? e.message : String(e), { kind: "err" });
 export function Toasts() {
@@ -78,9 +85,9 @@ export function Toasts() {
   return createPortal(
     <div className="hp-toasts" role="status" aria-live="polite">
       {list.map((t) => (
-        <div className={"hp-toast " + t.kind} key={t.id}>
+        <div className={"hp-toast " + t.kind + (t.out ? " out" : "")} key={t.id}>
           <span>{t.text}</span>
-          {t.action ? <button type="button" onClick={() => { t.action!.run(); toasts = toasts.filter((x) => x !== t); emitToasts(); }}>{t.action.label}</button> : null}
+          {t.action ? <button type="button" disabled={t.out} onClick={() => { t.action!.run(); dismissToast(t); }}>{t.action.label}</button> : null}
         </div>
       ))}
     </div>, document.body);
@@ -110,6 +117,43 @@ function useLayer(): () => boolean {
 }
 /** True while a dialog or menu of the home UI is open: the editor leaves the keyboard alone. */
 export const layerOpen = () => layers.length > 0;
+
+// ---------------------------------------------------------------- exits
+// A dialog or menu is unmounted the moment it closes (focus, the keyboard and the layer stack move
+// on at once).  What stays for a few frames is a lifeless copy that fades out, kept in a closed
+// shadow tree so that nothing — a selector, the keyboard, a pointer — can mistake it for the real one.
+let ghostCss: CSSStyleSheet | null | undefined;
+function ghostSheet(): CSSStyleSheet | null {
+  if (ghostCss !== undefined) return ghostCss;
+  ghostCss = null;
+  try {
+    let text = "";
+    for (const sheet of Array.from(document.styleSheets)) {
+      try { for (const rule of Array.from(sheet.cssRules)) if (rule.type !== CSSRule.IMPORT_RULE) text += rule.cssText + "\n"; } catch { /* a sheet from elsewhere */ }
+    }
+    const made = new CSSStyleSheet(); made.replaceSync(text); ghostCss = made;
+  } catch { /* no constructed style sheets here: things just disappear */ }
+  return ghostCss;
+}
+function leaveGhost(node: HTMLElement | null, ms: number) {
+  if (!node || !node.isConnected || document.hidden || typeof matchMedia !== "function" || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  try {
+    const sheet = ghostSheet();
+    if (!sheet) return;
+    const host = document.createElement("div");
+    host.setAttribute("aria-hidden", "true"); host.inert = true;
+    host.style.cssText = `position:fixed;inset:0;z-index:${getComputedStyle(node).zIndex || 200};pointer-events:none`;
+    const root = host.attachShadow({ mode: "closed" });
+    root.adoptedStyleSheets = [sheet];
+    const copy = node.cloneNode(true) as HTMLElement;
+    copy.classList.add("closing");
+    root.appendChild(copy); document.body.appendChild(host);
+    // the copy shows what was on screen, scrolled to where it was
+    const from = node.querySelectorAll<HTMLElement>(".hp-modal-b, .hp-menu"), to = copy.querySelectorAll<HTMLElement>(".hp-modal-b, .hp-menu");
+    from.forEach((el, i) => { if (el.scrollTop && to[i]) to[i].scrollTop = el.scrollTop; });
+    setTimeout(() => host.remove(), ms);
+  } catch { /* an exit animation is never worth an error */ }
+}
 
 // ---------------------------------------------------------------- modal
 /** A dialog: centred on a desktop, a bottom sheet on a phone.  Escape and the backdrop close it; focus is trapped inside. */
@@ -142,6 +186,7 @@ export function Modal({ title, onClose, children, footer, width = 480, busy }: {
     document.addEventListener("keydown", onKey, true);
     return () => { document.removeEventListener("keydown", onKey, true); if (prev && document.contains(prev)) prev.focus(); };
   }, []);
+  useLayoutEffect(() => { const scrim = ref.current?.parentElement || null; return () => leaveGhost(scrim, 150); }, []);
   return createPortal(
     <div className="hp-scrim" onMouseDown={(ev) => { if (ev.target === ev.currentTarget && !busy) onClose(); }}>
       <div className="hp-modal" role="dialog" aria-modal="true" tabIndex={-1} ref={ref} style={{ "--w": width + "px" } as CSSProperties}>
@@ -174,20 +219,25 @@ export function Confirm({ title, body, action, danger, onConfirm, onClose }: {
 export interface MenuItem { id: string; label: string; icon?: string; danger?: boolean; disabled?: boolean; hint?: string; run: () => void }
 export type MenuEntry = MenuItem | "-";
 /** A context menu: anchored to a point or an element's rect on a desktop, a bottom sheet on a phone. */
-export function Menu({ items, at, title, onClose }: { items: MenuEntry[]; at: { x: number; y: number; right?: number }; title?: string; onClose: () => void }) {
+/** Where a menu opens: a point, or under a button (`right` = its right edge, `top` = its top edge, so the menu can open above it instead). */
+export interface MenuAt { x: number; y: number; right?: number; top?: number }
+export function Menu({ items, at, title, onClose }: { items: MenuEntry[]; at: MenuAt; title?: string; onClose: () => void }) {
   const phone = useMedia(PHONE);
   const ref = useRef<HTMLDivElement>(null);
   // Placed off-screen-invisible with opacity, not visibility: a hidden element cannot take focus.
   const [pos, setPos] = useState<CSSProperties>({ left: at.x, top: at.y, opacity: 0 });
   useLayoutEffect(() => {
     if (phone || !ref.current) return;
-    const r = ref.current.getBoundingClientRect();
+    const r = { width: ref.current.offsetWidth, height: ref.current.offsetHeight };   // not the bounding box: the menu is still scaling in
     let left = at.right !== undefined ? at.right - r.width : at.x;
     let top = at.y;
     left = Math.max(8, Math.min(left, innerWidth - r.width - 8));
-    if (top + r.height > innerHeight - 8) top = Math.max(8, innerHeight - r.height - 8);
-    setPos({ left, top });
-  }, [phone, at.x, at.y, at.right]);
+    // No room below: open above the button (or the pointer), never on top of it.
+    const up = top + r.height > innerHeight - 8;
+    if (up) top = Math.max(8, (at.top !== undefined ? at.top - 4 : at.y) - r.height);
+    setPos({ left, top, transformOrigin: `${up ? "bottom" : "top"} ${at.right !== undefined ? "right" : "left"}` });
+  }, [phone, at.x, at.y, at.right, at.top]);
+  useLayoutEffect(() => { const scrim = ref.current?.parentElement || null; return () => leaveGhost(scrim, 110); }, []);
   const close = useRef(onClose); close.current = onClose;
   const top = useLayer();
   useEffect(() => {
@@ -219,6 +269,7 @@ export function Menu({ items, at, title, onClose }: { items: MenuEntry[]; at: { 
         {phone && title ? <div className="hp-menu-title">{title}</div> : null}
         {items.map((it, i) => it === "-" ? <div className="hp-menu-sep" key={"s" + i} /> : (
           <button type="button" role="menuitem" key={it.id} className={it.danger ? "danger" : undefined} disabled={it.disabled} title={it.hint}
+            onMouseEnter={phone ? undefined : (ev) => ev.currentTarget.focus({ preventScroll: true })}
             onClick={() => { onClose(); it.run(); }}>
             <Ic name={it.icon || ""} /><span>{it.label}</span>
           </button>

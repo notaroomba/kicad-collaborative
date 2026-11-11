@@ -115,9 +115,9 @@ export function fillPoly(G: Grid, pts: Pt[], span: (x0: number, x1: number, iy: 
 
 /**
  * The grid pitch and origin.  Among KiCad's usual grids the one most pad centres sit on wins (so tracks leave pads
- * from their centres without a stub), finer first, within a cell budget that keeps a run in memory and in time.
+ * from their centres without a stub; fine-pitch pads count most, across their row), finer first, within a cell budget that keeps a run in memory and in time.
  */
-export function pickGrid(pads: Pt[], bounds: [number, number, number, number], nLayers: number, forced?: number): { g: number; ox: number; oy: number } {
+export function pickGrid(pads: (Pt | number[])[], bounds: [number, number, number, number], nLayers: number, forced?: number): { g: number; ox: number; oy: number } {
   const area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]); const budget = 3.2e6 / Math.max(2, nLayers);
   const cands = forced ? [forced] : [0.1, 0.127, 0.125, 0.05, 0.2, 0.254, 0.25, 0.4, 0.5, 0.635, 1.27];
   let best: { g: number; ox: number; oy: number; score: number } | null = null;
@@ -125,8 +125,8 @@ export function pickGrid(pads: Pt[], bounds: [number, number, number, number], n
     if (!forced && area / (g * g) > budget) continue;
     const off = (axis: 0 | 1) => {
       const hist = new Map<number, number>(); let top = 0, at = 0;
-      for (const p of pads) { const r = Math.round((((p[axis] % g) + g) % g) * 1000) % Math.round(g * 1000); const n = (hist.get(r) || 0) + 1; hist.set(r, n); if (n > top) { top = n; at = r; } }
-      return { frac: pads.length ? top / pads.length : 1, off: at / 1000 };
+      let sum = 0; for (const p of pads) { const wt = p.length > 2 ? (p as number[])[2 + axis] : 1; sum += wt; const r = Math.round((((p[axis] % g) + g) % g) * 1000) % Math.round(g * 1000); const n = (hist.get(r) || 0) + wt; hist.set(r, n); if (n > top) { top = n; at = r; } }
+      return { frac: sum ? top / sum : 1, off: at / 1000 };
     };
     const fx = off(0), fy = off(1);
     const score = (fx.frac + fy.frac) / 2 - g * 0.6;   // a finer grid is worth a few off-centre pads

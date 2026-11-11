@@ -244,9 +244,11 @@ pub async fn create_project(
     let project_name = name
         .or_else(|| {
             files.iter().find(|(n, _)| n.ends_with(".kicad_pro")).map(|(n, _)| {
-                n.rsplit('/').next().unwrap_or(n).trim_end_matches(".kicad_pro").to_string()
+                n.rsplit('/').next().unwrap_or(n).trim_end_matches(".kicad_pro").trim().to_string()
             })
         })
+        // A file called ".kicad_pro" or "  .kicad_pro" gives no usable name.
+        .filter(|n| !n.is_empty() && checked_name(n).is_ok())
         .unwrap_or_else(|| "untitled".to_string());
     let project_name: String = project_name.chars().take(MAX_NAME_CHARS).collect();
 
@@ -283,11 +285,14 @@ pub async fn list_projects(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> AppResult<Response> {
-    let projects: Vec<_> = persist::list_projects_for_user(&state.pool, user.id)
-        .await?
+    let list = persist::list_projects_for_user(&state.pool, user.id).await?;
+    let ids: Vec<Uuid> = list.iter().map(|p| p.id).collect();
+    let linked = crate::github::linked_repos(&state.pool, &ids).await?;
+    let projects: Vec<_> = list
         .into_iter()
         .map(|p| {
             json!({
+                "github": linked.get(&p.id),
                 "projectId": p.id, "name": p.name,
                 "description": p.description,
                 "ownerId": p.owner_id, "ownerLogin": p.owner_login,
@@ -932,13 +937,11 @@ pub async fn create_comment(
                                           req.y, body)
         .await?;
 
-    if let Some(tx) = state.registry.existing(doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "added", "comment": comment.to_json() }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(comment.to_json()).into_response())
 }
@@ -964,13 +967,11 @@ pub async fn update_comment(
 
     let updated = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
 
-    if let Some(tx) = state.registry.existing(updated.doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(updated.doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "updated", "comment": updated.to_json() }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(updated.to_json()).into_response())
 }
@@ -995,14 +996,12 @@ pub async fn delete_comment(
 
     persist::delete_comment(&state.pool, id).await?;
 
-    if let Some(tx) = state.registry.existing(comment.doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(comment.doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "deleted",
                                  "comment": { "id": id, "docId": comment.doc_id } }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(json!({ "ok": true })).into_response())
 }
@@ -1029,8 +1028,6 @@ pub async fn delete_project(
     Path(id): Path<Uuid>,
     Query(q): Query<DeleteQuery>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     match persist::get_project(&state.pool, id).await? {
         Some(project) => {
             if project.owner_id != user.id {
@@ -1049,6 +1046,9 @@ pub async fn delete_project(
             }
         }
     }
+    // Only now: a socket that looked its role up before the change landed would
+    // otherwise keep the old one (ws.rs).
+    state.access_changed();
     Ok(Json(json!({ "ok": true, "trashed": !q.permanent })).into_response())
 }
 
@@ -1120,8 +1120,6 @@ pub async fn transfer_project(
     Path(id): Path<Uuid>,
     LenientJson(req): LenientJson<TransferRequest>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
         return Err(AppError::Forbidden);
@@ -1130,6 +1128,7 @@ pub async fn transfer_project(
         return Err(AppError::BadRequest("you already own this project".into()));
     }
     if persist::transfer_ownership(&state.pool, id, user.id, req.user_id).await? {
+        state.access_changed();
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::BadRequest("only someone who already has access can become the owner".into()))
@@ -1182,7 +1181,18 @@ pub async fn create_blank_project(
         "(kicad_sch\n\t(version 20250114)\n\t(generator \"eeschema\")\n\t(generator_version \"9.0\")\n\t(uuid \"{}\")\n\t(paper \"A4\")\n\t(lib_symbols)\n\t(sheet_instances\n\t\t(path \"/\"\n\t\t\t(page \"1\")\n\t\t)\n\t)\n\t(embedded_fonts no)\n)\n",
         Uuid::new_v4()
     );
-    let pcb = "(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n)\n";
+    // The header KiCad writes for a new board: without the layer table there is no copper to route on.
+    let pcb = concat!(
+        "(kicad_pcb\n\t(version 20241229)\n\t(generator \"pcbnew\")\n\t(generator_version \"9.0\")\n",
+        "\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper \"A4\")\n\t(layers\n",
+        "\t\t(0 \"F.Cu\" signal)\n\t\t(2 \"B.Cu\" signal)\n\t\t(9 \"F.Adhes\" user \"F.Adhesive\")\n\t\t(11 \"B.Adhes\" user \"B.Adhesive\")\n",
+        "\t\t(13 \"F.Paste\" user)\n\t\t(15 \"B.Paste\" user)\n\t\t(5 \"F.SilkS\" user \"F.Silkscreen\")\n\t\t(7 \"B.SilkS\" user \"B.Silkscreen\")\n",
+        "\t\t(1 \"F.Mask\" user)\n\t\t(3 \"B.Mask\" user)\n\t\t(17 \"Dwgs.User\" user \"User.Drawings\")\n\t\t(19 \"Cmts.User\" user \"User.Comments\")\n",
+        "\t\t(21 \"Eco1.User\" user \"User.Eco1\")\n\t\t(23 \"Eco2.User\" user \"User.Eco2\")\n\t\t(25 \"Edge.Cuts\" user)\n\t\t(27 \"Margin\" user)\n",
+        "\t\t(31 \"F.CrtYd\" user \"F.Courtyard\")\n\t\t(29 \"B.CrtYd\" user \"B.Courtyard\")\n\t\t(35 \"F.Fab\" user)\n\t\t(33 \"B.Fab\" user)\n\t)\n",
+        "\t(setup\n\t\t(pad_to_mask_clearance 0)\n\t\t(allow_soldermask_bridges_in_footprints no)\n\t\t(tenting front back)\n\t)\n",
+        "\t(embedded_fonts no)\n)\n"
+    );
 
     let project = persist::create_project(&state.pool, user.id, name).await?;
     let mut docs = Vec::new();
@@ -1294,7 +1304,17 @@ pub async fn create_link(
     if !matches!(role.as_str(), "editor" | "viewer") {
         return Err(AppError::BadRequest("role must be editor or viewer".into()));
     }
-    let expires_at = req.expires_in_days.map(|d| chrono::Utc::now() + chrono::Duration::days(d));
+    let expires_at = match req.expires_in_days {
+        Some(d) if (1..=3650).contains(&d) => Some(
+            chrono::Utc::now()
+                .checked_add_signed(chrono::Duration::days(d))
+                .ok_or_else(|| AppError::BadRequest("expiresInDays is out of range".into()))?,
+        ),
+        Some(_) => {
+            return Err(AppError::BadRequest("expiresInDays must be between 1 and 3650".into()))
+        }
+        None => None,
+    };
     let token = auth::random_token();
     persist::create_share_link(&state.pool, &token, id, &role, user.id, expires_at).await?;
     Ok(Json(json!({
@@ -1332,6 +1352,7 @@ pub async fn claim_link(
         return Ok(Json(json!({ "projectId": link.project_id, "role": "editor" })).into_response());
     }
     persist::claim_share_link(&state.pool, user.id, &link).await?;
+    state.access_changed();
     let role = persist::effective_role(&state.pool, user.id, link.project_id)
         .await?
         .unwrap_or_else(|| link.role.clone());
@@ -1498,8 +1519,6 @@ pub async fn leave_project(
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id == user.id {
         return Err(AppError::BadRequest(
@@ -1507,6 +1526,7 @@ pub async fn leave_project(
         ));
     }
     persist::remove_member(&state.pool, id, user.id).await?;
+    state.access_changed();
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1548,6 +1568,7 @@ pub async fn invite(
             return Err(AppError::BadRequest("that user owns this project".into()));
         }
         persist::grant_role(&state.pool, id, invitee.id, &role).await?;
+        state.access_changed();
         return Ok(Json(json!({
             "ok": true, "status": "granted",
             "userId": invitee.id, "login": invitee.login,
@@ -1727,12 +1748,24 @@ pub async fn create_doc(
         return Err(AppError::BadRequest("file type not allowed".into()));
     }
 
-    for existing in persist::project_documents(&state.pool, id).await? {
+    // The same rules as an upload: nothing from a project's own bookkeeping, and no
+    // second file that differs from an existing one only in case.
+    if is_local_state_path(&path) {
+        return Err(AppError::BadRequest("that path is not part of a project".into()));
+    }
+    let documents = persist::project_documents(&state.pool, id).await?;
+    for existing in &documents {
         if existing.path == path {
             return Ok(Json(json!({ "docId": existing.id, "path": existing.path,
                                    "docType": existing.doc_type, "existing": true }))
                 .into_response());
         }
+        if existing.path.to_lowercase() == path.to_lowercase() {
+            return Err(AppError::BadRequest(format!("duplicate file: {}", existing.path)));
+        }
+    }
+    if documents.len() >= MAX_FILES {
+        return Err(AppError::BadRequest(format!("too many files (max {MAX_FILES})")));
     }
 
     let doc_type = req.doc_type.unwrap_or_else(|| doc_type_for(&path).to_string());
@@ -1847,7 +1880,10 @@ pub async fn create_checkpoint(
         return Err(AppError::BadRequest("project has no snapshots to name".into()));
     }
 
-    Ok(Json(json!({ "name": req.name, "docs": named })).into_response())
+    // A project linked to GitHub can ask for every checkpoint to be pushed.
+    let pushing = crate::github::push_on_checkpoint(&state, &user, id, &req.name).await;
+
+    Ok(Json(json!({ "name": req.name, "docs": named, "githubPush": pushing })).into_response())
 }
 
 pub async fn list_checkpoints(
@@ -1910,9 +1946,7 @@ pub async fn restore_checkpoint(
         let seq = head + 1;
         persist::insert_snapshot(&state.pool, doc_id, seq, &content, None, Some(user.id)).await?;
 
-        if let Some(tx) = state.registry.existing(doc_id) {
-            let _ = tx.send(crate::doc_actor::DocMsg::Reset { seq }).await;
-        }
+        state.doc_event(doc_id, crate::doc_actor::DocMsg::Reset { seq }).await;
 
         restored.push(json!({ "docId": doc_id, "seq": seq }));
     }

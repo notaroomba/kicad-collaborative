@@ -13,7 +13,7 @@ import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
-import { base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
+import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
 export const docNav = { list: [], idx: -1, lock: false };
 
 
@@ -160,6 +160,9 @@ export function applyChanges(changes) {
   if (!E.kdoc) return;
   let any = false, dropped = null;
   for (const c of changes || []) {
+    // a document-level change (Page Settings: paper and title block) addresses no item — web/dialogs/project.ts
+    if (c && c.docProps) { if (KiCadCanvas.applyDocProps(E.kdoc, c.docProps)) { any = true; if (isSch()) { E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]]; base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" ")); applyView(); } } continue; }
+    if (c && c.typeName === "BOARD_SETUP") { if (KiCadCanvas.boardSetup && KiCadCanvas.boardSetup.applyBoardSetup(E.kdoc, c)) { any = true; renderLayersFromDoc(); } continue; }   // board-level sections (canvas/board-setup.ts)
     let ok = false;
     try { ok = KiCadCanvas.applyChange(E.kdoc, c, E.IU); } catch (e) { console.warn("change not applied", e); }
     if (ok) { any = true; continue; }
@@ -186,7 +189,7 @@ export function noteDroppedChange(change) {
 
 export function setupGridControls() {
   const choices = GRID_CHOICES[E.DOC_TYPE] || GRID_CHOICES.kicad_pcb;   // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
-  E.gridPitch = choices[0][0];
+  E.gridPitch = (E.gridDefault && E.gridDefault()) || choices[0][0];   // Preferences > Grids keeps KiCad's list order; its default is not always the first
   store.slice("viewport", { gridChoices: choices.map((c) => c.slice()) });
   updateGridStatus();
 }
@@ -197,8 +200,9 @@ export function setGridPitch(v) { E.gridPitch = Number(v) || E.gridPitch; update
 
 export function snapMm(mm) {
   if (!E.snapOn) return mm;
-  if (!isSch()) return KiCadCanvas.pcbSizes.state.snapToGrid(mm, E.gridPitch);   // the board's grid starts at its grid origin
-  return [KiCadCanvas.snap(mm[0], E.gridPitch), KiCadCanvas.snap(mm[1], E.gridPitch)];
+  const p = E.gridFor ? E.gridFor() : E.gridPitch;   // E.gridFor: the grid override of the active tool (Preferences > Grids)
+  if (!isSch()) return KiCadCanvas.pcbSizes.state.snapToGrid(mm, p);   // the board's grid starts at its grid origin
+  return [KiCadCanvas.snap(mm[0], p), KiCadCanvas.snap(mm[1], p)];
 }
 
 

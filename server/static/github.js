@@ -297,6 +297,10 @@
           <label class="f grow">Commit message <input type="text" id="msg" placeholder="Update ${esc(p.name)} from KiCad Collaborative" maxlength="200"></label>
           <label class="muted" style="display:flex;gap:6px;align-items:center;min-height:34px"><input type="checkbox" id="asPr" ${r.branchExists ? "" : "disabled"}> Open a pull request instead</label>
         </div>
+        <div class="row" style="margin-top:12px">
+          <label class="muted" style="display:flex;gap:6px;align-items:center;min-height:34px"><input type="checkbox" id="autoPush" ${link.autoPush ? "checked" : ""}> Push to GitHub every time a checkpoint is saved</label>
+        </div>
+        ${link.autoPush && link.lastAuto ? `<div class="note ${link.lastAuto.ok ? "ok" : "warn"}" id="lastAuto" style="margin-top:8px">Checkpoint <b>${esc(link.lastAuto.checkpoint || "")}</b>, ${esc(ago(link.lastAuto.at))}${link.lastAuto.by ? ` by ${esc(link.lastAuto.by)}` : ""}: ${link.lastAuto.ok ? "" : "not pushed. "}${esc(link.lastAuto.message || "")}${link.lastAuto.commitUrl ? ` · <a href="${esc(link.lastAuto.commitUrl)}" target="_blank" rel="noreferrer">view commit</a>` : ""}</div>` : ""}
         ${s.conflict ? `<div class="row" style="margin-top:12px"><span class="muted">When both sides changed the same item, keep</span>
             <span class="seg" id="prefer"><button type="button" data-v="online" class="on">the online version</button><button type="button" data-v="github">GitHub's version</button></span></div>` : ""}
       </div></section>`;
@@ -335,6 +339,15 @@
     }));
     const seg = $("#prefer");
     if (seg) $$("button", seg).forEach((b) => (b.onclick = () => { $$("button", seg).forEach((x) => x.classList.toggle("on", x === b)); }));
+    const auto = $("#autoPush");
+    if (auto) auto.onchange = async () => {
+      auto.disabled = true;
+      try {
+        await api(`/api/projects/${projectId}/github/settings`, { method: "POST", body: { autoPush: auto.checked } });
+        st.link.autoPush = auto.checked;
+        render();
+      } catch (e) { auto.checked = !auto.checked; auto.disabled = false; showError(e); }
+    };
     const pullBtn = $("#pull"), pushBtn = $("#push");
     if (pullBtn) pullBtn.onclick = () => busy(pullBtn, () => doPull(false));
     if (pushBtn) pushBtn.onclick = () => busy(pushBtn, doPush);

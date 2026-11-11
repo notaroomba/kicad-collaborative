@@ -74,13 +74,13 @@ const clickSlop = (): number => 5 / Math.max(1, E.zoom * 0.6);
 function pcbPick(mm: Mm): KItem | null {
   const d = doc(), t = pcbTools(); if (!d || !t) return null;
   const it = t.hitTestItem(d, mm[0], mm[1], 0.15 + 2 / Math.max(1, pxPerMm()));
-  return it && filterAllows(it.kind) ? it : null;
+  return it && filterAllows(it.kind, it) ? it : null;
 }
 function schPick(mm: Mm): KItem | null {
   const m = CollabTools.sch; if (!m || E.viewOnly) return null;
   const pick = m._ && (m._.pickNonSymbol as ((ctx: ToolCtx, mm: Mm) => KItem | null) | undefined);
   if (!pick) return null;
-  try { const it = pick(toolCtx(), mm); return it && filterAllows(it.kind) ? it : null; } catch { return null; }
+  try { const it = pick(toolCtx(), mm); return it && filterAllows(it.kind, it) ? it : null; } catch { return null; }
 }
 
 /** What a plain left click at `mm` selects, without touching the selection: the field, movable item or module item. */
@@ -142,7 +142,7 @@ export function hitsAt(mm: Mm): KItem[] {
   const out: KItem[] = [];
   for (const it of d.items.values()) {
     const b = it.bbox; if (!b || x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol) continue;
-    if (!filterAllows(it.kind)) continue;
+    if (!filterAllows(it.kind, it)) continue;
     let hit = false;
     if (it.kind === "symbol" || it.kind === "sheet") hit = true;
     else for (const g of it.geom) {
@@ -305,7 +305,7 @@ function onWheel(ev: WheelEvent): void {
   if (ev.ctrlKey) { panBy(-rot * 0.0012 * r.width, 0, mm); return; }
   if (ev.altKey) return;
   if (dx !== 0 && Math.abs(dx) > Math.abs(dy)) { panBy(-dx, 0, mm); return; } // horizontal wheel / two-finger sideways
-  zoomBy(Math.pow(1.0018, -dy), ev.clientX - r.left, ev.clientY - r.top);
+  zoomBy(Math.pow(E.zoomStep || 1.0018, -dy), ev.clientX - r.left, ev.clientY - r.top);
 }
 
 // ---------------------------------------------------------------- right / middle button
@@ -319,7 +319,7 @@ function startPan(ev: PointerEvent, fromX: number, fromY: number): void {
 function onDownCapture(ev: PointerEvent): void {
   const t = ev.target as Element;
   if (t.closest && (t.closest("#cmtPanel") || t.closest("#signinOverlay") || t.closest("#pcbChip") || t.closest("[data-schtools]"))) return;
-  if (ev.button === 1) { ev.preventDefault(); ev.stopImmediatePropagation(); startPan(ev, ev.clientX, ev.clientY); return; }
+  if (ev.button === 1) { ev.preventDefault(); ev.stopImmediatePropagation(); if (E.middleDragPan !== false) startPan(ev, ev.clientX, ev.clientY); return; }   // Preferences > Mouse and Touchpad
   if (ev.button === 2) {
     ev.preventDefault(); ev.stopImmediatePropagation();
     E.rdown = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
@@ -335,7 +335,7 @@ function onDownCapture(ev: PointerEvent): void {
 }
 function onMoveCapture(ev: PointerEvent): void {
   if (buttonLost(ev)) { cancelInteraction(); }
-  if (E.rdown && !E.pan && Math.hypot(ev.clientX - E.rdown.x, ev.clientY - E.rdown.y) > DRAG_THRESHOLD_PX) { const r = E.rdown; E.rdown = null; startPan(ev, r.x, r.y); }
+  if (E.rdown && !E.pan && E.rightDragPan !== false && Math.hypot(ev.clientX - E.rdown.x, ev.clientY - E.rdown.y) > DRAG_THRESHOLD_PX) { const r = E.rdown; E.rdown = null; startPan(ev, r.x, r.y); }
   queueHover(ev);
 }
 function onUpCapture(ev: PointerEvent): void {

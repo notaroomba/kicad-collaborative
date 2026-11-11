@@ -214,3 +214,36 @@ test("placement honours fixed parts and makes an outline when the board has none
   const r2 = R.place(K, P, bare, null, {}); assert.equal(r2.outlineFromBoard, false); assert.equal(r2.placements.length, 3); assert.equal(r2.score.overlaps, 0); assert.equal(r2.score.outside, 0);
   assert.equal(r2.groups.length, 1, "small parts join the larger part they connect to");
 });
+
+test("the Auto Place command commits the moves once as ordinary edits; view-only sessions cannot place", () => {
+  const doc = placeBoard(); const commits = [];
+  const ctx = { K, doc, viewOnly: false, designSettings: null, commit(ch, label) { commits.push([ch, label]); }, toast() {}, requestRender() {} };
+  const s = R.autoplace(ctx, { refs: ["C1", "C2", "L1", "R1"] });
+  assert.equal(commits.length, 1); assert.equal(commits[0][1], "auto place"); assert.equal(s.parts, 4); assert.equal(s.moved, 4);
+  assert.deepEqual(commits[0][0].map((c) => c.id).sort(), ["fp-C1", "fp-C2", "fp-L1", "fp-R1"]); for (const c of commits[0][0]) assert.match(c.sexpr, /\(footprint /);
+  assert.equal(s.score.overlaps, 0); assert.match(R.placeSummaryText(s), /4 footprints moved/);
+  const ro = R.autoplace(Object.assign({}, ctx, { viewOnly: true }), {}); assert.equal(ro.moved, 0); assert.equal(commits.length, 1);
+  assert.ok(P.ACTIONS.autoplace && P.ACTIONS.autoroute, "both commands are in the editor's action table");
+});
+
+test("fine-pitch pads: tracks neck down and leave the pads off the grid, within the rules", () => {
+  // eight 0.25 mm pads at 0.4 mm pitch whose rows fall between the rows of the 0.1 mm grid, each to a test pad
+  const nets = ["N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8"];
+  const chip = `(footprint "T:QFN" (layer "F.Cu") (uuid "fp-qfn") (at 100 50)
+    ${nets.map((nm, i) => `(pad "${i + 1}" smd roundrect (at 0 ${(i * 0.4 + 0.05).toFixed(2)}) (size 0.825 0.25) (roundrect_rratio 0.25) (layers "F.Cu" "F.Mask") (net "${nm}") (uuid "q-${i}"))`).join("\n    ")})`;
+  const doc = board(chip, ...nets.map((nm, i) => smd(106 + (i % 2) * 3, 44 + i * 2.2, nm)));
+  const settings = P.designSettings({ net_settings: { classes: [{ name: "Default", clearance: 0.15, track_width: 0.25, via_diameter: 0.6, via_drill: 0.3 }] }, rules: { min_track_width: 0.1 } });
+  const res = R.route(K, P, doc, settings, { pitch: 0.1 });
+  assert.equal(res.routed, 8, JSON.stringify(res.connections.filter((c) => !c.routed).map((c) => [c.net, c.reason, c.detail])));
+  const widths = new Set(segs(res).map((i) => K.num(K.kid(i.node, "width")[1]))); assert.equal(widths.size, 1); const w = [...widths][0];
+  assert.ok(w < 0.25 && w >= 0.15, `narrower than the class's 0.25 mm at these pads, as wide as their neighbours allow (${w} mm)`);
+  apply(doc, res); assert.deepEqual(errors(doc, settings), []); assert.equal(P.ratsnest(doc).length, 0);
+});
+
+test("placement: two pinned parts in one group both land exactly where asked, unsnapped", () => {
+  const doc = placeBoard();
+  const res = R.place(K, P, doc, null, { footprints: SPEC.map((s) => s.ref === "U1" ? { ...s, fixed: { x: 100.013, y: 50.57, rot: 0 } } : s.ref === "L1" ? { ...s, fixed: { x: 121.57, y: 62.86, rot: 90 } } : s) });
+  const at = (ref) => res.placements.find((p) => p.ref === ref);
+  assert.deepEqual([at("U1").x, at("U1").y, at("U1").rot], [100.013, 50.57, 0]); assert.deepEqual([at("L1").x, at("L1").y, at("L1").rot], [121.57, 62.86, 90]);
+  assert.equal(at("L1").group, "buck"); assert.equal(res.score.courtyardClashes, 0);
+});

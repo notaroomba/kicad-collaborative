@@ -18,8 +18,12 @@ use crate::AppState;
 
 pub const PROTO_VERSION: u32 = 1;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often an idle socket looks whether anyone's access changed.
+const ACCESS_RECHECK: Duration = Duration::from_secs(1);
 const PING_INTERVAL: Duration = Duration::from_secs(20);
-const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// One op is one message.  A zone travels with its fill, and the fill of a large pour
+/// alone can pass a megabyte.
+const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 /// Presence is fanned out to every peer every 50ms, so an unbounded blob is a
 /// broadcast amplifier any viewer can point at the doc.
 const MAX_PRESENCE_BYTES: usize = 8 * 1024;
@@ -60,9 +64,13 @@ struct JoinedDoc {
 /// anyone's access changed since it was cached: a demoted editor stops writing
 /// and a removed member stops receiving without having to reconnect.  `None`
 /// means the access is gone.
-async fn current_role(state: &AppState, user_id: i64, d: &mut JoinedDoc) -> Option<String> {
+///
+/// `writing` is set for an op.  With other replicas around, the news that access changed
+/// travels as a notification and can arrive a moment after the change itself, so a write
+/// does not rely on it: it asks the database every time.
+async fn current_role(state: &AppState, user_id: i64, d: &mut JoinedDoc, writing: bool) -> Option<String> {
     let now = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
-    if now != d.epoch {
+    if now != d.epoch || (writing && state.relay.others_alive()) {
         match persist::effective_role(&state.pool, user_id, d.project_id).await {
             Ok(Some(role)) => {
                 d.role = role;
@@ -197,6 +205,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     if let Some(link_token) = &link_token {
         if let Some(link) = persist::get_valid_share_link(&state.pool, link_token).await? {
             persist::claim_share_link(&state.pool, user.id, &link).await?;
+            state.access_changed();
         }
     }
 
@@ -218,13 +227,19 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
         }
         format!("{}{}", own_prefix, suffix)
     };
-    let color_idx = state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len();
+    // One counter for every replica, so two people who meet in a document through
+    // different replicas were not both handed the same colour.
+    let color_idx = match sqlx::query_as::<_, (i64,)>("SELECT nextval('peer_color_seq')").fetch_one(&state.pool).await {
+        Ok((n,)) => n as usize % PEER_COLORS.len(),
+        Err(_) => state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len(),
+    };
     let peer = PeerInfo {
         client_id: client_id.clone(),
         user_id: user.id,
         login: user.login.clone(),
         name: user.name.clone().unwrap_or_else(|| user.login.clone()),
         color: PEER_COLORS[color_idx].to_string(),
+        kind: if client_kind.as_deref() == Some("web") { "web".into() } else { "desktop".into() },
     };
     let _ = out_tx.try_send(
         json!({
@@ -243,7 +258,37 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     // --- Main loop ---
     let mut joined: HashMap<Uuid, JoinedDoc> = HashMap::new();
 
-    while let Some(frame) = ws_rx.next().await {
+    // Someone who only watches never sends anything, so losing access cannot wait for
+    // their next message: the epoch is looked at on a timer as well, and every joined
+    // document is rechecked when it moved.  A removed member, a project put in the
+    // Trash or made private stops reaching this socket within about a second.
+    let mut access_tick = tokio::time::interval(ACCESS_RECHECK);
+    access_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut seen_epoch = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
+
+    loop {
+        let frame = tokio::select! {
+            frame = ws_rx.next() => frame,
+            _ = access_tick.tick() => {
+                let now = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
+                if now != seen_epoch {
+                    seen_epoch = now;
+                    let ids: Vec<Uuid> = joined.keys().copied().collect();
+                    for doc_id in ids {
+                        let Some(d) = joined.get_mut(&doc_id) else { continue };
+                        if current_role(&state, user.id, d, false).await.is_none() {
+                            let _ = out_tx.try_send(
+                                json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                                    .to_string(),
+                            );
+                            drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                        }
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(frame) = frame else { break };
         let frame = match frame {
             Ok(f) => f,
             Err(_) => break,
@@ -357,7 +402,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                     );
                     continue;
                 };
-                let role = current_role(&state, user.id, d).await;
+                let role = current_role(&state, user.id, d, true).await;
                 if role.as_deref() != Some("editor") {
                     let _ = out_tx.try_send(
                         json!({ "type": "error", "code": "permission_denied", "docId": doc_id,
@@ -400,7 +445,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                 // Presence is the heartbeat of someone who only watches: the place to
                 // notice that their access was taken away.
                 if let Some(d) = joined.get_mut(&doc_id) {
-                    if current_role(&state, user.id, d).await.is_none() {
+                    if current_role(&state, user.id, d, false).await.is_none() {
                         let _ = out_tx.try_send(
                             json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
                                 .to_string(),
@@ -419,7 +464,33 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                         .await;
                 }
             }
+            ClientMsg::request { doc_id, action } => {
+                // Only an editor may set someone else's application to work, and only on
+                // the short list of things there is a reason to ask for.
+                let Some(d) = joined.get_mut(&doc_id) else { continue };
+                let role = current_role(&state, user.id, d, true).await;
+                if role.as_deref() != Some("editor") || action != "fill_zones" {
+                    let _ = out_tx.try_send(
+                        json!({ "type": "error", "code": "request_refused", "docId": doc_id,
+                                "action": action }).to_string(),
+                    );
+                    continue;
+                }
+                let Some(d) = joined.get(&doc_id) else { continue };
+                let _ = d.tx.send(DocMsg::Request { client_id: client_id.clone(), action }).await;
+            }
             ClientMsg::resync { doc_id } => {
+                // A resync hands over the whole file: never to someone whose access went.
+                if let Some(d) = joined.get_mut(&doc_id) {
+                    if current_role(&state, user.id, d, false).await.is_none() {
+                        let _ = out_tx.try_send(
+                            json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                                .to_string(),
+                        );
+                        drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                        continue;
+                    }
+                }
                 if let Some(d) = joined.get(&doc_id) {
                     let _ = d.tx.send(DocMsg::Resync { client_id: client_id.clone() }).await;
                 }

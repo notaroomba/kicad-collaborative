@@ -9,7 +9,7 @@ import type { Weights } from "./weights";
 
 export interface Node { ix: number; iy: number; l: number }
 export interface Features { length: number; vias: number; b45: number; b90: number; wrong: number }
-export interface Terminal { ix: number; iy: number; layers: number[] }
+export interface Terminal { ix: number; iy: number; layers: number[]; esc?: [number, number] }
 export interface Win { x0: number; y0: number; x1: number; y1: number }
 export interface ProbeInput {
   G: Grid; maps: Uint16Array[]; vmaps: Uint16Array[];

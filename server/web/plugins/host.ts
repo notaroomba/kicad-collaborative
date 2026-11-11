@@ -24,12 +24,26 @@ export interface PromptField { name: string; label: string; type?: "text" | "num
 export interface PromptRequest { id: number; plugin: string; pluginName: string; kind: "form" | "confirm"; title: string; message?: string; fields: PromptField[]; okLabel?: string; resolve: (v: any) => void }
 export interface Consent { manifest: PluginManifest; files: Record<string, string>; source: string; update: boolean; added: string[] }
 export interface CatalogEntry { manifest: PluginManifest; files: Record<string, string> }
+/** A plugin someone published to the community registry (no files: they are fetched when the person asks to install). */
+export interface RegistryEntry { identifier: string; manifest: PluginManifest; publisher: string; installs: number; publishedAt?: string; updatedAt?: string }
+/** What the registry says about one identifier. */
+export interface PublishedInfo { publisher: string; version: string; status: "listed" | "hidden" | "removed"; reason: string | null }
+/** A published plugin an administrator has to look at: reported, hidden or removed. */
+export interface ModerationEntry { identifier: string; manifest: PluginManifest; publisher: string; status: "listed" | "hidden" | "removed"; reason: string | null; installs: number; reports: Array<{ reporter: string; reason: string; at: string }> }
+/** A plugin the open project suggests to the people who work on it. */
+export interface ProjectPlugin { identifier: string; origin: "catalog" | "registry"; addedBy: string | null; publisher: string | null; manifest: PluginManifest; files: Record<string, string> }
 
 export interface PluginState {
   loaded: boolean; signedIn: boolean; error: string | null;
   installed: InstalledPlugin[]; catalog: CatalogEntry[] | null;
   running: Record<string, RunState>; logs: Record<string, LogLine[]>;
-  manager: { open: boolean; tab: "installed" | "catalog" | "develop"; selected: string | null };
+  /** The community registry as last searched; `published` is what is known about single identifiers (null: not published). */
+  registry: RegistryEntry[] | null; registryQuery: string; published: Record<string, PublishedInfo | null>;
+  /** Whether this person moderates the registry (KC_ADMINS on the server), and what is waiting for them. */
+  admin: boolean; moderation: ModerationEntry[] | null;
+  /** What the open project recommends, and whether this person may change that. */
+  project: { id: string | null; plugins: ProjectPlugin[]; canEdit: boolean; dismissed: string };
+  manager: { open: boolean; tab: "installed" | "catalog" | "project" | "develop" | "moderation"; selected: string | null };
   panel: { open: boolean; active: string | null; width: number };
   prompt: PromptRequest | null; consent: Consent | null;
   editor: string | null;
@@ -40,6 +54,7 @@ const LS_PANEL = "kc.plugins.panel";
 
 let S: PluginState = {
   loaded: false, signedIn: false, error: null, installed: [], catalog: null, running: {}, logs: {},
+  registry: null, registryQuery: "", published: {}, admin: false, moderation: null, project: { id: null, plugins: [], canEdit: false, dismissed: "" },
   manager: { open: false, tab: "installed", selected: null },
   panel: (() => { try { const j = JSON.parse(ls.get(LS_PANEL) || "{}"); return { open: !!j.open, active: typeof j.active === "string" ? j.active : null, width: Math.min(640, Math.max(240, Number(j.width) || 320)) }; } catch { return { open: false, active: null, width: 320 }; } })(),
   prompt: null, consent: null, editor: null,
@@ -74,13 +89,108 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 
 export async function refresh(): Promise<void> {
   const me = APP() ? APP().getState().me : null;
-  if (!me) { set({ loaded: true, signedIn: false, installed: [], error: null }); syncRunning(); return; }
-  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], error: null }); }
+  if (!me) { set({ loaded: true, signedIn: false, installed: [], admin: false, moderation: null, error: null }); syncRunning(); return; }
+  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); }
   catch (e) { set({ loaded: true, signedIn: true, error: e instanceof Error ? e.message : String(e) }); }
   syncRunning();
 }
 export async function loadCatalog(): Promise<void> {
   try { const j = await api("/api/plugins/catalog"); set({ catalog: j.plugins || [] }); } catch (e) { set({ catalog: [], error: e instanceof Error ? e.message : String(e) }); }
+}
+
+
+// ---- the community registry
+
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+let registrySeq = 0;
+export async function loadRegistry(q?: string): Promise<void> {
+  const query = q === undefined ? S.registryQuery : q; const seq = ++registrySeq;
+  if (q !== undefined) set({ registryQuery: q });
+  try { const j = await api(`/api/plugins/registry?q=${encodeURIComponent(query)}`); if (seq === registrySeq) set({ registry: j.plugins || [] }); }
+  catch (e) { if (seq === registrySeq) set({ registry: [], error: msg(e) }); }
+}
+/** Fetch a published plugin's files and put the consent sheet in front of the person. */
+export async function installFromRegistry(identifier: string): Promise<string | null> {
+  if (!S.signedIn) return "Sign in to install plugins.";
+  try {
+    const j = await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`);
+    if (j.status && j.status !== "listed") { void loadRegistry(); return "The administrators took this plugin out of the registry."; }
+    return requestInstall(j.manifest, j.files, `registry:${j.publisher}`);
+  }
+  catch (e) { return msg(e); }
+}
+/** Learn whether an identifier is in the registry, and under whom (the installed plugin's detail asks). */
+export async function lookupPublished(identifier: string): Promise<void> {
+  let info: PublishedInfo | null = null;
+  try { const r = await fetch(`/api/plugins/registry/${encodeURIComponent(identifier)}`); if (r.ok) { const j = await r.json(); info = { publisher: j.publisher, version: (j.manifest && j.manifest.version) || j.version || "", status: j.status || "listed", reason: j.reason || null }; } else if (r.status !== 404) return; }
+  catch { return; }
+  set({ published: Object.assign({}, S.published, { [identifier]: info }) });
+}
+/** Publish the installed copy for others to find.  It shares the copy; it installs nothing for anyone. */
+export async function publish(identifier: string): Promise<string | null> {
+  const p = find(identifier); if (!p) return "That plugin is not installed.";
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`, { method: "PUT", body: JSON.stringify({ manifest: p.manifest, files: p.files }) }); }
+  catch (e) { return msg(e); }
+  await Promise.all([lookupPublished(identifier), S.registry ? loadRegistry() : Promise.resolve()]); return null;
+}
+export async function unpublish(identifier: string): Promise<string | null> {
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`, { method: "DELETE" }); } catch (e) { return msg(e); }
+  await Promise.all([lookupPublished(identifier), S.registry ? loadRegistry() : Promise.resolve(), loadProject()]); return null;
+}
+
+/** Tell the administrators something is wrong with a published plugin. */
+export async function report(identifier: string, reason: string): Promise<string | null> {
+  if (!S.signedIn) return "Sign in to report a plugin.";
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}/report`, { method: "POST", body: JSON.stringify({ reason }) }); } catch (e) { return msg(e); }
+  if (S.admin) void loadModeration(); return null;
+}
+export async function loadModeration(): Promise<void> {
+  if (!S.admin) { set({ moderation: null }); return; }
+  try { const j = await api("/api/plugins/moderation"); set({ moderation: j.plugins || [] }); } catch (e) { set({ moderation: [], error: msg(e) }); }
+}
+/** An administrator's decision: hide, restore, remove, or dismiss the reports. */
+export async function moderate(identifier: string, action: "hide" | "restore" | "remove" | "dismiss", reason: string): Promise<string | null> {
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}/moderate`, { method: "POST", body: JSON.stringify({ action, reason }) }); } catch (e) { return msg(e); }
+  await Promise.all([loadModeration(), loadRegistry(), refresh(), loadProject()]); return null;
+}
+
+// ---- what the open project recommends
+
+const LS_DISMISS = "kc.plugins.recommended.seen.";
+const projectId = (): string | null => { const st = APP() ? APP().getState() : null; return st && st.me && st.project ? st.project.projectId : null; };
+let projectSeq = 0;
+export async function loadProject(): Promise<void> {
+  const id = projectId(); const seq = ++projectSeq;
+  if (!id) { set({ project: { id: null, plugins: [], canEdit: false, dismissed: "" } }); return; }
+  try {
+    const j = await api(`/api/projects/${encodeURIComponent(id)}/plugins`); if (seq !== projectSeq) return;
+    set({ project: { id, plugins: j.plugins || [], canEdit: !!j.canEdit, dismissed: ls.get(LS_DISMISS + id) || "" } });
+  } catch { if (seq === projectSeq) set({ project: { id, plugins: [], canEdit: false, dismissed: "" } }); }
+}
+/** The recommendations this person has not installed. */
+export const missingRecommended = (s: PluginState): ProjectPlugin[] => s.project.plugins.filter((r) => !s.installed.some((p) => p.identifier === r.identifier));
+const missingKey = (s: PluginState) => missingRecommended(s).map((r) => r.identifier).sort().join(",");
+/** True while the project recommends something this person neither has nor has waved away. */
+export const recommendedPending = (s: PluginState): boolean => { const k = missingKey(s); return !!k && k !== s.project.dismissed; };
+/** Stop pointing at the current recommendations (a new one points again). */
+export function dismissRecommended(): void {
+  const id = S.project.id; if (!id) return; const k = missingKey(S);
+  ls.set(LS_DISMISS + id, k); set({ project: Object.assign({}, S.project, { dismissed: k }) });
+}
+/** Where a plugin the person has can be got by anyone: the catalog, the registry, or nowhere (a private copy). */
+export function originOf(p: InstalledPlugin, s: PluginState = S): "catalog" | "registry" | null {
+  if (p.source === "catalog") return "catalog";
+  const pub = s.published[p.identifier]; return pub && pub.status === "listed" ? "registry" : null;
+}
+export async function recommend(identifier: string, origin: "catalog" | "registry", on: boolean): Promise<string | null> {
+  const id = projectId(); if (!id) return "Open a project first.";
+  try { await api(`/api/projects/${encodeURIComponent(id)}/plugins/${encodeURIComponent(identifier)}`, on ? { method: "PUT", body: JSON.stringify({ origin }) } : { method: "DELETE" }); }
+  catch (e) { return msg(e); }
+  await loadProject(); return null;
+}
+export function installRecommended(r: ProjectPlugin): string | null {
+  if (!S.signedIn) return "Sign in to install plugins.";
+  return requestInstall(r.manifest, r.files, r.origin === "catalog" ? "catalog" : `registry:${r.publisher || "unknown"}`);
 }
 
 /** Ask the person before anything is stored: what the plugin is and every permission it wants. */
@@ -100,7 +210,7 @@ export async function confirmInstall(): Promise<string | null> {
   } catch (e) { return e instanceof Error ? e.message : String(e); }
   stop(c.manifest.identifier);
   set({ consent: null, manager: Object.assign({}, S.manager, { tab: "installed", selected: c.manifest.identifier }) });
-  await refresh(); return null;
+  await refresh(); if (S.registry) void loadRegistry(); return null;
 }
 export async function setEnabled(id: string, enabled: boolean): Promise<void> {
   set({ installed: S.installed.map((p) => (p.identifier === id ? Object.assign({}, p, { enabled }) : p)) }); syncRunning();   // at once; the refresh below confirms it
@@ -364,9 +474,11 @@ export function pluginUiKey(id: string): string {
 
 async function busy<T>(id: string, what: string, fn: () => Promise<T>): Promise<T | undefined> {
   setRun(id, { busy: what });
+  // An action may wait on a dialog for minutes, so there is no deadline; a plugin that is simply stuck is named once, with the way out.
+  const slow = window.setTimeout(() => { if (!S.prompt) { log(id, "warn", `${what} has been running for 20 seconds`); toast(`${find(id)?.manifest.name || "A plugin"} is still running “${what}”. Restart it from Manage Plugins if it is stuck.`, 6000); } }, 20000);
   try { return await fn(); }
   catch (e) { const msg = e instanceof Error ? e.message : String(e); log(id, "error", `${what}: ${msg}`); toast(`${find(id)?.manifest.name || "Plugin"}: ${msg}`, 5000); return undefined; }
-  finally { if (S.running[id]) setRun(id, { busy: null }); }
+  finally { clearTimeout(slow); if (S.running[id]) setRun(id, { busy: null }); }
 }
 
 export async function runAction(plugin: string, action: string): Promise<void> {
@@ -415,7 +527,7 @@ function showFrames() {
 }
 export function openManager(tab?: PluginState["manager"]["tab"]) {
   set({ manager: Object.assign({}, S.manager, { open: true, tab: tab || S.manager.tab }) });
-  void refresh(); if (!S.catalog) void loadCatalog();
+  if (!S.catalog) void loadCatalog(); void loadRegistry(); void loadProject(); void refresh().then(() => loadModeration());
 }
 export const closeManager = () => set({ manager: Object.assign({}, S.manager, { open: false }), consent: null });
 export const setManager = (patch: Partial<PluginState["manager"]>) => set({ manager: Object.assign({}, S.manager, patch) });
@@ -460,6 +572,8 @@ export function initPlugins(): void {
     if (now.me !== was.me) void refresh();
     if (now.editor !== was.editor) { set({ editor: now.editor }); showFrames(); }
     if (now.view !== was.view || now.project !== was.project) syncRunning();
+    if (now.project !== was.project || now.me !== was.me) void loadProject();
+    if (now.project !== was.project && now.project && was.me === now.me) void refresh();   // a plugin withdrawn since the last look stops here
     if (!runs.size) return;
     if (now.docId !== was.docId || now.editor !== was.editor || now.viewOnly !== was.viewOnly) {
       for (const run of runs.values()) run.sandbox.send({ t: "event", name: "editor", data: editorState(has(run.plugin, "design:read")) });
@@ -476,10 +590,10 @@ export function initPlugins(): void {
 
   document.addEventListener("keydown", (ev) => {
     const t = ev.target as HTMLElement | null;
-    if (!S.editor || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
+    if (!S.editor || app.getState().view !== "editor" || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
     for (const a of actionsFor(S, S.editor)) if (a.action.key && hotkeyMatches(ev, a.action.key)) { ev.preventDefault(); ev.stopPropagation(); void runAction(a.plugin, a.id); return; }
   }, true);
 
   // The assistant (web/ai/client.ts) reaches plugin tools through this object; tests use it too.
-  W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, refresh };
+  W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, refresh, loadProject };
 }

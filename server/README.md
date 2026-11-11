@@ -86,7 +86,8 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 
 ## Vendor parts and part libraries
 
-Parts can be found at LCSC / JLCPCB, Mouser and DigiKey and placed straight
+Parts can be found at LCSC / JLCPCB, Mouser, DigiKey and Farnell / Newark /
+element14 and placed straight
 into a schematic or a board (`src/parts/`, dialog in `web/parts/`, in the
 editor under Tools → Add Part from Vendor… and Part Libraries…).
 
@@ -99,11 +100,22 @@ converted from it on each request (`src/parts/easyeda.rs`). A placed part is
 embedded in the sheet or board as KiCad does, with `LCSC` / `Mouser` /
 `DigiKey`, `MPN` and `Manufacturer` fields.
 
-LCSC needs no key. Mouser and DigiKey need API keys, either for the whole
-deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`) or
+The dialog's BOM tab lists the parts of the design (every sheet, or the board) by the vendor
+fields they carry, with stock and the price break for the number of boards,
+finds and assigns a vendor part to lines that have none, and downloads the BOM
+in JLCPCB's assembly format or in full.
+
+LCSC needs no key. Mouser, DigiKey and Farnell need API keys, either for the
+whole deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`,
+`FARNELL_API_KEY` with `FARNELL_STORE`, default `uk.farnell.com`) or
 per person in the dialog's API Keys tab (stored encrypted in `vendor_keys`).
-Neither publishes drawings, so their parts use the LCSC drawing for the same
+None of them publishes drawings, so their parts use the LCSC drawing for the same
 manufacturer part number when there is one.
+
+`/p/{id}/edit?parts=search|libraries|bom` and `/?parts=libraries` open the
+dialog from a link. The desktop editors' File → Vendor Parts… opens that link:
+in a session a part placed in the browser arrives in the desktop app like any
+collaborator's edit; without one it opens the library manager.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -138,6 +150,12 @@ File → GitHub Sync… in the web editor).
   never forced, and files GitHub changed are left alone. It can instead go to a
   new branch with a pull request. A missing branch is created from the default
   branch; an empty repository gets its first commit.
+- **Push on checkpoint** (a checkbox on the sync page) pushes the same way
+  every time a checkpoint is saved, as the person who saved it, with the
+  checkpoint's name as the commit message. It never overwrites a change made
+  on GitHub; the page shows what the last one did.
+- Only the linked folder is read from GitHub, so a project in a corner of a
+  very large repository syncs as fast as one in its own.
 - **Pull** brings GitHub's changes in. A file changed on both sides is merged
   item by item (`src/merge.rs`): items are matched by their `uuid`, each side's
   changes are kept, and only an item both sides changed differently needs a
@@ -181,11 +199,28 @@ with Claude that can read the open design and propose edits to it.
   net, and the card says so. On a board, an `autoroute` edit runs the board
   autorouter and proposes its tracks and vias like any other change.
 
+- **A board from a description.** The assistant can take a design from a prompt
+  to a routed board, each stage a proposal: it finds parts in KiCad's symbol and
+  footprint libraries (`find_parts`, `get_library_part`, served and cached by
+  this server from the KiCad library repositories) and at the parts vendors,
+  draws the schematic one functional block at a time (`add_symbol`, `add_wire`,
+  `add_label`, power symbols, no-connects), runs ERC, brings the parts to the
+  board (`update_from_schematic`), places them (`auto_place`, or explicit
+  positions), and routes in stages it orders itself (`autoroute` with a net
+  order, per-net widths and layers), judging each stage from the engine's
+  report of what was left unrouted and why.
+  `scripts/ai-rp2040.mjs` runs that whole flow for an RP2040 dev board through
+  the same tool calls, with the plan written out by hand so it needs no key.
+
 | Endpoint | |
 |---|---|
 | `GET /api/ai` | whether the assistant is available to the caller, the model, today's usage |
 | `PUT/DELETE /api/ai/key` | store / remove the caller's own API key (AES-GCM encrypted at rest) |
 | `POST /api/projects/{id}/ai/chat` | `{messages}` in, the Messages API event stream out; project members only |
+| `GET /api/kicad-lib/search?kind=symbol\|footprint&q=` | search KiCad's libraries by name (index built on first use, cached a day) |
+| `GET /api/kicad-lib/list?kind=&lib=` | libraries, or the items of one |
+| `GET /api/kicad-lib/item?kind=&lib=&name=` | one symbol (`.kicad_sym`) or footprint (`.kicad_mod`) |
+| `GET /api/docs/{id}/ops?since=N` | the ops applied to a document after snapshot `N`, so another document of the project is read as it is now |
 
 | Variable | |
 |---|---|
@@ -194,6 +229,7 @@ with Claude that can read the open design and propose edits to it.
 | `AI_DAILY_REQUESTS` | model calls per person per day on the server's key (default 300) |
 | `AI_WEB_TOOLS=0` | turn off web search and fetch |
 | `ANTHROPIC_API_URL` | another endpoint (a gateway, or the test stand-in) |
+| `KICAD_LIBS_URL`, `KICAD_LIBS_REF` | where KiCad's libraries are read from (default `https://gitlab.com`, `master`); `scripts/kicad-libs-mirror.mjs` is a caching mirror for machines whose outbound traffic goes through a proxy |
 
 ## Running
 
@@ -245,8 +281,16 @@ stale, a second client seeing an accepted edit, undo, errors, own keys, access.
 `server/scripts/parts-e2e.mjs` (API) and `parts-ui.mjs` (two people in
 Chromium) test vendor parts against `fake-vendors.mjs`, which replays answers
 recorded from LCSC, JLCPCB and EasyEDA (`tests/fixtures/vendor/`, refreshed
-with `capture-vendor-fixtures.sh`) and stands in for Mouser and DigiKey from
+with `capture-vendor-fixtures.sh`) and stands in for Mouser, DigiKey and Farnell from
 their API documentation.
+
+Against the real vendors (network, and keys for all but LCSC; a vendor without
+a key is reported as skipped):
+
+```bash
+MOUSER_API_KEY=… DIGIKEY_CLIENT_ID=… DIGIKEY_CLIENT_SECRET=… FARNELL_API_KEY=… \
+  cargo test -- --ignored --nocapture live_
+```
 
 `server/scripts/e2e.mjs` goes further: it drives two WebSocket clients through
 the real join → op → ack → broadcast flow and checks sharing, role enforcement,
@@ -295,3 +339,12 @@ plan — the assistant's model, or a person. Everything here is pure (nothing is
   pull. Without groups, small parts join the larger part they connect to. It returns positions, a score (ratsnest,
   overlaps, courtyard clashes, parts outside) and the outline it used; `placementChanges` turns the positions into
   ordinary edits.
+
+**Tools ▸ Auto Place Footprints…** runs the same placement from the editor without a model: all unlocked footprints
+or the selected ones, committed as one undo step like any other edit. `scripts/place-bench.mjs` forgets a finished
+board's placement and tracks, places and routes it again and compares with the hand layout;
+`scripts/autoplace-ui.mjs` is the two-browser test.
+
+Fine-pitch parts: a connection that ends on a surface pad narrower than its class's track runs narrower (pad width
+less 0.1 mm, never below the board minimum), and where a pad's row falls between grid rows the track leaves the pad
+straight along its axis off the grid and joins the grid outside, each piece checked exactly.

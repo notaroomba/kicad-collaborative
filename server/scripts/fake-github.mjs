@@ -284,8 +284,17 @@ const server = http.createServer(async (req, res) => {
   if ((mm = rest.match(/^\/git\/trees\/([0-9a-f]+)$/)) && req.method === 'GET') {
     const tree = trees.get(mm[1]);
     if (!tree) return notFound(res);
-    return send(res, 200, { sha: mm[1], truncated: false,
-      tree: [...tree.entries()].map(([p, s]) => ({ path: p, mode: '100644', type: 'blob', sha: s, size: blobs.get(s).length })) });
+    const blobEntry = ([p, s]) => ({ path: p, mode: '100644', type: 'blob', sha: s, size: blobs.get(s).length });
+    if (q.get('recursive')) return send(res, 200, { sha: mm[1], truncated: false, tree: [...tree.entries()].map(blobEntry) });
+    // Like GitHub: without ?recursive only the direct children, folders as "tree" entries.
+    const out = [], dirs = new Map();
+    for (const [p, s] of tree) {
+      const i = p.indexOf('/');
+      if (i < 0) out.push(blobEntry([p, s]));
+      else { const d = p.slice(0, i); if (!dirs.has(d)) dirs.set(d, new Map()); dirs.get(d).set(p.slice(i + 1), s); }
+    }
+    for (const [d, sub] of dirs) out.push({ path: d, mode: '040000', type: 'tree', sha: putTree(sub) });
+    return send(res, 200, { sha: mm[1], truncated: false, tree: out });
   }
   if ((mm = rest.match(/^\/git\/blobs\/([0-9a-f]+)$/)) && req.method === 'GET') {
     const b = blobs.get(mm[1]);

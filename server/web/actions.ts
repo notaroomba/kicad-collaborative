@@ -6,7 +6,8 @@
 // runs in the desktop app.
 import { useMemo } from "react";
 import { actionMeta } from "./spec";
-import { LINKS, LOCAL_KEYS, LOCAL_LABELS, PANE_ACTION, toolFor } from "./tables";
+import { hotkeyOwners, menuMeta, normKey } from "./menuspec";
+import { EDITOR_ONLY, EXTRA_TOOLS, LINKS, LOCAL_KEYS, LOCAL_LABELS, MODULE_ALIAS, PANE_ACTION, toolFor } from "./tables";
 import { anchorOf, dispatch, useApp, type Editor, type ModuleAction, type ModuleTool } from "./store";
 import { isPluginUiId, pluginUiKey, pluginUiLabel, runPluginUi } from "./plugins/host";
 
@@ -34,15 +35,24 @@ export function useAvail(): Avail {
 
 export const isModuleAction = (id: string) => id.startsWith("module:");
 
-/** The module action behind an id: "module:<id>" explicitly, or a KiCad entry the active module backs (same id). */
+/** Handled by the editor core in this editor (an id only one editor implements does not count in the other). */
+function handledHere(a: Avail, id: string): boolean { return a.handled.has(id) && (!EDITOR_ONLY[id] || EDITOR_ONLY[id] === a.editor); }
+
+/**
+ * The module action behind an id: "module:<id>" explicitly, the module's own name for a KiCad action
+ * (MODULE_ALIAS — it does more than the core's handler: tracks, groups, the module's own selection), or a KiCad
+ * entry the active module backs under the same id.
+ */
 export function moduleActionFor(a: Avail, id: string): ModuleAction | undefined {
   if (isModuleAction(id)) return a.moduleActions.get(id.slice(7));
-  return a.handled.has(id) ? undefined : a.moduleActions.get(id);
+  const alias = a.editor ? MODULE_ALIAS[a.editor][id] : undefined;
+  if (alias && a.moduleActions.has(alias)) return a.moduleActions.get(alias);
+  return handledHere(a, id) ? undefined : a.moduleActions.get(id);
 }
 
 /** Why an action is dimmed; null when it works here. */
 export function unavailable(a: Avail, id: string): string | null {
-  if (a.handled.has(id) || LINKS[id] || isPluginUiId(id)) return null;   // a plugin entry is listed only while its plugin is enabled
+  if (handledHere(a, id) || LINKS[id] || isPluginUiId(id)) return null;   // a plugin entry is listed only while its plugin is enabled
   if (moduleActionFor(a, id)) return null;
   if (isModuleAction(id)) return "not available in the web editor yet";
   const tid = toolFor(a.editor, id);
@@ -50,25 +60,46 @@ export function unavailable(a: Avail, id: string): string | null {
   return "runs in the desktop app";
 }
 
+/** A key a module chose that KiCad binds to a different action in this editor is not that module entry's hotkey here. */
+function ownKey(a: Avail, id: string, key: string | null | undefined): string {
+  if (!key) return "";
+  if (!a.editor) return key;
+  const owners = hotkeyOwners(a.editor, normKey(key.replace(/^Delete$/, "Del").replace(/^Insert$/, "Ins")));
+  return owners.length && !owners.includes(id) ? "" : key;
+}
+
+/** The hotkey shown beside an action: KiCad's default (what editor/hotkeys.ts binds), else the module's own key. */
 export function keyFor(a: Avail, id: string): string {
   if (isPluginUiId(id)) return pluginUiKey(id);
+  if (isModuleAction(id)) { const m = a.moduleActions.get(id.slice(7)); return m ? ownKey(a, id.slice(7), m.key) : ""; }
+  const extra = EXTRA_TOOLS.find((e) => e.id === id); if (extra) return extra.key;
+  const meta = menuMeta(a.editor, id);
+  if (meta && meta.key) return meta.key;
   const ma = moduleActionFor(a, id);
-  if (ma) return ma.key || (isModuleAction(id) ? "" : actionMeta(id)?.key || "");
+  if (ma && ma.key) return ownKey(a, id, ma.key);
   const tid = toolFor(a.editor, id);
   const mt = tid ? a.moduleTools.get(tid) : undefined;
-  return (mt && mt.key) || actionMeta(id)?.key || LOCAL_KEYS[id] || "";
+  return (mt && ownKey(a, id, mt.key)) || LOCAL_KEYS[id] || "";
 }
 
 export function labelFor(a: Avail, id: string): string {
   if (isPluginUiId(id)) return pluginUiLabel(id) || id;
-  if (isModuleAction(id)) return a.moduleActions.get(id.slice(7))?.label || id.slice(7);
+  if (isModuleAction(id)) return (a.moduleActions.get(id.slice(7))?.label || LOCAL_LABELS[id.slice(7)] || id.slice(7)).replace(/…/g, "...");
   if (LOCAL_LABELS[id]) return LOCAL_LABELS[id];
-  const m = actionMeta(id);
-  return m ? m.label.replace(/\.\.\.$/, "…") : id;
+  const m = menuMeta(a.editor, id) || actionMeta(id);
+  if (m) return m.label;
+  return (moduleActionFor(a, id)?.label || id).replace(/…/g, "...");
+}
+
+/** KiCad's icon for an action (null for our own entries and module-only commands). */
+export function iconFor(a: Avail, id: string): string | null {
+  if (isModuleAction(id)) return null;
+  const m = menuMeta(a.editor, id) || actionMeta(id);
+  return m && m.icon && m.icon !== "INVALID_BITMAP" ? m.icon : null;
 }
 
 export function titleFor(a: Avail, id: string): string {
-  const m = actionMeta(id); const k = keyFor(a, id);
+  const m = menuMeta(a.editor, id) || actionMeta(id); const k = keyFor(a, id);
   let t = (m ? m.label : labelFor(a, id)) + (k ? `  (${k})` : "");
   if (m && m.tip && m.tip !== m.label) t += "\n" + m.tip;
   const why = unavailable(a, id);
@@ -87,10 +118,12 @@ export function isOn(id: string, toggles: Record<string, boolean>, panes: Record
 export function runUiAction(a: Avail, id: string, el?: Element | null): void {
   if (isPluginUiId(id)) { runPluginUi(id); return; }
   const anchor = anchorOf(el);
-  if (a.handled.has(id) || isModuleAction(id)) { dispatch({ type: "action", id, anchor }); return; }
-  if (moduleActionFor(a, id)) { dispatch({ type: "action", id: "module:" + id, anchor }); return; }
+  if (isModuleAction(id)) { dispatch({ type: "action", id, anchor }); return; }
+  const ma = moduleActionFor(a, id);
+  if (ma) { dispatch({ type: "action", id: "module:" + ma.id, anchor }); return; }
+  if (handledHere(a, id)) { dispatch({ type: "action", id, anchor }); return; }
   const tid = toolFor(a.editor, id);
   if (tid && (a.appTools.has(tid) || a.moduleTools.has(tid))) { dispatch({ type: "setTool", tool: tid }); return; }
   if (LINKS[id]) { window.open(LINKS[id], "_blank"); return; }
-  dispatch({ type: "popover", popover: { kind: "desktop", title: labelFor(a, id), why: tid ? "This tool isn't in the web editor yet." : "This runs in the desktop app.", anchor } });
+  dispatch({ type: "popover", popover: { kind: "desktop", title: labelFor(a, id).replace(/\.\.\.$/, ""), why: tid ? "This tool isn't in the web editor yet." : "This runs in the desktop app.", anchor } });
 }

@@ -9,6 +9,8 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
+import { projectDocs, resolveDoc } from "./design";
+import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -27,6 +29,8 @@ export interface Proposal {
   connectivity?: string[];
   /** extra facts for the model about what an edit did (the autorouter's summary) */
   details?: unknown[];
+  /** board rules to write into the project file when accepted (set_rules) */
+  rules?: Record<string, number | string>;
 }
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -85,7 +89,7 @@ function setField(doc: any, it: any, field: string, value: string): any {
   return modified(doc, it, node);
 }
 
-function moveItem(doc: any, it: any, x: number, y: number, rot: number | undefined): any {
+function moveItem(doc: any, it: any, x: number, y: number, rot: number | undefined, side?: string): any {
   const k = K(); const node = k.cloneNode(it.node);
   if (doc.type === "sch" && (it.kind === "wire" || it.kind === "bus" || it.kind === "polyline")) {
     const pts = k.ptsOf(node); if (!pts.length) throw new ToolError("that line has no points");
@@ -95,8 +99,11 @@ function moveItem(doc: any, it: any, x: number, y: number, rot: number | undefin
   if (!k.kid(node, "at")) throw new ToolError(`a ${it.kind} has no single position; remove it and add it again where it should go`);
   const [ox, oy, orot] = k.atOf(node); const dx = x - ox, dy = y - oy;
   if (doc.type === "pcb" && it.kind === "footprint") {
-    k.setAt(node, r4(x), r4(y));
-    if (rot !== undefined && rot !== orot) PCB().rotateFootprintNode(node, rot - orot);
+    const P = PCB();
+    if (side && (side === "back") !== (k.str((k.kid(node, "layer") || [])[1]) === "B.Cu")) P.flipNode(node, ox, doc);
+    P.translateNode(node, dx, dy);
+    const cur = k.atOf(node)[2] || 0;
+    if (rot !== undefined && rot !== cur) P.rotateNode(node, x, y, rot - cur);
   } else {
     k.setAt(node, r4(x), r4(y), rot);
     if (it.kind === "symbol") for (const p of k.kids(node, "property")) { const a = k.kid(p, "at"); if (a) { a[1] = r4(k.num(a[1]) + dx); a[2] = r4(k.num(a[2]) + dy); } }
@@ -111,15 +118,19 @@ function nextRef(doc: any, prefix: string, taken: Set<string>): string {
 }
 
 function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: string } {
-  const s = SCH(); const k = K(); const libId = text(e.lib_id, "lib_id");
-  if (!k.resolveLib(doc, libId)) throw new ToolError(`symbol ${libId} is not on this sheet yet; the symbols available here are: ${Array.from(doc.lib.keys()).sort().join(", ") || "(none)"}`);
+  const s = SCH(); const k = K(); const got = e.__lib as { libId: string; node: any; fields?: Record<string, string>; value?: string } | undefined;
+  const libId = got ? got.libId : text(e.lib_id, "lib_id");
+  if (got && !k.resolveLib(doc, libId)) doc.lib.set(libId, got.node);   // the sheet's own copy wins when it has one; an unused definition is not written out
+  if (!k.resolveLib(doc, libId)) throw new ToolError(`symbol ${libId} is not on this sheet and was not found in KiCad's libraries; look it up with find_parts`);
+  if (got && got.fields) e = Object.assign({}, e, { value: e.value || got.value, fields: Object.assign({}, got.fields, e.fields || {}) });
   const rot = e.rotation === undefined ? 0 : num(e.rotation, "rotation");
   if (![0, 90, 180, 270].includes(((rot % 360) + 360) % 360)) throw new ToolError("a symbol's rotation is 0, 90, 180 or 270");
   const node = s._.symbolNode(doc, libId, [num(e.x, "x"), num(e.y, "y")], ((rot % 360) + 360) % 360, e.mirror || "");
   const prop = (name: string) => k.kids(node, "property").find((q: any) => k.str(q[1]) === name);
+  const unit = e.unit === undefined ? 1 : num(e.unit, "unit"); if (unit !== 1) { const un = k.kid(node, "unit"); if (un) un[1] = unit; }
   const refP = prop("Reference"); let ref = typeof e.reference === "string" && e.reference ? e.reference : "";
-  if (ref && findByRef(doc, ref).length) throw new ToolError(`reference ${ref} is already used on this sheet`);
-  if (!ref) { const cur = refP ? k.str(refP[2]) : "U?"; ref = /^#/.test(cur) ? cur : nextRef(doc, cur.replace(/\?$/, "") || "U", taken); } else taken.add(ref);
+  if (ref && unit === 1 && findByRef(doc, ref).length) throw new ToolError(`reference ${ref} is already used on this sheet`);
+  if (!ref) { const cur = refP ? k.str(refP[2]) : "U?"; ref = nextRef(doc, /^#/.test(cur) ? cur.replace(/\?$/, "") + "0" : cur.replace(/\?$/, "") || "U", taken); } else taken.add(ref);
   if (refP) refP[2] = ref;
   if (typeof e.value === "string" && e.value) { const v = prop("Value"); if (v) v[2] = e.value; }
   for (const [name, value] of Object.entries(e.fields || {})) {
@@ -127,7 +138,26 @@ function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: s
     if (p) p[2] = String(value);
     else { const [x, y] = k.atOf(node); const np = ["property", name, String(value), ["at", r4(x), r4(y), 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]]; const at = node.findIndex((c: any) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, np); else node.push(np); }
   }
-  return { change: added(doc, node), ref };
+  // a turned symbol keeps its library's field positions turned with it, which lays text over its
+  // own wires; KiCad's field autoplace puts them beside the body instead
+  let out = node;
+  if (((rot % 360) + 360) % 360 !== 0 && s._.autoplaceNode) { try { const placed = s._.autoplaceNode(doc, { node, id: "__new", kind: "symbol" }, { manual: false }); if (placed) out = placed; } catch { /* keep the library's positions */ } }
+  // a power symbol turned on its side reads best with its name on its own row, beyond its tip,
+  // where it cannot land on the label of the pin above or below
+  const turn = ((rot % 360) + 360) % 360;
+  if ((turn === 90 || turn === 270) && s._.isPowerSymbol(doc, libId) && s._.bodyBox && k.symbolTransform) {
+    try {
+      const box = s._.bodyBox(doc, { node: out, id: "__new", kind: "symbol" }); const [x, y] = k.atOf(out); const T = k.symbolTransform(turn, e.mirror || "");
+      const left = (box[0] + box[2]) / 2 < x, v = k.kids(out, "property").find((q: any) => k.str(q[1]) === "Value");
+      if (v) {
+        const at = k.kid(v, "at"); if (at) { at[1] = r4(left ? box[0] - 0.635 : box[2] + 0.635); at[2] = r4(y); }
+        const flip = (T[1] !== 0 ? T[1] : T[0]) < 0, hj = left ? "right" : "left", stored = flip ? (hj === "left" ? "right" : "left") : hj;
+        let ef = k.kid(v, "effects"); if (!ef) { ef = ["effects", ["font", ["size", 1.27, 1.27]]]; v.push(ef); }
+        const j = ef.findIndex((c: any) => Array.isArray(c) && c[0] === "justify"); if (j >= 0) ef.splice(j, 1); ef.push(["justify", stored]);
+      }
+    } catch { /* keep the autoplaced position */ }
+  }
+  return { change: added(doc, out), ref };
 }
 
 function points(e: Edit): number[][] {
@@ -142,14 +172,120 @@ function boardNet(doc: any, name: string): any {
   return n;
 }
 
+// ---------------------------------------------------------------- schematic to board
+
+interface SyncAdd { ref: string; value: string; fpid: string; x: number; y: number; node: any; padNets: Record<string, string> }
+interface SyncUpdate { item: any; node: any; what: string; padNets: Record<string, string> }
+interface SyncPlan { adds: SyncAdd[]; updates: SyncUpdate[]; extra: string[]; nets: number; problems: string[] }
+const VENDOR_FIELDS: [string, string][] = [["LCSC", "lcsc"], ["Mouser", "mouser"], ["DigiKey", "digikey"]];
+
+/**
+ * KiCad's "Update PCB from Schematic", as a plan: every part of the project's sheets that should be
+ * on the board and is not gets its footprint, with each pad on its pin's net; a part that is there
+ * gets its pad nets and value brought into line.  Nothing is removed.
+ */
+async function planSync(board: any, e: Edit): Promise<SyncPlan> {
+  const k = K(); const P = PCB(); const s = SCH(); if (!s) throw new ToolError("The schematic tools are not loaded.");
+  const sheets = projectDocs().filter((d) => d.docType === "kicad_sch" && (!e.schematic || d.path === e.schematic || d.path.endsWith("/" + e.schematic)));
+  if (!sheets.length) throw new ToolError(e.schematic ? `there is no schematic ${e.schematic} in this project` : "this project has no schematic");
+  const parts = new Map<string, { ref: string; value: string; fpid: string; fields: Record<string, string>; pins: Map<string, string> }>(); const netNames = new Set<string>(); const problems: string[] = [];
+  for (const sh of sheets) {
+    const { doc } = await resolveDoc(sh.path);
+    const multi = sheets.length > 1; const nets = schNets(doc);
+    const local = (n: { name: string; named: boolean }) => (n.named || !multi ? n.name : n.name);   // unnamed nets are named from a pin, which is unique across sheets
+    const pinNet = new Map<string, string>();
+    for (const n of nets) { if (n.pins.length < 1) continue; const name = local(n); for (const p of n.pins) pinNet.set(`${p.ref}\u0000${p.number}`, name); if (n.pins.length > 1 || n.named) netNames.add(name); }
+    for (const it of doc.items.values() as Iterable<any>) {
+      if (it.kind !== "symbol" || !it.ref || /^#/.test(it.ref)) continue;
+      const ob = k.kid(it.node, "on_board"); if (ob && k.str(ob[1]) === "no") continue;
+      const f = fieldsOf(it.node); let part = parts.get(it.ref);
+      if (!part) { part = { ref: it.ref, value: f.Value || "", fpid: f.Footprint || "", fields: f, pins: new Map() }; parts.set(it.ref, part); }
+      for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && (nets.find((n) => n.name === net)!.pins.length > 1 || nets.find((n) => n.name === net)!.named)) part.pins.set(String(p.number), net); }
+    }
+  }
+  if (/\?$/.test(Array.from(parts.keys()).join(" ")) || Array.from(parts.keys()).some((r) => /\?$/.test(r))) problems.push("some symbols are not annotated (their reference ends in ?); annotate the schematic first");
+
+  // nets as this board writes them: by name where the board already does, else code and name with new codes after the highest in use
+  const style = P.netStyle(board); const codes = new Map<string, number>(); let top = 0;
+  for (const n of P.boardNets(board)) { if (n.code > 0) { codes.set(n.name, n.code); top = Math.max(top, n.code); } }
+  const netOf = (name: string) => { if (style === "name") return ["net", name]; let c = codes.get(name); if (!c) { c = ++top; codes.set(name, c); } return ["net", c, name]; };
+
+  const onBoard = new Map<string, any>(); for (const it of board.items.values() as Iterable<any>) if (it.kind === "footprint" && it.ref) onBoard.set(it.ref, it);
+  const adds: SyncAdd[] = [], updates: SyncUpdate[] = [];
+  const placements: Record<string, any> = e.placements && typeof e.placements === "object" ? e.placements : {};
+  // park new parts in rows to the right of what is there (or from a sensible origin on an empty board)
+  const bb = board.bbox && isFinite(board.bbox[0]) && board.items.size ? board.bbox : null;
+  const x0 = bb ? bb[2] + 10 : 100, y0 = bb ? bb[1] : 60; let cx = x0, cy = y0, rowH = 0;
+  const refs = Array.from(parts.keys()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  for (const ref of refs) {
+    const part = parts.get(ref)!; const have = onBoard.get(ref);
+    if (have) {
+      const node = k.cloneNode(have.node); const what: string[] = []; const padNets: Record<string, string> = {};
+      for (const pad of k.kids(node, "pad")) {
+        const num = k.str(pad[1]); const want = part.pins.get(num) || ""; const cur = P.netOf(pad).name || ""; if (want) padNets[num] = want;
+        if (want === cur) continue;
+        const i = pad.findIndex((q: any) => Array.isArray(q) && q[0] === "net"); if (i >= 0) pad.splice(i, 1); if (want) pad.push(netOf(want));
+        what.push(`pad ${num} ${cur || "no net"} → ${want || "no net"}`);
+      }
+      const vp = k.kids(node, "property").find((q: any) => k.str(q[1]) === "Value"); if (vp && part.value && k.str(vp[2]) !== part.value) { what.push(`value ${k.str(vp[2])} → ${part.value}`); vp[2] = part.value; }
+      if (what.length) updates.push({ item: have, node, what: what.slice(0, 4).join(", ") + (what.length > 4 ? ` and ${what.length - 4} more` : ""), padNets });
+      continue;
+    }
+    try {
+      let fpid = part.fpid, sexpr = "";
+      const vend = VENDOR_FIELDS.find(([f]) => part.fields[f]);
+      if (fpid) { try { sexpr = await kicadFootprint(fpid); } catch (err) { if (!vend) throw err; } }
+      if (!sexpr && vend) { const vp = await vendorPart(vend[1], part.fields[vend[0]]); const fp = vp.cad && vp.cad.footprint; if (fp) { sexpr = fp.sexpr; fpid = fpid || fp.fpid; } }
+      if (!sexpr) throw new ToolError(fpid ? `footprint ${fpid} was not found` : "no Footprint field");
+      const extra: Record<string, string> = {}; for (const [name, v] of Object.entries(part.fields)) if (!["Reference", "Value", "Footprint", "Description"].includes(name) && !name.startsWith("ki_") && v && v !== "~") extra[name] = v;
+      const padNets: Record<string, string> = {};
+      const node = footprintNode(fpid, sexpr, ref, part.value, extra, (pad) => { const n = part.pins.get(pad); if (!n) return null; padNets[pad] = n; return netOf(n); });
+      // its extent, to park it without overlapping its neighbours
+      const probe = k.parseDoc('(kicad_pcb (version 20241229) (generator "pcbnew"))', "kicad_pcb"); const pit = k.addItem(probe, k.cloneNode(node)); const b = pit.bbox || [-2, -2, 2, 2];
+      const pl = placements[ref]; let x: number, y: number;
+      if (pl && typeof pl.x === "number" && typeof pl.y === "number") {
+        x = pl.x; y = pl.y; if (pl.side === "back") P.flipNode(node, 0, board);
+        if (typeof pl.rotation === "number" && pl.rotation) P.rotateNode(node, 0, 0, pl.rotation);
+      } else {
+        const w = b[2] - b[0], h = b[3] - b[1];
+        if (cx > x0 && cx + w > x0 + 90) { cx = x0; cy += rowH + 2; rowH = 0; }
+        x = r4(cx - b[0]); y = r4(cy - b[1]); cx += w + 2; rowH = Math.max(rowH, h);
+      }
+      P.translateNode(node, x, y);
+      adds.push({ ref, value: part.value, fpid, x, y, node, padNets });
+    } catch (err) { problems.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`); }
+  }
+  const extra = Array.from(onBoard.keys()).filter((r) => !parts.has(r)).sort();
+  return { adds, updates, extra, nets: netNames.size, problems };
+}
+
 /** Turn the model's edits into changes plus a line of plain words for each.  Throws ToolError naming the edit at fault. */
-export function buildProposal(input: { title?: string; rationale?: string; edits?: Edit[] }): Proposal {
+export async function buildProposal(input: { title?: string; rationale?: string; edits?: Edit[] }): Promise<Proposal> {
+  await fetchSources(input.edits);
+  return build(input);
+}
+
+/** What an edit needs from a library or a vendor is fetched first, so that building stays one synchronous pass over the document. */
+async function fetchSources(edits: Edit[] | undefined): Promise<void> {
+  const doc = ED()?.kdoc; if (!doc || !Array.isArray(edits)) return;
+  await Promise.all(edits.map(async (e) => {
+    if (!e || typeof e !== "object") return;
+    try {
+      if (e.op === "add_symbol" && doc.type === "sch") {
+        if (e.part && typeof e.part === "object") e.__lib = await vendorSymbol(String(e.part.vendor || "lcsc"), String(e.part.id || ""));
+        else if (typeof e.lib_id === "string" && !K().resolveLib(doc, e.lib_id)) e.__lib = { libId: e.lib_id, node: await kicadSymbol(e.lib_id) };
+      } else if (e.op === "update_from_schematic" && doc.type === "pcb") e.__sync = await planSync(doc, e);
+    } catch (err) { e.__error = err instanceof Error ? err.message : String(err); }
+  }));
+}
+
+function build(input: { title?: string; rationale?: string; edits?: Edit[] }): Proposal {
   const ed = ED(); const doc = ed?.kdoc; const open = openEntry();
   if (!doc || !open) throw new ToolError("No document is open in the editor, so there is nothing to change.");
   const edits = input.edits; if (!Array.isArray(edits) || !edits.length) throw new ToolError("edits must be a non-empty list.");
   if (edits.length > 400) throw new ToolError("That is too many edits for one proposal; split it into steps a person can review.");
   const isSch = doc.type === "sch"; const k = K();
-  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = []; const details: unknown[] = [];
+  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = []; const details: unknown[] = []; let rules: Record<string, number | string> | undefined;
   const touched = new Map<string, string>(); const taken = new Set<string>();
   const touch = (it: any, op: string) => { const prev = touched.get(it.id); if (prev) throw new ToolError(`${nameOf(it)} is already changed by an earlier edit (${prev}); combine them or split the proposal`); touched.set(it.id, op); basis[it.id] = k.serialize(it.node); };
   const schOnly = (op: string) => { if (!isSch) throw new ToolError(`${op} is a schematic edit and the board is open`); };
@@ -158,6 +294,7 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
   edits.forEach((e, i) => {
     try {
       if (!e || typeof e !== "object" || typeof e.op !== "string") throw new ToolError("needs an op");
+      if (e.__error) throw new ToolError(e.__error);
       switch (e.op) {
         case "set_field": {
           const field = text(e.field, "field"); if (typeof e.value !== "string") throw new ToolError("value must be a string");
@@ -172,8 +309,10 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
         case "move": {
           const it = one(target(doc, e), e); touch(it, e.op);
           const x = num(e.x, "x"), y = num(e.y, "y"); const rot = e.rotation === undefined ? undefined : num(e.rotation, "rotation");
-          changes.push(moveItem(doc, it, x, y, rot));
-          lines.push({ kind: "modify", text: `Move ${nameOf(it)} to (${fmt(x)}, ${fmt(y)})${rot !== undefined ? `, rotated ${rot}°` : ""}`, ids: [it.id] });
+          const side = e.side === undefined ? undefined : e.side === "back" || e.side === "front" ? e.side : (() => { throw new ToolError("side is front or back"); })();
+          if (side && !(doc.type === "pcb" && it.kind === "footprint")) throw new ToolError("side applies to footprints on the board");
+          changes.push(moveItem(doc, it, x, y, rot, side));
+          lines.push({ kind: "modify", text: `Move ${nameOf(it)} to (${fmt(x)}, ${fmt(y)})${rot !== undefined ? `, rotated ${rot}°` : ""}${side ? `, ${side} side` : ""}`, ids: [it.id] });
           break;
         }
         case "remove": {
@@ -234,19 +373,68 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
           lines.push({ kind: "add", text: `Add via ${fmt(size)}/${fmt(drill)} mm on net ${net.name} at (${fmt(e.x)}, ${fmt(e.y)})`, ids: [c.id] });
           break;
         }
+        case "auto_place": {
+          pcbOnly(e.op); const P = PCB(); const R = (window as any).PcbAutoRouter;
+          if (!R || !R.place || !R.placementChanges) throw new ToolError("the placement engine is not loaded in this editor");
+          const specs = (Array.isArray(e.parts) ? e.parts : []).map((q: any) => { if (!q || typeof q.ref !== "string") throw new ToolError("each entry of parts needs a ref");
+            if (!findByRef(doc, q.ref).length) throw new ToolError(`there is no ${q.ref} on the board`);
+            return { ref: q.ref, group: q.group, near: q.near, anchor: q.anchor === true ? true : undefined, side: q.side, edge: q.edge, rot: typeof q.rotation === "number" ? q.rotation : undefined,
+              fixed: q.fixed && typeof q.fixed.x === "number" && typeof q.fixed.y === "number" ? { x: q.fixed.x, y: q.fixed.y, rot: q.fixed.rotation || 0 } : undefined }; });
+          const outline = Array.isArray(e.outline) && e.outline.length === 4 && e.outline.every((v: any) => typeof v === "number") ? e.outline : undefined;
+          const res = R.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : undefined, outline, spacing: typeof e.spacing === "number" ? e.spacing : undefined });
+          const cs: any[] = R.placementChanges(k, P, doc, res.placements); if (!cs.length) throw new ToolError("the placement engine moved nothing");
+          for (const c of cs) { const it = doc.items.get(c.id); if (it) touch(it, e.op); changes.push(c); }
+          const byGroup = new Map<string, string[]>(); for (const pl of res.placements) { const g = pl.group || "ungrouped"; if (!byGroup.has(g)) byGroup.set(g, []); byGroup.get(g)!.push(pl.ref); }
+          lines.push({ kind: "modify", text: `Place ${res.placements.length} footprint${res.placements.length === 1 ? "" : "s"} in ${byGroup.size} group${byGroup.size === 1 ? "" : "s"} inside (${res.outline.map(fmt).join(", ")})`, ids: cs.map((c) => c.id) });
+          details.push({ auto_place: { outline: res.outline.map(r4), outline_from_board: res.outlineFromBoard, score: res.score, groups: res.groups, unknown_refs: res.unknown,
+            placements: res.placements.map((pl: any) => ({ ref: pl.ref, x: r4(pl.x), y: r4(pl.y), rotation: pl.rot, side: pl.side })),
+            note: "overlaps, courtyardClashes and outside should be 0; ratsnest is the total length of the connections still to route, lower is better. Adjust groups, anchors, edges or the outline and propose again if the score or the picture is poor." } });
+          break;
+        }
+        case "update_from_schematic": {
+          pcbOnly(e.op); const plan = e.__sync as SyncPlan | undefined; if (!plan) throw new ToolError("the schematic could not be read");
+          if (plan.problems.length && !plan.adds.length && !plan.updates.length) throw new ToolError(plan.problems.join("; "));
+          for (const a of plan.adds) { const c = added(doc, a.node); c.padNets = a.padNets; changes.push(c); lines.push({ kind: "add", text: `Add ${a.ref} ${a.value} (${a.fpid}) at (${fmt(a.x)}, ${fmt(a.y)})`, ids: [c.id] }); }
+          for (const u of plan.updates) { touch(u.item, e.op); const c = modified(doc, u.item, u.node); c.padNets = u.padNets; changes.push(c); lines.push({ kind: "modify", text: `Update ${u.item.ref}: ${u.what}`, ids: [u.item.id] }); }
+          if (!plan.adds.length && !plan.updates.length) throw new ToolError("the board already matches the schematic: every part is on it with the right nets" + (plan.extra.length ? `; on the board but not in the schematic: ${plan.extra.join(", ")}` : ""));
+          details.push({ update_from_schematic: { added: plan.adds.map((a) => a.ref), updated: plan.updates.map((u) => u.item.ref), nets: plan.nets, not_in_schematic: plan.extra, problems: plan.problems,
+            note: plan.adds.length ? "New footprints are parked in rows beside the board; place them next (move edits, or give placements with this edit)." : undefined } });
+          break;
+        }
         case "autoroute": {
           pcbOnly(e.op); const P = PCB(); const R = (window as any).PcbAutoRouter;
           if (!R || !R.route) throw new ToolError("the autorouter is not loaded in this editor");
           if (e.nets !== undefined && (!Array.isArray(e.nets) || !e.nets.length)) throw new ToolError("nets must be a non-empty list of net names, or left out for every unrouted net");
           const nets: string[] | null = e.nets ? e.nets.map((n: unknown) => boardNet(doc, text(n, "net")).name) : null;
-          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: 12000 });
+          const netOpts: Record<string, any> = {};
+          for (const [name, o] of Object.entries((e.net_options && typeof e.net_options === "object" ? e.net_options : {}) as Record<string, any>)) {
+            const net = boardNet(doc, name).name; if (!o || typeof o !== "object") continue;
+            netOpts[net] = { layers: Array.isArray(o.layers) && o.layers.length ? o.layers : undefined, width: typeof o.width === "number" ? o.width : undefined, allowVias: typeof o.allow_vias === "boolean" ? o.allow_vias : undefined,
+              maxVias: typeof o.max_vias === "number" ? o.max_vias : undefined, avoid: Array.isArray(o.avoid) ? o.avoid : undefined };
+          }
+          const order = Array.isArray(e.order) ? e.order.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined;
+          const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q: any) => q && Array.isArray(q.box) && q.box.length === 4).map((q: any) => ({ layers: Array.isArray(q.layers) ? q.layers : undefined, box: q.box })) : undefined;
+          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: Math.round(1000 * Math.min(120, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts });
           const failed = (res.failed || []).map((f: any) => ({ net: f.net, from: f.a.map(r4), to: f.b.map(r4) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
           const ids: string[] = [];
           for (const it of res.items) { const c = added(doc, it.node); if (!c.netName && it.netName) c.netName = it.netName; changes.push(c); ids.push(c.id); }   // not P.addedChange: that one inserts into the live board
-          details.push({ autoroute: { connections: res.total, routed: res.routed, unrouted: failed.slice(0, 40), segments: res.segments, vias: res.vias, length_mm: r4(res.length) } });
+          const conns: any[] = Array.isArray(res.connections) ? res.connections : [];
+          details.push({ autoroute: { connections: res.total, routed: res.routed, segments: res.segments, vias: res.vias, length_mm: r4(res.length),
+            unrouted: conns.length ? conns.filter((c) => !c.routed).slice(0, 40).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, reason: c.reason, detail: c.detail, blocked_by_nets: c.blockedBy && c.blockedBy.nets })) : failed.slice(0, 40),
+            longest_detours: conns.filter((c) => c.routed && c.detourRatio > 1.6).sort((a, b) => b.detourRatio - a.detourRatio).slice(0, 12).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, length_mm: r4(c.length), detour_ratio: r4(c.detourRatio), vias: c.vias, layers: c.layers })),
+            note: "Judge this before the person does: a net left unrouted, a power net with a long detour or many vias, or a sensitive net crossing the board is a reason to change the placement or the net order and options and propose again instead." } });
           lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
+          break;
+        }
+        case "set_rules": {
+          const out: Record<string, number | string> = {}; const said: string[] = [];
+          for (const [key, label] of RULE_KEYS) { const v = (e as any)[key]; if (v === undefined) continue; const n = num(v, key); if (n < 0 || n > 10) throw new ToolError(`${key} is in millimetres, between 0 and 10`); out[key] = n; said.push(`${label} ${fmt(n)} mm`); }
+          if (!said.length) throw new ToolError("set_rules needs at least one of: " + RULE_KEYS.map((r) => r[0]).join(", "));
+          const cls = typeof e.net_class === "string" && e.net_class ? e.net_class : "Default"; out.net_class = cls;
+          rules = Object.assign(rules || {}, out);
+          lines.push({ kind: "modify", text: `Board rules (net class ${cls}): ${said.join(", ")}`, ids: [] });
           break;
         }
         case "add_item": {
@@ -271,7 +459,7 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
   });
   if (problems.length) throw new ToolError(`No proposal was shown, because ${problems.length === 1 ? "an edit is" : "some edits are"} invalid:\n- ${problems.join("\n- ")}`);
   return { id: "p" + Math.random().toString(36).slice(2, 9), title: String(input.title || "Proposed change").slice(0, 120), rationale: String(input.rationale || "").slice(0, 600),
-    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", details: details.length ? details : undefined, connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
+    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", rules, details: details.length ? details : undefined, connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
 }
 
 /**
@@ -315,12 +503,29 @@ export function staleReason(p: Proposal): string | null {
   return null;
 }
 
+const RULE_KEYS: [string, string][] = [["clearance", "clearance"], ["track_width", "track width"], ["via_diameter", "via diameter"], ["via_drill", "via drill"],
+  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"]];
+/** The rules of a set_rules edit written into a .kicad_pro: the net class's own values, and the board-wide minimums. */
+function writeRules(pro: any, r: Record<string, number | string>): void {
+  const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } }; if (!Array.isArray(ns.classes)) ns.classes = [];
+  const name = String(r.net_class || "Default"); let c = ns.classes.find((x: any) => x && x.name === name);
+  if (!c) { c = { bus_width: 12, clearance: 0.2, diff_pair_gap: 0.25, diff_pair_via_gap: 0.25, diff_pair_width: 0.2, line_style: 0, microvia_diameter: 0.3, microvia_drill: 0.1, name,
+    pcb_color: "rgba(0, 0, 0, 0.000)", schematic_color: "rgba(0, 0, 0, 0.000)", track_width: 0.2, via_diameter: 0.6, via_drill: 0.3, wire_width: 6 }; ns.classes.push(c); }
+  for (const key of ["clearance", "track_width", "via_diameter", "via_drill"]) if (typeof r[key] === "number") c[key] = r[key];
+  const board = pro.board = pro.board || {}; const ds = board.design_settings = board.design_settings || {}; const rules = ds.rules = ds.rules || {};
+  if (typeof r.min_track_width === "number") rules.min_track_width = r.min_track_width;
+  if (typeof r.min_clearance === "number") rules.min_clearance = r.min_clearance;
+  if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
+}
+
 /** Apply an accepted proposal through the editor's own commit path: local apply, op to the server, one undo step. */
 export function applyProposal(p: Proposal): { ok: boolean; reason?: string } {
   const ed = ED();
   if (ed.viewOnly) return { ok: false, reason: "You have view-only access to this project." };
   const stale = staleReason(p); if (stale) return { ok: false, reason: stale };
-  ed.api.commitChanges(p.changes, "AI: " + p.title);
+  if (p.rules) { const r = p.rules; const save = ed.dialogs && ed.dialogs.saveProject; if (!save) return { ok: false, reason: "This editor cannot change the project's board rules." };
+    save((pro: any) => writeRules(pro, r), "board rules").catch((err: unknown) => console.warn("board rules were not saved:", err)); }
+  if (p.changes.length) ed.api.commitChanges(p.changes, "AI: " + p.title);
   clearPreview();
   return { ok: true };
 }

@@ -51,6 +51,8 @@ export interface PluginManifest {
 export interface InstalledPlugin {
   identifier: string; manifest: PluginManifest; files: Record<string, string>;
   enabled: boolean; granted: string[]; source: string; installedAt?: string; updatedAt?: string;
+  /** Set when the registry plugin this copy came from was hidden or removed by the administrators: their reason. */
+  withdrawn?: string | null;
 }
 
 export const ID_RE = /^[a-zA-Z][-_a-zA-Z0-9.]{0,98}[a-zA-Z0-9]$/;

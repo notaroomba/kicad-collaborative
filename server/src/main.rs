@@ -1,4 +1,5 @@
 mod ai;
+mod kicadlib;
 mod auth;
 mod doc_actor;
 mod error;
@@ -12,6 +13,7 @@ mod parts;
 mod persist;
 mod plugins;
 mod registry;
+mod relay;
 mod ws;
 
 use std::sync::atomic::AtomicUsize;
@@ -53,18 +55,44 @@ pub struct Config {
 pub struct AppState {
     pub pool: PgPool,
     pub cfg: Arc<Config>,
-    pub auth_pending: Arc<auth::AuthPending>,
     pub registry: Arc<registry::Registry>,
     pub color_counter: Arc<AtomicUsize>,
     /// Bumped whenever anybody's access to any project changes (role, removal,
     /// transfer, visibility, trash).  Live sockets cache their role per joined
     /// document; a changed epoch makes them look it up again (ws.rs).
     pub access_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// The link to the other server replicas, if there are any (relay.rs).
+    pub relay: Arc<relay::Relay>,
 }
 
 impl AppState {
     pub fn access_changed(&self) {
         self.access_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.relay.publish(serde_json::json!({ "t": "access" }));
+    }
+
+    /// Deliver a server-initiated event (a comment, a history restore, a snapshot
+    /// request) to everyone who has the document open, on whichever replica.  Returns
+    /// whether anybody could have received it.
+    pub async fn doc_event(&self, doc_id: uuid::Uuid, msg: doc_actor::DocMsg) -> bool {
+        use doc_actor::DocMsg;
+        let relayed = match &msg {
+            DocMsg::Comment { payload } => Some(serde_json::json!({ "t": "comment", "d": doc_id, "comment": payload })),
+            DocMsg::Reset { seq } => Some(serde_json::json!({ "t": "reset", "d": doc_id, "seq": seq })),
+            DocMsg::SnapshotNow => Some(serde_json::json!({ "t": "snapshot_now", "d": doc_id })),
+            _ => None,
+        };
+        let mut delivered = false;
+        if let Some(tx) = self.registry.existing(doc_id) {
+            delivered = tx.send(msg).await.is_ok();
+        }
+        if let Some(relayed) = relayed {
+            if self.relay.others_alive() {
+                self.relay.publish(relayed);
+                delivered = true;
+            }
+        }
+        delivered
     }
 }
 
@@ -151,14 +179,16 @@ async fn main() -> anyhow::Result<()> {
     };
     sqlx::migrate!("./migrations").run(&pool).await?;
 
+    let (relay, relay_outbox) = relay::Relay::new();
     let state = AppState {
         pool: pool.clone(),
         cfg: Arc::new(cfg),
-        auth_pending: Arc::new(auth::AuthPending::default()),
-        registry: Arc::new(registry::Registry::default()),
+        registry: Arc::new(registry::Registry::new(relay.clone())),
         color_counter: Arc::new(AtomicUsize::new(0)),
         access_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        relay: relay.clone(),
     };
+    relay::start(relay, relay_outbox, pool.clone(), state.registry.clone(), state.access_epoch.clone());
 
     // Daily pruning of ops/snapshots behind snapshot coverage.
     {
@@ -175,13 +205,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = Router::new()
-        .route("/", get(pages::app_page))
+        .route("/", get(pages::home))
         .route("/app", get(pages::app_page))
         .route("/p/{id}/edit", get(pages::app_page))
         .route("/static/dist/editor.js", get(pages::editor_js))
         .route("/static/dist/editor.js.map", get(pages::editor_js_map))
         .route("/static/dist/autoroute.js", get(pages::autoroute_js))
         .route("/static/dist/autoroute.js.map", get(pages::autoroute_js_map))
+        .route("/static/dist/viewer3d.js", get(pages::viewer3d_js))
         .route("/static/kicad-canvas.js", get(pages::canvas_js))
         .route("/static/sch-tools.js", get(pages::sch_tools_js))
         .route("/static/pcb-tools.js", get(pages::pcb_tools_js))
@@ -190,7 +221,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/dist/ui.js", get(pages::ui_js))
         .route("/static/dist/ui.js.map", get(pages::ui_js_map))
         .route("/static/dist/ui.css", get(pages::ui_css))
-        .route("/welcome", get(pages::index))
+        .route("/welcome", get(pages::landing_page))
+        .route("/static/dist/landing.js", get(pages::landing_js))
+        .route("/static/dist/landing.js.map", get(pages::landing_js_map))
+        .route("/static/landing/{name}", get(pages::landing_image))
         .route("/api/projects/{id}/info", get(http::project_info))
         .route("/healthz", get(http::healthz))
         .route("/j/{token}", get(pages::join_page))
@@ -276,11 +310,16 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/projects/{id}/github/diff", get(github::file_diff))
         .route("/api/projects/{id}/github/push", post(github::push))
+        .route("/api/projects/{id}/github/settings", post(github::settings))
         .route("/api/projects/{id}/github/pull", post(github::pull))
         // The design assistant (ai.rs)
         .route("/api/ai", get(ai::status))
         .route("/api/ai/key", axum::routing::put(ai::put_key).delete(ai::delete_key))
         .route("/api/projects/{id}/ai/chat", post(ai::chat))
+        .route("/api/docs/{id}/ops", get(ai::doc_ops))
+        .route("/api/kicad-lib/list", get(kicadlib::list))
+        .route("/api/kicad-lib/item", get(kicadlib::item))
+        .route("/api/kicad-lib/search", get(kicadlib::search))
         // vendor parts and saved part libraries (src/parts)
         .route("/static/dist/parts.js", get(pages::parts_js))
         .route("/static/dist/parts.js.map", get(pages::parts_js_map))
@@ -299,6 +338,13 @@ async fn main() -> anyhow::Result<()> {
         // web editor plugins (the per-account store and the built-in catalog)
         .route("/api/plugins", get(plugins::list))
         .route("/api/plugins/catalog", get(plugins::catalog))
+        .route("/api/plugins/registry", get(plugins::registry_list))
+        .route("/api/plugins/moderation", get(plugins::moderation_list))
+        .route("/api/plugins/registry/{identifier}/report", post(plugins::registry_report))
+        .route("/api/plugins/registry/{identifier}/moderate", post(plugins::registry_moderate))
+        .route("/api/plugins/registry/{identifier}", get(plugins::registry_get).put(plugins::registry_publish).delete(plugins::registry_unpublish))
+        .route("/api/projects/{id}/plugins", get(plugins::project_list))
+        .route("/api/projects/{id}/plugins/{identifier}", axum::routing::put(plugins::project_recommend).delete(plugins::project_unrecommend))
         .route("/api/plugins/{identifier}", axum::routing::put(plugins::install).delete(plugins::uninstall))
         .route("/api/plugins/{identifier}/state", post(plugins::set_state))
         .route("/ws", get(ws::ws_handler))

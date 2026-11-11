@@ -1,7 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
-import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbZ, rgba } from "./colors";
+import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
@@ -128,6 +128,20 @@ export function tracePad(ctx, g) {
  *   showHiddenText (board)     — draw the hidden fp_text / properties (kept in item.hiddenGeom, tagged
  *                                hiddenText, outside the hit boxes) at HIDDEN_TEXT_ALPHA; KiCad has no
  *                                painter rule for this (this version dropped LAYER_HIDDEN_TEXT).
+ *   layerColors    (board)     — Map layer name → css colour: the user's colour for a layer (Appearance ▸ Layers
+ *                                swatch); geometry painted in the layer's theme colour takes it instead;
+ *   objects        (board)     — { hide: Set, opacity: {…} } keyed by KiCad's Appearance ▸ Objects rows: tracks,
+ *                                vias, pads, zones, images (visibility + opacity), filledShapes (opacity),
+ *                                fpFront / fpBack (a footprint on that side with all its children, as
+ *                                LAYER_FOOTPRINTS_FR/BK), values, references, fpText (footprint text), anchors
+ *                                (in `show`: the 5 px LAYER_ANCHOR cross on every footprint origin) and
+ *                                lockedShadow (in `show`, with lockedIds: LAYER_LOCKED_ITEM_SHADOW halo);
+ *   itemColors     (board)     — Map item id → css colour (tracks, vias, zones) or an array of colours by pad index
+ *                                (footprints): net / netclass colours resolved per item by the caller, for boards
+ *                                whose nets are named inline rather than numbered (netColors needs net codes);
+ *   inactiveHide   (board)     — with highContrast + activeLayer: the inactive layers are not drawn at all
+ *                                (Appearance ▸ Layer Display Options ▸ Inactive layers: Hide);
+ *   gridColor      (both)      — css colour of the grid dots (LAYER_GRID swatch);
  * Stroke styles: geometry with dashType (dash | dot | dash_dot | dash_dot_dot, from (stroke (type …))) is
  * dashed per STROKE_PARAMS::Stroke with KiCad's ISO 128-2 ratios — dash 11 w, gap 4 w, dot 0.2 w of the drawn
  * line width.  Knockout text (knockout on the geometry) fills its inflated box in the layer colour and
@@ -202,8 +216,9 @@ export function trackNameColor(copper) {
 }
 
 /** STROKE_PARAMS::Stroke dash pattern (mm) for a drawn line width: dash 11 w, gap 4 w, dot 0.2 w (ISO 128-2 ratios 12 / 3, correction 1). */
+export const DASH_RATIOS = { dash: 12, gap: 3 };   // the schematic's dashed_lines_dash_length_ratio / gap_length_ratio (Schematic Setup > Formatting)
 export function dashPattern(type, w) {
-  const dash = 11 * w, gap = 4 * w, dot = 0.2 * w;
+  const dash = Math.max(DASH_RATIOS.dash - 1, 1) * w, gap = Math.max(DASH_RATIOS.gap + 1, 1) * w, dot = 0.2 * w;
   if (type === "dot") return [dot, gap];
   if (type === "dash_dot") return [dash, gap, dot, gap];
   if (type === "dash_dot_dot") return [dash, gap, dot, gap, dot, gap];
@@ -267,6 +282,10 @@ export function render(doc, ctx, view, opts) {
    zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
   const rats = isPcb && opts.ratsnest && opts.ratsnest.length ? opts.ratsnest : null, ratsNets = opts.ratsnestNets || null;
   const markers = opts.markers && opts.markers.length ? opts.markers : null;
+  const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
+  const obj = isPcb && opts.objects ? opts.objects : null, objHide = obj && obj.hide && obj.hide.size ? obj.hide : null, objAlpha = obj && obj.opacity ? obj.opacity : null;
+  const hcHide = !!opts.inactiveHide;
+  const itemColors = isPcb && opts.itemColors && opts.itemColors.size ? opts.itemColors : null, tint = itemColors ? new Map() : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
   const sCss = view.ppm * view.zoom;                    // css px per mm (KiCad's LOD rules work in logical pixels)
@@ -291,7 +310,7 @@ export function render(doc, ctx, view, opts) {
     const go = opts.gridOrigin || [0, 0], gx = go[0], gy = go[1];   // BOARD_DESIGN_SETTINGS::m_GridOrigin: the grid is laid out from it
     const i0 = Math.floor((vx0 - gx) / pitch), i1 = Math.ceil((vx1 - gx) / pitch), j0 = Math.floor((vy0 - gy) / pitch), j1 = Math.ceil((vy1 - gy) / pitch);
     const px1 = Math.max(1, dpr) / s;   // one device pixel (grid.line_width 1.0)
-    const gridColor = isPcb ? PCB_GRID : SCH.grid;
+    const gridColor = opts.gridColor || (isPcb ? PCB_GRID : SCH.grid);
     if ((i1 - i0) * (j1 - j0) < 400000) {
       if (style === "dots") {
         ctx.fillStyle = gridColor; ctx.beginPath();
@@ -356,6 +375,9 @@ export function render(doc, ctx, view, opts) {
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
     const isSel = selPcb ? selPcb.has(it.id) : false;
+    const itemTint = itemColors ? itemColors.get(it.id) : null;
+    const isFp = objHide && it.kind === "footprint";
+    if (isFp && objHide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
     // an item that only partly shows (a long connector, a zone's hatch, a big footprint when zoomed in) is
     // culled geometry by geometry; the boxes are cached on the geometry records (rebuilt with the item)
     const partial = !zoneFill && b && it.geom.length > 6 && (b[0] < cx0 || b[2] > cx1 || b[1] < cy0 || b[3] > cy1);
@@ -372,9 +394,18 @@ export function render(doc, ctx, view, opts) {
         const pl = g.padLayers; let vis = false;
         if (hcLayer) vis = pl.indexOf(hcLayer) >= 0; else for (let i = 0; i < pl.length; i++) if (!hidden.has(pl[i])) { vis = true; break; }
         if (!vis) continue;
-      } else if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
+      } else {
+        if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
+        if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes") continue;   // inactive layers: Hide
+      }
+      if (objHide) {
+        const oc = objectClass(g);
+        if (oc && objHide.has(oc)) continue;
+        if (isFp && g.t === "text" && !g.pad && (objHide.has("fpText") || (g.field === "Reference" && objHide.has("references")) || (g.field === "Value" && objHide.has("values")))) continue;
+      }
       const z = zOf(g);
       bucket(BUCKETS, z).push(g);
+      if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex]; if (tc) tint.set(g, tc); }
       if (isHl) hlGeoms.add(g);
       if (isSel) selGeoms.add(g);
       if (netNames && g.net > 0) {
@@ -423,7 +454,10 @@ export function render(doc, ctx, view, opts) {
       if (g.zoneFill) alpha *= ZONE_OPACITY;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity
       if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
+      if (objAlpha) { const oc = objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
+      if (layerColors && !g.hole) { const lc = layerColors.get(g.layer); if (lc) { const def = pcbColor(g.layer); if (color === def) color = lc; if (fill === def) fill = lc; } }
       if (netColors && g.net > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net); if (nc) { color = nc; if (fill) fill = nc; } }
+      if (tint) { const tc = tint.get(g); if (tc && copperZ.indexOf(g.layer) >= 0) { color = tc; if (fill) fill = tc; } }
       // board selection: the item repainted in its layer's selected colour (PCB_PAINTER::getColor), holes untouched
       if (selPcb && selGeoms.has(g) && !g.hole) { color = selectedColor(color); if (fill) fill = selectedColor(fill); }
       if (hl) { if (hlGeoms.has(g)) { color = hlColor(color); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); } else alpha *= HL_DIM; }
@@ -486,6 +520,7 @@ export function render(doc, ctx, view, opts) {
   if (!ratsDone) { drawRatsnest(ctx, rats, ratsNets, netColors, s, dpr, viewRect); }
   if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1)); }
   ctx.globalAlpha = 1;
+  if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
   if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
@@ -494,6 +529,30 @@ export function render(doc, ctx, view, opts) {
   // pcbnew repaints the item in its selected colour instead, which the geometry pass above already did
   if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+/** Which Appearance ▸ Objects row a geometry belongs to (null: governed by its layer alone). */
+export function objectClass(g) {
+  return g.track ? "tracks" : g.via ? "vias" : g.pad ? "pads" : (g.zoneFill || g.zoneOutline || g.zoneUnfilled) ? "zones" : g.t === "image" ? "images" : null;
+}
+
+export const ANCHOR_COLOR = "#FF26E2", LOCKED_SHADOW_COLOR = "rgba(255,38,226,0.5)";
+   // LAYER_ANCHOR, LAYER_LOCKED_ITEM_SHADOW (builtin_color_themes.h)
+/** The overlay object layers: the locked-item shadow (under the anchors) and the footprint anchors — PCB_PAINTER::draw(FOOTPRINT, LAYER_ANCHOR): a 5 px cross, 1 px pen. */
+export function drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, vr) {
+  const show = obj.show, hide = obj.hide || new Set();
+  if (show.has("lockedShadow") && opts.lockedIds && opts.lockedIds.size) drawHalo(ctx, doc, opts.lockedIds, s, dpr, hidden, { color: () => "#FF26E2", alpha: 0.5, extraPx: 4 });
+  if (show.has("anchors")) {
+    const a = 5 * Math.max(1, dpr) / s;
+    ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint" || it.x === undefined) continue;
+      if (hide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
+      if (it.x < vr[0] - a || it.x > vr[2] + a || it.y < vr[1] - a || it.y > vr[3] + a) continue;
+      ctx.moveTo(it.x - a, it.y); ctx.lineTo(it.x + a, it.y); ctx.moveTo(it.x, it.y - a); ctx.lineTo(it.x, it.y + a);
+    }
+    ctx.stroke(); ctx.restore();
+  }
 }
 
 /** RATSNEST_VIEW_ITEM::ViewDraw: hairlines in LAYER_RATSNEST (or the net colour), a cross where both ends coincide. */

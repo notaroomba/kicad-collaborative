@@ -106,7 +106,7 @@ export const writes: Record<string, (a: any, label: string) => Promise<unknown>>
   /** Structured edits, the grammar the assistant's proposals use (set_field, move, remove, add_symbol, add_wire, add_track, …). */
   apply: async (a, label) => {
     const { ed } = mayWrite();
-    let p; try { p = buildProposal({ title: a.title, edits: a.edits }); } catch (e) { if (e instanceof ToolError) throw new ApiError(e.message.replace(/^No proposal was shown, because /, "Nothing was changed, because "), "invalid"); throw e; }
+    let p; try { p = await buildProposal({ title: a.title, edits: a.edits }); } catch (e) { if (e instanceof ToolError) throw new ApiError(e.message.replace(/^No proposal was shown, because /, "Nothing was changed, because "), "invalid"); throw e; }
     commit(ed, p.changes, label);
     return { changes: p.lines.map((l) => ({ kind: l.kind, text: l.text, ids: l.ids })) };
   },

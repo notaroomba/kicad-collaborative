@@ -2,12 +2,14 @@
 // their actions, the dialogs the host draws on their behalf, and the manager (KiCad's Plugin and
 // Content Manager, for the web): what is installed, what it may do, a catalog, and a developer tab.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { cx } from "../util";
 import {
-  actionsFor, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, confirmInstall, exportersFor, fetchFromUrl, importersFor, initPlugins, openManager, panelsFor,
-  readLocalFiles, requestInstall, restart, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, usePlugins,
-  type CatalogEntry, type PromptField, type PromptRequest,
+  actionsFor, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
+  installFromRegistry, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
+  recommendedPending, requestInstall, restart, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, unpublish, usePlugins,
+  type CatalogEntry, type ModerationEntry, type ProjectPlugin, type PromptField, type PromptRequest, type RegistryEntry,
 } from "./host";
 import { describePermission, type InstalledPlugin, type PluginManifest } from "./types";
 
@@ -26,7 +28,7 @@ export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | 
   const acts = actionsFor(s, editor); const imps = importersFor(s, editor), exps = exportersFor(s, editor); const panels = panelsFor(s, editor);
   const byMenu = (name: string) => acts.filter((a) => (a.action.menu || "tools").toLowerCase() === name).map((a) => a.uiId);
   return menus.map(([title, entries]) => {
-    const t = title.toLowerCase(); let out = entries;
+    const t = title.replace("&", "").toLowerCase(); let out = entries;   // titles carry KiCad's "&" mnemonic marker
     if (t === "file" && (imps.length || exps.length)) {
       const extra: MenuEntry[] = []; if (imps.length) extra.push(["Import", imps.map((x) => x.uiId)]); if (exps.length) extra.push(["Export", exps.map((x) => x.uiId)]);
       const at = out.indexOf("print"); out = at >= 0 ? [...out.slice(0, at), ...extra, "-", ...out.slice(at)] : [...out, "-", ...extra];
@@ -186,7 +188,8 @@ function ConsentSheet() {
   return (
     <div className="plg-consent" id="pluginConsent">
       <h2>{c.update ? "Update" : "Install"} {m.name}?</h2>
-      <p className="plg-muted">{m.identifier}{m.version ? ` · version ${m.version}` : ""}{m.author ? ` · by ${m.author}` : ""}<br />From: {c.source === "catalog" ? "the built-in catalog" : c.source === "local" ? "files on your computer" : c.source}</p>
+      <p className="plg-muted">{m.identifier}{m.version ? ` · version ${m.version}` : ""}{m.author ? ` · by ${m.author}` : ""}<br />From: {sourceLabel(c.source)}</p>
+      {c.source.startsWith("registry:") ? <p className="plg-warn" id="pluginUnreviewed">Community plugins are published by other people and are not reviewed. Install it only if you trust {c.source.slice(9)}, and read what it asks for below.</p> : null}
       <p>{m.description}</p>
       <h3>It will be able to</h3>
       <Permissions perms={perms} fresh={c.update ? c.added : undefined} />
@@ -200,6 +203,8 @@ function ConsentSheet() {
   );
 }
 
+const sourceLabel = (source: string) => (source === "catalog" ? "the built-in catalog" : source === "local" ? "files on your computer" : source.startsWith("registry:") ? `the community registry, published by ${source.slice(9)}` : source);
+
 function InstalledTab() {
   const s = usePlugins((x) => x); const sel = s.installed.find((p) => p.identifier === s.manager.selected) || s.installed[0] || null;
   if (!s.signedIn) return <div className="plg-empty">Sign in to install plugins. They are kept with your account and follow you to any browser.</div>;
@@ -209,7 +214,7 @@ function InstalledTab() {
       <ul className="plg-list" id="pluginList">
         {s.installed.map((p) => { const run = s.running[p.identifier]; return (
           <li key={p.identifier} className={cx(sel && sel.identifier === p.identifier && "on")} data-plugin={p.identifier} onClick={() => setManager({ selected: p.identifier })}>
-            <span className={cx("state", !p.enabled ? "off" : run ? (run.failed ? "bad" : run.ready ? "run" : "wait") : "idle")} title={!p.enabled ? "Disabled" : run ? (run.failed ? "Failed to start" : "Running") : "Starts when you open a project"} />
+            <span className={cx("state", p.withdrawn ? "bad" : !p.enabled ? "off" : run ? (run.failed ? "bad" : run.ready ? "run" : "wait") : "idle")} title={p.withdrawn ? "Taken out of the registry by the administrators" : !p.enabled ? "Disabled" : run ? (run.failed ? "Failed to start" : "Running") : "Starts when you open a project"} />
             <span className="nm">{p.manifest.name}</span><span className="ver">{p.manifest.version || ""}</span>
           </li>
         ); })}
@@ -222,17 +227,47 @@ function Detail({ p }: { p: InstalledPlugin }) {
   const run = usePlugins((x) => x.running[p.identifier]); const lines = usePlugins((x) => x.logs[p.identifier]) || []; const m = p.manifest;
   const logEl = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { const el = logEl.current; if (el) el.scrollTop = el.scrollHeight; }, [lines.length]);
+  const s = usePlugins((x) => x); const me = useApp((st) => st.me); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const pub = s.published[p.identifier]; const known = p.identifier in s.published; const origin = originOf(p, s);
+  useEffect(() => { if (p.source !== "catalog") void lookupPublished(p.identifier); }, [p.identifier, p.source]);
+  const mine = !!pub && !!me && pub.publisher === me.login; const recommended = s.project.plugins.some((r) => r.identifier === p.identifier);
+  const act = async (fn: () => Promise<string | null>) => { setBusy(true); setErr(await fn()); setBusy(false); };
   return (
     <div className="plg-detail" id="pluginDetail">
       <div className="plg-row">
         <h2>{m.name}</h2><span className="plg-muted">{m.version || ""}</span><span className="grow" />
-        <label className="plg-switch"><input type="checkbox" id="pluginEnabled" checked={p.enabled} onChange={(e) => void setEnabled(p.identifier, e.target.checked)} /> Enabled</label>
+        <label className="plg-switch"><input type="checkbox" id="pluginEnabled" checked={p.enabled} onChange={(e) => { if (e.target.checked && p.withdrawn && !confirm(`The administrators took ${m.name} out of the registry:\n\n${p.withdrawn}\n\nSwitch it on anyway?`)) return; void setEnabled(p.identifier, e.target.checked); }} /> Enabled</label>
       </div>
+      {p.withdrawn ? <p className="plg-warn bad" id="pluginWithdrawn">The administrators took this plugin out of the community registry, and your copy was switched off. Their reason: {p.withdrawn} The copy is still yours: uninstall it, or switch it back on if you trust it.</p> : null}
       <p className="plg-muted">{m.identifier}{m.author ? ` · by ${m.author}` : ""}{scopesOf(m) ? ` · ${scopesOf(m)}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</p>
       <p>{m.description}</p>
       <h3>Permissions you granted</h3><Permissions perms={p.granted} />
       <h3>Adds</h3><Contributes m={m} />
-      <h3>Log <span className="plg-muted">{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? "not running (open a project)" : "disabled"}</span></h3>
+      {p.source === "catalog" && !(s.project.id && s.project.canEdit) ? null : (
+        <>
+          <h3>Sharing</h3>
+          <div className="plg-share" id="pluginShare">
+            {p.source === "catalog" ? null : !known ? <p className="plg-muted">Checking the registry…</p> : pub && pub.status !== "listed" ? (
+              <p className="plg-muted" id="pluginModerated">{mine ? "The administrators" : `Published by ${pub.publisher}; the administrators`} {pub.status === "hidden" ? "hid" : "removed"} {mine ? "your listing" : "the listing"}{pub.reason ? `: ${pub.reason}` : "."}{mine ? " It cannot be published again while that stands." : ""}</p>
+            ) : pub && !mine ? <p className="plg-muted">In the community registry, published by {pub.publisher} (version {pub.version || "?"}).</p> : pub ? (
+              <div className="plg-row"><span className="grow">You published version {pub.version || "?"} to the community registry.</span>
+                {(m.version || "") !== pub.version ? <button type="button" className="btn sm" id="pluginPublish" disabled={busy} onClick={() => void act(() => publish(p.identifier))}>Publish {m.version || "this copy"}</button> : null}
+                <button type="button" className="btn sm danger" id="pluginUnpublish" disabled={busy} onClick={() => { if (confirm(`Remove ${m.name} from the registry? People who installed it keep their copy.`)) void act(() => unpublish(p.identifier)); }}>Unpublish</button></div>
+            ) : (
+              <div className="plg-row"><span className="grow plg-muted">Only you have this plugin. Publishing lists this copy in the community registry under your name, for anyone to install.</span>
+                <button type="button" className="btn sm" id="pluginPublish" disabled={busy} onClick={() => { if (confirm(`Publish ${m.name} ${m.version || ""} to the community registry as ${me ? me.login : "you"}? Anyone will be able to see and install it.`)) void act(() => publish(p.identifier)); }}>Publish…</button></div>
+            )}
+            {s.project.id && s.project.canEdit ? (
+              <label className="plg-check" title={origin ? "Collaborators are shown it and choose for themselves. It never installs or runs for them on its own." : "Publish it first: collaborators need somewhere to get it from."}>
+                <input type="checkbox" id="pluginRecommend" checked={recommended} disabled={busy || (!origin && !recommended)} onChange={(e) => void act(() => recommend(p.identifier, origin || "registry", e.target.checked))} />
+                Recommend to this project's collaborators{origin ? "" : " (publish it first)"}
+              </label>
+            ) : null}
+            {err ? <p className="plg-err" id="pluginShareErr">{err}</p> : null}
+          </div>
+        </>
+      )}
+      <h3>Log <span className={cx("plg-status", run && run.failed && "bad", run && run.ready && !run.failed && "run")}>{run ? (run.failed ? "failed to start" : run.busy ? `running: ${run.busy}` : run.ready ? "running" : "starting") : p.enabled ? "not running (open a project)" : "disabled"}</span></h3>
       <div className="plg-log" id="pluginLog" ref={logEl}>{lines.length ? lines.map((l, i) => <div key={i} className={l.level}><time>{new Date(l.at).toLocaleTimeString()}</time>{l.text}</div>) : <div className="plg-muted">Nothing logged yet. A plugin's console output appears here.</div>}</div>
       <div className="plg-row end">
         <button type="button" className="btn sm" onClick={() => clearLog(p.identifier)}>Clear log</button>
@@ -250,6 +285,8 @@ function CatalogTab() {
   const install = (c: CatalogEntry) => setErr(s.signedIn ? requestInstall(c.manifest, c.files, "catalog") : "Sign in to install plugins.");
   return (
     <div className="plg-catalog" id="pluginCatalog">
+      <div className="plg-row plg-jump"><span className="plg-muted">Built in ({s.catalog.length})</span><span className="grow" />
+        <button type="button" className="btn sm" id="pluginJumpCommunity" onClick={() => { const el = document.getElementById("pluginRegistry"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }}>Community plugins{s.registry && s.registry.length ? ` (${s.registry.length})` : ""} ↓</button></div>
       {err ? <p className="plg-err">{err}</p> : null}
       {s.catalog.map((c) => { const m = c.manifest; const cur = have(m.identifier); const newer = cur && (cur.manifest.version || "") !== (m.version || ""); return (
         <div className="plg-card" key={m.identifier} data-plugin={m.identifier}>
@@ -260,6 +297,110 @@ function CatalogTab() {
         </div>
       ); })}
       <p className="plg-muted">These ship with KiCad Collaborative and double as examples: their source is in server/plugins.</p>
+      <Community setErr={setErr} />
+    </div>
+  );
+}
+
+const when = (iso?: string) => { if (!iso) return ""; const d = new Date(iso); return isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); };
+/** The community registry: what other people published.  Searchable; each entry says who published it. */
+function Community({ setErr }: { setErr: (e: string | null) => void }) {
+  const s = usePlugins((x) => x); const [q, setQ] = useState(s.registryQuery); const timer = useRef(0);
+  const search = (v: string) => { setQ(v); clearTimeout(timer.current); timer.current = window.setTimeout(() => void loadRegistry(v.trim()), 220); };
+  const list = s.registry;
+  return (
+    <div className="plg-community" id="pluginRegistry">
+      <div className="plg-row plg-community-head"><h3>Community</h3><span className="grow" />
+        <input type="search" id="pluginSearch" placeholder="Search published plugins" value={q} onChange={(e) => search(e.target.value)} /></div>
+      <p className="plg-muted">Published by other people and not reviewed. You are shown who published a plugin and everything it asks for before it is installed.</p>
+      {list === null ? <p className="plg-muted">Loading…</p> : !list.length ? <p className="plg-muted" id="pluginRegistryEmpty">{s.registryQuery ? `Nothing published matches "${s.registryQuery}".` : "Nothing has been published yet. Yours could be the first: install a plugin from a file, then publish it from its page."}</p> : list.map((r) => <RegistryCard key={r.identifier} r={r} setErr={setErr} />)}
+    </div>
+  );
+}
+function RegistryCard({ r, setErr }: { r: RegistryEntry; setErr: (e: string | null) => void }) {
+  const cur = usePlugins((x) => x.installed.find((p) => p.identifier === r.identifier)); const m = r.manifest; const [busy, setBusy] = useState(false);
+  const newer = cur && (cur.manifest.version || "") !== (m.version || "");
+  const [reporting, setReporting] = useState(false); const [why, setWhy] = useState(""); const [sent, setSent] = useState(false); const [rerr, setRerr] = useState<string | null>(null);
+  const send = async () => { setBusy(true); const e = await report(r.identifier, why); setBusy(false); setRerr(e); if (!e) { setSent(true); setReporting(false); setWhy(""); } };
+  return (
+    <div className="plg-card" data-plugin={r.identifier}>
+      <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">by {r.publisher}</span><span className="grow" /><span className="plg-muted">{scopesOf(m)}</span></div>
+      <p>{m.description}</p>
+      <p className="plg-muted plg-meta">{r.identifier} · {r.installs} install{r.installs === 1 ? "" : "s"}{when(r.updatedAt) ? ` · updated ${when(r.updatedAt)}` : ""}</p>
+      <div className="plg-row"><span className="plg-muted perms">{(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</span><span className="grow" />
+        {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={r.identifier} disabled={busy} onClick={async () => { setBusy(true); setErr(await installFromRegistry(r.identifier)); setBusy(false); }}>{newer ? "Update…" : "Install…"}</button>}</div>
+      <div className="plg-report">
+        {sent ? <span className="plg-muted" data-reported={r.identifier}>Reported. The administrators will look at it.</span> : reporting ? (
+          <>
+            <textarea rows={2} data-report-reason={r.identifier} autoFocus placeholder="What is wrong with this plugin? The administrators read this." value={why} maxLength={1000} onChange={(e) => setWhy(e.target.value)} />
+            {rerr ? <p className="plg-err">{rerr}</p> : null}
+            <div className="plg-row end"><button type="button" className="btn sm" onClick={() => { setReporting(false); setRerr(null); }}>Cancel</button><button type="button" className="btn sm" data-report-send={r.identifier} disabled={busy || why.trim().length < 10} onClick={() => void send()}>Send report</button></div>
+          </>
+        ) : <button type="button" className="plg-link" data-report={r.identifier} onClick={() => setReporting(true)}>Report a problem…</button>}
+      </div>
+    </div>
+  );
+}
+
+/** For the server's administrators: published plugins that were reported, hidden or removed, and what to do about each. */
+function ModerationTab() {
+  const list = usePlugins((x) => x.moderation);
+  if (list === null) return <div className="plg-empty">Loading…</div>;
+  return (
+    <div className="plg-catalog" id="pluginModeration">
+      <p className="plg-muted">Published plugins that someone reported, or that you hid or removed. Hiding takes a plugin out of the registry and out of project recommendations and switches off the copies people installed from it; they are told your reason. Removing does the same for good and drops its files.</p>
+      {!list.length ? <div className="plg-none" id="pluginModerationEmpty">Nothing is waiting. Reports appear here.</div> : list.map((e) => <ModerationCard key={e.identifier} e={e} />)}
+    </div>
+  );
+}
+function ModerationCard({ e }: { e: ModerationEntry }) {
+  const [reason, setReason] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const m = e.manifest;
+  const act = async (action: "hide" | "restore" | "remove" | "dismiss") => {
+    if (action === "remove" && !confirm(`Remove ${m.name} from the registry for good? Its files are dropped and the identifier cannot be published again.`)) return;
+    setBusy(true); const r = await moderate(e.identifier, action, reason); setBusy(false); setErr(r); if (!r) setReason("");
+  };
+  const needs = reason.trim().length < 5;
+  return (
+    <div className="plg-card" data-plugin={e.identifier}>
+      <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">by {e.publisher}</span><span className={cx("plg-status", e.status !== "listed" && "bad")}>{e.status}</span><span className="grow" /><span className="plg-muted">{e.installs} install{e.installs === 1 ? "" : "s"}</span></div>
+      <p className="plg-muted plg-meta">{e.identifier} · {(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</p>
+      {e.status !== "listed" && e.reason ? <p>Your reason: {e.reason}</p> : null}
+      {e.reports.length ? <ul className="plg-reports">{e.reports.map((r, i) => <li key={i}><b>{r.reporter}</b> <span className="plg-muted">{when(r.at)}</span><br />{r.reason}</li>)}</ul> : null}
+      {err ? <p className="plg-err">{err}</p> : null}
+      {e.status === "removed" ? null : (
+        <div className="plg-row">
+          {e.status === "listed" ? <input type="text" className="grow" data-mod-reason={e.identifier} placeholder="Reason, shown to the publisher and to people who installed it" value={reason} maxLength={500} onChange={(ev) => setReason(ev.target.value)} /> : <span className="grow" />}
+          {e.status === "listed" && e.reports.length ? <button type="button" className="btn sm" data-mod="dismiss" disabled={busy} onClick={() => void act("dismiss")}>Dismiss reports</button> : null}
+          {e.status === "listed" ? <button type="button" className="btn sm" data-mod="hide" disabled={busy || needs} onClick={() => void act("hide")}>Hide</button> : <button type="button" className="btn sm" data-mod="restore" disabled={busy} onClick={() => void act("restore")}>Restore</button>}
+          {e.status === "listed" ? <button type="button" className="btn sm danger" data-mod="remove" disabled={busy || needs} onClick={() => void act("remove")}>Remove</button> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What the open project recommends.  A list to choose from: nothing here installs or runs by itself. */
+function ProjectTab() {
+  const s = usePlugins((x) => x); const name = useApp((st) => (st.project ? st.project.name : "")); const [err, setErr] = useState<string | null>(null);
+  if (!s.project.id) return <div className="plg-empty">Open a project to see the plugins it recommends.</div>;
+  const recs = s.project.plugins;
+  return (
+    <div className="plg-catalog" id="pluginProject">
+      <p className="plg-muted">Plugins that people working on {name || "this project"} suggest to each other. A recommendation is only a pointer: each person installs for themselves, after seeing what the plugin asks for, and it runs in their own browser only.</p>
+      {err ? <p className="plg-err">{err}</p> : null}
+      {!recs.length ? <div className="plg-none" id="pluginProjectEmpty">{s.project.canEdit ? "Nothing is recommended yet. Open one of your installed plugins and tick “Recommend to this project's collaborators”." : "Nothing is recommended for this project."}</div> : recs.map((r) => <ProjectCard key={r.identifier} r={r} canEdit={s.project.canEdit} setErr={setErr} />)}
+    </div>
+  );
+}
+function ProjectCard({ r, canEdit, setErr }: { r: ProjectPlugin; canEdit: boolean; setErr: (e: string | null) => void }) {
+  const cur = usePlugins((x) => x.installed.find((p) => p.identifier === r.identifier)); const m = r.manifest; const newer = cur && (cur.manifest.version || "") !== (m.version || "");
+  return (
+    <div className="plg-card" data-plugin={r.identifier}>
+      <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span><span className="plg-from">{r.origin === "catalog" ? "built in" : `by ${r.publisher || "unknown"}`}</span><span className="grow" /><span className="plg-muted">{scopesOf(m)}</span></div>
+      <p>{m.description}</p>
+      <div className="plg-row"><span className="plg-muted perms">{r.addedBy ? `Recommended by ${r.addedBy} · ` : ""}{(m.permissions || []).map((p) => describePermission(p).title).join(" · ") || "No permissions"}</span><span className="grow" />
+        {canEdit ? <button type="button" className="btn sm" data-unrecommend={r.identifier} onClick={async () => setErr(await recommend(r.identifier, r.origin, false))}>Stop recommending</button> : null}
+        {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={r.identifier} onClick={() => setErr(installRecommended(r))}>{newer ? "Update…" : "Install…"}</button>}</div>
     </div>
   );
 }
@@ -295,18 +436,20 @@ function DevelopTab() {
 
 export function PluginManager() {
   const mgr = usePlugins((x) => x.manager); const consent = usePlugins((x) => x.consent); const error = usePlugins((x) => x.error); const n = usePlugins((x) => x.installed.length);
+  const recs = usePlugins((x) => (x.project.id ? x.project.plugins.length : -1));
+  const admin = usePlugins((x) => x.admin); const waiting = usePlugins((x) => (x.moderation || []).filter((e) => e.status === "listed").length);
   if (!mgr.open) return null;
-  const tabs: [typeof mgr.tab, string][] = [["installed", `Installed${n ? ` (${n})` : ""}`], ["catalog", "Catalog"], ["develop", "Install from file or URL"]];
+  const tabs: [typeof mgr.tab, string][] = [["installed", `Installed${n ? ` (${n})` : ""}`], ["catalog", "Catalog"], ...(recs >= 0 ? [["project", `This project${recs ? ` (${recs})` : ""}`] as [typeof mgr.tab, string]] : []), ["develop", "Install from file or URL"], ...(admin ? [["moderation", `Moderation${waiting ? ` (${waiting})` : ""}`] as [typeof mgr.tab, string]] : [])];
   return (
     <div className="kd-overlay plg-overlay" onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") { if (consent) cancelInstall(); else closeManager(); } }} onPointerDown={(e) => { if (e.target === e.currentTarget) closeManager(); }}>
-      <div className="kd-dialog plg-manager" role="dialog" aria-modal="true" id="pluginManager" tabIndex={-1}>
+      <div className={cx("kd-dialog plg-manager", consent && "consenting")} role="dialog" aria-modal="true" id="pluginManager" tabIndex={-1}>
         <div className="kd-title"><span>Plugin Manager</span><span className="kd-x" title="Close (Esc)" onClick={() => closeManager()}>×</span></div>
         {consent ? <div className="kd-body"><ConsentSheet /></div> : (
           <>
             <div className="plg-mtabs">{tabs.map(([id, label]) => <button type="button" key={id} className={cx(mgr.tab === id && "on")} data-tab={id} onClick={() => setManager({ tab: id })}>{label}</button>)}</div>
             <div className="kd-body">
               {error ? <p className="plg-err">{error}</p> : null}
-              {mgr.tab === "installed" ? <InstalledTab /> : mgr.tab === "catalog" ? <CatalogTab /> : <DevelopTab />}
+              {mgr.tab === "installed" ? <InstalledTab /> : mgr.tab === "catalog" ? <CatalogTab /> : mgr.tab === "project" ? <ProjectTab /> : mgr.tab === "moderation" && admin ? <ModerationTab /> : <DevelopTab />}
             </div>
           </>
         )}
@@ -315,5 +458,22 @@ export function PluginManager() {
   );
 }
 
-/** Everything of ours that mounts once. */
-export function PluginChrome() { return <><PluginDock /><PluginPrompt /><PluginManager /></>; }
+/** The dialogs sit at page level (not in the editor), so the home view can open the manager too. */
+export function PluginDialogs() { return <><PluginPrompt /><PluginManager /><RecommendBar /></>; }
+
+/**
+ * The notice that the open project recommends plugins this person does not have — KiCad's
+ * infobar, across the top of the canvas.  It points at the list and can be closed; it installs nothing.
+ */
+function RecommendBar() {
+  const n = usePlugins((x) => (recommendedPending(x) ? missingRecommended(x).length : 0)); const view = useApp((st) => st.view);
+  // Beside the canvas, not inside it: the canvas captures every pointer that goes down on it.
+  const stage = typeof document !== "undefined" ? document.getElementById("editorBody") : null;
+  if (!n || view !== "editor" || !stage) return null;
+  return createPortal(
+    <div className="plg-infobar" id="pluginRecommended" role="status">
+      {PUZZLE}<span className="grow">This project recommends {n === 1 ? "a plugin" : `${n} plugins`} you do not have. Nothing is installed unless you choose to.</span>
+      <button type="button" className="btn sm" id="pluginRecommendedShow" onClick={() => openManager("project")}>Show…</button>
+      <button type="button" className="plg-ib" id="pluginRecommendedDismiss" title="Dismiss" aria-label="Dismiss" onClick={() => dismissRecommended()}>×</button>
+    </div>, stage);
+}

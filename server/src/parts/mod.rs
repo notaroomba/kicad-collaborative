@@ -126,6 +126,7 @@ async fn user_keys(state: &AppState, user_id: i64) -> AppResult<Keys> {
         match vendor.as_str() {
             "mouser" if !g("api_key").is_empty() => keys.mouser = Some(g("api_key")),
             "digikey" if !g("client_id").is_empty() && !g("client_secret").is_empty() => keys.digikey = Some((g("client_id"), g("client_secret"))),
+            "farnell" if !g("api_key").is_empty() => keys.farnell = Some((g("api_key"), vendors::farnell_store(&g("store")))),
             _ => {}
         }
     }
@@ -154,6 +155,8 @@ pub async fn list_vendors(State(state): State<AppState>, AuthUser(user): AuthUse
               json!([{ "id": "api_key", "label": "Search API key" }]), "https://www.mouser.com/api-search/"),
         entry("digikey", "DigiKey", "Part data, stock and prices. Drawings are matched from LCSC by manufacturer part number.",
               json!([{ "id": "client_id", "label": "Client ID" }, { "id": "client_secret", "label": "Client secret" }]), "https://developer.digikey.com/"),
+        entry("farnell", "Farnell / Newark / element14", "Part data, stock and prices from the store you name. Drawings are matched from LCSC by manufacturer part number.",
+              json!([{ "id": "api_key", "label": "Product Search API key" }, { "id": "store", "label": "Store (uk.farnell.com, www.newark.com, au.element14.com, …)", "optional": true }]), "https://partner.element14.com/"),
     ] })))
 }
 
@@ -174,12 +177,23 @@ pub async fn put_key(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
             }
             json!({ "client_id": g("client_id"), "client_secret": g("client_secret") })
         }
+        "farnell" => {
+            if g("api_key").is_empty() {
+                return Err(AppError::BadRequest("Enter the Farnell Product Search API key.".into()));
+            }
+            let store = vendors::farnell_store(&g("store"));
+            if store.is_empty() {
+                return Err(AppError::BadRequest("The store must be a host name such as uk.farnell.com or www.newark.com.".into()));
+            }
+            json!({ "api_key": g("api_key"), "store": store })
+        }
         _ => return Err(AppError::BadRequest("LCSC needs no key.".into())),
     };
     // Try the credentials before keeping them, so a typo is caught here and not at the next search.
     let mut probe = Keys::default();
     match vendor {
         "mouser" => probe.mouser = Some(g("api_key")),
+        "farnell" => probe.farnell = Some((g("api_key"), vendors::farnell_store(&g("store")))),
         _ => probe.digikey = Some((g("client_id"), g("client_secret"))),
     }
     let verified = match vendors::search(vendor, &probe, "STM32F103C8T6", 1).await {

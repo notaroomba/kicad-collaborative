@@ -9,11 +9,11 @@ import { UNITS, setRadio } from "./util";
 import { isSch, requestRender } from "./view";
 // ================================================================ KiCad frame (the React chrome reads the store)
 // Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
-export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance"];
+export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav"];
 
-export const PANE_EDITOR_ONLY = { hier: "sch" };
+export const PANE_EDITOR_ONLY = { hier: "sch", netnav: "sch" };
 
-export const PANE_DEFAULT_HIDDEN = { sch: ["peers", "comments", "appearance"], pcb: ["peers", "comments"] };
+export const PANE_DEFAULT_HIDDEN = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
 
 
 export const editorId = () => (isSch() ? "sch" : "pcb");

@@ -65,6 +65,13 @@ const fmt = (v) => String(+v.toFixed(3));
 const layerClass = (l) => /^[FB]\.SilkS$/.test(l) ? "silk" : /\.Cu$/.test(l) ? "copper" : l === "Edge.Cuts" ? "edges" : /^[FB]\.CrtYd$/.test(l) ? "courtyard" : /^[FB]\.Fab$/.test(l) ? "fab" : "others";
 const LINE_W = { silk: 0.1, copper: 0.2, edges: 0.05, courtyard: 0.05, fab: 0.1, others: 0.1 };
 const TEXT_STYLE = { silk: [1, 0.1], copper: [1.5, 0.3], edges: [1, 0.15], courtyard: [1, 0.15], fab: [1, 0.15], others: [1, 0.15] };
+/** Take the project's per-layer-class defaults (board.design_settings.defaults) for new graphics and text. */
+function layerDefaults(d) {
+  for (const [cls, stem] of [["silk", "silk"], ["copper", "copper"], ["edges", "board_outline"], ["courtyard", "courtyard"], ["fab", "fab"], ["others", "other"]]) {
+    const w = d[stem + "_line_width"]; if (typeof w === "number" && w > 0) LINE_W[cls] = w;
+    const sz = d[stem + "_text_size_h"], th = d[stem + "_text_thickness"]; if (typeof sz === "number" && sz > 0) TEXT_STYLE[cls] = [sz, typeof th === "number" && th > 0 ? th : TEXT_STYLE[cls][1]];
+  }
+}
 const textStyle = (layer) => { const [size, thick] = TEXT_STYLE[layerClass(layer)]; return { size, thick }; };
 const isBack = (l) => /^B\./.test(l);
 const xy = (p) => ["xy", r6(p[0]), r6(p[1])];
@@ -84,12 +91,13 @@ function netOf(node) {
 const NET_STYLE = new WeakMap();
 function netStyle(doc) {
   if (NET_STYLE.has(doc)) return NET_STYLE.get(doc);
-  let style = "code";
+  let style = null;
   for (const it of doc.items.values()) {
     const probe = it.kind === "footprint" ? K.kid(it.node, "pad") : (it.kind === "segment" || it.kind === "via" || it.kind === "arc") ? it.node : null;
     const n = probe && K.kid(probe, "net"); if (!n) continue;
     style = typeof n[1] === "number" ? "code" : "name"; break;
   }
+  if (!style) return "name";   // nothing on a net yet: this build's own form, and not remembered, so the first netted item decides
   NET_STYLE.set(doc, style); return style;
 }
 function netNode(doc, net) { return netStyle(doc) === "name" ? ["net", net && net.name ? net.name : ""] : ["net", net && net.code > 0 ? net.code : 0]; }
@@ -1433,7 +1441,8 @@ function designSettings(src) {
   if (src.netclasses || src.clearance !== undefined) return Object.assign(s, src);   // already our shape
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; }
+  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; }
+  const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
     for (const c of ns.classes) if (c && c.name) s.netclasses[c.name] = { clearance: c.clearance !== undefined ? c.clearance : s.clearance, track_width: c.track_width !== undefined ? c.track_width : s.trackWidth, via_diameter: c.via_diameter !== undefined ? c.via_diameter : s.viaDiameter, via_drill: c.via_drill !== undefined ? c.via_drill : s.viaDrill };
@@ -1520,7 +1529,7 @@ const boxCenter = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, 
 function drc(doc, settings, opts) {
   const s = settings && settings.netclasses ? settings : designSettings(settings); opts = opts || {}; const out = [];
   const nl = netlist(doc); const conds = nl.conductors.filter((c) => c.kind !== "zone");
-  const clr = (c) => netClearance(s, c.net); const maxClr = Math.max(s.clearance, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
+  const clr = (c) => netClearance(s, c.net); const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
   // copper clearance
   const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
   for (let i = 0; i < order.length; i++) {
@@ -1528,7 +1537,7 @@ function drc(doc, settings, opts) {
     for (let j = i + 1; j < order.length; j++) {
       const b = order[j]; if (b.bbox[0] > a.bbox[2] + maxClr) break;
       if (a.net && a.net === b.net) continue; if (!shareLayer(a.layers, b.layers)) continue;
-      const need = Math.max(clr(a), clr(b)); if (!boxesTouch(a.bbox, b.bbox, need)) continue;
+      const need = Math.max(clr(a), clr(b), s.minClearance || 0); if (!boxesTouch(a.bbox, b.bbox, need)) continue;   // Board Setup > Constraints: the board minimum is a floor
       const gap = shapeGap(a.shape, b.shape); if (gap >= need - DRC_EPS) continue;
       const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);   // the stricter class of the pair names the rule
       const [x, y] = boxCenter(a.bbox, b.bbox);
@@ -2220,8 +2229,13 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
   const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; const zones = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it.kind === "zone"); if (!zones.length) { ctx.toast("No zone selected"); return true; }
   return openForm({ title: "Duplicate Zone", fields: [{ k: "layer", label: "Layer", type: "select", value: zoneLayers(zones[0].node)[0] || "F.Cu", options: copperOf(ctx.doc) }], apply: (v) => { const out = []; for (const z of zones) { const node = clone(z.node); const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); for (const fp of K.kids(node, "filled_polygon")) node.splice(node.indexOf(fp), 1); const l = K.kid(node, "layer"), ls = K.kid(node, "layers"); if (l) l[1] = v.layer; else if (ls) ls.splice(1, ls.length - 1, v.layer); out.push(addedChange(ctx.doc, node, netOf(node))); } commitSel(ctx, out, "duplicate zone"); } });
 });
+// Filling is the desktop application's job: its filler is what the fabrication output comes from, so the
+// browser never approximates one.  It asks a desktop editor in the document to refill; the result arrives
+// as an ordinary edit.
+act("zoneFillAll", "Fill All Zones", "B", (ctx) => { if (ctx.viewOnly) { ctx.toast("View only"); return true; } if (!ctx.requestDesktop || !ctx.requestDesktop("fill_zones")) { ctx.toast("Not connected"); return true; } ctx.toast("Asked the desktop app to refill zones"); return true; });
 // The autorouter is its own bundle (web/router → dist/autoroute.js); this is its entry in the Route menu.
 act("autoroute", "Autoroute…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.open) { ctx.toast("The autorouter is not loaded"); return true; } return r.open(ctx); }, { menu: "Route" });
+act("autoplace", "Auto Place Footprints…", "", (ctx) => { const r = root.PcbAutoRouter; if (!r || !r.openPlace) { ctx.toast("The placer is not loaded"); return true; } return r.openPlace(ctx); }, { menu: "Tools" });
 // library access (web/editor/library.ts, window.KiCadLibrary): KiCad's footprint chooser and the footprint library browser
 const libraryAction = (opts) => (ctx) => { const L = root.KiCadLibrary; if (!L || !L.chooseAndPlace) { ctx.toast("The library module is not loaded"); return true; } L.chooseAndPlace("footprint", opts); return true; };
 act("placeFootprint", "Place Footprints", "A", libraryAction());
@@ -2402,12 +2416,15 @@ function drawOverlay(c, view, ctx) {
     const lines = ratsnestLines(doc); const sel = S.localRatsnest ? selectionIds(ctx) : null;
     c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.lineWidth = 1 * px; c.beginPath();
     const curved = K.pcbSizes.state.curvedRatsnest;   // RATSNEST_VIEW_ITEM: a Bezier whose two control points sit 10% off the midpoint
-    for (const l of lines) {
-      if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; c.moveTo(l.a[0], l.a[1]);
+    const trace = (l) => {
+      c.moveTo(l.a[0], l.a[1]);
       if (curved) { const dx = l.b[0] - l.a[0], dy = l.b[1] - l.a[1], mx = l.a[0] + 0.5 * dx - 0.1 * dy, my = l.a[1] + 0.5 * dy + 0.1 * dx; c.bezierCurveTo(mx, my, mx, my, l.b[0], l.b[1]); }
       else c.lineTo(l.b[0], l.b[1]);
-    }
+    };
+    const tinted = S.ratsnestColors && S.ratsnestColors.size ? [] : null;   // net name -> colour, set by the Appearance pane's Nets tab
+    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
     c.stroke();
+    if (tinted) for (const l of tinted) { c.strokeStyle = S.ratsnestColors.get(l.net); c.beginPath(); trace(l); c.stroke(); }
   }
   // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
   { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
@@ -2417,7 +2434,7 @@ function drawOverlay(c, view, ctx) {
   // DRC markers: KiCad's red pins, an X in a ring
   if (S.markers.length) {
     const r = 6 * px; c.lineWidth = 1.5 * px;
-    for (const m of S.markers) { c.strokeStyle = m.severity === "error" ? MARKER : MARKER_WARN; c.globalAlpha = 0.95; ring(c, [m.x, m.y], r); line(c, [m.x - r * 0.6, m.y - r * 0.6], [m.x + r * 0.6, m.y + r * 0.6]); line(c, [m.x + r * 0.6, m.y - r * 0.6], [m.x - r * 0.6, m.y + r * 0.6]); }
+    for (const m of S.markers) { if (S.hiddenSeverities && S.hiddenSeverities.has(m.severity)) continue; c.strokeStyle = m.severity === "error" ? MARKER : MARKER_WARN; c.globalAlpha = 0.95; ring(c, [m.x, m.y], r); line(c, [m.x - r * 0.6, m.y - r * 0.6], [m.x + r * 0.6, m.y + r * 0.6]); line(c, [m.x + r * 0.6, m.y - r * 0.6], [m.x - r * 0.6, m.y + r * 0.6]); }
   }
   // drag preview: the moved segment and its neighbours at their new places
   if (S.drag && S.drag.anchor) {
@@ -2575,6 +2592,7 @@ const pcb = {
     bind(ctx); if (!ctx.doc || (ev.button !== undefined && ev.button !== 0)) return false;
     const it = hitTestItem(ctx.doc, mm[0], mm[1], HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1));
     if (!it) return false;
+    const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(it)) return false;   // the Selection Filter pane (kinds, locked items, hidden objects)
     const f = ctx.selFilter || {};
     if ((it.kind === "segment" || it.kind === "arc") && f.tracks === false) return false;
     if (it.kind === "via" && f.vias === false) return false;

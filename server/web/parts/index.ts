@@ -33,6 +33,7 @@ function installActions(): void {
       m.actions = {
         ...(m.actions || {}),
         vendorParts: { label: "Add Part from Vendor…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx }); } },
+        vendorBom: { label: "Bill of Materials with Vendor Prices…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx, tab: "bom" }); } },
         vendorLibraries: { label: "Part Libraries…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx, tab: "libraries" }); } },
       };
     } catch (e) { console.warn("vendor parts: could not add the menu entries", e); }
@@ -44,7 +45,7 @@ function registerSource(): boolean {
   const lib = W.KiCadLibrary; if (!lib || !lib.registerSource) return false;
   const split = (id: string): [string, string] => { const i = id.indexOf(":"); return [id.slice(0, i), id.slice(i + 1)]; };
   lib.registerSource({
-    id: "vendors", label: "Vendors (LCSC, Mouser, DigiKey)", kinds: ["symbol", "footprint"],
+    id: "vendors", label: "Vendors (LCSC, Mouser, DigiKey, Farnell)", kinds: ["symbol", "footprint"],
     async search(query) {
       if (query.trim().length < 2) return [];
       const r = await api.search(query.trim(), "all");
@@ -64,7 +65,7 @@ function registerSource(): boolean {
 
 W.KiCadParts = {
   /** Open the dialog.  `ctx` is the editor's tool context; without one the dialog browses and manages libraries only. */
-  open(opts?: { ctx?: ToolCtx; tab?: "search" | "libraries" | "keys"; query?: string }) { if (opts && opts.ctx) lastCtx = opts.ctx; openParts(opts || {}); },
+  open(opts?: { ctx?: ToolCtx; tab?: "search" | "libraries" | "keys" | "bom"; query?: string }) { if (opts && opts.ctx) lastCtx = opts.ctx; openParts(opts || {}); },
   close: closeParts,
   isOpen,
   /** Fetch a part by reference and put it on the cursor: the same thing the dialog's Place button does. */
@@ -78,3 +79,21 @@ if (!registerSource()) {
   let tries = 0; const t = setInterval(() => { if (registerSource() || ++tries > 40) clearInterval(t); }, 250);
 }
 document.addEventListener("DOMContentLoaded", installActions);
+
+// A link can ask for the dialog: /p/{id}/edit?parts=search|libraries|bom and /?parts=libraries.
+// The desktop app's Vendor Parts menu entry opens such a link; a part placed here reaches the
+// desktop through the collaboration session.
+(function openFromLink() {
+  const want = new URLSearchParams(location.search).get("parts"); if (!want) return;
+  const tab = want === "libraries" || want === "bom" || want === "keys" ? want : "search";
+  const action = tab === "libraries" ? "vendorLibraries" : tab === "bom" ? "vendorBom" : "vendorParts";
+  const app = () => (window as unknown as { CollabApp?: { getState(): { document?: { hasDoc?: boolean } }; dispatch(a: unknown): void } }).CollabApp;
+  let tries = 0;
+  const t = setInterval(() => {
+    const inEditor = /^\/p\/[0-9a-f-]{36}\/edit/.test(location.pathname); const a = app();
+    if (inEditor) {
+      if (a && a.getState().document && a.getState().document!.hasDoc) { clearInterval(t); if (!isOpen()) a.dispatch({ type: "action", id: "module:" + action }); }
+    } else if (document.readyState !== "loading") { clearInterval(t); if (!isOpen()) openParts({ tab: tab === "bom" ? "libraries" : tab }); }
+    if (++tries > 120) clearInterval(t);
+  }, 250);
+})();

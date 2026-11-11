@@ -24,7 +24,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
 import { PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, pcbColor, pcbZ } from "./colors";
-import { PAPER_SIZES, addItem, computeBBox, mm2mils, parseDoc } from "./doc";
+import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, parseDoc, titleBlockOf } from "./doc";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
 import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingSheet, wrapFragment } from "./export";
 import { buildGeom } from "./geom";
@@ -32,7 +32,11 @@ import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
-import { HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawPad, drawSelectionHalo, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawPad, drawSelectionHalo, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { boardSetup } from "./board-setup";
+import { DRC_ITEMS } from "./drc-items";
+import { pcbNetlist } from "./pcb-netlist";
+import { projectFile } from "./project-file";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
@@ -42,7 +46,7 @@ import { displayNetName, netCode } from "./geom-pcb";
 import { unitLetter } from "./geom-sch";
 import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } from "./render";
 import { pcbSizes } from "./pcb-sizes";
-export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
+export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
@@ -67,4 +71,5 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setVie
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
   pcbSizes };
 
+api.pcbNetlist = pcbNetlist; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;

@@ -30,6 +30,8 @@ export function toolCtx(extra) {
     commit(changes, label) { commitChanges(changes, label); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender, toast, enterSheet, setTool,
+    // Ask a desktop editor in this document to do what the browser cannot (fill zones).
+    requestDesktop(action) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },
     setStatus(text) { setStatusBar({ mode: text || "" }); },
   }, extra || {});
 }
@@ -153,7 +155,7 @@ export function deleteAction() { if (schKey("Delete")) return; if (E.selected &&
 
 export function selectAll() {
   if (!E.kdoc) return; E.selection.clear();
-  for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind)) E.selection.add(it.id);
+  for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind, it)) E.selection.add(it.id);
   E.selected = E.items.find((f) => E.selection.has(f.id)) || null;
   drawSelection(); renderProps(); renderObjects(); setStatusBar({ message: `${E.selection.size} items selected` });
 }

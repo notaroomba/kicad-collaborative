@@ -2068,6 +2068,13 @@ TOOL_ACTION SCH_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Copy Share Link" ) )
         .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::collabVendorParts( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.vendorParts" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Vendor Parts..." ) )
+        .Tooltip( _( "Search LCSC, Mouser and DigiKey for parts and manage saved part libraries "
+                     "(opens in the browser; in a session, placed parts arrive here)" ) ) );
+
 TOOL_ACTION SCH_ACTIONS::collabGithub( TOOL_ACTION_ARGS()
         .Name( "eeschema.Collab.github" )
         .Scope( AS_GLOBAL )
