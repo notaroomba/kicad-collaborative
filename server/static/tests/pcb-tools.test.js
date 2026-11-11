@@ -228,7 +228,7 @@ function fakeCtx(doc) {
 }
 const ev = (extra) => Object.assign({ button: 0, shiftKey: false, clientX: 0, clientY: 0 }, extra || {});
 
-test("module: route from a pad, add a via with V, finish with Enter", () => {
+test("module: route from a pad, add a via with V, Enter clicks, End finishes: one commit", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc);
   assert.ok(pcb.tools.some((t) => t.id === "route" && t.key === "X"));
   pcb.onDocChanged(ctx);
@@ -237,19 +237,27 @@ test("module: route from a pad, add a via with V, finish with Enter", () => {
   assert.deepEqual(P.state.route.last, [100, 49.1]); assert.equal(P.state.route.net.name, "GND");
   pcb.onPointerMove(ev(), [110.1, 52.1], ctx);
   assert.equal(pcb.onKey("/", ev(), ctx), true); assert.equal(P.state.route.diagFirst, true);   // straight-first by default (start_diagonal false), / forces the other posture
-  pcb.onPointerDown(ev(), [110.1, 52.1], ctx);                          // fixes the leg (grid-snapped to 110, 52)
-  assert.equal(log.commits.length, 1); assert.equal(log.commits[0].changes.length, 2);
-  for (const c of log.commits[0].changes) { assert.equal(c.typeName, "PCB_TRACK"); assert.equal(c.netName, "GND"); assert.equal(doc.items.get(c.id).kind, "segment"); }
-  assert.equal(K.kid(doc.items.get(log.commits[0].changes[0].id).node, "layer")[1], "F.Cu");
+  pcb.onPointerDown(ev(), [110.1, 52.1], ctx);                          // fixes the leg (grid-snapped to 110, 52) on the route's branch
+  assert.equal(log.commits.length, 0, "nothing reaches the board until the route ends");
+  assert.equal(P.state.route.stages.length, 1); assert.equal(P.state.route.stages[0].ops.filter((o) => o.add && o.add[0] === "segment").length, 2);
   pcb.onPointerMove(ev(), [120, 52], ctx);
-  assert.equal(pcb.onKey("v", ev(), ctx), true);                        // leg + via, then B.Cu
-  const viaCommit = log.commits[1]; assert.equal(viaCommit.changes.length, 2);
-  assert.equal(viaCommit.changes[1].typeName, "PCB_VIA"); assert.equal(doc.items.get(viaCommit.changes[1].id).kind, "via");
-  assert.equal(P.state.route.layer, "B.Cu"); assert.equal(P.state.layer, "B.Cu");
+  assert.equal(pcb.onKey("v", ev(), ctx), true);                        // a via rides the head's end; nothing is fixed yet
+  assert.ok(P.state.route.placingVia); assert.equal(P.state.route.placingVia.toLayer, "B.Cu"); assert.equal(P.state.route.stages.length, 1);
+  assert.equal(pcb.onKey("v", ev(), ctx), true); assert.equal(P.state.route.placingVia, null, "V again takes the via off");
+  pcb.onKey("v", ev(), ctx); pcb.onPointerDown(ev(), [120, 52], ctx);    // the click fixes trace and via, then B.Cu
+  assert.equal(P.state.route.layer, "B.Cu"); assert.equal(P.state.layer, "B.Cu"); assert.equal(P.state.route.stages.length, 2);
+  assert.ok(P.state.route.stages[1].ops.some((o) => o.add && o.add[0] === "via"));
   pcb.onPointerMove(ev(), [120, 60], ctx);
-  assert.equal(pcb.onKey("Enter", ev(), ctx), true);
+  assert.equal(pcb.onKey("Enter", ev(), ctx), true);                    // ACTIONS::cursorClick: fixes and carries on
+  assert.ok(P.state.route); assert.equal(P.state.route.stages.length, 3); assert.equal(log.commits.length, 0);
+  pcb.onPointerMove(ev(), [125, 60], ctx);
+  assert.equal(pcb.onKey("End", ev(), ctx), true);
   assert.equal(P.state.route, null);
-  assert.equal(K.kid(doc.items.get(log.commits[2].changes[0].id).node, "layer")[1], "B.Cu");
+  assert.equal(log.commits.length, 1, "the whole route is one undo step"); assert.equal(log.commits[0].label, "Route Track");
+  const kinds = log.commits[0].changes.map((c) => c.typeName).sort();
+  assert.deepEqual(kinds, ["PCB_TRACK", "PCB_TRACK", "PCB_TRACK", "PCB_TRACK", "PCB_TRACK", "PCB_VIA"]);
+  const back = log.commits[0].changes.filter((c) => c.typeName === "PCB_TRACK").map((c) => K.kid(doc.items.get(c.id).node, "layer")[1]);
+  assert.equal(back.filter((l) => l === "B.Cu").length, 2);
   assert.equal(pcb.onKey("PageUp", ev(), ctx), true); assert.equal(P.state.layer, "F.Cu");
   assert.ok(!log.toasts.some((m) => /Active layer/.test(m)), "no banner: the layer shows in the toolbar combo and the status bar");
   // a change applied mid-route (own commit or a peer's) keeps the route; a new document object resets it
@@ -1202,8 +1210,9 @@ test("router: clicking on another net's pad never ends or shorts the route; a ro
   assert.ok(rt.target[0] < 19, "the head stops short of pad C's clearance: " + rt.target);
   pcb.onPointerDown(ev(), [20, 10], ctx);
   assert.ok(P.state.route, "the route carries on");
+  pcb.onKey("End", ev(), ctx);
   const ids = new Set(log.commits[0].changes.map((c) => c.id)); assert.ok(minGapTo(doc, ids, "A") >= 0.2 - 1e-4);
-  pcb.onKey("Escape", ev(), ctx); pcb.cancel();
+  pcb.cancel();
   // started in empty space: no net, nothing to snap to, every netted item is an obstacle
   pcb.onActivate("route", ctx); pcb.onPointerDown(ev(), [20, 20], ctx);
   const orphan = P.state.route; assert.equal(orphan.netKey, "");
@@ -1256,16 +1265,20 @@ test("router: walkaround keeps every obstacle's clearance and stops at the neare
   const end = blocked.pts.at(-1); assert.ok(Math.hypot(end[0] - 20, end[1] - 10) < 1.4 + 0.1, "near pad C's clearance edge: " + end);
 });
 
-test("router: V drops no via where the via would break another net's clearance", () => {
+test("router: V attaches a via that follows the head; a click cannot place it inside another net's clearance", () => {
   const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
   pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
   pcb.onPointerMove(ev(), [70, 10.75], ctx);   // 0.4 mm from net B's track centre: room for a 0.2 mm track, not for a 0.6 mm via
   assert.equal(P.state.route.reached, true);
   pcb.onKey("v", ev(), ctx);
-  assert.equal(log.commits.length, 0, "no via, no segments"); assert.equal(P.state.route.layer, "F.Cu");
-  assert.deepEqual(P.state.violations.obs.map((o) => o.id), ["sb1"]);
-  pcb.onPointerMove(ev(), [70, 12], ctx); pcb.onKey("v", ev(), ctx);
-  assert.equal(log.commits.length, 1); assert.ok(log.commits[0].changes.some((c) => c.typeName === "PCB_VIA")); assert.equal(P.state.route.layer, "B.Cu");
+  assert.ok(P.state.route.placingVia); assert.deepEqual(P.state.route.viaBad.map((o) => o.id), ["sb1"], "the via's collision is marked");
+  pcb.onPointerDown(ev(), [70, 10.75], ctx);
+  assert.equal(P.state.route.stages.length, 0, "no via, no segments"); assert.equal(P.state.route.layer, "F.Cu");
+  pcb.onPointerMove(ev(), [70, 12], ctx); assert.equal(P.state.route.viaBad, null);
+  pcb.onPointerDown(ev(), [70, 12], ctx);
+  assert.equal(P.state.route.stages.length, 1); assert.equal(P.state.route.layer, "B.Cu");
+  pcb.onKey("End", ev(), ctx);
+  assert.equal(log.commits.length, 1); assert.ok(log.commits[0].changes.some((c) => c.typeName === "PCB_VIA"));
   pcb.cancel();
 });
 

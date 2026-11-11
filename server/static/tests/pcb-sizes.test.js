@@ -151,21 +151,25 @@ test("router: netclass width, selected width, inherited width, via from the sele
   pcb.onPointerDown(ev(), [100.1, 50.1], ctx);                       // pad 1, GND -> POWER 0.8
   assert.equal(P.state.route.net.name, "GND"); assert.equal(P.state.route.width, 0.8);
   pcb.onPointerMove(ev(), [100, 60], ctx); pcb.onPointerDown(ev(), [100, 60], ctx);
-  const first = log.commits[0].changes.map((c) => doc.items.get(c.id).node); assert.ok(first.length >= 1); for (const n of first) assert.equal(val(n, "width"), 0.8);
+  // the route is one transaction: a click fixes a stage, nothing reaches the board until the route ends
+  const stageNodes = (st) => st.ops.map((o) => o.add || o.node).filter(Boolean);
+  assert.equal(log.commits.length, 0); assert.equal(P.state.route.stages.length, 1);
+  const first = stageNodes(P.state.route.stages[0]).filter((n) => n[0] === "segment"); assert.ok(first.length >= 1); for (const n of first) assert.equal(val(n, "width"), 0.8);
   // Backspace takes the leg back and routing goes on from the pad
-  assert.equal(pcb.onKey("Backspace", ev(), ctx), true); assert.deepEqual(P.state.route.last, [100, 50]);
-  for (const c of log.commits[0].changes) assert.equal(doc.items.has(c.id), false);
+  assert.equal(pcb.onKey("Backspace", ev(), ctx), true); assert.deepEqual(P.state.route.last, [100, 50]); assert.equal(P.state.route.stages.length, 0);
   // W mid-route: the next pre-defined width applies to what is drawn next
   pcb.onKey("w", ev(), ctx); assert.equal(R.trackIndex, 1);
   pcb.onPointerMove(ev(), [100, 58], ctx); pcb.onPointerDown(ev(), [100, 58], ctx);
-  const leg = log.commits[log.commits.length - 1].changes.map((c) => doc.items.get(c.id).node); for (const n of leg) assert.equal(val(n, "width"), 0.4);
-  // V: a via of the net's class (no pre-defined via chosen) and on to the paired layer
-  pcb.onPointerMove(ev(), [104, 58], ctx); pcb.onKey("v", ev(), ctx);
-  const via = log.commits[log.commits.length - 1].changes.map((c) => doc.items.get(c.id)).find((i) => i.kind === "via");
-  assert.equal(val(via.node, "size"), 1.6); assert.equal(val(via.node, "drill"), 0.6); assert.deepEqual(K.kid(via.node, "layers").slice(1).map(K.str), ["F.Cu", "B.Cu"]);
+  const leg = stageNodes(P.state.route.stages[P.state.route.stages.length - 1]).filter((n) => n[0] === "segment"); assert.ok(leg.length >= 1); for (const n of leg) assert.equal(val(n, "width"), 0.4);
+  // V: a via of the net's class (no pre-defined via chosen) follows the head, the next click places it and routing goes on on the paired layer
+  pcb.onPointerMove(ev(), [104, 58], ctx); pcb.onKey("v", ev(), ctx); assert.ok(P.state.route.placingVia);
+  pcb.onPointerDown(ev(), [104, 58], ctx);
+  const via = stageNodes(P.state.route.stages[P.state.route.stages.length - 1]).find((n) => n[0] === "via");
+  assert.equal(val(via, "size"), 1.6); assert.equal(val(via, "drill"), 0.6); assert.deepEqual(K.kid(via, "layers").slice(1).map(K.str), ["F.Cu", "B.Cu"]);
   assert.equal(P.state.route.layer, "B.Cu"); assert.equal(R.activeLayer, "B.Cu");
-  // End fixes the leg under the cursor and finishes
+  // End fixes the leg under the cursor and finishes: one commit
   pcb.onPointerMove(ev(), [110, 58], ctx); assert.equal(pcb.onKey("End", ev(), ctx), true); assert.equal(P.state.route, null);
+  assert.equal(log.commits.length, 1); assert.equal(log.commits[0].label, "Route Track");
   assert.equal(R.tempOverride, false);
   // a route started on the end of an existing 0.35 track inherits its width and net
   pcb.onKey("PageUp", ev(), ctx); R.setTrackIndex(0);

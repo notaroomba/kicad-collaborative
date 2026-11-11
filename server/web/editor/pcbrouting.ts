@@ -18,6 +18,7 @@ import { saveProjectFile as writeProjectFile } from "./projectfile";
 import type { Plain } from "../canvas/project-file";
 import { api, esc, toast } from "./util";
 import { isSch, requestRender } from "./view";
+import { installRouterDialogs } from "./routersettings";
 
 const PS = () => KiCadCanvas.pcbSizes;
 const R = (): PcbSizes => KiCadCanvas.pcbSizes.state;
@@ -42,7 +43,7 @@ const layerColor = (l: string): string => (KiCadCanvas as unknown as { pcbColor(
 
 // ---------------------------------------------------------------- store
 function publish(): void {
-  const st = R(), u = units();
+  const st = R(), u = units(); const pcb = typeof CollabTools !== "undefined" ? CollabTools.pcb : undefined;
   if (u !== "mm") lastImperial = u;
   const board = isBoard();
   const slice: RoutingState = {
@@ -53,7 +54,11 @@ function publish(): void {
   };
   const sig = JSON.stringify(slice);
   if (sig !== published) { published = sig; store.slice("routing", slice); }
-  const toggles = { autoTrackWidth: st.useConnectedWidth, ratsnestLineMode: st.curvedRatsnest };
+  // the router's mode and corner mode (menu bar / toolbar check items), as pcb-tools.js's settings stand
+  const rc = pcb && (pcb as unknown as { routerChecks?: () => Record<string, boolean> }).routerChecks;
+  const router: Record<string, boolean> = {};
+  if (rc) for (const [k, v] of Object.entries(rc())) if (!k.includes("::")) router[k] = v;
+  const toggles = { autoTrackWidth: st.useConnectedWidth, ratsnestLineMode: st.curvedRatsnest, ...router };
   const tsig = JSON.stringify(toggles);
   if (tsig !== lastToggles) { lastToggles = tsig; setToggles(toggles); }
 }
@@ -319,6 +324,7 @@ export function installPcbRouting(): void {
   // the dialogs need the page, so pcb-tools.js publishes their KiCad action ids and calls back into this module
   const pcb = CollabTools.pcb as (PcbToolModule & { setRoutingDialogs?(d: { layerPair(): void; sizes(): void }): void }) | undefined;
   if (pcb && pcb.setRoutingDialogs) pcb.setRoutingDialogs({ layerPair: openLayerPair, sizes: openPredefinedSizes });
+  installRouterDialogs();   // Interactive Router Settings and the Select Layer picker
   R().subscribe(onSizesChanged);
   store.subscribe(onStore);
 }

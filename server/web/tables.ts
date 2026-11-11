@@ -158,7 +158,11 @@ export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
 /** Module action ids that only repeat another one (the same command under a second name), or that KiCad offers only in a context menu: never listed on their own. */
 export const MODULE_DUPLICATES: Record<Editor, string[]> = {
   sch: ["highlightNet"],
-  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner"],
+  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
+    // the interactive router's own commands: KiCad offers them in the router's context menu and the route tool's toolbar menu only
+    "routerHighlightMode", "routerShoveMode", "routerWalkaroundMode", "cycleRouterMode", "routerUndoLastSegment",
+    "ACT_SwitchCornerModeToNext", "ACT_SwitchCornerMode45", "ACT_SwitchCornerModeArc45", "ACT_SwitchCornerMode90", "ACT_SwitchCornerModeArc90",
+    "ACT_PlaceThroughVia", "ACT_PlaceBlindVia", "ACT_PlaceMicroVia", "ACT_SelLayerAndPlaceThroughVia", "ACT_SelLayerAndPlaceBlindVia", "ACT_SelLayerAndPlaceMicroVia"],
 };
 /** What an entry needs before it can run (KiCad's SELECTION_CONDITIONS / the read-only frame): greyed out otherwise. */
 export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete", "duplicate", "increment", "decrement", "move", "drag", "drag45Degree", "dragFreeAngle", "rotateCCW", "rotateCW", "rotateCcw", "rotateCw",

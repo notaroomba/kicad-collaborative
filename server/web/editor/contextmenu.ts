@@ -54,7 +54,10 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
     "SCH_ACTIONS::setExcludeFromSim": some((n) => flag(n, "exclude_from_sim") === "yes"),
     "SCH_ACTIONS::setExcludeFromPosFiles": some((n) => flag(n, "in_pos_files") === "no"),
   };
+  // ROUTER_TOOL's check items (router mode, corner mode) as pcb-tools.js's router settings stand
+  const router = (CollabTools.pcb as unknown as { routerChecks?: () => Record<string, boolean> } | undefined);
   return {
+    ...(router && router.routerChecks ? router.routerChecks() : {}),
     "PCB_ACTIONS::toggleExcludeFromBOM": some((n) => attrHas(n, "exclude_from_bom")),
     "PCB_ACTIONS::toggleExcludeFromPosFiles": some((n) => attrHas(n, "exclude_from_pos_files")),
     "PCB_ACTIONS::toggleExcludeFromSim": some((n) => attrHas(n, "exclude_from_sim")),
@@ -354,6 +357,21 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
     }
   }
   show(ev.clientX, ev.clientY, mm, true);
+}
+
+/**
+ * The "Track routing tools" toolbar group's context menu (toolbars_pcb_editor.cpp): the three router modes as check
+ * items, then Interactive Router Settings, opened under the button.
+ */
+export function openRouterModeMenu(at: { left: number; bottom: number } | null): void {
+  if (!E.kdoc || state.view !== "editor" || isSch()) return;
+  const c = menuCtx();
+  const items: CtxItem[] = [row("PCB_ACTIONS::routerHighlightMode", true, c), row("PCB_ACTIONS::routerShoveMode", true, c), row("PCB_ACTIONS::routerWalkaroundMode", true, c),
+    { sep: true }, row("PCB_ACTIONS::routerSettingsDialog", false, c)];
+  const x = at ? at.left : stage.getBoundingClientRect().left + 40, y = at ? at.bottom : stage.getBoundingClientRect().top + 40;
+  E.contextMenuOpen = true; anchor = null;
+  store.set({ contextMenu: { id: ++menuId, x, y, items } });
+  requestRender();
 }
 
 export function closeContextMenu(): void {

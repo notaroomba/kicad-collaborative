@@ -409,11 +409,11 @@ function snapTarget(doc, x, y, tol, layer, net, strict) {
   const mids = [];
   for (const it of doc.items.values()) {
     const b = it.bbox; if (b && (x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol)) continue;
-    if (it.kind === "footprint") { for (const p of padsOf(it)) if (padOnLayer(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y)); }
-    else if (it.kind === "via") { const a = pt(it.node, "at"); if (a) take(a[0], a[1], netOf(it.node), "via", false); }
+    if (it.kind === "footprint") { padsOf(it).forEach((p, i) => { if (padOnLayer(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y), { fp: it.id, padIndex: p.index !== undefined ? p.index : i }); }); }
+    else if (it.kind === "via") { const a = pt(it.node, "at"); if (a) take(a[0], a[1], netOf(it.node), "via", false, { id: it.id }); }
     else if ((it.kind === "segment" || it.kind === "arc") && layerOf(it.node) === layer) {
       const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) continue;
-      take(a[0], a[1], netOf(it.node), "track", false); take(b[0], b[1], netOf(it.node), "track", false);
+      take(a[0], a[1], netOf(it.node), "track", false, { id: it.id }); take(b[0], b[1], netOf(it.node), "track", false, { id: it.id });
       if (strict && it.kind === "segment" && Math.hypot(a[0] - x, a[1] - y) > tol && Math.hypot(b[0] - x, b[1] - y) > tol) mids.push({ it, a, b });
     }
   }
@@ -830,7 +830,8 @@ function dragSegment45(line, aIndex, aP, thresh) {
 
 /** Track endpoints by layer and point, vias and pad centres by point: what NODE::FindJoint looks up. */
 function jointIndex(doc) {
-  if (S.joints && S.joints.doc === doc && S.joints.ver === S.docVer) return S.joints;
+  if (doc.__bc && doc.__bc.joints) return doc.__bc.joints;
+  if (!doc.__bc && S.joints && S.joints.doc === doc && S.joints.ver === S.docVer) return S.joints;
   const NT = netTable(doc); const ends = new Map(), vias = new Map(), pads = new Map(); const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   const add = (m, k, v) => { let l = m.get(k); if (!l) m.set(k, l = []); l.push(v); };
   for (const it of doc.items.values()) {
@@ -838,8 +839,9 @@ function jointIndex(doc) {
     else if (it.kind === "via") { const a = pt(it.node, "at"); if (a) add(vias, ptKey(a), { item: it, layers: viaLayers(it.node, copper), net: NT.key(netOf(it.node)) }); }
     else if (it.kind === "footprint") for (const p of padsOf(it)) add(pads, ptKey([p.x, p.y]), { item: it, pad: p, layers: padCopperLayers(p, copper) });
   }
-  S.joints = { doc, ver: S.docVer, ends, vias, pads, NT };
-  return S.joints;
+  const J = { doc, ver: S.docVer, ends, vias, pads, NT };
+  if (doc.__bc) doc.__bc.joints = J; else S.joints = J;
+  return J;
 }
 const trackEnds = (it) => [pt(it.node, "start"), pt(it.node, "end")];
 /**
@@ -1024,14 +1026,50 @@ function optimizeDragged(O, pts, orig, p, w) {
   return simplifyPts(path);   // mergeColinear
 }
 /**
+ * DRAGGER::dragShove's SHOVE run: each dragged line is a head (the via a proxy that carries its fanout), the dragged
+ * items themselves left out of the world.  { ops, preview } or null when the shove cannot make room.
+ */
+function dragShove(ctx, d, sol) {
+  const doc = ctx.doc, s = settingsOf(ctx); const heads = [];
+  for (const { l, pts } of sol.lines) {
+    if (pts.length < 2) continue;
+    // a dragged line still meets the solids it would cross: SHOVE never moves those
+    if (pathHits(dragSolidObs(ctx, d, l.layer), pts, l.width / 2).length) return null;
+    heads.push({ pts, w: l.width, layer: l.layer, net: l.netKey, ownIds: d.ids });
+  }
+  if (sol.viaAt && d.via) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const r = viaNow(d.via.node).size / 2; const layers = new Set(viaLayers(d.via.node, copper));
+    for (const L of layers) if (pathHits(dragSolidObs(ctx, d, L), [sol.viaAt], r).length) return null;
+    heads.push({ pts: [sol.viaAt.slice()], w: 0, layer: Array.from(layers)[0], net: d.netKey, ownIds: d.ids, viaId: d.via.id, via: { at: sol.viaAt.slice(), r, layers } });
+  }
+  if (!heads.length) return { ops: [], preview: { hidden: new Set(), lines: [], vias: [] } };
+  const SW = shoveWorld(doc, s, S.rs.shove_vias); const st = shoveRun(SW, heads, S.rs); if (!st) return null;
+  return { ops: shoveOps(doc, st), preview: shovePreview(doc, st) };
+}
+/** The drag's obstacles that a shove cannot move (pads, holes, rule areas, the edge, locked items). */
+function dragSolidObs(ctx, d, layer) {
+  const key = "s|" + layer + "|" + S.rs.shove_vias; let O = d.obs.get(key); if (O) return O;
+  const s = settingsOf(ctx); const SW = shoveWorld(ctx.doc, s, S.rs.shove_vias); const skip = new Set([...SW.tracks.keys(), ...SW.vias.keys(), ...(d.excl || [])]);
+  O = routeObstacles(ctx.doc, s, d.netKey, layer, d.netKey ? null : d.ids, skip); d.obs.set(key, O); return O;
+}
+/**
  * DRAGGER::Drag: free angle (and a drag that started in violation) marks obstacles - the step is taken, its status is
  * whether it is clear; walk around takes a step only when it is clear (walking around what it crosses), otherwise the
  * last valid solution stays.  A first step that cannot be made switches to forced mark-obstacles mode.
  */
 function dragTo(ctx, d, p) {
   d.cursor = p.slice(); const first = d.first; d.first = false;
-  const raw = dragSolution(d, p);
-  if (d.free || d.forceMark) { d.sol = raw; d.hits = solutionHits(ctx, d, raw); d.status = !d.hits.length; d.lastValid = p.slice(); return true; }
+  const raw = dragSolution(d, p); const mode = S.rs.mode;
+  if (d.free || d.forceMark) { d.sol = raw; d.shove = null; d.hits = solutionHits(ctx, d, raw); d.status = !d.hits.length; d.lastValid = p.slice(); return true; }
+  // DRAGGER::dragMarkObstacles: the step is always taken; it may be fixed when clear or when DRC violations are allowed
+  if (mode === RM_MARK) { d.sol = raw; d.shove = null; d.hits = solutionHits(ctx, d, raw); d.status = !!S.rs.can_violate_drc || !d.hits.length; d.lastValid = p.slice(); return true; }
+  // DRAGGER::dragShove: the dragged lines (and the via) push what they meet; a step the shove cannot make keeps the last one
+  if (mode === RM_SHOVE) {
+    const sh = dragShove(ctx, d, raw);
+    if (sh) { d.sol = raw; d.shove = sh; d.hits = []; d.status = true; d.lastValid = p.slice(); return true; }
+    if (first) { d.forceMark = true; d.sol = raw; d.shove = null; d.hits = solutionHits(ctx, d, raw); d.status = !d.hits.length; d.lastValid = p.slice(); return true; }
+    d.status = true; d.hits = []; return false;
+  }
   const viaClear = !raw.viaAt || !solutionHits(ctx, d, { lines: [], viaAt: raw.viaAt }).length;
   let walked = viaClear ? walkSolution(ctx, d, raw) : null;
   if (walked && (d.mode !== "via" || walked !== raw)) walked = Object.assign({}, walked, { lines: walked.lines.map(({ l, pts }, i) => (d.mode === "via" && pts === raw.lines[i].pts) ? { l, pts } : { l, pts: optimizeDragged(dragObstacles(ctx, d, l.layer), pts, l.pts, p, l.width) }) });
@@ -1063,6 +1101,7 @@ function dragChanges(ctx, d) {
     }
   }
   if (d.sol.viaAt && d.via && !peq(d.sol.viaAt, d.viaAt)) { const node = clone(d.via.node); K.kid(node, "at").splice(1, 2, r6(d.sol.viaAt[0]), r6(d.sol.viaAt[1])); changes.push(replacedChange(d.via, node)); }
+  if (d.shove && d.shove.ops.length) changes.push(...branchChanges(doc, branchDoc(doc, d.shove.ops)));   // what the drag pushed aside
   return changes;
 }
 const solutionChanged = (d) => d.sol && (d.sol.lines.some(({ l, pts }) => pts.length !== l.pts.length || pts.some((p, i) => !peq(p, l.pts[i]))) || (d.sol.viaAt && !peq(d.sol.viaAt, d.viaAt)));
@@ -1131,100 +1170,381 @@ function hoverPoint(ctx, mm, magnetic) {
   if (magnetic && ctx.doc) {
     const rt = S.route;
     // TOOL_BASE::updateEndItem: while routing only the routed net's items are end candidates (a route without a net has none)
-    const s = rt ? (rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
+    // (Highlight collisions connects to net-less items too, and a net-less route to anything: FixRoute adopts the net)
+    const s = rt ? (S.rs.mode === RM_MARK ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netKey ? rt.net : null, false) : rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
     if (s) { out.x = s.x; out.y = s.y; out.snap = s; }
   }
   return out;
 }
 /** The board's netlist, rebuilt after a document change and kept until the next one. */
 function netlistCached(doc) {
+  if (doc.__bc) return doc.__bc.nl || (doc.__bc.nl = netlist(doc));   // a route's branch is never edited in place
   if (!S.nlc || S.nlc.doc !== doc || S.nlc.ver !== S.docVer) S.nlc = { doc, ver: S.docVer, nl: netlist(doc) };
   return S.nlc.nl;
 }
-/** The route's own net-less items (its start item and fixed segments): a route without a net does not collide with itself. */
-function routeOwn(rt) { const s = new Set(rt.startIds || []); for (const l of rt.legs) for (const id of l.ids) s.add(id); return s; }
+// ================================================================ ROUTING_SETTINGS (pcbnew/router/pns_routing_settings.cpp)
+// The interactive router's settings, kept per viewer under KiCad's own parameter names ("pns" in pcbnew.json).
+const RM_MARK = 0, RM_SHOVE = 1, RM_WALK = 2;                 // PNS_MODE: RM_MarkObstacles, RM_Shove, RM_Walkaround
+const CM_M45 = 0, CM_R45 = 1, CM_M90 = 2, CM_R90 = 3;         // DIRECTION_45::CORNER_MODE
+const RS_KEY = "kc.pcbnew.pns";
+const RS_DEFAULTS = Object.freeze({ mode: RM_WALK, effort: 1, remove_loops: true, smart_pads: true, shove_vias: true, suggest_finish: false, follow_mouse: true, start_diagonal: false,
+  shove_iteration_limit: 250, via_force_prop_iteration_limit: 40, spread_tracks_distance: 0, shove_time_limit: 1000, walkaround_iteration_limit: 40, jump_over_obstacles: false,
+  smooth_dragged_segments: true, can_violate_drc: false, free_angle_mode: false, snap_to_tracks: false, snap_to_pads: false, optimize_dragged_track: false, auto_posture: true,
+  fix_all_segments: true, restrict_angles: false, keep_diff_pair_coupling_when_dragging: true, corner_mode: CM_M45, walkaround_hug_length_threshold: 1.5, diff_pair_width_to_miter_ratio: 3.0 });
+const MODE_NAMES = ["Highlight collisions", "Shove", "Walk around"];
+const CORNER_NAMES = ["45-degree", "45-degree rounded", "90-degree", "90-degree rounded"];
+function lsGet(key) { try { return root.localStorage ? root.localStorage.getItem(key) : null; } catch (e) { return null; } }
+function lsSet(key, v) { try { if (root.localStorage) root.localStorage.setItem(key, v); } catch (e) { /* private mode: the settings last for the session */ } }
+/** The stored settings over the defaults; a value of the wrong type (or out of range) keeps the default. */
+function parseRouterSettings(text) {
+  const out = Object.assign({}, RS_DEFAULTS); let j = null;
+  try { j = text ? JSON.parse(text) : null; } catch (e) { j = null; }
+  if (j && typeof j === "object") for (const k of Object.keys(RS_DEFAULTS)) if (typeof j[k] === typeof RS_DEFAULTS[k]) out[k] = j[k];
+  if (![RM_MARK, RM_SHOVE, RM_WALK].includes(out.mode)) out.mode = RM_WALK;
+  if (![CM_M45, CM_R45, CM_M90, CM_R90].includes(out.corner_mode)) out.corner_mode = CM_M45;
+  return out;
+}
+S.rs = parseRouterSettings(lsGet(RS_KEY));
+/** Change router settings (ROUTER_TOOL::ChangeRouterMode, the corner mode actions, DIALOG_PNS_SETTINGS::TransferDataFromWindow). */
+function setRouterSettings(patch) {
+  Object.assign(S.rs, patch); S.rs = parseRouterSettings(JSON.stringify(S.rs)); lsSet(RS_KEY, JSON.stringify(S.rs));
+  const ctx = lastCtx;
+  if (ctx && ctx.doc && S.route) { S.route.collisions = null; updateHead(ctx); }
+  if (ctx && ctx.requestRender) ctx.requestRender();
+  if (ctx) refreshChip(ctx);
+  try { if (K && K.pcbSizes) K.pcbSizes.state.emit(); } catch (e) { /* the chrome republishes its checks on the next change */ }
+}
+/** ROUTER_TOOL::UpdateMessagePanel's "Corner Style". */
+const cornerStyleName = (rs) => (rs.free_angle_mode ? "Free-angle" : CORNER_NAMES[rs.corner_mode]);
+const is90 = (cm) => cm === CM_M90 || cm === CM_R90;
+const isRounded = (cm) => cm === CM_R45 || cm === CM_R90;
+/** The check marks of the router's mode and corner-mode actions (menus, the toolbar group's context menu). */
+function routerChecks() {
+  const rs = S.rs; return {
+    "PCB_ACTIONS::routerHighlightMode": rs.mode === RM_MARK, "PCB_ACTIONS::routerShoveMode": rs.mode === RM_SHOVE, "PCB_ACTIONS::routerWalkaroundMode": rs.mode === RM_WALK,
+    routerHighlightMode: rs.mode === RM_MARK, routerShoveMode: rs.mode === RM_SHOVE, routerWalkaroundMode: rs.mode === RM_WALK,
+    ACT_SwitchCornerMode45: rs.corner_mode === CM_M45, ACT_SwitchCornerModeArc45: rs.corner_mode === CM_R45, ACT_SwitchCornerMode90: rs.corner_mode === CM_M90, ACT_SwitchCornerModeArc90: rs.corner_mode === CM_R90,
+  };
+}
+
+// ---------------------------------------------------------------- DIRECTION_45::BuildInitialTrace in every corner mode
+/**
+ * The two-segment trace from a to b.  diagFirst is the posture (DIRECTION_45::IsDiagonal of the guessed direction).
+ * 45° modes: a straight and a diagonal run; 90° modes: one horizontal and one vertical leg, the longer axis first in
+ * the straight posture (`startDiagonal == ( h >= w )` takes E first).  Free angle (Highlight collisions only): a
+ * single segment.
+ */
+function cornerLeg(a, b, diagFirst, cm, free) {
+  if (free) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
+  if (!is90(cm)) return legPts(a, b, diagFirst);
+  const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+  if (w < 1e-9 || h < 1e-9) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
+  const mid = diagFirst === (h >= w) ? [b[0], a[1]] : [a[0], b[1]];
+  return [a.slice(), rp(mid), b.slice()];
+}
+/**
+ * The rounded corner modes: every corner of a mitred line becomes a tangent arc.  BuildInitialTrace's fillet uses
+ * the whole of the shorter leg (ROUNDED_45: radius diagLength / (2 cos 67.5°), the chord over the diagonal;
+ * ROUNDED_90: the radius is the shorter of the two runs), so the tangent length at a corner is the shorter
+ * adjacent run — half of a run that has a corner at both ends.  Returns elements [{ t: "seg", a, b } | { t: "arc", a, m, b }].
+ */
+function roundCorners(pts) {
+  const n = pts.length; if (n < 3) return pts.length > 1 ? [{ t: "seg", a: pts[0].slice(), b: pts[1].slice() }] : [];
+  const len = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  const corners = [];
+  for (let i = 1; i < n - 1; i++) {
+    const lp = len(i - 1) * (i - 1 === 0 ? 1 : 0.5), ln = len(i) * (i + 1 === n - 1 ? 1 : 0.5); const t = Math.min(lp, ln);
+    const u1 = vunit(vsub(pts[i - 1], pts[i])), u2 = vunit(vsub(pts[i + 1], pts[i]));
+    const cos = u1[0] * u2[0] + u1[1] * u2[1];
+    if (t < 1e-6 || cos < -1 + 1e-9) { corners.push(null); continue; }   // straight on: no corner
+    const half = Math.acos(Math.max(-1, Math.min(1, cos))) / 2; const bis = vunit(vadd(u1, u2));
+    const R = t * Math.tan(half), dc = t / Math.cos(half);
+    corners.push({ a: rp(vadd(pts[i], vmul(u1, t))), b: rp(vadd(pts[i], vmul(u2, t))), m: rp(vadd(pts[i], vmul(bis, dc - R))) });
+  }
+  const out = []; let cur = pts[0].slice();
+  for (let i = 1; i < n - 1; i++) {
+    const c = corners[i - 1]; if (!c) continue;
+    if (!peq(cur, c.a)) out.push({ t: "seg", a: cur, b: c.a });
+    out.push({ t: "arc", a: c.a, m: c.m, b: c.b }); cur = c.b;
+  }
+  if (!peq(cur, pts[n - 1])) out.push({ t: "seg", a: cur, b: pts[n - 1].slice() });
+  return out;
+}
+/** A line's elements as a polyline (arcs at 8 chords): what the clearance checks walk. */
+function elemsPts(els) {
+  const out = [];
+  for (const e of els) {
+    if (e.t === "seg") { chainAppend(out, [e.a, e.b]); continue; }
+    const arc = K.arcFrom3(e.a, e.m, e.b); if (!arc) { chainAppend(out, [e.a, e.b]); continue; }
+    let sweep = arc.anticlockwise ? arc.a0 - arc.a1 : arc.a1 - arc.a0; sweep = ((sweep % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const pts = [e.a]; for (let k = 1; k < 8; k++) { const a = arc.a0 + (arc.anticlockwise ? -1 : 1) * sweep * k / 8; pts.push([arc.x + arc.r * Math.cos(a), arc.y + arc.r * Math.sin(a)]); }
+    pts.push(e.b); chainAppend(out, pts);
+  }
+  return out;
+}
+/** The head's elements in the current corner mode: rounded only where the fillet keeps clear (the mitred corner otherwise). */
+function headElems(pts, cm, clear) {
+  const plain = () => pts.slice(0, -1).map((p, i) => ({ t: "seg", a: p.slice(), b: pts[i + 1].slice() }));
+  if (!isRounded(cm) || pts.length < 3) return plain();
+  const els = roundCorners(pts); return !clear || clear(elemsPts(els)) ? els : plain();
+}
+function arcTrackNode(doc, a, m, b, width, layer, net) {
+  return ["arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], ["width", r6(width)], ["layer", layer], netNode(doc, net)];
+}
+
+// ---------------------------------------------------------------- the route's branch: ROUTER's NODE until CommitRouting
+// Everything fixed while one track is routed (its segments, vias, broken tracks and what Shove pushed aside) lives on a
+// branch of the board — a document with its own item map — and goes to the board as ONE commit when the route ends.
+// Escape drops the branch (LINE_PLACER::AbortPlacement), Backspace pops the last fixed stage (UnfixRoute).
+function branchDoc(doc, ops) {
+  const b = Object.assign({}, doc, { items: new Map(doc.items), __bc: {}, __base: doc });
+  for (const op of ops || []) applyBranchOp(b, op);
+  return b;
+}
+/** One branch edit: { add: node } | { del: id } | { set: id, node } (the node keeps the item's uuid). */
+function applyBranchOp(b, op) {
+  if (op.del) { b.items.delete(op.del); return; }
+  if (op.set) { b.items.delete(op.set); K.createItem(b, op.node); return; }
+  if (op.add) K.createItem(b, op.add);
+}
+/** The board changes that turn `doc` into the branch: added, modified and removed items. */
+function branchChanges(doc, b) {
+  const out = [];
+  for (const [id, it] of b.items) { const o = doc.items.get(id); if (!o) out.push(upsertChange(it, "ADDED", netOf(it.node))); else if (o.node !== it.node) out.push(replacedChange(o, it.node)); }
+  for (const [id, o] of doc.items) if (!b.items.has(id)) out.push(removedChange(o));
+  return out;
+}
+/** The route's working document: the board plus its fixed stages. */
+function routeDoc(ctx, rt) {
+  if (!rt.stages.length) return ctx.doc;
+  if (!rt.bdoc || rt.bdoc.__base !== ctx.doc || rt.bdocVer !== S.docVer) { rt.bdoc = branchDoc(ctx.doc, rt.stages.flatMap((s) => s.ops)); rt.bdocVer = S.docVer; }
+  return rt.bdoc;
+}
+/** The tool context with the route's document in place of the board's (what the router's queries see). */
+function routeCtx(ctx, rt) { const d = routeDoc(ctx, rt); if (d === ctx.doc) return ctx; const rc = Object.create(ctx); rc.doc = d; return rc; }
+/** A route without a net does not collide with itself: its start item. */
+function routeOwn(rt) {
+  const s = new Set(rt.startIds || []); for (const st of rt.stages) { for (const id of st.startIds || []) s.add(id); for (const op of st.ops) if (op.add && op.add[0] !== "footprint") { const u = K.kid(op.add, "uuid"); if (u) s.add(K.str(u[1])); } }
+  return s;
+}
 function routeObs(ctx, rt, layer) {
-  layer = layer || rt.layer; const key = S.docVer + "|" + layer + "|" + rt.width + "|" + rt.legs.length;
-  if (!rt.obs || rt.obs.key !== key) { rt.obs = routeObstacles(ctx.doc, settingsOf(ctx), rt.netKey, layer, rt.netKey ? null : routeOwn(rt)); rt.obs.key = key; }
+  layer = layer || rt.layer; const doc = routeDoc(ctx, rt); const key = S.docVer + "|" + layer + "|" + rt.width + "|" + rt.stages.length + "|" + rt.netKey;
+  if (!rt.obs || rt.obs.key !== key || rt.obs.doc !== doc) { rt.obs = routeObstacles(doc, settingsOf(ctx), rt.netKey, layer, rt.netKey ? null : routeOwn(rt)); rt.obs.key = key; rt.obs.doc = doc; }
   return rt.obs;
 }
 /** ROUTING_SETTINGS' displayed clearance (ImportSizes): the routed net's class clearance, never below the board minimum. */
 function routeHaloClearance(ctx, rt) { const s = settingsOf(ctx); return Math.max(netClearance(s, rt.netKey), s.minClearance || 0); }
-/** LINE_PLACER::Move: the posture from the mouse trail, then the head walked around the obstacles to the cursor. */
-function updateHead(ctx) {
-  const rt = S.route; if (!rt || !ctx.doc) return;
-  const O = routeObs(ctx, rt); const r = rt.width / 2;
-  trailAdd(rt.tracer, rt.cursor);
-  rt.diagFirst = isDiagDir(tracerPosture(rt.tracer, rt.cursor));
-  const res = walkHead(O, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir);
-  rt.head = res.pts; rt.reached = res.reached; rt.target = rt.head[rt.head.length - 1].slice();
-  rt.ratline = leadingRatline(ctx, rt);
+/** The via being carried at the head's end (ToggleViaPlacement): its sizes and the copper it spans. */
+function headVia(ctx, rt) {
+  const pv = rt.placingVia; if (!pv) return null;
+  const end = rt.head && rt.head.length ? rt.head[rt.head.length - 1] : rt.last;
+  return { at: end.slice(), diameter: pv.diameter, drill: pv.drill, layers: pv.span, type: pv.type };
+}
+/** Every obstacle the carried via violates, on each copper layer it spans. */
+function viaHits(ctx, rt, via) {
+  const doc = routeDoc(ctx, rt), s = settingsOf(ctx), own = rt.netKey ? null : routeOwn(rt); const out = [];
+  for (const L of viaSpanLayers(doc, via.layers)) for (const ob of pathHits(routeObstacles(doc, s, rt.netKey, L, own), [via.at], via.diameter / 2)) if (!out.includes(ob)) out.push(ob);
+  return out;
+}
+/** The copper layers between two layers of a via, inclusive, in stack order. */
+function viaSpanLayers(doc, pair) {
+  const cu = K.pcbSizes.copperStack(copperOf(doc)); const i = cu.indexOf(pair[0]), j = cu.indexOf(pair[pair.length - 1]);
+  if (i < 0 || j < 0) return pair.slice(); return cu.slice(Math.min(i, j), Math.max(i, j) + 1);
 }
 /**
+ * LINE_PLACER::Move → routeHead: the posture from the mouse trail, then the head built for the router mode —
+ * Highlight collisions: straight to the cursor (snapped onto the first obstacle's hull when the cursor is within half
+ * a track width of it), collisions marked; Shove: walked around the solids, the tracks and vias in the way pushed
+ * aside (Walk around when the shove cannot be done); Walk around: walked around every obstacle.
+ */
+function updateHead(ctx) {
+  const rt = S.route; if (!rt || !ctx.doc) return;
+  const rs = S.rs, rc = routeCtx(ctx, rt), O = routeObs(ctx, rt); const r = rt.width / 2;
+  trailAdd(rt.tracer, rt.cursor);
+  // MOUSE_TRAIL_TRACER: the posture follows the mouse unless "Use mouse path to set track posture" is off (then the
+  // last segment's direction, or the initial direction)
+  if (rs.auto_posture || rt.tracer.manuallyForced) rt.diagFirst = isDiagDir(tracerPosture(rt.tracer, rt.cursor));
+  else rt.diagFirst = rt.tracer.lastSegDir >= 0 ? isDiagDir(rt.tracer.lastSegDir) : !!rs.start_diagonal;
+  const cm = rs.corner_mode, free = rs.mode === RM_MARK && rs.free_angle_mode;
+  const leg = (a, b, df) => cornerLeg(a, b, df, cm, false);
+  rt.collisions = null; rt.shove = null; rt.viaBad = null;
+  const via = headVia(ctx, rt);
+  if (rs.mode === RM_MARK) {
+    let pts = cornerLeg(rt.last, rt.cursor, rt.diagFirst, cm, free); let hits = pathHits(O, pts, r);
+    if (hits.length) {   // snap to the hull of the first obstacle (rhMarkObstacles)
+      const ob = firstHit(O, pts, r) || hits[0]; const H = hullOf(ob, r);
+      const near = is90(cm) ? boxNearest(H, rt.cursor) : polyNearest(H, rt.cursor);
+      if (Math.hypot(near[0] - rt.cursor[0], near[1] - rt.cursor[1]) < r) { pts = cornerLeg(rt.last, rp(near), rt.diagFirst, cm, free); hits = pathHits(O, pts, r); }
+    }
+    rt.head = pts; rt.reached = true;
+    if (via) { rt.head.length && (via.at = rt.head[rt.head.length - 1].slice()); for (const ob of viaHits(ctx, rt, via)) if (!hits.includes(ob)) hits.push(ob); }
+    rt.collisions = hits.length ? hits : null;
+  } else if (rs.mode === RM_SHOVE) {
+    const res = shoveHead(rc, rt, leg);
+    if (res) { rt.head = res.pts; rt.reached = res.reached; rt.shove = res.shove; }
+    else { const w = walkHead(O, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir, leg); rt.head = w.pts; rt.reached = w.reached; }
+  } else {
+    const res = walkHead(O, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir, leg);
+    rt.head = res.pts; rt.reached = res.reached;
+  }
+  rt.target = rt.head[rt.head.length - 1].slice();
+  if (via && rs.mode === RM_WALK) { const vh = viaHits(ctx, rt, Object.assign({}, via, { at: rt.target })); rt.viaBad = vh.length ? vh : null; }
+  rt.els = headElems(rt.head, cm, rs.mode === RM_MARK ? null : (p) => pathClear(O, p, r));
+  rt.ratline = leadingRatline(rc, rt);
+}
+/** NODE::NearestObstacle: the obstacle met first along the line. */
+function firstHit(O, pts, r) {
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i], b = pts[i + 1]; let best = null, bd = Infinity;
+    obstaclesNear(O, [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])], r, (ob) => {
+      if (!obstacleHit(ob, a, b, r)) return false;
+      const c = shapeCorePts(ob.shape); let d = Infinity; for (const p of c) d = Math.min(d, Math.hypot(p[0] - a[0], p[1] - a[1]));
+      if (d < bd) { bd = d; best = ob; } return false;
+    });
+    if (best) return best;
+  }
+  return null;
+}
+/** SHAPE_LINE_CHAIN::NearestPoint on a closed polygon's outline. */
+function polyNearest(P, p) { let best = P[0], bd = Infinity; for (let i = 0; i < P.length; i++) { const q = closestOnSeg(p, P[i], P[(i + 1) % P.length]); const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = q; } } return best; }
+/** BOX2::NearestPoint of the polygon's bounding box (the 90° corner modes). */
+function boxNearest(P, p) { const xs = P.map((q) => q[0]), ys = P.map((q) => q[1]); return [Math.max(Math.min(...xs), Math.min(Math.max(...xs), p[0])), Math.max(Math.min(...ys), Math.min(Math.max(...ys), p[1]))]; }
+/**
  * TOPOLOGY::LeadingRatLine: from the head's end to the nearest anchor of the routed net that is not already connected
- * to the line (its start's copper, or what its end lands on).  None for a route without a net.
+ * to the line (its start's copper, or what its end lands on).  None for a route without a net.  The anchor's copper
+ * layers ride along (ROUTER::GetNearestRatnestAnchor, which picks a through via's target layer).
  */
 function leadingRatline(ctx, rt) {
-  if (!rt.netKey) return null;
+  rt.ratAnchor = null; if (!rt.netKey) return null;
   const nl = netlistCached(ctx.doc); const net = nl.nets.get(rt.netKey); if (!net) return null;
   const end = rt.target; const probe = (p) => ({ t: "circle", x: p[0], y: p[1], r: 0 });
   const touches = (cl, p, layer) => cl.items.some((c) => c.kind !== "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, probe(p)) <= EPS);
-  let best = null, bd = Infinity;
+  let best = null, bd = Infinity, bcl = null;
   for (const cl of net.clusters) {
-    if (touches(cl, rt.last, rt.layer) || touches(cl, end, rt.layer)) continue;
-    for (const a of cl.anchors) { const d = Math.hypot(a.p[0] - end[0], a.p[1] - end[1]); if (d < bd) { bd = d; best = a.p; } }
+    if (touches(cl, rt.last, rt.layer) || touches(cl, end, rt.layer) || (rt.start && touches(cl, rt.start, rt.startLayer))) continue;
+    for (const a of cl.anchors) { const d = Math.hypot(a.p[0] - end[0], a.p[1] - end[1]); if (d < bd) { bd = d; best = a; bcl = cl; } }
   }
-  return best ? [end.slice(), best.slice()] : null;
+  rt.ratAnchor = null; if (!best) return null;
+  const cond = bcl.items.find((c) => c.id === best.id && c.anchors.some((q) => samePt(q, best.p))) || bcl.items.find((c) => c.id === best.id);
+  rt.ratAnchor = { p: best.p.slice(), layers: cond ? Array.from(cond.layers) : [], through: !!cond && (cond.kind === "pad" ? cond.pad.type === "thru_hole" : cond.kind === "via" ? cond.layers.size >= copperOf(ctx.doc).length : false) };
+  return [end.slice(), best.p.slice()];
 }
 /** highlightNets( true, { net } ): the routed net brightened, the rest dimmed; a highlight the user had on that net is kept for afterwards. */
-function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netHighlightIds(ctx.doc, rt.netKey, netlistCached(ctx.doc))); }
+function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netHighlightIds(routeDoc(ctx, rt), rt.netKey, netlistCached(routeDoc(ctx, rt)))); }
 function routeUnhighlight(ctx, rt) {
   if (!ctx || !rt || !rt.netKey) return;
   if (rt.keepHighlight && S.highlightNet === rt.netKey) highlightIds(ctx, netHighlightIds(ctx.doc, rt.netKey, netlistCached(ctx.doc)));
   else { S.highlightNet = null; highlightIds(ctx, null); }
 }
-/** LINE_PLACER::FixRoute: commit the head (the walked line since the last click); refused while it violates clearance. */
-function fixHead(ctx) {
-  const rt = S.route; const pts = rt.head; if (!pts || pts.length < 2) return false;
-  if (!pathClear(routeObs(ctx, rt), pts, rt.width / 2)) return false;   // AllowDRCViolations() is false outside Highlight collisions
-  const changes = []; for (let i = 0; i + 1 < pts.length; i++) changes.push(addedChange(ctx.doc, segmentNode(ctx.doc, pts[i], pts[i + 1], rt.width, rt.layer, rt.net), rt.net));
-  const ids = changes.map((c) => c.id);
-  if (rt.split) { changes.push(...splitChanges(ctx.doc, rt.split)); rt.split = null; }
-  if (rt.endSplit) { changes.push(...splitChanges(ctx.doc, rt.endSplit)); rt.endSplit = null; }
-  const end = pts[pts.length - 1].slice(), lastDir = dir8(pts[pts.length - 2], end);
-  rt.legs.push({ ids, from: rt.last.slice(), layer: rt.layer });
-  ctx.commit(changes, "route");
-  rt.last = end; rt.head = [end.slice()]; rt.target = end.slice(); rt.cursor = end.slice(); rt.ratline = null;
-  rt.tracer = newTracer(rt.width, lastDir); trailAdd(rt.tracer, rt.last);   // the next leg prefers to carry on the last segment's direction
-  return true;
+/** The branch edits that add a line's elements as tracks (segments, and arcs in the rounded corner modes). */
+function trackOps(doc, els, width, layer, net) {
+  const ops = [];
+  for (const e of els) {
+    if (peq(e.a, e.b)) continue;
+    const node = e.t === "arc" ? arcTrackNode(doc, e.a, e.m, e.b, width, layer, net) : segmentNode(doc, e.a, e.b, width, layer, net);
+    node.push(["uuid", K.newUuid()]); ops.push({ add: node });
+  }
+  return ops;
 }
-function endRoute(ctx, fixCurrent) {
-  const rt = S.route; if (!rt) return;
-  if (fixCurrent && rt.head && rt.head.length > 1) fixHead(ctx);
-  S.route = null; routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
-}
-/** Backspace while routing (the router's UndoLastSegment): take back the last fixed leg — and its via — and carry on from where it began. */
-function undoRouteLeg(ctx) {
-  const rt = S.route; const leg = rt && rt.legs.pop(); if (!leg) return false;
-  const changes = leg.ids.map((id) => ctx.doc.items.get(id)).filter(Boolean).map(removedChange);
-  if (changes.length) ctx.commit(changes, "undo segment");
-  rt.last = leg.from.slice(); if (leg.layer !== rt.layer) { rt.layer = leg.layer; S.layer = leg.layer; sizesOf(ctx).setActiveLayer(leg.layer); }
-  rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, rt.last); rt.head = [rt.last.slice()]; rt.target = rt.last.slice();
-  if (rt.cursor) updateHead(ctx);
-  refreshChip(ctx); ctx.requestRender(); return true;
-}
-/**
- * PNS LINE_PLACER::splitAdjacentSegments: a route that starts in the middle of a track breaks that track there — the
- * track keeps its start and uuid and ends at the point, a new track of the same width, layer and net carries on to
- * the old end.  Nothing when the track has changed since the route began or the point is one of its ends.
- */
-function splitChanges(doc, split) {
+/** The branch edits that break a track at a point (splitAdjacentSegments): the track ends there, a new one carries on. */
+function splitOps(doc, split) {
   const it = doc.items.get(split.id); if (!it || it.kind !== "segment" || K.serialize(it.node) !== K.serialize(split.node)) return [];
   const a = pt(it.node, "start"), b = pt(it.node, "end"), p = split.point; if (!a || !b || samePt(a, p) || samePt(b, p)) return [];
   const head = clone(it.node); K.kid(head, "end").splice(1, 2, r6(p[0]), r6(p[1]));
   const tail = clone(it.node); const u = K.kid(tail, "uuid"); if (u) tail.splice(tail.indexOf(u), 1);
-  K.kid(tail, "start").splice(1, 2, r6(p[0]), r6(p[1]));
-  return [replacedChange(it, head), addedChange(doc, tail, netOf(tail))];
+  K.kid(tail, "start").splice(1, 2, r6(p[0]), r6(p[1])); tail.push(["uuid", K.newUuid()]);
+  return [{ set: it.id, node: head }, { add: tail }];
+}
+/** splitAdjacentSegments as board changes (exported for the tests and the autorouter). */
+function splitChanges(doc, split) {
+  return splitOps(doc, split).map((op) => op.set ? replacedChange(doc.items.get(op.set), op.node) : addedChange(doc, op.add, netOf(op.add)));
+}
+/** FixRoute( forceFinish = false ) in Highlight collisions: the end item and a net-less trace adopt each other's net. */
+function adoptNetOps(doc, rt, snap) {
+  if (!snap) return [];
+  if (!rt.netKey && hasNet(snap.net)) { rt.net = snap.net; rt.netKey = netTable(doc).key(snap.net); return []; }
+  if (rt.netKey && !hasNet(snap.net)) {
+    if (snap.kind === "pad" && snap.fp) {
+      const fp = doc.items.get(snap.fp); if (!fp) return []; const node = clone(fp.node); const pad = K.kids(node, "pad")[snap.padIndex]; if (!pad) return [];
+      const nk = K.kid(pad, "net"); const nn = netNode(doc, rt.net); if (nk) pad.splice(pad.indexOf(nk), 1, nn); else pad.splice(pad.length - 1, 0, nn);
+      return [{ set: fp.id, node }];
+    }
+    const it = snap.id ? doc.items.get(snap.id) : null; if (!it) return [];
+    const node = clone(it.node); const nk = K.kid(node, "net"); const nn = netNode(doc, rt.net); if (nk) node.splice(node.indexOf(nk), 1, nn); else node.push(nn);
+    return [{ set: it.id, node }];
+  }
+  return [];
+}
+/**
+ * LINE_PLACER::FixRoute: the head (and the via it carries) goes onto the route's branch; refused while it collides —
+ * except in Highlight collisions with "Allow DRC violations", and in Shove only for collisions with solids.  With
+ * "Fix all segments on click" off the last segment stays free unless the route ends or a via is placed.
+ * Returns false when nothing was fixed.
+ */
+function fixHead(ctx, opts) {
+  opts = opts || {}; const rt = S.route; const rs = S.rs; const doc = routeDoc(ctx, rt);
+  let els = rt.els && rt.els.length ? rt.els : []; const via = headVia(ctx, rt);
+  if (!els.length && !via) return false;
+  const O = routeObs(ctx, rt); const r = rt.width / 2;
+  if (!rs.can_violate_drc || rs.mode !== RM_MARK) {
+    if (rs.mode === RM_MARK) { if (rt.collisions && rt.collisions.length) return false; }
+    else if (!pathClear(rs.mode === RM_SHOVE ? solidObs(ctx, rt) : O, elemsPts(els.length ? els : [{ t: "seg", a: rt.last, b: rt.last }]), r)) return false;
+    if (via && rs.mode !== RM_MARK && rt.viaBad) { showViolations(rt.viaBad, via.at); return false; }
+  }
+  const realEnd = !!opts.finish;
+  if (!rs.fix_all_segments && !realEnd && !via && els.length > 1) els = els.slice(0, -1);
+  const ops = [];
+  if (rs.mode === RM_MARK && opts.snap) ops.push(...adoptNetOps(doc, rt, opts.snap));
+  ops.push(...trackOps(doc, els, rt.width, rt.layer, rt.net));
+  if (rt.split && els.length) { ops.push(...splitOps(doc, rt.split)); rt.split = null; }
+  if (opts.endSplit) ops.push(...splitOps(doc, opts.endSplit));
+  if (rt.shove && rs.mode === RM_SHOVE) ops.push(...rt.shove.ops);
+  const end = els.length ? els[els.length - 1].b.slice() : rt.last.slice();
+  if (via) { const node = viaNode(doc, end[0], end[1], via.diameter, via.drill, rt.net, via.type === "through" ? viaSpan(doc) : [via.layers[0], via.layers[1]]); if (via.type !== "through") node.splice(1, 0, via.type); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); }
+  const prevDir = els.length ? dirOfElem(els[els.length - 1]) : -1;
+  rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: rt.split, dir: rt.tracer.lastSegDir });
+  rt.bdoc = null; rt.obs = null;
+  rt.last = end; rt.head = [end.slice()]; rt.els = []; rt.target = end.slice(); rt.ratline = null; rt.shove = null; rt.collisions = null; rt.startIds = [];
+  if (via) {   // switchLayerOnViaPlacement: on to the via's other layer
+    rt.layer = rt.placingVia.toLayer; S.layer = rt.layer; sizesOf(ctx).setActiveLayer(rt.layer); rt.placingVia = null;
+    rt.tracer = newTracer(rt.width, -1);
+  } else rt.tracer = newTracer(rt.width, prevDir);   // the next leg prefers to carry on the last segment's direction
+  rt.chained = !via;
+  trailAdd(rt.tracer, rt.last);
+  return true;
+}
+const dirOfElem = (e) => (e.t === "seg" ? dir8(e.a, e.b) : -1);
+/** ROUTER::CommitRouting: the route's branch onto the board as one undo step ("Route Track"). */
+function commitRoute(ctx, rt) {
+  const b = routeDoc(ctx, rt); if (b === ctx.doc) return false;
+  const changes = branchChanges(ctx.doc, b); if (!changes.length) return false;
+  ctx.commit(changes, "Route Track"); return true;
+}
+/** End the route: fix the head when asked (End / double click: FixRoute( forceFinish )), then commit everything fixed. */
+function endRoute(ctx, fixCurrent) {
+  const rt = S.route; if (!rt) return;
+  if (fixCurrent && ((rt.els && rt.els.length) || rt.placingVia)) fixHead(ctx, { finish: true });
+  S.route = null; commitRoute(ctx, rt); routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
+}
+/** Escape / another tool (ROUTER::AbortPlacement): the route and everything fixed in it are dropped. */
+function abortRoute(ctx) {
+  const rt = S.route; if (!rt) return; S.route = null; S.violations = null;
+  if (rt.layer !== rt.startLayer && ctx) { /* the active layer stays where routing left it, as in pcbnew */ }
+  if (ctx) { routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender(); } else if (K.pcbSizes) K.pcbSizes.state.endRoute();
+}
+/**
+ * Backspace / Delete / Ctrl+Z while routing (ROUTER::UndoLastSegment → LINE_PLACER::UnfixRoute): the last fixed stage
+ * comes off the branch and routing carries on from where it began.  Silent when nothing is fixed.
+ */
+function undoRouteLeg(ctx) {
+  const rt = S.route; const st = rt && rt.stages.pop(); if (!st) return false;
+  rt.bdoc = null; rt.obs = null;
+  rt.last = st.from.slice(); rt.net = st.net; rt.netKey = st.netKey; rt.startIds = st.startIds || []; rt.split = st.split || null; rt.placingVia = null;
+  if (st.layer !== rt.layer) { rt.layer = st.layer; S.layer = st.layer; sizesOf(ctx).setActiveLayer(st.layer); }
+  rt.tracer = newTracer(rt.width, rt.stages.length ? st.dir : -1); trailAdd(rt.tracer, rt.last); rt.head = [rt.last.slice()]; rt.els = []; rt.target = rt.last.slice();
+  rt.chained = rt.stages.length > 0 && !rt.stages[rt.stages.length - 1].placingVia;
+  if (rt.cursor) updateHead(ctx);
+  routeHighlight(ctx, rt); refreshChip(ctx); ctx.requestRender(); return true;
 }
 /** The segment on `layer` under (x, y) with the point projected onto its centre line: where a route started on a track begins. */
 function trackUnder(doc, x, y, layer) {
@@ -1238,7 +1558,7 @@ function showViolations(obs, at) { S.violations = obs.length ? { obs, at: at.sli
 /**
  * ROUTER::isStartingPointRoutable and ROUTER_TOOL's start checks: no route from a non-plated hole, inside a rule area
  * that keeps tracks out, from copper text, or where a zero-length track (at the route width, then the board minimum)
- * already violates clearance.  Returns the refusal message or null.
+ * already violates clearance (not in Highlight collisions, which only marks).  Returns the refusal message or null.
  */
 function startRefusal(ctx, p, mm, net, width, layer, own, snapped) {
   const doc = ctx.doc; const q = mm || p;
@@ -1248,6 +1568,7 @@ function startRefusal(ctx, p, mm, net, width, layer, own, snapped) {
   if (W.keepouts.some((k) => k.layers.has(layer) && pointInPoly(k.shape.pts, p[0], p[1]))) return "Rule area disallows tracks.";
   if (!snapped && !pad) { const t = hitTestItem(doc, q[0], q[1], HIT_MM); if (t && (t.kind === "gr_text" || t.kind === "gr_text_box") && /\.Cu$/.test(layerOf(t.node, ""))) return "Cannot start routing from a text item."; }
   if (!/\.Cu$/.test(layer)) return "Tracks on Copper layers only.";
+  if (S.rs.mode === RM_MARK) return null;
   const s = settingsOf(ctx); const key = netTable(doc).key(net);
   const O = routeObstacles(doc, s, key, layer, key ? null : own);
   let hits = pathHits(O, [p], width / 2);
@@ -1255,67 +1576,153 @@ function startRefusal(ctx, p, mm, net, width, layer, own, snapped) {
   if (hits.length) { showViolations(hits, p); return "The routing start point violates DRC."; }
   return null;
 }
-function routeClick(ctx, hv, mm) {
-  const now = Date.now(); let p = [hv.x, hv.y];
+function routeClick(ctx, hv, mm, opts) {
+  opts = opts || {}; const now = Date.now(); let p = [hv.x, hv.y];
   S.violations = null;
   if (!S.route) {
     let net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer);
-    let split = null, startIds = [];
-    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; startIds.push(on.item.id); } }   // started on a track: its centre line and its net
+    let split = null, startIds = [], startKind = hv.snap ? hv.snap.kind : null;
+    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; startIds.push(on.item.id); startKind = "track"; } }   // started on a track: its centre line and its net
     else if (hv.snap.kind !== "pad") { const it = hitTestItem(ctx.doc, hv.x, hv.y, HIT_MM); if (it) startIds.push(it.id); }
     const R = sizesOf(ctx); const connected = connectedWidth(ctx.doc, p, S.layer, mm || p);
     const width = R.routeWidth(netNameOf(ctx, net), connected);   // ImportSizes: the connected track, the net's class, or the selected width
     const refusal = startRefusal(ctx, p, mm, net, width, S.layer, new Set(startIds), !!hv.snap);
     if (refusal) { ctx.toast(refusal); ctx.requestRender(); return; }
     const netKey = netTable(ctx.doc).key(net);
-    S.route = { last: p, target: p.slice(), cursor: p.slice(), head: [p.slice()], reached: true, net, netKey, layer: S.layer, width, connected, diagFirst: false, clickT: now, clickAt: p.slice(), legs: [], split, startIds, ratline: null,
+    S.route = { start: p.slice(), startLayer: S.layer, startKind, startSpan: hv.snap && (hv.snap.kind === "pad" || hv.snap.kind === "via") ? (hv.snap.layers || null) : null,
+      last: p, target: p.slice(), cursor: p.slice(), head: [p.slice()], els: [], reached: true, net, netKey, layer: S.layer, width, connected, diagFirst: !!S.rs.start_diagonal, clickT: now, clickAt: p.slice(),
+      stages: [], split, startIds, ratline: null, placingVia: null, chained: false, collisions: null, shove: null,
       tracer: newTracer(width, -1), keepHighlight: !!netKey && S.highlightNet === netKey };
     trailAdd(S.route.tracer, p);
     if (R.activeLayer !== S.layer) R.setActiveLayer(S.layer);
     routeHighlight(ctx, S.route); S.route.ratline = leadingRatline(ctx, S.route);
+    // V before the route started (m_startWithVia): a via from the layer the route began on to the toggled layer,
+    // unless the start pad / via already reaches it
+    const swv = S.startWithVia; S.startWithVia = null;
+    if (swv && swv.from !== S.route.layer && !startSpans(ctx, S.route, S.route.layer)) { const to = S.route.layer; S.route.layer = swv.from; S.layer = swv.from; S.route.obs = null; toggleViaPlacement(ctx, "through", to); }
     refreshChip(ctx); ctx.requestRender(); return;
   }
   const rt = S.route;
-  const dbl = now - rt.clickT < DBL_MS && Math.hypot(p[0] - rt.clickAt[0], p[1] - rt.clickAt[1]) < 0.3;
+  const dbl = !opts.enter && now - rt.clickT < DBL_MS && Math.hypot(p[0] - rt.clickAt[0], p[1] - rt.clickAt[1]) < 0.3;
   rt.clickT = now; rt.clickAt = p.slice();
   if (dbl) { endRoute(ctx, true); return; }
   if (!samePt(p, rt.cursor || rt.last)) { rt.cursor = p.slice(); updateHead(ctx); }
-  // landing on the routed net (a pad, via or track end) ends the trace once the walk reaches it, as in KiCad
-  const lands = hv.snap && rt.netKey && sameNet(hv.snap.net, rt.net) && rt.reached && samePt(rt.target, [hv.x, hv.y]);
-  if (lands && hv.snap.kind === "trackMid" && !(rt.split && rt.split.id === hv.snap.id)) { const it = ctx.doc.items.get(hv.snap.id); if (it) rt.endSplit = { id: it.id, point: [hv.x, hv.y], node: clone(it.node) }; }
-  if (!fixHead(ctx)) { rt.endSplit = null; ctx.requestRender(); return; }
-  if (lands) { const done = S.route; S.route = null; routeUnhighlight(ctx, done); sizesOf(ctx).endRoute(); refreshChip(ctx); }
-  ctx.requestRender();
+  const rc = routeCtx(ctx, rt);
+  // landing on the routed net (a pad, via or track end) ends the trace once the head reaches it, as in KiCad
+  const onNet = hv.snap && rt.netKey && sameNet(hv.snap.net, rt.net);
+  const lands = onNet && rt.reached && samePt(rt.target, [hv.x, hv.y]);
+  let endSplit = null;
+  if (lands && hv.snap.kind === "trackMid" && !(rt.split && rt.split.id === hv.snap.id)) { const it = rc.doc.items.get(hv.snap.id); if (it) endSplit = { id: it.id, point: [hv.x, hv.y], node: clone(it.node) }; }
+  const markEnd = S.rs.mode === RM_MARK && hv.snap && samePt(rt.target, [hv.x, hv.y]) ? hv.snap : null;
+  const placingVia = !!rt.placingVia;
+  if (!fixHead(ctx, { endSplit, snap: markEnd })) { ctx.requestRender(); return; }
+  if ((lands || (markEnd && hasNet(markEnd.net) && rt.netKey && sameNet(markEnd.net, rt.net))) && !placingVia) { endRoute(ctx, false); return; }
+  if (rt.cursor) updateHead(ctx);
+  routeHighlight(ctx, rt); refreshChip(ctx); ctx.requestRender();
 }
 /** The through via's layer span: the outer copper layers of the board. */
 function viaSpan(doc) { const cu = K.pcbSizes.copperStack(copperOf(doc)); return [cu[0], cu[cu.length - 1]]; }
-/** V while routing: fix the head, drop a via at its end and continue on the other layer of the routing pair — only where the via keeps its clearance. */
-function routeVia(ctx, toLayer) {
-  const rt = S.route; const doc = ctx.doc; const R = sizesOf(ctx); const s = settingsOf(ctx);
-  const via = R.routeVia(netNameOf(ctx, rt.net)); const p = rt.target.slice(); const pts = rt.head && rt.head.length > 1 ? rt.head : [p];
-  if (pts.length > 1 && !pathClear(routeObs(ctx, rt), pts, rt.width / 2)) return false;
-  const own = rt.netKey ? null : routeOwn(rt); const hits = [];
-  for (const l of copperOf(doc)) hits.push(...pathHits(routeObstacles(doc, s, rt.netKey, l, own), [p], via.diameter / 2));
-  if (hits.length) { showViolations(hits, p); ctx.requestRender(); return false; }
-  const changes = []; for (let i = 0; i + 1 < pts.length; i++) changes.push(addedChange(doc, segmentNode(doc, pts[i], pts[i + 1], rt.width, rt.layer, rt.net), rt.net));
-  if (rt.split && changes.length) { changes.push(...splitChanges(doc, rt.split)); rt.split = null; }
-  changes.push(addedChange(doc, viaNode(doc, p[0], p[1], via.diameter, via.drill, rt.net, viaSpan(doc)), rt.net));
-  rt.legs.push({ ids: changes.filter((c) => c.kind === "ADDED").map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
-  ctx.commit(changes, "route via");
-  rt.last = p; rt.target = p.slice(); rt.head = [p.slice()]; rt.layer = toLayer || R.pairedLayer(rt.layer); S.layer = rt.layer; R.setActiveLayer(rt.layer);
-  rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, p);   // a line ending in a via has no last direction
+/** The microvia's sizes: the net's class microvia, else KiCad's netclass defaults (0.3 / 0.1 mm). */
+function microViaSize(ctx, net) {
+  const R = sizesOf(ctx); const nc = R.netclassOf ? R.netclassOf(netNameOf(ctx, net)) : null;
+  return { diameter: nc && nc.uvia_diameter > 0 ? nc.uvia_diameter : 0.3, drill: nc && nc.uvia_drill > 0 ? nc.uvia_drill : 0.1 };
+}
+/**
+ * ROUTER_TOOL::handleLayerSwitch for a via command: the via's type, sizes and the layer it leads to.  A through via
+ * goes to the layer of the nearest ratsnest anchor (the layer pair when that anchor is through-hole or on the current
+ * layer, or when there is none); blind/buried and micro vias go across the layer pair.  `target` is a picked layer
+ * (the Select Layer variants).  Returns the via or a refusal message.
+ */
+function viaPlan(ctx, rt, type, target) {
+  const R = sizesOf(ctx); const cur = rt.layer; const [pTop, pBot] = R.layerPair || ["F.Cu", "B.Cu"];
+  const doc = routeDoc(ctx, rt); const stack = K.pcbSizes.copperStack(copperOf(doc)); const F = stack[0], B = stack[stack.length - 1];
+  if (type !== "through" && target && ((target === B && cur === F) || (target === F && cur === B))) type = "through";   // a blind via across the whole board is a through via
+  const paired = (x, p0, p1) => (x === p0 ? p1 : x === p1 ? p0 : p0);   // SIZES_SETTINGS::PairedLayer, else GetLayerTop()
+  let a = cur, b = target || null, next;
+  if (b) next = b;
+  else if (type === "through") {
+    const rl = rt.ratAnchor;
+    if (!rl || !rl.layers.length) { a = pTop; b = pBot; next = paired(cur, pTop, pBot); }
+    else if (rl.through) { b = cur === pBot ? pTop : cur === pTop ? pBot : pTop; next = b; }
+    else { const other = K.pcbSizes.copperStack(rl.layers)[0]; b = other === cur ? paired(cur, pTop, pBot) : other; next = b; }
+  } else {
+    if (cur === pTop || cur === pBot) { a = pTop; b = pBot; } else b = pTop;
+    if (a === b) return "Via needs 2 different layers.";
+    next = paired(cur, a, b);
+  }
+  if (next === cur) { if (type !== "through") return "Via needs 2 different layers."; next = cur === F ? B : F; }
+  const size = type === "micro" ? microViaSize(ctx, rt.net) : R.routeVia(netNameOf(ctx, rt.net));
+  const span = type === "through" ? [F, B] : [a, b].sort((x, y) => stack.indexOf(x) - stack.indexOf(y));
+  return { type, toLayer: next, span, diameter: size.diameter, drill: size.drill };
+}
+/**
+ * ROUTER_TOOL::onViaCommand: the first via command attaches a via to the head's end (it follows the cursor and is
+ * checked with it, ToggleViaPlacement); the same command again takes it off.  The next click fixes trace and via
+ * and routing goes on on the via's other layer.  With no route yet (the Route tool idle) the next route starts with a via.
+ */
+function toggleViaPlacement(ctx, type, target) {
+  const rt = S.route;
+  if (!rt) { startWithVia(ctx); return true; }
+  if (rt.placingVia && !target) { rt.placingVia = null; S.layer = rt.layer; sizesOf(ctx).setActiveLayer(rt.layer); if (rt.cursor) updateHead(ctx); refreshChip(ctx); ctx.requestRender(); return true; }
+  const plan = viaPlan(ctx, rt, type, target);
+  if (typeof plan === "string") { ctx.toast(plan); return true; }
+  rt.placingVia = plan; sizesOf(ctx).setActiveLayer(plan.toLayer); S.layer = rt.layer;
   if (rt.cursor) updateHead(ctx);
   refreshChip(ctx); ctx.requestRender(); return true;
+}
+/** ACT_PlaceThroughVia with the Route tool idle: the next route starts with a via, and the active layer toggles. */
+function startWithVia(ctx) { S.startWithVia = { from: S.layer }; runAction("layerToggle", ctx); }
+/** The Select Layer and Place … Via commands: KiCad's layer picker at the track end, then the via to that layer. */
+function selectLayerAndPlaceVia(ctx, type) {
+  const rt = S.route; if (!rt) return false;
+  const doc = routeDoc(ctx, rt); const cu = K.pcbSizes.copperStack(copperOf(doc));
+  const disallow = new Set(type === "through" ? [] : [rt.layer]);
+  const at = rt.target || rt.last;
+  layerPickerImpl({ layers: cu, current: rt.layer, disallow, at, client: S.client }, (layer) => {
+    if (!layer || !S.route || S.route !== rt) return;
+    if (type !== "through" && layer === rt.layer) return;
+    if (rt.placingVia) rt.placingVia = null;
+    toggleViaPlacement(lastCtx || ctx, type, layer);
+  });
+  return true;
 }
 function placeVia(ctx, hv) {
   const net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, null);
   const via = sizesOf(ctx).routeVia(netNameOf(ctx, net));
   ctx.commit([addedChange(ctx.doc, viaNode(ctx.doc, hv.x, hv.y, via.diameter, via.drill, net, viaSpan(ctx.doc)), net)], "via");
 }
+/**
+ * A layer change while routing (PgUp/PgDn, + / -, Toggle Layer, the layer combo): LINE_PLACER::SetLayer moves the head
+ * to the layer when nothing is fixed yet and the route starts on a pad or via that spans it (or on nothing); otherwise
+ * a via to that layer is armed, placed on the next click.
+ */
 function setLayer(ctx, layer) {
-  if (S.route) { if (layer !== S.route.layer) routeVia(ctx, layer); return; }   // layer change mid-route goes through a via
+  const rt = S.route;
+  if (rt) {
+    if (layer === rt.layer) { if (rt.placingVia) toggleViaPlacement(ctx); return; }
+    const spans = !rt.stages.length && (!rt.startKind || ((rt.startKind === "pad" || rt.startKind === "via") && startSpans(ctx, rt, layer)));
+    const afterVia = rt.stages.length && !rt.chained;
+    if (!rt.placingVia && (spans || afterVia)) {
+      rt.layer = layer; S.layer = layer; sizesOf(ctx).setActiveLayer(layer); rt.obs = null;
+      rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, rt.last); rt.head = [rt.last.slice()]; rt.els = [];
+      if (rt.cursor) updateHead(ctx); refreshChip(ctx); ctx.requestRender(); return;
+    }
+    rt.placingVia = null; toggleViaPlacement(ctx, "through", layer); return;
+  }
   S.layer = layer; S.gfxLayer = layer; sizesOf(ctx).setActiveLayer(layer); refreshChip(ctx); ctx.requestRender();
 }
+/** Whether the route's start pad / via has copper on `layer`. */
+function startSpans(ctx, rt, layer) {
+  const doc = ctx.doc; const p = rt.start; const cu = copperOf(doc);
+  for (const it of doc.items.values()) {
+    const b = it.bbox; if (b && (p[0] < b[0] - 0.01 || p[0] > b[2] + 0.01 || p[1] < b[1] - 0.01 || p[1] > b[3] + 0.01)) continue;
+    if (it.kind === "via") { const a = pt(it.node, "at"); if (a && samePt(a, p) && viaLayers(it.node, cu).has(layer)) return true; }
+    else if (it.kind === "footprint") for (const pd of padsOf(it)) if (samePt([pd.x, pd.y], p) && padCopperLayers(pd, cu).has(layer)) return true;
+  }
+  return false;
+}
+// The layer picker (PCB_EDIT_FRAME::SelectOneLayer) is DOM; the editor installs the real one, the tests a stub.
+let layerPickerImpl = function (opts, done) { done(null); };
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 function stepLayer(ctx, forward) {
   const R = sizesOf(ctx); const hidden = appGlobal(() => editorState().hiddenLayers, null);
@@ -1447,7 +1854,7 @@ function dragMove(ctx, mm) {
   D.moved = true; const dx = p[0] - lead.start[0], dy = p[1] - lead.start[1];
   const done = [];
   for (const d of D.subs) {
-    const prev = { sol: d.sol, lastValid: d.lastValid, hits: d.hits, status: d.status };
+    const prev = { sol: d.sol, lastValid: d.lastValid, hits: d.hits, status: d.status, shove: d.shove };
     dragTo(ctx, d, d === lead ? p : rp([d.start[0] + dx, d.start[1] + dy]));
     // MULTI_DRAGGER drags the lines one after another in one node: each meets the ones already moved
     const peers = peerHits(ctx, d, done);
@@ -1499,7 +1906,7 @@ function finishDrag(ctx, commit, force) {
 function dragHiddenIds() {
   if (S.move && S.move.conns && S.move.conns.length && S.move.moved) { const out = new Set(); for (const c of S.move.conns) for (const id of c.l.ids) out.add(id); return out; }
   const D = S.drag; if (!D || !D.moved) return null;
-  const out = new Set(); for (const d of D.subs) for (const id of d.ids) out.add(id); return out;
+  const out = new Set(); for (const d of D.subs) { for (const id of d.ids) out.add(id); if (d.shove) for (const id of d.shove.preview.hidden) out.add(id); } return out;
 }
 /** The drag in progress: the lines and via where they would go, obstacles in violation green, and KiCad's status note. */
 function drawDragPreview(c, ctx, view, px) {
@@ -1510,6 +1917,10 @@ function drawDragPreview(c, ctx, view, px) {
   const D = S.drag; if (!D || !D.moved) return;
   for (const d of D.subs) {
     const bad = d.hits && d.hits.length; const s = settingsOf(ctx);
+    if (d.shove) {   // the items the drag pushed, where they would go
+      for (const L of d.shove.preview.lines) { if (L.pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = color(L.layer); c.lineWidth = L.w; polyline(c, L.pts, false); }
+      for (const v of d.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
+    }
     if (bad) for (const ob of d.hits) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
     for (const { l, pts } of d.sol.lines) {
       if (pts.length < 2) continue;
@@ -1522,6 +1933,54 @@ function drawDragPreview(c, ctx, view, px) {
     }
   }
   if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", "(Ctrl+click to commit anyway.)");
+}
+/** A track element (segment or arc) stroked at the current width. */
+function strokeElem(c, e) {
+  if (e.t === "arc") { const a = K.arcFrom3(e.a, e.m, e.b); if (a) { c.beginPath(); c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise); c.stroke(); return; } }
+  line(c, e.a, e.b);
+}
+/** A via as the router previews it: the annulus in the via colour. */
+function drawViaPreview(c, at, size, drill, px, alpha) { c.globalAlpha = alpha; c.strokeStyle = "rgb(179, 179, 179)"; c.lineWidth = Math.max((size - drill) / 2, px); ring(c, at, (size + drill) / 4); }
+/** The items a node stands for, as preview elements: { layer, width, els } for a track, { via } for a via. */
+function previewOfNode(node) {
+  if (node[0] === "segment") return { layer: layerOf(node), width: widthOf(node, 0.25), els: [{ t: "seg", a: pt(node, "start"), b: pt(node, "end") }] };
+  if (node[0] === "arc") return { layer: layerOf(node), width: widthOf(node, 0.25), els: [{ t: "arc", a: pt(node, "start"), m: pt(node, "mid"), b: pt(node, "end") }] };
+  if (node[0] === "via") { const v = viaNow(node); return { via: { at: pt(node, "at"), size: v.size, drill: v.drill } }; }
+  return null;
+}
+/** ROUTER::movePlacing's preview: the route's branch (ROUTER_PREVIEW_ITEM, layer colour at 0.8), the head (PNS_HEAD_TRACE, saturated). */
+function drawRoute(c, ctx, px) {
+  const rt = S.route;
+  for (const st of rt.stages) for (const op of st.ops) {
+    const node = op.add || (op.set && op.node); if (!node) continue; const pv = previewOfNode(node); if (!pv) continue;
+    if (pv.via) { drawViaPreview(c, pv.via.at, pv.via.size, pv.via.drill, px, 0.8); continue; }
+    c.globalAlpha = 0.8; c.strokeStyle = color(pv.layer); c.lineWidth = pv.width; for (const e of pv.els) strokeElem(c, e);
+  }
+  if (rt.shove) {
+    for (const L of rt.shove.preview.lines) { if (L.pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = color(L.layer); c.lineWidth = L.w; polyline(c, L.pts, false); }
+    for (const v of rt.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
+  }
+  const marks = (rt.collisions || []).concat(rt.viaBad || []);
+  for (const ob of marks) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }   // ROUTER::markViolations
+  const els = rt.els && rt.els.length ? rt.els : (rt.head && rt.head.length > 1 ? rt.head.slice(0, -1).map((p, i) => ({ t: "seg", a: p, b: rt.head[i + 1] })) : []);
+  if (els.length) {
+    c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = rt.width + 2 * routeHaloClearance(ctx, rt); for (const e of els) strokeElem(c, e);   // track_clearance_mode SHOW_WITH_VIA_WHILE_ROUTING
+    c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt.layer)); c.lineWidth = rt.width; for (const e of els) strokeElem(c, e);                      // PNS_HEAD_TRACE: the layer colour saturated, alpha 0.8
+  }
+  const via = headVia(ctx, rt);
+  if (via) {
+    const at = rt.target || rt.last; const clr = routeHaloClearance(ctx, rt);
+    c.globalAlpha = 0.7; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], via.diameter / 2 + clr, 0, 2 * Math.PI); c.fill();
+    drawViaPreview(c, at, via.diameter, via.drill, px, 0.8);
+  }
+  if (rt.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; line(c, rt.ratline[0], rt.ratline[1]); }
+}
+/** What the board render leaves out while the route shows it elsewhere: items rewritten or removed on its branch, and those the shove pushed. */
+function routeHiddenIds() {
+  const rt = S.route; if (!rt) return null; const out = new Set();
+  for (const st of rt.stages) for (const op of st.ops) { if (op.set) out.add(op.set); if (op.del) out.add(op.del); }
+  if (rt.shove) for (const id of rt.shove.preview.hidden) out.add(id);
+  return out.size ? out : null;
 }
 /** ROUTER_STATUS_VIEW_ITEM: a boxed message and hint above and to the right of the cursor, in the UI's colours. */
 function drawStatusNote(c, at, cpx, msg, hint) {
@@ -1581,7 +2040,7 @@ function finishSelectMove(ctx, commit, force) {
   }
   if (!commit || !m.moved || (!dx && !dy)) { ctx.requestRender(); return; }
   if (m.conns && !force) {   // COMPONENT_DRAGGER::FixRoute: refused while the dragged items collide (Ctrl+click forces)
-    moveApply(ctx, m, dx, dy); const hits = componentDragHits(ctx, m, dx, dy); moveApply(ctx, m, 0, 0); S.rworld = null;
+    moveApply(ctx, m, dx, dy); const hits = componentDragHits(ctx, m, dx, dy); moveApply(ctx, m, 0, 0); S.rworld = null; S.sworld = null;
     if (hits.length) { showViolations(hits, hits.at || cursorPoint(ctx)); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }
   }
   const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
@@ -1645,7 +2104,7 @@ function dragEnds(doc, m) {
  * with `at` the first place a hit was found.
  */
 function componentDragHits(ctx, m, dx, dy) {
-  const doc = ctx.doc, s = settingsOf(ctx); S.rworld = null;
+  const doc = ctx.doc, s = settingsOf(ctx); S.rworld = null; S.sworld = null;
   const lines = connLines(m, dx, dy); const gone = new Set(); for (const c of m.conns || []) for (const id of c.l.ids) gone.add(id);
   const moved = new Set(m.ids); const hits = new Set(); let at = null;
   const hit = (ob, p) => { if (!hits.has(ob)) { hits.add(ob); if (!at) at = p; } };
@@ -1675,7 +2134,7 @@ function componentDragHits(ctx, m, dx, dy) {
       }
     }
   }
-  S.rworld = null;
+  S.rworld = null; S.sworld = null;
   const out = Array.from(hits); out.at = at; return out;
 }
 /** The attached lines at a component drag's offset (LINE::DragCorner of the attached end, 45°). */
@@ -2516,7 +2975,8 @@ function shapeCorePts(s) { return s.t === "circle" ? [[s.x, s.y]] : s.t === "seg
 
 /** The board's copper and other routing obstacles, rebuilt when the document changes. */
 function routerWorld(doc) {
-  if (S.rworld && S.rworld.doc === doc && S.rworld.ver === S.docVer) return S.rworld;
+  if (doc.__bc && doc.__bc.rworld) return doc.__bc.rworld;
+  if (!doc.__bc && S.rworld && S.rworld.doc === doc && S.rworld.ver === S.docVer) return S.rworld;
   const copper = copperOf(doc); const conds = conductors(doc).filter((c) => c.kind !== "zone");
   const holes = [], keepouts = [];
   for (const it of doc.items.values()) {
@@ -2536,8 +2996,9 @@ function routerWorld(doc) {
     }
   }
   const edges = edgeShapes(doc).shapes.map((shape) => ({ id: null, kind: "edge", shape, bbox: shapeBBox(shape) }));
-  S.rworld = { doc, ver: S.docVer, conds, holes, keepouts, edges, copper };
-  return S.rworld;
+  const W = { doc, ver: S.docVer, conds, holes, keepouts, edges, copper };
+  if (doc.__bc) doc.__bc.rworld = W; else { S.rworld = W; S.sworld = null; }
+  return W;
 }
 /** PNS_PCBNEW_RULE_RESOLVER::Clearance for the routed net against an obstacle (the larger netclass clearance, floored at the board minimum). */
 function routeClearance(s, netKey, ob) {
@@ -2628,6 +3089,7 @@ function dir8(a, b) { const dx = b[0] - a[0], dy = b[1] - a[1]; if (Math.abs(dx)
 const dirAngle = (d1, d2) => { const d = Math.abs(d1 - d2) % 8; return d > 4 ? 8 - d : d; };
 const isDiagDir = (d) => d >= 0 && d % 2 === 1;
 /** A leg as a point list (routeLeg's segments joined). */
+const legPts45 = (a, b, diagFirst) => legPts(a, b, diagFirst);
 function legPts(a, b, diagFirst) { const segs = routeLeg(a, b, diagFirst); return segs.length ? [segs[0][0]].concat(segs.map((s) => s[1])) : [a.slice()]; }
 /** SHAPE_LINE_CHAIN::Simplify: drop repeated points and merge colinear segments. */
 function simplifyPts(pts) {
@@ -2660,8 +3122,8 @@ function clipPts(O, pts, r) {
  * wins), growing the set of obstacles it walks around until the goal is reached.  Returns the points or null.
  */
 const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
-function walkTo(O, start, goal, r, diagFirst, lastDir, deadline) {
-  deadline = deadline || now() + 40;
+function walkTo(O, start, goal, r, diagFirst, lastDir, deadline, legFn) {
+  deadline = deadline || now() + 40; const legPts = legFn || legPts45;
   const first = legPts(start, goal, diagFirst); if (pathClear(O, first, r)) return first;
   const second = legPts(start, goal, !diagFirst); if (pathClear(O, second, r)) return second;
   const active = new Set(pathHits(O, first, r).concat(pathHits(O, second, r)));
@@ -2729,11 +3191,12 @@ function walkTo(O, start, goal, r, diagFirst, lastDir, deadline) {
  * LINE_PLACER::routeHead in Walk around: the clear line towards the cursor.  An unreachable cursor (inside another
  * net's clearance, or walled in) gives the reachable point nearest to it.  { pts, reached }.
  */
-function walkHead(O, start, goal, r, diagFirst, lastDir) {
+function walkHead(O, start, goal, r, diagFirst, lastDir, legFn) {
+  const legPts = legFn || legPts45;
   const deadline = now() + 35;   // a mouse move must stay interactive: past this the head just stops short
   if (samePt(start, goal)) return { pts: [start.slice()], reached: true };
   if (segHit(O, start, start, r)) return { pts: [start.slice()], reached: false };
-  if (!segHit(O, goal, goal, r)) { const p = walkTo(O, start, goal, r, diagFirst, lastDir, deadline); if (p) return { pts: p, reached: true }; }
+  if (!segHit(O, goal, goal, r)) { const p = walkTo(O, start, goal, r, diagFirst, lastDir, deadline, legFn); if (p) return { pts: p, reached: true }; }
   // the cursor sits in a clearance zone (or no walk reaches it): try the hull edges nearest to it, then clip
   const cands = [];
   obstaclesNear(O, [goal[0], goal[1], goal[0], goal[1]], r, (ob) => {
@@ -2745,10 +3208,343 @@ function walkHead(O, start, goal, r, diagFirst, lastDir) {
   const clip = clipPts(O, legPts(start, goal, diagFirst), r); options.push(clip);
   cands.sort((p, q) => Math.hypot(p[0] - goal[0], p[1] - goal[1]) - Math.hypot(q[0] - goal[0], q[1] - goal[1]));
   let tried = 0;
-  for (const c of cands) { if (tried >= 2 || now() > deadline) break; if (segHit(O, c, c, r)) continue; tried++; const p = walkTo(O, start, [r6(c[0]), r6(c[1])], r, diagFirst, lastDir, deadline); if (p) options.push(p); }
+  for (const c of cands) { if (tried >= 2 || now() > deadline) break; if (segHit(O, c, c, r)) continue; tried++; const p = walkTo(O, start, [r6(c[0]), r6(c[1])], r, diagFirst, lastDir, deadline, legFn); if (p) options.push(p); }
   const dist = (p) => { const e = p[p.length - 1]; return Math.hypot(e[0] - goal[0], e[1] - goal[1]); };
   options.sort((a, b) => dist(a) - dist(b) || ptsLength(a) - ptsLength(b));
   return { pts: options[0], reached: false };
+}
+
+// ================================================================ SHOVE (pcbnew/router/pns_shove.cpp)
+// The head pushes the tracks and vias of other nets out of its way.  Each pushed track is re-walked around the hulls
+// of whatever pushes it (ShoveObstacleLine, both ways round, the side away from the pusher), vias are pushed out by
+// the collision's minimum translation and drag their tracks along (pushOrShoveVia), and every pushed thing is pushed
+// on a stack and checked in turn, until nothing collides or the iteration / time limits run out.  Pads, holes, rule
+// areas, the board edge, arcs and locked items are never moved: the head walks round them, and a pushed track that
+// meets one walks round it too (onCollidingSolid).  The whole shove is recomputed from the route's branch on every
+// move, so pushed tracks spring back as the head retreats (the springback stack's effect).
+const SHOVE_HEAD_RANK = 1e6;
+/** The octagonal hull (8 directions) of a shape's core points grown by `off`: SegmentHull / OctagonalHull. */
+function octagon(core, off) {
+  const h = DIRS8.map((u) => { let m = -Infinity; for (const p of core) m = Math.max(m, p[0] * u[0] + p[1] * u[1]); return m + off; });
+  const out = [];
+  for (let k = 0; k < 8; k++) {
+    const u0 = DIRS8[k], u1 = DIRS8[(k + 1) % 8], h0 = h[k], h1 = h[(k + 1) % 8]; const det = u0[0] * u1[1] - u0[1] * u1[0];
+    out.push([(h0 * u1[1] - h1 * u0[1]) / det, (u0[0] * h1 - u1[0] * h0) / det]);
+  }
+  return out;
+}
+const pairClr = (s, a, b) => Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0);
+const sameNetKey = (a, b) => !!a && a === b;
+/** Strictly inside a convex polygon (on the outline is outside). */
+function insideConvex(P, p) {
+  let sign = 0;
+  for (let i = 0; i < P.length; i++) {
+    const a = P[i], b = P[(i + 1) % P.length]; const c = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    if (Math.abs(c) < 1e-9 * Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1]))) return false;
+    const sg = c > 0 ? 1 : -1; if (!sign) sign = sg; else if (sg !== sign) return false;
+  }
+  return true;
+}
+/** Proper or touching intersection of segments p1p2 and p3p4: { t (along p1p2), u (along p3p4), p } or null (parallel: null). */
+function segIntersect(p1, p2, p3, p4) {
+  const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]]; const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
+  const E = 1e-9; if (t < -E || t > 1 + E || u < -E || u > 1 + E) return null;
+  return { t: Math.max(0, Math.min(1, t)), u: Math.max(0, Math.min(1, u)), p: [p1[0] + d1[0] * t, p1[1] + d1[1] * t] };
+}
+/**
+ * LINE::Walkaround for a convex hull: the path with its stretch through the hull replaced by the hull's outline,
+ * going round in hull order (dir +1) or against it (-1).  The path is returned unchanged when it only touches the
+ * hull; null when it starts or ends inside it.
+ */
+function walkAroundHull(path, H, dir) {
+  if (path.length < 2) return null;
+  if (insideConvex(H, path[0]) || insideConvex(H, path[path.length - 1])) return null;
+  const ips = [];
+  for (let i = 0; i + 1 < path.length; i++) for (let j = 0; j < H.length; j++) { const x = segIntersect(path[i], path[i + 1], H[j], H[(j + 1) % H.length]); if (x) ips.push({ i, t: x.t, j, u: x.u, p: x.p }); }
+  if (ips.length < 2) return path.map((p) => p.slice());
+  ips.sort((a, b) => a.i - b.i || a.t - b.t);
+  const first = ips[0], last = ips[ips.length - 1];
+  // only touching (no stretch strictly inside): nothing to walk round
+  let enters = false;
+  for (let k = 0; k + 1 < ips.length && !enters; k++) { const a = ips[k], b = ips[k + 1]; const pa = a.p, pb = b.p; if (insideConvex(H, [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2])) enters = true; }
+  for (let i = first.i + 1; i <= last.i && !enters; i++) if (insideConvex(H, path[i])) enters = true;
+  if (!enters) return path.map((p) => p.slice());
+  const n = H.length; const out = path.slice(0, first.i + 1).map((p) => p.slice()); out.push(first.p);
+  if (dir > 0) {
+    if (first.j === last.j && last.u >= first.u) { /* along the same edge */ }
+    else { let k = (first.j + 1) % n; for (let g = 0; g <= n; g++) { out.push(H[k].slice()); if (k === last.j) break; k = (k + 1) % n; } }
+  } else if (first.j === last.j && last.u <= first.u) { /* along the same edge, backwards */ }
+  else { let k = first.j; for (let g = 0; g <= n; g++) { out.push(H[k].slice()); if (k === (last.j + 1) % n) break; k = (k + n - 1) % n; } }
+  out.push(last.p); for (let i = last.i + 1; i < path.length; i++) out.push(path[i].slice());
+  return simplifyPts(out.map(rp));
+}
+/** SHAPE_LINE_CHAIN::SelfIntersecting: two non-adjacent segments that meet. */
+function selfIntersecting(pts) {
+  for (let i = 0; i + 1 < pts.length; i++) for (let j = i + 2; j + 1 < pts.length; j++) {
+    if (i === 0 && j === pts.length - 2 && peq(pts[0], pts[pts.length - 1])) continue;
+    if (segsIntersect(pts[i], pts[i + 1], pts[j], pts[j + 1])) return true;
+  }
+  return false;
+}
+/**
+ * The shove's view of the board: the movable tracks (unlocked segments) and vias, in coarse grids, and the solids
+ * (pads, holes, rule areas, the edge, arcs, locked tracks and vias, and vias at all while "Shove vias" is off).
+ */
+function shoveWorld(doc, s, shoveVias) {
+  const bc = doc.__bc; const key = "sw" + (shoveVias ? 1 : 0);
+  if (bc && bc[key]) return bc[key];
+  if (!bc && S.sworld && S.sworld.doc === doc && S.sworld.ver === S.docVer && S.sworld.key === key) return S.sworld.w;
+  const Wd = routerWorld(doc); const tracks = new Map(), vias = new Map(), solids = [];
+  const CELL = 2.5; const grid = new Map(); let maxW = 0;
+  const gadd = (o, b) => { for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) { const k = gx + "," + gy; let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(o); } };
+  for (const c of Wd.conds) {
+    const locked = c.item && isLocked(c.item.node);
+    if (c.kind === "segment" && !locked) { const o = { kind: "track", id: c.id, a: c.shape.a, b: c.shape.b, w: c.width, layer: Array.from(c.layers)[0], net: c.net, item: c.item }; tracks.set(c.id, o); gadd(o, c.bbox); maxW = Math.max(maxW, c.width); continue; }
+    if (c.kind === "via" && !locked && shoveVias) { const o = { kind: "via", id: c.id, at: [c.shape.x, c.shape.y], r: c.shape.r, drill: c.drill, layers: c.layers, net: c.net, item: c.item }; vias.set(c.id, o); gadd(o, c.bbox); maxW = Math.max(maxW, 2 * c.shape.r); continue; }
+    const o = { kind: "solid", id: c.id, ckind: c.kind, layers: c.layers, net: c.net, shape: c.shape, bbox: c.bbox, pad: c.pad }; solids.push(o); gadd(o, c.bbox);
+  }
+  for (const h of Wd.holes) { const o = { kind: "solid", id: h.id, ckind: "hole", layers: h.layers, net: "", shape: h.shape, bbox: h.bbox }; solids.push(o); gadd(o, h.bbox); }
+  for (const k of Wd.keepouts) { const o = { kind: "solid", id: k.id, ckind: "keepout", layers: k.layers, net: "", shape: k.shape, bbox: k.bbox }; solids.push(o); gadd(o, k.bbox); }
+  for (const e of Wd.edges) { const o = { kind: "solid", id: null, ckind: "edge", layers: null, net: "", shape: e.shape, bbox: e.bbox }; solids.push(o); gadd(o, e.bbox); }
+  const w = { doc, tracks, vias, solids, grid, CELL, maxW, s };
+  if (bc) bc[key] = w; else S.sworld = { doc, ver: S.docVer, key, w };
+  return w;
+}
+/** Clearance between a line of net `net` and a solid (PNS_PCBNEW_RULE_RESOLVER's kinds). */
+function solidClr(s, net, o) { return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net }); }
+/** The items of the world (base grid, then the shoved lines and vias) near a box. */
+function shoveNear(SW, st, box, grow, fn) {
+  const C = SW.CELL, seen = new Set();
+  for (let gx = Math.floor((box[0] - grow) / C); gx <= Math.floor((box[2] + grow) / C); gx++) for (let gy = Math.floor((box[1] - grow) / C); gy <= Math.floor((box[3] + grow) / C); gy++) {
+    const l = SW.grid.get(gx + "," + gy); if (!l) continue;
+    for (const o of l) { if (seen.has(o)) continue; seen.add(o); if (o.kind === "track" && st.lineOf.has(o.id)) continue; if (o.kind === "via" && st.viaAt.has(o.id)) continue; fn(o); }
+  }
+  for (const L of st.lines.values()) fn({ kind: "line", L });
+  for (const [id, at] of st.viaAt) { const v = SW.vias.get(id); if (v) fn(Object.assign({}, v, { at, moved: true })); }
+}
+/** The line's segments [a, b] and its via (if any) as collision probes. */
+const lineSegs = (L) => (L.pts.length > 1 ? L.pts.slice(0, -1).map((p, i) => [p, L.pts[i + 1]]) : []);
+/**
+ * NODE::NearestObstacle in SHOVE::shoveIteration's search order (SOLID, VIA, SEGMENT): the obstacle the line meets
+ * first.  { kind: "solid" | "via" | "line", o, L } or null.
+ */
+function shoveNearest(SW, st, L) {
+  const s = SW.s; const segs = lineSegs(L); const found = { solid: null, via: null, line: null };
+  const score = (k, d, x) => { if (!found[k] || d < found[k].d) found[k] = Object.assign({ d }, x); };
+  const consider = (o, probe, idx, rL, onLayer) => {
+    if (o.kind === "line") {
+      const M = o.L; if (M === L || M.layer !== onLayer || sameNetKey(M.net, L.net)) return;
+      const c = pairClr(s, L.net, M.net);
+      for (let k = 0; k + 1 < M.pts.length; k++) { const g = probeGap(probe, rL, { t: "seg", a: M.pts[k], b: M.pts[k + 1], r: M.w / 2 }); if (g < c - ROUTE_EPS) { score("line", idx + probeDist(probe, M.pts[k]), { L: M }); return; } }
+      return;
+    }
+    if (L.ownIds && o.id && L.ownIds.has(o.id)) return;
+    if (o.kind === "track") {
+      if (o.layer !== onLayer || sameNetKey(o.net, L.net) || (L.ids && L.ids.includes(o.id))) return;
+      const g = probeGap(probe, rL, { t: "seg", a: o.a, b: o.b, r: o.w / 2 }); if (g < pairClr(s, L.net, o.net) - ROUTE_EPS) score("line", idx + probeDist(probe, o.a), { o });
+    } else if (o.kind === "via") {
+      if (!o.layers.has(onLayer) || sameNetKey(o.net, L.net) || (L.viaId && L.viaId === o.id)) return;
+      const g = probeGap(probe, rL, { t: "circle", x: o.at[0], y: o.at[1], r: o.r }); if (g < pairClr(s, L.net, o.net) - ROUTE_EPS) score("via", idx + probeDist(probe, o.at), { o });
+    } else {
+      if (o.layers && !o.layers.has(onLayer)) return;
+      if (o.ckind !== "edge" && o.ckind !== "hole" && o.ckind !== "keepout" && (sameNetKey(o.net, L.net) || (o.ckind === "pad" && (!o.net ? !L.net : isFreePad(o.pad))))) return;
+      if (o.ckind === "keepout") { const a = probe.t === "seg" ? probe.a : [probe.x, probe.y], b = probe.t === "seg" ? probe.b : a; if (pointInPoly(o.shape.pts, a[0], a[1]) || pointInPoly(o.shape.pts, b[0], b[1]) || polySegDist(o.shape.pts, a, b) < rL - ROUTE_EPS) score("solid", idx, { o }); return; }
+      const g = probeGap(probe, rL, o.shape); if (g < solidClr(s, L.net, o) - ROUTE_EPS) score("solid", idx + probeDist(probe, shapeCorePts(o.shape)[0]), { o });
+    }
+  };
+  const grow = (L.w || 0) / 2 + SW.maxW + 2;
+  segs.forEach(([a, b], i) => {
+    const probe = { t: "seg", a, b }; const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+    shoveNear(SW, st, box, grow, (o) => consider(o, probe, i * 1e4, L.w / 2, L.layer));
+  });
+  if (L.via) {
+    const v = L.via; const probe = { t: "circle", x: v.at[0], y: v.at[1] };
+    for (const layer of v.layers) shoveNear(SW, st, [v.at[0], v.at[1], v.at[0], v.at[1]], v.r + grow, (o) => consider(o, probe, segs.length * 1e4, v.r, layer));
+  }
+  if (found.solid) return Object.assign({ kind: "solid" }, found.solid);
+  if (found.via) return Object.assign({ kind: "via" }, found.via);
+  if (found.line) return Object.assign({ kind: "line" }, found.line);
+  return null;
+}
+function probeGap(probe, r, shape) { const p = probe.t === "seg" ? { t: "seg", a: probe.a, b: probe.b, r } : { t: "circle", x: probe.x, y: probe.y, r }; return shapeGap(p, shape); }
+function probeDist(probe, q) { const a = probe.t === "seg" ? probe.a : [probe.x, probe.y]; return Math.min(9999, Math.hypot(q[0] - a[0], q[1] - a[1])); }
+/** SHOVE::assembleLine for a track of the world (or the shoved line it is already part of). */
+function shoveLineOf(SW, st, o) {
+  if (st.lineOf.has(o.id)) return st.lineOf.get(o.id);
+  const ln = assembleLine(SW.doc, o.item); if (!ln) return null;
+  return { key: ln.ids.join(","), ids: ln.ids, pts: ln.pts.map((p) => p.slice()), orig: ln.pts.map((p) => p.slice()), w: ln.width, layer: ln.layer, net: ln.netKey, rank: -Infinity };
+}
+function setLine(st, L, pts) { L.pts = pts; if (L.head || L.proxy) return; st.lines.set(L.key, L); for (const id of L.ids) st.lineOf.set(id, L); }
+/** The hulls a pusher puts around itself for a pushed line of width w (its segments, and its via). */
+function pusherHulls(s, P, V) {
+  const c = pairClr(s, P.net, V.net); const out = [];
+  for (const [a, b] of lineSegs(P)) out.push(octagon([a, b], P.w / 2 + c + V.w / 2 + HULL_EPS));
+  if (P.via) out.push(octagon([P.via.at], P.via.r + c + V.w / 2 + HULL_EPS));
+  return out;
+}
+/** Does line V keep its clearance to pusher P? */
+function clearOf(s, P, V) {
+  const c = pairClr(s, P.net, V.net) - ROUTE_EPS;
+  for (const [a, b] of lineSegs(V)) {
+    const sv = { t: "seg", a, b, r: V.w / 2 };
+    for (const [p, q] of lineSegs(P)) if (shapeGap(sv, { t: "seg", a: p, b: q, r: P.w / 2 }) < c) return false;
+    if (P.via && shapeGap(sv, { t: "circle", x: P.via.at[0], y: P.via.at[1], r: P.via.r }) < c) return false;
+  }
+  return true;
+}
+/** SHOVE::checkShoveDirection: the pusher's first point must not lie inside the area the shove sweeps. */
+function shoveDirectionOk(P, orig, shoved) {
+  const cp = P.pts.length ? P.pts[0] : P.via.at;
+  const poly = orig.concat(shoved.slice().reverse()); return !pointInPoly(poly, cp[0], cp[1]);
+}
+/**
+ * SHOVE::ShoveObstacleLine / shoveLineToHullSet: line V re-walked round the hulls of pusher P — four attempts (each
+ * way round, the hulls in either order) — keeping its ends, on the side away from the pusher, clear of it.
+ */
+function shoveLine(s, P, V) {
+  const hulls = pusherHulls(s, P, V); if (!hulls.length || V.pts.length < 2) return null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const order = attempt >= 2 ? hulls.slice().reverse() : hulls, dir = attempt % 2 ? 1 : -1;
+    let path = V.pts.map((p) => p.slice()); let ok = true;
+    for (const H of order) { const w = walkAroundHull(path, H, dir); if (!w) { ok = false; break; } path = w; }
+    if (!ok) continue;
+    if (!peq(path[0], V.pts[0]) || !peq(path[path.length - 1], V.pts[V.pts.length - 1])) continue;
+    if (!shoveDirectionOk(P, V.pts, path)) continue;
+    if (selfIntersecting(path)) continue;
+    if (!clearOf(s, P, { pts: path, w: V.w, net: V.net })) continue;
+    return path;
+  }
+  return null;
+}
+/** SHOVE::onCollidingSolid for a pushed line: walk it round the solid, the shorter way, its ends kept. */
+function walkLineAround(s, L, shape, clr) {
+  const core = shapeCorePts(shape); const off = (shape.t === "poly" ? 0 : shapeOffset(shape)) + clr + L.w / 2 + HULL_EPS; const H = octagon(core, off);
+  let best = null;
+  for (const dir of [1, -1]) { const p = walkAroundHull(L.pts, H, dir); if (!p || selfIntersecting(p) || !peq(p[0], L.pts[0]) || !peq(p[p.length - 1], L.pts[L.pts.length - 1])) continue; if (!best || ptsLength(p) < ptsLength(best)) best = p; }
+  return best;
+}
+/**
+ * SHOVE::pushOrShoveVia: the via pushed out of the line by the collision's minimum translation; the tracks ending
+ * on it follow with 45° corners (LINE::DragCorner) and are pushed on the stack with the via.
+ */
+function pushVia(SW, st, L, v, stack) {
+  const s = SW.s; const R = v.r + pairClr(s, L.net, v.net) + HULL_EPS; let at = v.at.slice();
+  for (let k = 0; k < 24; k++) {
+    let moved = false;
+    for (const [a, b] of lineSegs(L)) {
+      const q = closestOnSeg(at, a, b); let d = Math.hypot(at[0] - q[0], at[1] - q[1]); const need = R + L.w / 2;
+      if (d >= need - 1e-9) continue;
+      let n = d > 1e-9 ? [(at[0] - q[0]) / d, (at[1] - q[1]) / d] : vunit([-(b[1] - a[1]), b[0] - a[0]]);
+      if (d <= 1e-9 && !n[0] && !n[1]) n = [1, 0];
+      at = [at[0] + n[0] * (need - d), at[1] + n[1] * (need - d)]; moved = true;
+    }
+    if (L.via) { const d = Math.hypot(at[0] - L.via.at[0], at[1] - L.via.at[1]), need = R + L.via.r; if (d < need - 1e-9) { const n = d > 1e-9 ? [(at[0] - L.via.at[0]) / d, (at[1] - L.via.at[1]) / d] : [1, 0]; at = [at[0] + n[0] * (need - d), at[1] + n[1] * (need - d)]; moved = true; } }
+    if (!moved) break;
+  }
+  at = rp(at);
+  const rank = L.rank - 1; st.viaAt.set(v.id, at); st.viaRank.set(v.id, rank);
+  const item = SW.doc.items.get(v.id);
+  for (const fl of item ? viaFanout(SW.doc, item) : []) {
+    if (fl.arc || !fl.ids.length) return false;   // an arc on the via cannot follow (arcs are not shoved here)
+    const M = st.lineOf.get(fl.ids[0]) || { key: fl.ids.join(","), ids: fl.ids, pts: fl.pts.map((p) => p.slice()), orig: fl.pts.map((p) => p.slice()), w: fl.width, layer: fl.layer, net: fl.netKey, rank: -Infinity };
+    if (!peq(M.pts[0], v.at) && peq(M.pts[M.pts.length - 1], v.at)) { M.pts.reverse(); M.ids = M.ids.slice().reverse(); if (M.orig) M.orig = M.orig.slice().reverse(); }
+    if (!peq(M.pts[0], v.at)) continue;
+    M.rank = rank; setLine(st, M, dragCorner45(M.pts, 0, at, 0));
+    const i = stack.indexOf(M); if (i >= 0) stack.splice(i, 1); stack.push(M);
+  }
+  stack.push({ proxy: true, key: "via:" + v.id, viaId: v.id, pts: [at], w: 0, layer: null, net: v.net, rank, via: { at, r: v.r, layers: v.layers } });
+  return true;
+}
+/**
+ * SHOVE::Run → shoveMainLoop: push everything out of the heads' way.  heads: [{ pts, w, layer, net, via?, ownIds? }].
+ * Returns the shove state { lines, viaAt } or null when it cannot be done within the limits.
+ */
+function shoveRun(SW, heads, rs) {
+  const st = { lines: new Map(), lineOf: new Map(), viaAt: new Map(), viaRank: new Map() };
+  const stack = heads.map((h, i) => Object.assign({ head: true, key: "head" + i, rank: SHOVE_HEAD_RANK, ids: h.ids || [] }, h));
+  const limit = rs.shove_iteration_limit || 250, deadline = now() + Math.min(rs.shove_time_limit || 1000, 150);   // an interactive move keeps well under KiCad's 1 s
+  const s = SW.s;
+  for (let iter = 0; stack.length; iter++) {
+    if (iter >= limit || now() > deadline) return null;
+    const cur = stack[stack.length - 1];
+    const hit = shoveNearest(SW, st, cur);
+    if (!hit) { stack.pop(); continue; }
+    if (hit.kind === "solid") {
+      if (cur.head || cur.proxy) return null;
+      const w = walkLineAround(s, cur, hit.o.shape, hit.o.ckind === "keepout" ? 0 : solidClr(s, cur.net, hit.o)); if (!w) return null;
+      setLine(st, cur, w); continue;
+    }
+    if (hit.kind === "via") {
+      const v = st.viaAt.has(hit.o.id) ? Object.assign({}, hit.o, { at: st.viaAt.get(hit.o.id) }) : hit.o;
+      const vr = st.viaRank.has(v.id) ? st.viaRank.get(v.id) : -Infinity;
+      if (vr > cur.rank) {   // onReverseCollidingVia: the line gives way round the via that was pushed into it
+        if (cur.head || cur.proxy) return null;
+        const res = shoveLine(s, { pts: [], w: 0, net: v.net, via: { at: v.at, r: v.r } }, cur); if (!res) return null; setLine(st, cur, res); continue;
+      }
+      if (!pushVia(SW, st, cur, v, stack)) return null;
+      continue;
+    }
+    const ob = hit.L || shoveLineOf(SW, st, hit.o); if (!ob) return null;
+    if (ob.rank > cur.rank) {   // reverse collision: the line that was pushed further pushes this one back
+      if (cur.head || cur.proxy) return null;
+      const res = shoveLine(s, ob, cur); if (!res) return null; setLine(st, cur, res); continue;
+    }
+    const res = shoveLine(s, cur, ob); if (!res) return null;
+    ob.rank = cur.rank - 1; setLine(st, ob, res);
+    const i = stack.indexOf(ob); if (i >= 0) stack.splice(i, 1); stack.push(ob);
+  }
+  return st;
+}
+/** The branch edits of a shove: each pushed line's segments rewritten (the first ones keep their uuids), each pushed via moved. */
+function shoveOps(doc, st) {
+  const ops = [];
+  for (const L of st.lines.values()) {
+    const pts = simplifyPts(L.pts); const olds = L.ids.map((id) => doc.items.get(id)).filter(Boolean); if (!olds.length) continue;
+    const n = pts.length - 1;
+    for (let i = 0; i < n; i++) {
+      const base = olds[Math.min(i, olds.length - 1)]; const node = clone(base.node);
+      K.kid(node, "start").splice(1, 2, r6(pts[i][0]), r6(pts[i][1])); K.kid(node, "end").splice(1, 2, r6(pts[i + 1][0]), r6(pts[i + 1][1]));
+      if (i < olds.length) ops.push({ set: olds[i].id, node });
+      else { const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); }
+    }
+    for (let i = Math.max(n, 0); i < olds.length; i++) ops.push({ del: olds[i].id });
+  }
+  for (const [id, at] of st.viaAt) { const it = doc.items.get(id); if (!it) continue; const node = clone(it.node); K.kid(node, "at").splice(1, 2, r6(at[0]), r6(at[1])); ops.push({ set: id, node }); }
+  return ops;
+}
+/** What a shove shows: the pushed lines and vias, and the ids of the originals they hide. */
+function shovePreview(doc, st) {
+  const hidden = new Set(); const lines = [], vias = [];
+  for (const L of st.lines.values()) { for (const id of L.ids) hidden.add(id); lines.push({ pts: L.pts, w: L.w, layer: L.layer }); }
+  for (const [id, at] of st.viaAt) { const it = doc.items.get(id); if (!it) continue; hidden.add(id); const v = viaNow(it.node); vias.push({ at, size: v.size, drill: v.drill }); }
+  return { hidden, lines, vias };
+}
+/** The router's obstacles in Shove mode for the head's walk (rhWalkBase( SOLID_T )): everything the shove cannot move. */
+function solidObs(ctx, rt, layer) {
+  layer = layer || rt.layer; const doc = routeDoc(ctx, rt); const s = settingsOf(ctx);
+  const key = S.docVer + "|" + layer + "|" + rt.width + "|" + rt.stages.length + "|" + rt.netKey + "|" + S.rs.shove_vias;
+  if (rt.sobs && rt.sobs.key === key && rt.sobs.doc === doc) return rt.sobs;
+  const SW = shoveWorld(doc, s, S.rs.shove_vias); const skip = new Set([...SW.tracks.keys(), ...SW.vias.keys()]);
+  rt.sobs = routeObstacles(doc, s, rt.netKey, layer, rt.netKey ? null : routeOwn(rt), skip); rt.sobs.key = key; rt.sobs.doc = doc;
+  return rt.sobs;
+}
+/**
+ * LINE_PLACER::rhShoveOnly: the head walked round the solids, then shoved into the rest.  { pts, reached, shove } or
+ * null when the shove fails (the caller walks around instead).
+ */
+function shoveHead(ctx, rt, leg) {
+  const s = settingsOf(ctx), doc = ctx.doc; const r = rt.width / 2;
+  const SOL = solidObs(ctx, rt); const w = walkHead(SOL, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir, leg);
+  const via = headVia(ctx, rt); const head = { pts: w.pts, w: rt.width, layer: rt.layer, net: rt.netKey, ownIds: rt.netKey ? null : routeOwn(rt) };
+  if (via) {
+    head.via = { at: w.pts[w.pts.length - 1].slice(), r: via.diameter / 2, layers: new Set(viaSpanLayers(doc, via.layers)) };
+    for (const L of head.via.layers) if (pathHits(solidObs(ctx, rt, L), [head.via.at], head.via.r).length) return null;
+  }
+  const SW = shoveWorld(doc, s, S.rs.shove_vias);
+  const st = shoveRun(SW, [head], S.rs); if (!st) return null;
+  return { pts: w.pts, reached: w.reached, shove: { ops: shoveOps(doc, st), preview: shovePreview(doc, st), viaOk: true } };
 }
 
 // ---------------------------------------------------------------- MOUSE_TRAIL_TRACER: the posture follows the mouse
@@ -3212,8 +4008,9 @@ function msgPanelInfo(doc, ids, opts) {
   if (rt) {   // ROUTER_TOOL::UpdateMessagePanel
     const net = rt.net && (rt.net.name || "");
     if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`); else add("Routing Track", "(no net)");
-    add("Corner Style", rt.freeAngle ? "Free-angle" : "45-degree");
-    add("Mode", "Walk around");
+    const rs = opts.routerSettings || S.rs;
+    add("Corner Style", cornerStyleName(rs));
+    add("Mode", MODE_NAMES[rs.mode]);
     const R = K.pcbSizes && K.pcbSizes.state;
     const widthFrom = rt.connected && R && R.useConnectedWidth && !R.tempOverride ? "existing track" : R && !R.useNetclassTrack ? "user choice" : `netclass '${NN(net)}'`;
     add(`Track Width: ${V(rt.width)}`, `(from ${widthFrom})`);
@@ -3614,6 +4411,32 @@ act("layerToggle", "Toggle Layer", "", (ctx) => { setLayer(ctx, sizesOf(ctx).pai
 act("ratsnestLineMode", "Curved Ratsnest Lines", "", (ctx) => { const R = sizesOf(ctx); R.setCurvedRatsnest(!R.curvedRatsnest); ctx.requestRender(); return true; }, { toggle: () => !!K.pcbSizes.state.curvedRatsnest, menu: "-" });
 // the two routing dialogs are built by the editor bundle (web/editor/pcbrouting.ts) and handed over through pcb.setRoutingDialogs
 let routingDialogs = {};
+// ROUTER_TOOL: the router's mode (PCB_ACTIONS::routerHighlightMode / routerShoveMode / routerWalkaroundMode, cycleRouterMode),
+// its settings dialog, the corner modes and the via commands (ACT_* in router_tool.cpp; context hotkeys in onCaptureKey / onKey)
+const ROUTER_ACTION = { menu: false };
+act("routerHighlightMode", "Router Highlight Mode", "", () => { setRouterSettings({ mode: RM_MARK }); return true; }, Object.assign({ tip: "Switch router to highlight mode", check: () => S.rs.mode === RM_MARK }, ROUTER_ACTION));
+act("routerShoveMode", "Router Shove Mode", "", () => { setRouterSettings({ mode: RM_SHOVE }); return true; }, Object.assign({ tip: "Switch router to shove mode", check: () => S.rs.mode === RM_SHOVE }, ROUTER_ACTION));
+act("routerWalkaroundMode", "Router Walkaround Mode", "", () => { setRouterSettings({ mode: RM_WALK }); return true; }, Object.assign({ tip: "Switch router to walkaround mode", check: () => S.rs.mode === RM_WALK }, ROUTER_ACTION));
+act("cycleRouterMode", "Cycle Router Mode", "", () => { setRouterSettings({ mode: S.rs.mode === RM_MARK ? RM_SHOVE : S.rs.mode === RM_SHOVE ? RM_WALK : RM_MARK }); return true; }, Object.assign({ tip: "Cycle router to the next mode" }, ROUTER_ACTION));
+act("routerSettingsDialog", "Interactive Router Settings...", "", (ctx) => { if (routingDialogs.routerSettings) routingDialogs.routerSettings(ctx); else ctx.toast("Interactive Router Settings: dialogs are unavailable here"); return true; }, { menu: "Route", tip: "Open Interactive Router settings" });
+// handlePnSCornerModeChange: Ctrl+/ steps MITERED_45 → ROUNDED_45 → MITERED_90 → ROUNDED_90
+act("ACT_SwitchCornerModeToNext", "Track Corner Mode Switch", "", () => { setRouterSettings({ corner_mode: (S.rs.corner_mode + 1) % 4 }); return true; }, Object.assign({ tip: "Switches between sharp/rounded and 45°/90° corners when routing tracks." }, ROUTER_ACTION));
+act("ACT_SwitchCornerMode45", "Track Corner Mode 45", "", () => { setRouterSettings({ corner_mode: CM_M45 }); return true; }, Object.assign({ tip: "Switch to 45° corner when routing tracks.", check: () => S.rs.corner_mode === CM_M45 }, ROUTER_ACTION));
+act("ACT_SwitchCornerModeArc45", "Track Corner Mode Arc 45", "", () => { setRouterSettings({ corner_mode: CM_R45 }); return true; }, Object.assign({ tip: "Switch to arc 45° corner when routing tracks.", check: () => S.rs.corner_mode === CM_R45 }, ROUTER_ACTION));
+act("ACT_SwitchCornerMode90", "Track Corner Mode 90", "", () => { setRouterSettings({ corner_mode: CM_M90 }); return true; }, Object.assign({ tip: "Switch to 90° corner when routing tracks.", check: () => S.rs.corner_mode === CM_M90 }, ROUTER_ACTION));
+act("ACT_SwitchCornerModeArc90", "Track Corner Mode Arc 90", "", () => { setRouterSettings({ corner_mode: CM_R90 }); return true; }, Object.assign({ tip: "Switch to arc 90° corner when routing tracks.", check: () => S.rs.corner_mode === CM_R90 }, ROUTER_ACTION));
+const routingOnly = (ctx, fn) => { if (!S.route) return false; if (!canEdit(ctx)) return true; fn(); return true; };
+act("ACT_PlaceThroughVia", "Place Through Via", "", (ctx) => {
+  if (S.route) return routingOnly(ctx, () => toggleViaPlacement(ctx, "through"));
+  if (S.modTool !== "route") return false;
+  startWithVia(ctx); return true;
+}, Object.assign({ tip: "Adds a through-hole via at the end of currently routed track." }, ROUTER_ACTION));
+act("ACT_PlaceBlindVia", "Place Blind/Buried Via", "", (ctx) => routingOnly(ctx, () => toggleViaPlacement(ctx, "blind")), Object.assign({ tip: "Adds a blind or buried via at the end of currently routed track." }, ROUTER_ACTION));
+act("ACT_PlaceMicroVia", "Place Microvia", "", (ctx) => routingOnly(ctx, () => toggleViaPlacement(ctx, "micro")), Object.assign({ tip: "Adds a microvia at the end of currently routed track." }, ROUTER_ACTION));
+act("ACT_SelLayerAndPlaceThroughVia", "Select Layer and Place Through Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "through")), Object.assign({ tip: "Select a layer, then add a through-hole via at the end of currently routed track." }, ROUTER_ACTION));
+act("ACT_SelLayerAndPlaceBlindVia", "Select Layer and Place Blind/Buried Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "blind")), Object.assign({ tip: "Select a layer, then add a blind or buried via at the end of currently routed track." }, ROUTER_ACTION));
+act("ACT_SelLayerAndPlaceMicroVia", "Select Layer and Place Micro Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "micro")), Object.assign({ tip: "Select a layer, then add a micro via at the end of currently routed track." }, ROUTER_ACTION));
+act("routerUndoLastSegment", "Undo Last Segment", "", (ctx) => routingOnly(ctx, () => undoRouteLeg(ctx)), Object.assign({ tip: "Walks the current track back one segment." }, ROUTER_ACTION));
 act("selectLayerPair", "Set Layer Pair...", "", (ctx) => { if (routingDialogs.layerPair) routingDialogs.layerPair(ctx); else ctx.toast("Set Layer Pair: dialogs are unavailable here"); return true; }, { menu: "-" });
 act("editPredefinedSizes", "Edit Pre-defined Sizes...", "", (ctx) => { if (routingDialogs.sizes) routingDialogs.sizes(ctx); else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here"); return true; }, { menu: "-" });
 // the grid origin and the drill / place file origin: picked with a one-shot tool, reset to the page origin
@@ -3777,11 +4600,33 @@ const CTRL_SHIFT_KEYS = { a: "Arc", p: "Polygon", b: "Bezier", h: "Ortho", k: "R
 const CTRL_KEYS = { c: "Copy", x: "Cut", v: "Paste", d: "Duplicate" };
 function repost(ev, key) { ev.stopImmediatePropagation(); ev.preventDefault(); document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); }
 const liveSelection = () => appGlobal(() => editorState().selection, null);
+/**
+ * ROUTER_TOOL's context hotkeys with a modifier (router_tool.cpp ACT_*), ahead of the board-wide ones they shadow while
+ * the router runs: Ctrl+Z / Ctrl+V / Alt+Shift+V / Alt+< only while a track is being routed (undo the last segment,
+ * microvia, blind via, select layer and place a blind via), the corner modes (Ctrl+/, Ctrl+W, Ctrl+Shift+W,
+ * Ctrl+Alt+W, Alt+W) whenever the Route tool is active.  The browser keeps Ctrl+W and Ctrl+Shift+W for itself.
+ */
+function routerKeyAction(ev) {
+  const ctrl = !!(ev.ctrlKey || ev.metaKey), alt = !!ev.altKey, shift = !!ev.shiftKey, code = ev.code || "", k = ev.key;
+  if (S.route) {
+    if (ctrl && !alt && !shift && (k === "z" || k === "Z")) return "routerUndoLastSegment";
+    if (ctrl && !alt && !shift && (code === "KeyV" || k === "v" || k === "V")) return "ACT_PlaceMicroVia";
+    if (alt && shift && !ctrl && code === "KeyV") return "ACT_PlaceBlindVia";
+    if (alt && !ctrl && (k === "<" || (shift && code === "Comma"))) return "ACT_SelLayerAndPlaceBlindVia";
+  }
+  if (ctrl && !alt && k === "/") return "ACT_SwitchCornerModeToNext";
+  if (code === "KeyW" && alt && !ctrl && !shift) return "ACT_SwitchCornerModeArc90";
+  if (code === "KeyW" && alt && ctrl && !shift) return "ACT_SwitchCornerMode90";
+  if (code === "KeyW" && ctrl && !alt && !shift) return "ACT_SwitchCornerMode45";
+  if (code === "KeyW" && ctrl && shift && !alt) return "ACT_SwitchCornerModeArc45";
+  return null;
+}
 function onCaptureKey(ev) {
   if (!isPcbDoc()) return;
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   if (root.KDialogs && root.KDialogs.isOpen && root.KDialogs.isOpen()) return;
   const k = ev.key;
+  if (S.route || S.modTool === "route") { const id = routerKeyAction(ev); if (id && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction(id, lastCtx); return; } }
   if (ev.altKey && !ev.metaKey) { if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyZ") repost(ev, "Zone"); else if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyS") repost(ev, "Swap"); return; }
   if (ev.ctrlKey || ev.metaKey) {
     if (ev.altKey) return;
@@ -3958,15 +4803,9 @@ function drawOverlay(c, view, ctx) {
   // route in progress: fixed legs are already in the document, the current one lives here
   // ROUTER::markViolations: obstacles in violation (a refused start or via) in pure green over their clearance halo
   if (S.violations) for (const ob of S.violations.obs) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
-  // route in progress (ROUTER::movePlacing): the head since the last click over its clearance halo, then the leading ratsnest line
-  if (S.route) {
-    const rt = S.route; const pts = rt.head || [rt.last];
-    if (pts.length > 1) {
-      c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = rt.width + 2 * routeHaloClearance(ctx, rt); polyline(c, pts, false);   // track_clearance_mode SHOW_WITH_VIA_WHILE_ROUTING
-      c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt.layer)); c.lineWidth = rt.width; polyline(c, pts, false);                      // PNS_HEAD_TRACE: the layer colour saturated, alpha 0.8
-    }
-    if (rt.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; line(c, rt.ratline[0], rt.ratline[1]); }
-  }
+  // route in progress (ROUTER::movePlacing): what is fixed on the route's branch, what the shove pushed, the head since
+  // the last click (and the via it carries) over its clearance halo, the collisions it marks, then the leading ratsnest line
+  if (S.route) drawRoute(c, ctx, px);
   // drawing preview
   if (S.draw) {
     const d = S.draw; const layer = d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer;
@@ -4044,7 +4883,7 @@ const TOOLS = [
   { id: "gridorigin", label: "Grid Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M7 7l10 10M17 7L7 17"/>' },
   { id: "drillorigin", label: "Drill/Place File Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M12 3v18M3 12h18"/>' },
 ];
-const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V via, W width, PgUp/PgDn layer, Enter or double-click to end",
+const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V via, Ctrl+/ corner mode, Backspace undo segment, End or double-click to finish, Esc to discard",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
   grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
   garc: "Arc — click the start, the end, then a point on the arc", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
@@ -4075,8 +4914,12 @@ function ghostSegs() {
   if (!rt)
     return [];
 
-  const pts = rt.head || [rt.last];
-  return pts.slice(0, -1).map((a, i) => [a[0], a[1], pts[i + 1][0], pts[i + 1][1], rt.width]);
+  // the route's fixed stages are not on the board until the route ends: they travel as ghosts too, with the head
+  const out = [];
+  for (const st of rt.stages) for (const op of st.ops) { const n = op.add || (op.set && op.node); if (!n || (n[0] !== "segment" && n[0] !== "arc")) continue; const a = pt(n, "start"), b = pt(n, "end"); out.push([a[0], a[1], b[0], b[1], widthOf(n, 0.25)]); }
+  const pts = rt.els && rt.els.length ? elemsPts(rt.els) : (rt.head || [rt.last]);
+  for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rt.width]);
+  return out;
 }
 
 const pcb = {
@@ -4091,7 +4934,7 @@ const pcb = {
     S.pending = { ids: Array.from(ids), item: ctx.doc.items.get(ids[0]), mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0], app: true }; return true;
   },
   /** What the canvas leaves out while it is drawn elsewhere (the lines being dragged). */
-  hiddenIds() { return dragHiddenIds(); },
+  hiddenIds() { return routeHiddenIds() || dragHiddenIds(); },
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
@@ -4177,7 +5020,11 @@ const pcb = {
     const shift = !!ev.shiftKey;
     switch (k) {
     case "x": case "X": if (!shift) { ctx.setTool("route"); return true; } return false;
-    case "v": case "V": if (shift) return false; if (S.route) { if (editing()) routeVia(ctx); } else ctx.setTool("via"); return true;
+    // V: ACT_PlaceThroughVia while the router is active (a via rides the head; idle, the next route starts with one),
+    // elsewhere PCB_ACTIONS::layerToggle (the spec table); Place Vias is Ctrl+Shift+X
+    case "v": case "V": if (shift) return false; if (S.route || S.modTool === "route") { if (editing()) runAction("ACT_PlaceThroughVia", ctx); return true; } return false;
+    case "<": if (S.route) { if (editing()) runAction("ACT_SelLayerAndPlaceThroughVia", ctx); return true; } return false;
+    case "ViaTool": ctx.setTool("via"); return true;
     case "d": case "D": case "g": case "G":
       if (shift) return false;
       { const ids = selectionIds(ctx); const it = liveSelected();
@@ -4199,7 +5046,7 @@ const pcb = {
     case "Zone": ctx.setTool("zone"); return true;
     case "RuleArea": ctx.setTool("rulearea"); return true;
     case "Flip": return editing() && flipSelected(ctx);
-    case "/": if (S.route && (ev.ctrlKey || ev.metaKey)) return true;   // Ctrl+/ cycles the corner mode; only mitred 45° is drawn here
+    case "/": if ((ev.ctrlKey || ev.metaKey) && S.modTool === "route") return runAction("ACT_SwitchCornerModeToNext", ctx);
       if (S.route) { const rt = S.route; tracerFlip(rt.tracer, rt.head && rt.head.length > 1 ? dir8(rt.head[0], rt.head[1]) : -1); updateHead(ctx); ctx.requestRender(); return true; } return false;   // ACT_SwitchPosture, until the next fix
     case "PageUp": return runAction("layerTop", ctx);
     case "PageDown": return runAction("layerBottom", ctx);
@@ -4225,16 +5072,17 @@ const pcb = {
     case "~": return runAction("clearHighlight", ctx);
     case "'": return runAction("viaSizeInc", ctx);
     case "\\": return runAction("viaSizeDec", ctx);
-    case "Enter":
-      if (S.route) { if (editing()) endRoute(ctx, true); return true; }
+    case "Enter":   // ACTIONS::cursorClick: a click where the cursor is (it fixes the head and routing goes on)
+      if (S.route) { if (editing()) { const rt = S.route; const hv = S.hover || { x: rt.cursor[0], y: rt.cursor[1], snap: null }; routeClick(ctx, hv, [hv.x, hv.y], { enter: true }); } return true; }
       if (S.draw) { if (POLY_TOOLS.has(S.draw.shape)) { if (editing()) finishPoly(ctx); } else { S.draw = null; ctx.requestRender(); } return true; }
       if (S.drag) { if (editing()) finishDrag(ctx, true, false); return true; }
       return false;
     case "Backspace":
-      if (S.route) { if (editing() && !undoRouteLeg(ctx)) ctx.toast("No routed segment to undo"); return true; }
+      if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // routerUndoLastSegment: silent with nothing fixed
       if (S.draw && (POLY_TOOLS.has(S.draw.shape) || S.draw.shape === "gcurve")) { if (S.draw.pts.length > 1) S.draw.pts.pop(); else S.draw = null; ctx.requestRender(); return true; }
       // fall through: with nothing being drawn Backspace deletes like Delete
     case "Delete":
+      if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // ACTIONS::doDelete while routing: undo the last segment
       if (shift && selectionIds(ctx).size && connectedRun(ctx.doc, selectionIds(ctx)).size) return runAction("deleteFull", ctx);   // Shift+Delete: the whole connected run
       if (S.sel.size) { if (editing()) deleteSelection(ctx); return true; }
       if (ctx.selection && ctx.selection.size) { if (editing()) { const free = unlockedIds(ctx, Array.from(ctx.selection)); if (free.length) { ctx.commit(deleteChanges(ctx.doc, free), "delete"); applySelection(ctx, []); } } return true; }   // app.js's box selection of one item
@@ -4276,7 +5124,15 @@ const pcb = {
     S.gfxLayer = layer; R.setActiveLayer(layer); refreshChip(ctx); ctx.requestRender();
   },
   sizes: () => K.pcbSizes.state,
-  setRoutingDialogs(d) { routingDialogs = d || {}; },
+  setRoutingDialogs(d) { routingDialogs = Object.assign({}, routingDialogs, d || {}); },
+  /** The interactive router's settings (ROUTING_SETTINGS), and changing them (persisted per viewer). */
+  routerSettings() { return Object.assign({}, S.rs); },
+  setRouterSettings(patch) { setRouterSettings(patch || {}); },
+  routerDefaults: () => Object.assign({}, RS_DEFAULTS),
+  /** Check marks of the router mode and corner mode actions, by KiCad action name. */
+  routerChecks,
+  /** The layer picker the Select Layer and Place Via commands open (PCB_EDIT_FRAME::SelectOneLayer). */
+  setLayerPicker(fn) { layerPickerImpl = fn || ((o, done) => done(null)); },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
   clipboardText, pasteChanges, cursorPoint, selectionIds, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner,
@@ -4290,7 +5146,9 @@ root.CollabTools.pcb = pcb;
 root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
-  // the interactive router (Walk around)
+  // the interactive router (Highlight collisions, Shove, Walk around)
+  RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
+  octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
