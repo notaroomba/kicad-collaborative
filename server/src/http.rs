@@ -244,9 +244,11 @@ pub async fn create_project(
     let project_name = name
         .or_else(|| {
             files.iter().find(|(n, _)| n.ends_with(".kicad_pro")).map(|(n, _)| {
-                n.rsplit('/').next().unwrap_or(n).trim_end_matches(".kicad_pro").to_string()
+                n.rsplit('/').next().unwrap_or(n).trim_end_matches(".kicad_pro").trim().to_string()
             })
         })
+        // A file called ".kicad_pro" or "  .kicad_pro" gives no usable name.
+        .filter(|n| !n.is_empty() && checked_name(n).is_ok())
         .unwrap_or_else(|| "untitled".to_string());
     let project_name: String = project_name.chars().take(MAX_NAME_CHARS).collect();
 
@@ -1026,8 +1028,6 @@ pub async fn delete_project(
     Path(id): Path<Uuid>,
     Query(q): Query<DeleteQuery>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     match persist::get_project(&state.pool, id).await? {
         Some(project) => {
             if project.owner_id != user.id {
@@ -1046,6 +1046,9 @@ pub async fn delete_project(
             }
         }
     }
+    // Only now: a socket that looked its role up before the change landed would
+    // otherwise keep the old one (ws.rs).
+    state.access_changed();
     Ok(Json(json!({ "ok": true, "trashed": !q.permanent })).into_response())
 }
 
@@ -1117,8 +1120,6 @@ pub async fn transfer_project(
     Path(id): Path<Uuid>,
     LenientJson(req): LenientJson<TransferRequest>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id != user.id {
         return Err(AppError::Forbidden);
@@ -1127,6 +1128,7 @@ pub async fn transfer_project(
         return Err(AppError::BadRequest("you already own this project".into()));
     }
     if persist::transfer_ownership(&state.pool, id, user.id, req.user_id).await? {
+        state.access_changed();
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::BadRequest("only someone who already has access can become the owner".into()))
@@ -1291,7 +1293,17 @@ pub async fn create_link(
     if !matches!(role.as_str(), "editor" | "viewer") {
         return Err(AppError::BadRequest("role must be editor or viewer".into()));
     }
-    let expires_at = req.expires_in_days.map(|d| chrono::Utc::now() + chrono::Duration::days(d));
+    let expires_at = match req.expires_in_days {
+        Some(d) if (1..=3650).contains(&d) => Some(
+            chrono::Utc::now()
+                .checked_add_signed(chrono::Duration::days(d))
+                .ok_or_else(|| AppError::BadRequest("expiresInDays is out of range".into()))?,
+        ),
+        Some(_) => {
+            return Err(AppError::BadRequest("expiresInDays must be between 1 and 3650".into()))
+        }
+        None => None,
+    };
     let token = auth::random_token();
     persist::create_share_link(&state.pool, &token, id, &role, user.id, expires_at).await?;
     Ok(Json(json!({
@@ -1329,6 +1341,7 @@ pub async fn claim_link(
         return Ok(Json(json!({ "projectId": link.project_id, "role": "editor" })).into_response());
     }
     persist::claim_share_link(&state.pool, user.id, &link).await?;
+    state.access_changed();
     let role = persist::effective_role(&state.pool, user.id, link.project_id)
         .await?
         .unwrap_or_else(|| link.role.clone());
@@ -1495,8 +1508,6 @@ pub async fn leave_project(
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    // Whatever happens below, live sockets re-check their access (ws.rs).
-    state.access_changed();
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
     if project.owner_id == user.id {
         return Err(AppError::BadRequest(
@@ -1504,6 +1515,7 @@ pub async fn leave_project(
         ));
     }
     persist::remove_member(&state.pool, id, user.id).await?;
+    state.access_changed();
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1545,6 +1557,7 @@ pub async fn invite(
             return Err(AppError::BadRequest("that user owns this project".into()));
         }
         persist::grant_role(&state.pool, id, invitee.id, &role).await?;
+        state.access_changed();
         return Ok(Json(json!({
             "ok": true, "status": "granted",
             "userId": invitee.id, "login": invitee.login,
@@ -1724,12 +1737,24 @@ pub async fn create_doc(
         return Err(AppError::BadRequest("file type not allowed".into()));
     }
 
-    for existing in persist::project_documents(&state.pool, id).await? {
+    // The same rules as an upload: nothing from a project's own bookkeeping, and no
+    // second file that differs from an existing one only in case.
+    if is_local_state_path(&path) {
+        return Err(AppError::BadRequest("that path is not part of a project".into()));
+    }
+    let documents = persist::project_documents(&state.pool, id).await?;
+    for existing in &documents {
         if existing.path == path {
             return Ok(Json(json!({ "docId": existing.id, "path": existing.path,
                                    "docType": existing.doc_type, "existing": true }))
                 .into_response());
         }
+        if existing.path.to_lowercase() == path.to_lowercase() {
+            return Err(AppError::BadRequest(format!("duplicate file: {}", existing.path)));
+        }
+    }
+    if documents.len() >= MAX_FILES {
+        return Err(AppError::BadRequest(format!("too many files (max {MAX_FILES})")));
     }
 
     let doc_type = req.doc_type.unwrap_or_else(|| doc_type_for(&path).to_string());

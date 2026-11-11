@@ -283,11 +283,15 @@ pub async fn join_page(
     };
 
     let url = format!("{}/j/{}", state.cfg.site_url, token);
+    // The server this link is on, not a fixed name: the card says where you are joining.
+    let host = esc(
+        state.cfg.site_url.split("://").nth(1).unwrap_or(&state.cfg.site_url).trim_end_matches('/'),
+    );
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
 <div class="dialog">
-  <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">kicad.notaroomba.dev</span></div>
+  <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">{host}</span></div>
   <div class="body">
     <h1>{name}</h1>
     <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>You join as</dt><dd>{role}</dd></dl>

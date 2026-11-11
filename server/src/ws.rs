@@ -18,6 +18,8 @@ use crate::AppState;
 
 pub const PROTO_VERSION: u32 = 1;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often an idle socket looks whether anyone's access changed.
+const ACCESS_RECHECK: Duration = Duration::from_secs(1);
 const PING_INTERVAL: Duration = Duration::from_secs(20);
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Presence is fanned out to every peer every 50ms, so an unbounded blob is a
@@ -201,6 +203,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     if let Some(link_token) = &link_token {
         if let Some(link) = persist::get_valid_share_link(&state.pool, link_token).await? {
             persist::claim_share_link(&state.pool, user.id, &link).await?;
+            state.access_changed();
         }
     }
 
@@ -253,7 +256,37 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
     // --- Main loop ---
     let mut joined: HashMap<Uuid, JoinedDoc> = HashMap::new();
 
-    while let Some(frame) = ws_rx.next().await {
+    // Someone who only watches never sends anything, so losing access cannot wait for
+    // their next message: the epoch is looked at on a timer as well, and every joined
+    // document is rechecked when it moved.  A removed member, a project put in the
+    // Trash or made private stops reaching this socket within about a second.
+    let mut access_tick = tokio::time::interval(ACCESS_RECHECK);
+    access_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut seen_epoch = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
+
+    loop {
+        let frame = tokio::select! {
+            frame = ws_rx.next() => frame,
+            _ = access_tick.tick() => {
+                let now = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
+                if now != seen_epoch {
+                    seen_epoch = now;
+                    let ids: Vec<Uuid> = joined.keys().copied().collect();
+                    for doc_id in ids {
+                        let Some(d) = joined.get_mut(&doc_id) else { continue };
+                        if current_role(&state, user.id, d, false).await.is_none() {
+                            let _ = out_tx.try_send(
+                                json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                                    .to_string(),
+                            );
+                            drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                        }
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(frame) = frame else { break };
         let frame = match frame {
             Ok(f) => f,
             Err(_) => break,
@@ -430,6 +463,17 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                 }
             }
             ClientMsg::resync { doc_id } => {
+                // A resync hands over the whole file: never to someone whose access went.
+                if let Some(d) = joined.get_mut(&doc_id) {
+                    if current_role(&state, user.id, d, false).await.is_none() {
+                        let _ = out_tx.try_send(
+                            json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
+                                .to_string(),
+                        );
+                        drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
+                        continue;
+                    }
+                }
                 if let Some(d) = joined.get(&doc_id) {
                     let _ = d.tx.send(DocMsg::Resync { client_id: client_id.clone() }).await;
                 }
