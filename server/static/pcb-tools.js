@@ -1232,11 +1232,16 @@ function finishDrag(ctx, commit, force) {
 }
 /** Items the canvas leaves out while their dragged shape is drawn in the overlay (ROUTER_IFACE::HideItem). */
 function dragHiddenIds() {
+  if (S.move && S.move.conns && S.move.conns.length && S.move.moved) { const out = new Set(); for (const c of S.move.conns) for (const id of c.l.ids) out.add(id); return out; }
   const D = S.drag; if (!D || !D.moved) return null;
   const out = new Set(); for (const d of D.subs) for (const id of d.ids) out.add(id); return out;
 }
 /** The drag in progress: the lines and via where they would go, obstacles in violation green, and KiCad's status note. */
 function drawDragPreview(c, ctx, view, px) {
+  const m = S.move;
+  if (m && m.conns && m.conns.length && m.moved) {   // COMPONENT_DRAGGER's attached lines at the footprint's offset
+    for (const { l, pts } of connLines(m, m.last[0], m.last[1])) { if (pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = color(l.layer); c.lineWidth = l.width; polyline(c, pts, false); }
+  }
   const D = S.drag; if (!D || !D.moved) return;
   for (const d of D.subs) {
     const bad = d.hits && d.hits.length; const s = settingsOf(ctx);
@@ -1301,7 +1306,7 @@ function selectMoveTo(ctx, mm) {
   if (dx === m.last[0] && dy === m.last[1]) return;
   m.last = [dx, dy]; m.moved = true; moveApply(ctx, m, dx, dy); ctx.requestRender();
 }
-function finishSelectMove(ctx, commit) {
+function finishSelectMove(ctx, commit, force) {
   const m = S.move; S.move = null; if (!m) return;
   const [dx, dy] = m.last; moveApply(ctx, m, 0, 0);            // originals back first, so commit() records a true inverse
   if (!commit && m.placing) {   // Escape on a paste / duplicate that still follows the cursor takes the new items out again
@@ -1310,7 +1315,14 @@ function finishSelectMove(ctx, commit) {
     applySelection(ctx, []); ctx.requestRender(); return;
   }
   if (!commit || !m.moved || (!dx && !dy)) { ctx.requestRender(); return; }
-  ctx.commit(moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node)), "move", m.placing ? { amend: true } : undefined);
+  const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
+  if (m.conns && m.conns.length) {
+    const lines = connLines(m, dx, dy); const s = settingsOf(ctx); const hits = [];
+    for (const { l, pts } of lines) hits.push(...pathHits(routeObstacles(ctx.doc, s, l.netKey, l.layer, l.netKey ? null : new Set(l.ids)), pts, l.width / 2));
+    if (hits.length && !force) { showViolations(hits, lines[0].pts[0]); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }   // COMPONENT_DRAGGER::FixRoute: refused while it collides (Ctrl+click forces)
+    changes.push(...dragChanges(ctx, { sol: { lines } }));
+  }
+  ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing ? { amend: true } : undefined);
   ctx.requestRender();
 }
 /**
@@ -1332,35 +1344,45 @@ function beginCarryMove(ctx, opts) {
   S.move = m; ctx.requestRender(); return true;
 }
 /**
- * Drag (D / G, EDIT_TOOL::Drag on footprints and vias): the tracks that end on a moving footprint's pad or a moving via
- * stay attached — their end follows the item (the router's free-angle drag of the last segment).  Tracks that are
- * themselves moving, and arcs (whose middle would not follow), are left alone.
+ * Drag (D, EDIT_TOOL::Drag -> COMPONENT_DRAGGER on footprints): every line attached to a moving pad (ending on its
+ * centre or inside it) is re-routed with LINE::DragCorner - its attached end follows the pad, the rest bends at 45° - and
+ * a line running between two pads that both move goes along whole.  A via's tracks stretch with it.
  */
 function dragEnds(doc, m) {
-  const anchors = [];
+  const pads = [], vias = [];
   for (const id of m.ids) {
     const it = doc.items.get(id); if (!it) continue;
-    if (it.kind === "footprint") for (const p of padsOf(it)) anchors.push({ p: [p.x, p.y], layers: p.layers });
-    else if (it.kind === "via") { const at = pt(it.node, "at"); if (at) anchors.push({ p: at, layers: null }); }
+    if (it.kind === "footprint") for (const p of padsOf(it)) pads.push(p);
+    else if (it.kind === "via") { const at = pt(it.node, "at"); if (at) vias.push(at); }
   }
-  if (!anchors.length) return;
-  const onLayer = (layers, l) => !layers || layers.some((x) => x === l || (x === "*.Cu" && /\.Cu$/.test(l)) || (x === "F&B.Cu" && (l === "F.Cu" || l === "B.Cu")));
-  for (const sg of doc.items.values()) {
-    if (sg.kind !== "segment" || m.ids.includes(sg.id)) continue;
+  if (!pads.length && !vias.length) return;
+  const onLayer = (layers, l) => layers.some((x) => x === l || (x === "*.Cu" && /\.Cu$/.test(l)) || (x === "F&B.Cu" && (l === "F.Cu" || l === "B.Cu")));
+  const padAtEnd = (q, l) => pads.some((p) => onLayer(p.layers, l) && (samePt(q, [p.x, p.y]) || padCovers(p, q[0], q[1])));
+  const seen = new Set(); m.conns = [];
+  for (const sg of Array.from(doc.items.values())) {
+    if (sg.kind !== "segment" || m.ids.includes(sg.id) || seen.has(sg.id)) continue;
     const l = layerOf(sg.node);
     for (const key of ["start", "end"]) {
-      const q = pt(sg.node, key); if (!q || !anchors.some((a) => samePt(q, a.p) && onLayer(a.layers, l))) continue;
-      m.ends.push({ id: sg.id, key }); if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone(sg.node));
+      const q = pt(sg.node, key); if (!q) continue;
+      if (vias.some((v) => samePt(q, v))) { m.ends.push({ id: sg.id, key }); if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone(sg.node)); continue; }
+      if (!padAtEnd(q, l) || seen.has(sg.id)) continue;
+      const ln = assembleLine(doc, sg); if (!ln) continue; ln.ids.forEach((id) => seen.add(id));
+      const first = ln.pts[0], last = ln.pts[ln.pts.length - 1];
+      const atFirst = Math.hypot(first[0] - q[0], first[1] - q[1]) <= Math.hypot(last[0] - q[0], last[1] - q[1]);
+      if (padAtEnd(first, l) && padAtEnd(last, l)) { for (const id of ln.ids) { if (!m.ids.includes(id)) m.ids.push(id); if (!m.orig.has(id)) m.orig.set(id, clone(doc.items.get(id).node)); } break; }   // between two moving pads: carried whole
+      m.conns.push({ l: ln, vertex: atFirst ? 0 : ln.pts.length - 1 }); break;
     }
   }
 }
+/** The attached lines at a component drag's offset (LINE::DragCorner of the attached end, 45°). */
+function connLines(m, dx, dy) { return (m.conns || []).map((c) => { const p = c.l.pts[c.vertex]; return { l: c.l, pts: dragCorner45(c.l.pts, c.vertex, rp([p[0] + dx, p[1] + dy]), 0) }; }); }
 /** A press while the selection follows the cursor: the left button drops it there (and the click goes no further). */
 function onStickyPointerDown(ev) {
   const ctx = lastCtx; const m = S.move; if (!m || !m.sticky || !ctx || !isPcbDoc()) return;
   if (ev.target.closest && (ev.target.closest("#pcbChip") || ev.target.closest("#cmtPanel"))) return;
   ev.stopImmediatePropagation(); ev.preventDefault();
   if (ev.button !== 0) return;
-  selectMoveTo(ctx, ctx.worldMm(ev)); S.stickyUp = true; finishSelectMove(ctx, true);
+  selectMoveTo(ctx, ctx.worldMm(ev)); S.stickyUp = true; finishSelectMove(ctx, true, !!(ev.ctrlKey || ev.metaKey));
 }
 const DRAG_PX = 5;
 /**
@@ -3678,7 +3700,7 @@ root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
 root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
-  flipLayerName, pt, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
+  flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Walk around)
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools

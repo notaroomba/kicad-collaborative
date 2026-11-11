@@ -300,6 +300,21 @@ test("module: D drags the selected segment with the router, a click commits the 
   pcb.cancel(); assert.equal(P.state.drag, null); assert.equal(log.commits.at(-1), c);
 });
 
+test("module: D on a footprint re-routes its attached tracks at 45° (COMPONENT_DRAGGER)", () => {
+  const extra = `  (segment (start 100 49.1) (end 105 49.1) (width 0.25) (layer "F.Cu") (net "GND") (uuid "t-1"))\n)`;
+  const doc = K.parseDoc(FIXTURE.replace(/\)\s*$/, extra), "kicad_pcb"); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(); ctx.selected = { id: "fp-1" }; ctx.selection = new Set(["fp-1"]); ctx.cursor = [100, 50];
+  assert.equal(pcb.onKey("d", ev(), ctx), true); const m = P.state.move; assert.ok(m && m.conns.length >= 1);
+  assert.deepEqual(m.conns.find((c) => c.l.ids.includes("t-1")).l.pts, [[100, 49.1], [105, 49.1]]);
+  P.selectMoveTo(ctx, [100, 48]);
+  assert.deepEqual([...pcb.hiddenIds()].includes("t-1"), true);
+  P.finishSelectMove(ctx, true, false);
+  const c = log.commits.at(-1); assert.equal(c.label, "drag");
+  const segs = [...doc.items.values()].filter((it) => it.kind === "segment" && K.str(K.kid(it.node, "net")[1]) === "GND" && K.kid(it.node, "layer")[1] === "F.Cu").map((it) => JSON.stringify([P.pt(it.node, "start"), P.pt(it.node, "end")]));
+  assert.ok(segs.includes(JSON.stringify([[100, 47.1], [102, 49.1]])) && segs.includes(JSON.stringify([[102, 49.1], [105, 49.1]])), segs.join(" "));
+  ctx.selected = null; ctx.selection = new Set();
+});
+
 test("module: a press on an unselected track draws a box (DRAG_SELECTED); on the selection it arms the router drag", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx); pcb.onActivate("select", ctx);
   P.state.sel = new Set();
