@@ -836,12 +836,12 @@ export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
   if (g.knockout) {
     // PCB_TEXT knockout: the text box, inflated by GetKnockoutTextMargin, in the layer colour; the glyphs cut out in the background colour
     const sx = g.sizeX > 0 ? g.sizeX : g.size, line = strokeLine(text, !!g.italic);
-    const [ox, oy] = strokeOrigin(line.advance, h, g.v, pen / sx, pen / g.size); const m = Math.max(pen / 2, g.size / 9);
+    const lay = g.layoutW !== undefined ? g.layoutW : pen; const [ox, oy] = strokeOrigin(line.advance, h, g.v, lay / sx, lay / g.size); const m = Math.max(pen / 2, g.size / 9);
     const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = mirror ? -1 : 1;
     ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
     // the glyph cell: capitals span 20/21 above the layout baseline and 1/21 below it (FONT_OFFSET)
     ctx.fillStyle = color; ctx.fillRect(ox * sx - m, (oy - 20 / 21) * g.size - m, line.width * sx + 2 * m, g.size + 2 * m);
-    drawStrokeText(ctx, base, spec, bgColor || PCB_BG, minW);
+    drawStrokeText(ctx, base, Object.assign(spec, { layoutPen: lay }), bgColor || PCB_BG, minW);
     return;
   }
   if (g.multiline && text.indexOf("\n") >= 0) {

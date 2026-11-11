@@ -78,33 +78,81 @@ function polyline(pts: Pt[], close: boolean, w: number, g: KGeom, out: Prim[]): 
 /** EDA_TEXT::GetEffectiveTextPenWidth: the pen never exceeds a quarter of the glyph size. */
 const clampPen = (pen: number, size: number, sizeX: number): number => Math.min(pen, Math.min(Math.abs(size), Math.abs(sizeX)) * 0.25);
 
-/** One text record as stroke-font segments (the transform drawStrokeText composes for the screen). */
+interface OutlineCache { node: Node; x: number; y: number; rot: number; shown: string; polys?: Pt[][] | null }
+
+/**
+ * The outlines KiCad stored for a text set in an outline font, when they still belong to the text: the same
+ * string and angle, and the block still sitting on the text's anchor (a text moved or resized here since KiCad
+ * wrote the file has outlines of where it was).
+ */
+function cachedOutlines(oc: OutlineCache, size: number, sizeX: number): Pt[][] | null {
+  if (oc.polys !== undefined) return oc.polys;
+  oc.polys = null;
+  const rc = oc.node; if (S(rc[1]) !== oc.shown) return null;
+  const turn = ((num(rc[2], 0) - oc.rot) % 360 + 360) % 360;
+  if (Math.min(turn, 360 - turn) > 0.01) return null;
+  const polys: Pt[][] = [];
+  for (const p of rc.slice(3)) {
+    if (!isList(p) || str(p[0]) !== "polygon") continue;
+    const outlines = (p as Node[]).filter((c) => isList(c) && str(c[0]) === "pts").map((c) => polyPtsOf(["x", c] as unknown as Node) as Pt[]).filter((o) => o.length >= 3);
+    if (!outlines.length) continue;
+    // an outline with holes (KiCad stores them fractured, so this is the exception) is fractured here
+    if (outlines.length === 1) polys.push(outlines[0]); else for (const o of fracture([clockwise(outlines[0])].concat(outlines.slice(1).map((h) => clockwise(h).slice().reverse())))) polys.push(o);
+  }
+  if (!polys.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const poly of polys) for (const q of poly) { const [lx, ly] = rot(q[0] - oc.x, q[1] - oc.y, -oc.rot); if (lx < x0) x0 = lx; if (ly < y0) y0 = ly; if (lx > x1) x1 = lx; if (ly > y1) y1 = ly; }
+  const tx = 0.35 * Math.abs(sizeX) + 0.1, ty = 0.6 * Math.abs(size) + 0.1;
+  const onX = Math.abs(x0) <= tx || Math.abs(x1) <= tx || Math.abs((x0 + x1) / 2) <= tx;
+  const onY = Math.abs(y0) <= ty || Math.abs(y1) <= ty || Math.abs((y0 + y1) / 2) <= ty;
+  if (!onX || !onY) return null;
+  oc.polys = polys;
+  return polys;
+}
+
+/** The box a knockout text is cut out of: the box of what the text draws, in the text's own frame, grown by the margin. */
+function knockoutBox(pts: Pt[], x: number, y: number, deg: number, margin: number): Pt[] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of pts) { const [lx, ly] = rot(q[0] - x, q[1] - y, -deg); if (lx < x0) x0 = lx; if (ly < y0) y0 = ly; if (lx > x1) x1 = lx; if (ly > y1) y1 = ly; }
+  return ([[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]] as Pt[]).map(([lx, ly]) => { const [rx, ry] = rot(lx, ly, deg); return [x + rx, y + ry] as Pt; });
+}
+
+/** One text record: the outlines KiCad cached for an outline font, else stroke-font segments (the transform drawStrokeText composes for the screen). */
 function textPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
   const text = S(g.raw) || S(g.text); if (!text) return;
   const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;
   const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);
-  if (g.face) log.warn(`Text set in the font "${S(g.face)}" is plotted with the KiCad stroke font: a browser cannot read the outlines of an installed font.`);
+  const margin = Math.max(pen / 2, size / 9);   // PCB_TEXT::GetKnockoutTextMargin
+  const dst = g.knockout ? knock : out, clear = g.knockout ? true : undefined;
+  if (g.face) {
+    const oc = g.outline as OutlineCache | undefined, polys = oc ? cachedOutlines(oc, size, sizeX) : null;
+    if (oc && polys) {
+      if (!g.outlineFirst) return;   // the outlines hold every line of the text: they go out with its first
+      if (g.knockout) knock.push({ k: "region", pts: knockoutBox(polys.flat(), oc.x, oc.y, oc.rot, margin) });
+      for (const pts of polys) dst.push({ k: "region", pts, clear });
+      return;
+    }
+    log.warn(oc ? `Text set in the font "${S(g.face)}" was changed after KiCad last drew it, so its stored outlines no longer fit. It is plotted with the KiCad stroke font; open and save the board in KiCad to refresh them.`
+      : `Text set in the font "${S(g.face)}" has no outlines stored in the board (KiCad stores them when it saves). It is plotted with the KiCad stroke font.`);
+  }
   const C = canvas(); const line = C.strokeLine(text, !!g.italic);
-  const [ox, oy] = C.strokeOrigin(line.advance, S(g.h) || "center", S(g.v) || "middle", pen / sizeX, pen / size);
+  const lay = g.knockout && g.layoutW !== undefined ? N(g.layoutW) : pen;
+  const [ox, oy] = C.strokeOrigin(line.advance, S(g.h) || "center", S(g.v) || "middle", lay / sizeX, lay / size);
   const a = -N(g.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
   const x0 = N(g.x), y0 = N(g.y);
   // local (unit) → board: T(x, y) · Rot(a) · MirrorX · Scale(sx, sy) · T(ox, oy)
   const P = (u: number, v: number): Pt => { const lx = (u + ox) * sizeX * mx, ly = (v + oy) * size; return [x0 + lx * c - ly * sn, y0 + lx * sn + ly * c]; };
-  const dst = g.knockout ? knock : out;
-  if (g.knockout) {
-    // PCB_TEXT knockout: the text box grown by GetKnockoutTextMargin = max(pen / 2, size / 9), the glyphs cleared out of it
-    const m = Math.max(pen / 2, size / 9);
-    const bx0 = ox * sizeX - m, by0 = (oy - 20 / 21) * size - m, bx1 = bx0 + line.width * sizeX + 2 * m, by1 = by0 + size + 2 * m;
-    const Q = (lx: number, ly: number): Pt => [x0 + lx * mx * c - ly * sn, y0 + lx * mx * sn + ly * c];
-    knock.push({ k: "region", pts: [Q(bx0, by0), Q(bx1, by0), Q(bx1, by1), Q(bx0, by1)] });
-  }
+  const segs: Prim[] = []; const ends: Pt[] = [];
   for (const st of line.strokes) {
-    if (st.length === 2) { const p = P(st[0], st[1]); dst.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear: g.knockout ? true : undefined }); continue; }
+    if (st.length === 2) { const p = P(st[0], st[1]); ends.push(p); segs.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear }); continue; }
     for (let i = 0; i + 3 < st.length; i += 2) {
-      const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]);
-      dst.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear: g.knockout ? true : undefined });
+      const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]); ends.push(p, q);
+      segs.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear });
     }
   }
+  // PCB_TEXT knockout: the box of the drawn glyphs (pen included) grown by the margin, the glyphs cleared out of it
+  if (g.knockout && ends.length) knock.push({ k: "region", pts: knockoutBox(ends, x0, y0, N(g.rot), margin + pen / 2) });
+  for (const p of segs) dst.push(p);
 }
 
 /** A geometry record of the canvas as primitives; `grow` widens strokes and fills (a solder mask margin on a copper graphic). */

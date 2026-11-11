@@ -179,6 +179,8 @@ export interface StrokeTextSpec {
   h: string; v: string;
   /** pen width, document units */
   pen: number; italic?: boolean;
+  /** the width the line is placed with, when it is not the pen (a knockout text: its stored width) */
+  layoutPen?: number;
   /** extra offset down the text's own Y axis, document units (line n of a multi-line run) */
   dy?: number;
 }
@@ -204,7 +206,7 @@ export function drawStrokeText(ctx: StrokeCtx, base: number[], t: StrokeTextSpec
   const line = strokeLine(t.text, t.italic);
   const sy = t.size, sx = t.sizeX && t.sizeX > 0 ? t.sizeX : t.size;
   const pen = Math.max(t.pen, minPen);
-  const o = strokeOrigin(line.advance, t.h, t.v, t.pen / sx, t.pen / sy);
+  const lay = t.layoutPen !== undefined ? t.layoutPen : t.pen; const o = strokeOrigin(line.advance, t.h, t.v, lay / sx, lay / sy);
   const ox = o[0], oy = o[1] + (t.dy || 0) / sy;
   const a = -(t.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = t.mirror ? -1 : 1;
   // device = base · T(x, y) · Rot(a) · MirrorX · Scale(sx, sy) · T(ox, oy)

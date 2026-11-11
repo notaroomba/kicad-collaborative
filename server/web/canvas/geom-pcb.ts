@@ -65,22 +65,58 @@ export function padCopperLayer(pad) {
  * ((layer "F.Cu" knockout) or (knockout yes)) is tagged knockout: the painter fills the text box, inflated by
  * GetKnockoutTextMargin = max(pen/2, size/9), in the layer colour and cuts the glyphs out of it.
  */
+/**
+ * The outlines stored with a text, kept true to the text across edits made here.  They are in board coordinates
+ * and only KiCad can redraw them, so the first build notes what the text looked like; a later build that finds
+ * the text only moved (itself, or with its footprint) moves the outlines with it — EDA_TEXT::Offset — and one
+ * that finds anything else changed drops them — EDA_TEXT::ClearRenderCache — so a stale shape is never plotted
+ * or saved.  KiCad draws them again the next time it opens the board.
+ */
+function trackedRenderCache(n, x, y, sig) {
+  const rc = kid(n, "render_cache"); if (!rc) return null;
+  const st = rc.__state;
+  if (!st) { Object.defineProperty(rc, "__state", { value: { sig, x, y }, enumerable: false }); return rc; }
+  if (st.sig !== sig) { n.splice(n.indexOf(rc), 1); return null; }
+  const dx = x - st.x, dy = y - st.y;
+  if (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9) {
+    for (const poly of rc) if (Array.isArray(poly) && poly[0] === "polygon") for (const pts of poly) if (Array.isArray(pts) && pts[0] === "pts")
+      for (const q of pts) if (Array.isArray(q) && q[0] === "xy") { q[1] = Math.round((num(q[1]) + dx) * 1e6) / 1e6; q[2] = Math.round((num(q[2]) + dy) * 1e6) / 1e6; }
+    st.x = x; st.y = y;
+  }
+  return rc;
+}
+
 export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
   const ef = effectsOf(n); if (!text) return null;
   const color = pcbColor(layer); const z = pcbZ(layer) + Z_TEXT;
-  const thick = ef.thick > 0 ? ef.thick : (ef.bold ? ef.size / 5 : ef.size / 8);
+  // EDA_TEXT::GetEffectiveTextPenWidth.  A bold stroke text draws 1.6 × its stored width (BOLD_STROKE_MULTIPLIER);
+  // files from before 20260826 stored the bold width itself, which the parser divides back on load.
+  const boldStroke = ef.bold && !ef.face && ef.thick > 0;
+  const attrW = boldStroke && boardVersion > 0 && boardVersion < 20260826 ? ef.thick / 1.6 : ef.thick;
+  const thick = ef.thick > 0 ? (boldStroke ? attrW * 1.6 : ef.thick) : (ef.bold ? ef.sizeX / 5 : ef.sizeX / 8);
   const ln = kid(n, "layer"); const knockout = (ln && has(ln, "knockout")) || yesNo(n, "knockout");
-  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true } : null, extra || {});
+  // a knockout text is laid out with the stored width and drawn with the effective one (PCB_TEXT::TransformTextToPolySet)
+  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true, layoutW: attrW } : null, extra || {});
+  // (render_cache "text" angle (polygon …) …): the outlines KiCad drew this text with in an outline font, in board
+  // coordinates.  A plot uses them as pcbnew does (the font itself cannot be read here); the screen draws the face.
+  const rc = ef.face ? trackedRenderCache(n, x, y, JSON.stringify([text, rot || 0, ef.size, ef.sizeX, ef.just, ef.bold, ef.italic, ef.face, layer])) : null;
   if (ef.hide) {
     const shadow = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
     for (const g of shadow.geom) g.hiddenText = true;
     if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
     return null;
   }
-  return textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, ex);
+  if (rc) ex.outline = { node: rc, x, y, rot: rot || 0, shown: text };
+  const first = textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, ex);
+  if (first && rc) first.outlineFirst = true;
+  return first;
 }
 
+/** The file version of the board being built (0 when unknown): some rules changed with the format. */
+let boardVersion = 0;
+
 export function buildPcbGeom(doc, item) {
+  boardVersion = (doc && doc.version) || 0;
   const n = item.node, k = item.kind;
   if (k === "segment") {
     const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const layer = layerOf(n, "F.Cu"); const net = netCode(doc, n); item.net = net;

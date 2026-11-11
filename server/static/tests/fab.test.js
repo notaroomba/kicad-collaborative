@@ -169,6 +169,42 @@ test("only the layers asked for are plotted, under the board's own layer names",
   assert.strictEqual(F.protelExtension("In2.Cu", ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]), "g3");
 });
 
+const mini = (version, items) => `(kicad_pcb (version ${version}) (generator "pcbnew") (general (thickness 1.6)) (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (25 "Edge.Cuts" user))
+ (setup (pad_to_mask_clearance 0)) (net 0 "") (gr_rect (start 0 0) (end 40 30) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "e")) ${items})`;
+
+test("bold stroke text: 1.6 x the stored width, and a knockout laid out with the stored one", () => {
+  const txt = `(gr_text "BOLD" (at 10 10) (layer "F.SilkS" knockout) (uuid "b") (effects (font (size 2 2) (thickness 0.32) (bold yes)) (justify left)))`;
+  const geomOf = (version) => K.parseDoc(mini(version, txt), "kicad_pcb").items.get("b").geom.find((g) => g.t === "text");
+  const now = geomOf(20261031), old = geomOf(20241229);
+  assert(Math.abs(now.w - 0.512) < 1e-9 && Math.abs(now.layoutW - 0.32) < 1e-9, `current format: pen ${now.w}, layout ${now.layoutW}`);
+  assert(Math.abs(old.w - 0.32) < 1e-9 && Math.abs(old.layoutW - 0.2) < 1e-9, `before 20260826 the file held the bold width: pen ${old.w}, layout ${old.layoutW}`);
+  // the knockout box starts at the anchor, less the first glyph's side bearing, the pen and the margin: 0.2 / 1.52 of layout offset, not 0.32 / 1.52
+  const d = K.parseDoc(mini(20241229, txt), "kicad_pcb"); const g = F.plotGerbers({ doc: d, setup: mini(20241229, ""), projectName: "b" }, { layers: ["F.SilkS"] });
+  const xs = [...g.files[0].text.matchAll(/X(-?\d+)Y-?\d+D0[12]\*/g)].map((m) => +m[1] / 1e6);
+  const plain = K.parseDoc(mini(20241229, txt.replace(" (bold yes)", "").replace("0.32", "0.2")), "kicad_pcb"); const gp = F.plotGerbers({ doc: plain, setup: mini(20241229, ""), projectName: "b" }, { layers: ["F.SilkS"] });
+  const xp = [...gp.files[0].text.matchAll(/X(-?\d+)Y-?\d+D0[12]\*/g)].map((m) => +m[1] / 1e6);
+  // same layout width, so the glyphs start at the same place; the box is wider by the pen difference (0.06 a side) and its margin (max(pen/2, size/9) is size/9 for both)
+  assert(Math.abs((Math.min(...xp) - Math.min(...xs)) - 0.06) < 2e-3, `box left edges ${Math.min(...xs)} and ${Math.min(...xp)}`);
+});
+
+test("text in an outline font is plotted from the outlines KiCad stored, which follow a move and go when the text changes", () => {
+  const txt = `(gr_text "Hi" (at 10 10) (layer "F.SilkS") (uuid "o") (effects (font (face "Some Face") (size 2 2) (thickness 0.3)) (justify left bottom))
+    (render_cache "Hi" 0 (polygon (pts (xy 10.2 8) (xy 11.2 8) (xy 11.2 10) (xy 10.2 10))) (polygon (pts (xy 11.6 8) (xy 12 8) (xy 12 10) (xy 11.6 10)))))`;
+  const d = K.parseDoc(mini(20261031, txt), "kicad_pcb"), c = { doc: d, setup: mini(20261031, ""), projectName: "o" };
+  const plot = () => { const g = F.plotGerbers(c, { layers: ["F.SilkS"] }); return { text: g.files[0].text, warnings: g.warnings }; };
+  let r = plot();
+  assert(/G36\*\s*X10200000Y-8000000D02\*/.test(r.text) && /X12000000Y-10000000D01\*/.test(r.text), "the stored polygons are the plot");
+  assert(!r.warnings.some((w) => /Some Face/.test(w)), r.warnings.join(" | "));
+  const it = d.items.get("o"); K.moveItem(d, it, 15, 12, 1e6);
+  assert(/\(xy 15\.2 10\)/.test(K.serializeItem(d, it)), "the outlines moved with the text: " + K.serializeItem(d, it));
+  r = plot();
+  assert(/G36\*\s*X15200000Y-10000000D02\*/.test(r.text), "and are plotted where the text now is");
+  it.node[1] = "Ho"; K.buildGeom(d, it);
+  assert(!/render_cache/.test(K.serializeItem(d, it)), "outlines of another string are dropped");
+  r = plot();
+  assert(!/G36/.test(r.text) && r.warnings.some((w) => /Some Face/.test(w) && /stroke font/.test(w)), "then the stroke font, with a warning: " + r.warnings.join(" | "));
+});
+
 Promise.all(pending).then(() => { console.log(`\n${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0); });
 
 /** The entries of a zip archive (stored or deflated). */
