@@ -64,13 +64,19 @@ public:
      */
     static bool CreateLocks() { return wxGetEnv( wxS( "KICAD_COLLAB_CREATE_LOCKS" ), nullptr ); }
 
-    LOCKFILE( const wxString &filename, bool aRemoveOnRelease = true ) :
-            m_removeOnRelease( aRemoveOnRelease )
+    /**
+     * @param aAlwaysCreate takes a real lock even when CreateLocks() is off.  For locks that
+     *        guard KiCad's own bookkeeping (the local history repository) rather than a design
+     *        file: nothing else coordinates those, and without the lock they cannot be used.
+     */
+    LOCKFILE( const wxString &filename, bool aRemoveOnRelease = true, bool aAlwaysCreate = false ) :
+            m_removeOnRelease( aRemoveOnRelease ),
+            m_createLocks( aAlwaysCreate || CreateLocks() )
     {
         if( filename.IsEmpty() )
             return;
 
-        if( !CreateLocks() )
+        if( !m_createLocks )
         {
             // Look, don't touch: honor a live lock (e.g. a stock KiCad's) but
             // never write one of our own.
@@ -175,7 +181,8 @@ public:
             m_lock( std::move( other.m_lock ) ),
             m_owned( other.m_owned ),
             m_status( other.m_status ),
-            m_removeOnRelease( other.m_removeOnRelease )
+            m_removeOnRelease( other.m_removeOnRelease ),
+            m_createLocks( other.m_createLocks )
     {
         // Disable unlock in the moved-from object
         other.m_owned = false;
@@ -216,7 +223,7 @@ public:
     {
         wxLogTrace( traceLockFile, "Overriding lock on %s", m_lockFilename );
 
-        if( !CreateLocks() )
+        if( !m_createLocks )
         {
             // Never rewrite or delete someone else's lock: just proceed.
             m_status = true;
@@ -270,6 +277,7 @@ private:
     bool m_owned = false;
     bool m_status = false;
     bool m_removeOnRelease = false;
+    bool m_createLocks = CreateLocks();
 
     /**
      * @return a value no other lock will carry.  Process ids cannot serve here: sandboxed

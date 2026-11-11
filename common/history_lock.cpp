@@ -151,7 +151,7 @@ bool HISTORY_LOCK_MANAGER::acquireFileLock()
         }
     }
 
-    m_fileLock = std::make_unique<LOCKFILE>( m_historyPath + wxS( ".repo" ), true );
+    m_fileLock = std::make_unique<LOCKFILE>( m_historyPath + wxS( ".repo" ), true, true );
 
     if( !m_fileLock->Locked() )
     {
@@ -272,7 +272,7 @@ bool HISTORY_LOCK_MANAGER::IsLockStale( const wxString& aProjectPath, int aStale
 bool HISTORY_LOCK_MANAGER::BreakStaleLock( const wxString& aProjectPath )
 {
     // Claim the abandoned lock before removing it, so a concurrent owner cannot be unlinked.
-    LOCKFILE lock( historyLockPath( aProjectPath ), true );
+    LOCKFILE lock( historyLockPath( aProjectPath ), true, true );
     return lock.Locked();
 }
 
