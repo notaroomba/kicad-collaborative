@@ -39,6 +39,7 @@
 #include <wx/dataview.h>
 #include <wx/dir.h>
 #include <wx/dirdlg.h>
+#include <wx/ffile.h>
 #include <wx/filename.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
@@ -46,6 +47,7 @@
 #include <wx/srchctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/choicdlg.h>
 #include <wx/textdlg.h>
 #include <wx/utils.h>
 
@@ -66,7 +68,8 @@ enum ONLINE_PROJECT_MENU_ID
     ID_ONLINE_DELETE_OR_LEAVE,
     ID_ONLINE_RESTORE,
     ID_ONLINE_NEW_PUBLISH,
-    ID_ONLINE_NEW_BLANK
+    ID_ONLINE_NEW_BLANK,
+    ID_ONLINE_NEW_FOLDER
 };
 
 
@@ -92,9 +95,66 @@ static constexpr int MAX_SIBLING_COPIES = 500;
 static constexpr int    MAX_PROJECT_NAME_CHARS = 120;
 static constexpr size_t MAX_PROJECT_DESCRIPTION_BYTES = 2000;
 
-/// The sort order the list was left in, for the next time it is shown in this run.
+/// The sort order the list was left in.  Kept in a small file beside the other user
+/// settings, so it is still there the next time KiCad starts.
 static int  s_sortColumn = wxNOT_FOUND;
 static bool s_sortAscending = true;
+static bool s_sortLoaded = false;
+
+
+static wxString sortOrderFile()
+{
+    return wxFileName( PATHS::GetUserSettingsPath(), wxS( "collab_online_projects.json" ) )
+            .GetFullPath();
+}
+
+
+static void loadSortOrder()
+{
+    if( s_sortLoaded )
+        return;
+
+    s_sortLoaded = true;
+
+    wxString path = sortOrderFile();
+
+    if( !wxFileName::FileExists( path ) )
+        return;
+
+    wxFFile  file( path, wxS( "rb" ) );
+    wxString text;
+
+    if( !file.IsOpened() || !file.ReadAll( &text, wxConvUTF8 ) )
+        return;
+
+    try
+    {
+        nlohmann::json saved = nlohmann::json::parse( text.ToStdString( wxConvUTF8 ) );
+
+        if( saved.is_object() )
+        {
+            s_sortColumn = saved.value( "sortColumn", (int) wxNOT_FOUND );
+            s_sortAscending = saved.value( "sortAscending", true );
+        }
+    }
+    catch( ... )
+    {
+        // A damaged file only loses the preference.
+        s_sortColumn = wxNOT_FOUND;
+        s_sortAscending = true;
+    }
+}
+
+
+static void saveSortOrder()
+{
+    nlohmann::json saved = { { "sortColumn", s_sortColumn }, { "sortAscending", s_sortAscending } };
+
+    wxFFile file( sortOrderFile(), wxS( "wb" ) );
+
+    if( file.IsOpened() )
+        file.Write( wxString::FromUTF8( saved.dump( 2 ) ), wxConvUTF8 );
+}
 
 
 /// The mark in the star column.
@@ -575,6 +635,8 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
                               sortable );
     m_list->AppendTextColumn( _( "Description" ), wxDATAVIEW_CELL_INERT, 240 );
 
+    loadSortOrder();
+
     if( s_sortColumn >= 0 && s_sortColumn < (int) m_list->GetColumnCount() )
         m_list->GetColumn( s_sortColumn )->SetSortOrder( s_sortAscending );
 
@@ -684,8 +746,15 @@ DIALOG_ONLINE_PROJECTS::~DIALOG_ONLINE_PROJECTS()
 
     wxDataViewColumn* sorting = m_list->GetSortingColumn();
 
-    s_sortColumn = sorting ? (int) sorting->GetModelColumn() : wxNOT_FOUND;
-    s_sortAscending = !sorting || sorting->IsSortOrderAscending();
+    int  column = sorting ? (int) sorting->GetModelColumn() : wxNOT_FOUND;
+    bool ascending = !sorting || sorting->IsSortOrderAscending();
+
+    if( column != s_sortColumn || ascending != s_sortAscending )
+    {
+        s_sortColumn = column;
+        s_sortAscending = ascending;
+        saveSortOrder();
+    }
 }
 
 
@@ -802,12 +871,13 @@ void DIALOG_ONLINE_PROJECTS::updatePublishable()
     // menu can.
     if( m_publishBlocked.IsEmpty() )
     {
-        m_newButton->SetToolTip( _( "Publish the project open in the project manager, or "
-                                    "start a blank online project" ) );
+        m_newButton->SetToolTip( _( "Publish the project open in the project manager or "
+                                    "one from a folder, or start a blank online project" ) );
     }
     else
     {
-        m_newButton->SetToolTip( wxString::Format( _( "Start a blank online project.  "
+        m_newButton->SetToolTip( wxString::Format( _( "Publish a project from a folder or "
+                                                      "start a blank online project.  "
                                                       "Publish Current Project is not "
                                                       "available: %s" ),
                                                    m_publishBlocked ) );
@@ -2463,6 +2533,9 @@ void DIALOG_ONLINE_PROJECTS::onNewProject( wxCommandEvent& )
                  m_publishBlocked.IsEmpty() ? _( "Upload the project open in the project "
                                                  "manager and keep it in sync from now on" )
                                             : m_publishBlocked );
+    menu.Append( ID_ONLINE_NEW_FOLDER, _( "Publish a Folder..." ),
+                 _( "Upload a KiCad project from a folder on this computer and keep it in "
+                    "sync from now on" ) );
     menu.Append( ID_ONLINE_NEW_BLANK, _( "Blank Project..." ),
                  _( "Start an empty project online and open it" ) );
 
@@ -2473,6 +2546,7 @@ void DIALOG_ONLINE_PROJECTS::onNewProject( wxCommandEvent& )
                                                         wxPoint( 0, m_newButton->GetSize().y ) ) )
     {
     case ID_ONLINE_NEW_PUBLISH: publishCurrentProject(); break;
+    case ID_ONLINE_NEW_FOLDER:  publishFolder();         break;
     case ID_ONLINE_NEW_BLANK:   newBlankProject();       break;
     default:                                             break;
     }
@@ -2504,10 +2578,91 @@ void DIALOG_ONLINE_PROJECTS::uploadCurrentProject()
         return;
 
     PROJECT& project = m_frame->Prj();
-    wxString projectPath = project.GetProjectPath();
-    wxString projectName = project.GetProjectName();
-    wxString proFile = project.GetProjectFullName();
 
+    uploadProject( project.GetProjectPath(), project.GetProjectName(),
+                   project.GetProjectFullName() );
+}
+
+
+void DIALOG_ONLINE_PROJECTS::publishFolder()
+{
+    if( m_busy > 0 || m_signingIn )
+        return;
+
+    wxDirDialog chooser( this, _( "Choose the folder of the KiCad project to publish" ),
+                         PATHS::GetDefaultUserProjectsPath(),
+                         wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST );
+
+    if( chooser.ShowModal() != wxID_OK )
+        return;
+
+    wxFileName folder = wxFileName::DirName( chooser.GetPath() );
+
+    // The project is whatever .kicad_pro the folder holds; it is not searched deeper,
+    // because a project's own folder is what gets linked and kept in sync.
+    wxArrayString proFiles;
+    wxDir::GetAllFiles( folder.GetPath(), &proFiles, wxS( "*.kicad_pro" ), wxDIR_FILES );
+    proFiles.Sort();
+
+    if( proFiles.IsEmpty() )
+    {
+        wxMessageBox( _( "That folder has no KiCad project file (.kicad_pro) in it.  Choose "
+                         "the folder that holds the project itself." ),
+                      _( "Publish a Folder" ), wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    wxFileName proFile( proFiles[0] );
+
+    if( proFiles.GetCount() > 1 )
+    {
+        wxArrayString names;
+
+        for( const wxString& file : proFiles )
+            names.Add( wxFileName( file ).GetName() );
+
+        int choice = wxGetSingleChoiceIndex( _( "This folder holds more than one project.  "
+                                                "Which one do you want to publish?" ),
+                                             _( "Publish a Folder" ), names, this );
+
+        if( choice < 0 )
+            return;
+
+        proFile = wxFileName( proFiles[choice] );
+    }
+
+    // The same form the project manager gives: a path that ends in a separator.
+    wxString projectPath = proFile.GetPathWithSep();
+    wxString projectName = proFile.GetName();
+    wxString linkedServer;
+
+    // One online project per local folder.
+    if( !COLLAB_PROJECT::ReadLocalLink( projectPath, projectName, linkedServer ).IsEmpty() )
+    {
+        wxMessageBox( wxString::Format( _( "'%s' is an online project already.  Open it from "
+                                           "the list instead." ),
+                                        projectName ),
+                      _( "Publish a Folder" ), wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    wxString fullName = proFile.GetFullPath();
+
+    whenSignedIn(
+            [this, projectPath, projectName, fullName]()
+            {
+                if( m_busy > 0 )
+                    return;
+
+                uploadProject( projectPath, projectName, fullName );
+            } );
+}
+
+
+void DIALOG_ONLINE_PROJECTS::uploadProject( const wxString& projectPath,
+                                            const wxString& projectName,
+                                            const wxString& proFile )
+{
     std::shared_ptr<nlohmann::json> projectOut = std::make_shared<nlohmann::json>();
     std::shared_ptr<std::string>    urlOut = std::make_shared<std::string>();
     std::shared_ptr<std::string>    errorOut = std::make_shared<std::string>();

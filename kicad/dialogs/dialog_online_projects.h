@@ -151,6 +151,13 @@ private:
     ///< The upload itself, off the UI thread, and linking this folder to the result.
     void uploadCurrentProject();
 
+    /// New > Publish a Folder: a project on disk that is not the one open.
+    void publishFolder();
+
+    /// Zip and upload the project in @a aProjectPath, then make that folder its local copy.
+    void uploadProject( const wxString& aProjectPath, const wxString& aProjectName,
+                        const wxString& aProFile );
+
     ///< Ask for a name, create an empty online project and open it.
     void newBlankProject();
     void createBlankProject( const wxString& aName );
