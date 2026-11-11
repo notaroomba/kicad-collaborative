@@ -177,7 +177,7 @@ stage.addEventListener("pointerdown", (ev) => {
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
   if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
-    try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { clearSelection(); drawSelection(); renderProps(); renderObjects(); stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); }
+    try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { E.selection.clear(); E.selected = null; E.selField = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); }
   }
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (!best) {
