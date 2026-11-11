@@ -94,6 +94,7 @@ export function printDialog() {
   const sch = isSch();
   const P = E.printOpts || (E.printOpts = { mono: false, frame: true, background: false, scale: "fit", custom: 1, layers: null });
   const layerNames = sch || !E.kdoc.layers ? [] : [...E.kdoc.layers.keys()];
+  if (P.layersDoc !== E.kdoc) { P.layers = null; P.layersDoc = E.kdoc; }   // another board: its own layers, not the last one's
   const included = new Set(P.layers || layerNames.filter((l) => !(E.hiddenLayers && E.hiddenLayers.has(l))));
   const cb = (id, on, label, dis) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
   const radio = (name, value, on, label) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="radio" name="${name}" value="${value}" style="width:auto;margin:0"${on ? " checked" : ""}> ${esc(label)}</label>`;
@@ -126,17 +127,22 @@ export function printDialog() {
     ] });
 }
 
-/** Black and White: KiCad prints every item in black on white paper; pale fills (a symbol body) stay paper white. */
-function monochrome(svg) {
+/**
+ * Black and White: KiCad prints every item in black on white paper.  On a schematic a pale *fill* (a symbol
+ * body, a sheet background) stays paper white; strokes and text are always black.  Translucent colours (mask
+ * layers) keep their alpha, so a print does not turn into one black slab.
+ */
+function monochrome(svg, sch) {
   const lum = (r, g, b) => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  const map = (c) => {
-    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r, g, b;
+  const map = (k, c) => {
+    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r, g, b, a = 1;
     if (m) { let h = m[1]; if (h.length === 3) h = h.replace(/./g, "$&$&"); r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
-    else if ((m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i.exec(c))) { r = +m[1]; g = +m[2]; b = +m[3]; }
+    else if ((m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?/i.exec(c))) { r = +m[1]; g = +m[2]; b = +m[3]; if (m[4] !== undefined) a = +m[4]; }
     else return c;
-    return lum(r, g, b) > 0.85 ? "#ffffff" : "#000000";
+    if (sch && k === "fill" && lum(r, g, b) > 0.85) return "#ffffff";
+    return a < 1 ? `rgba(0,0,0,${a})` : "#000000";
   };
-  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all, k, c) => (c === "none" ? all : `${k}="${map(c)}"`));
+  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all, k, c) => (c === "none" ? all : `${k}="${map(k, c)}"`));
 }
 
 /** Render the document for printing and open it in a print window (preview: shown, not printed). */
@@ -149,7 +155,7 @@ export function printDocument(P, preview) {
   const opts = { hidden, background: sch && P.background ? undefined : false, zoneOutline: !!E.renderOpts.zoneOutline, frame };
   if (!sch && frame && E.kdoc.page) opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
   let svg; try { svg = KiCadCanvas.renderSvg(E.kdoc, opts); } catch (e) { toast("Print failed: " + (e.message || e)); return; }
-  if (P.mono) svg = monochrome(svg);
+  if (P.mono) svg = monochrome(svg, sch);
   // 1:1 keeps the SVG's own millimetre size; Custom scales it; Fit to page (and a schematic page) fills the paper
   const m = /width="([\d.]+)mm" height="([\d.]+)mm"/.exec(svg);
   const k = !sch && P.scale === "1" ? 1 : !sch && P.scale === "custom" ? (P.custom || 1) : 0;
