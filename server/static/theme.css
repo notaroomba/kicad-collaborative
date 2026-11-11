@@ -14,7 +14,7 @@
      - No colour literal outside this file's token blocks.  Canvas drawing (KiCad's layer and
        schematic colours) is the one exception and lives in web/canvas/colors.ts.
      - Neutral grey chrome, as KiCad's own windows.  Blue is the accent: primary buttons, links,
-       selection, focus.  Red means F.Cu, the brand mark, or a destructive action, never "go".
+       selection, focus.  Red means F.Cu, an error, or a destructive action, never "go".
      - Radii stay small (3px controls, 6px windows), rules are 1px.  The one gradient on chrome
        is the pane caption (paper to bench), as KiCad's docked panes have. */
 
@@ -40,7 +40,7 @@
   --blue: #2F68C0;       /* links, selection, focus ring, active tab */
 
   /* ---- KiCad layer colours used as meaning ---- */
-  --copper: #C83434;     /* F.Cu: brand mark, owner badge */
+  --copper: #C83434;     /* F.Cu, owner badge */
   --copper-2: #A82B2B;
   --teal: #006464;       /* values and references, editor badge */
   --wire: #128A12;       /* live, ok */

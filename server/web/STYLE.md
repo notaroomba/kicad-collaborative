@@ -11,7 +11,7 @@ file, is at `/styleguide`.
    rules. The design on the canvas is the only colourful thing on screen.
 2. **Blue is the accent.** Primary buttons, links, selection, focus and the active tab are blue.
    One primary button per view.
-3. **Red means red.** Red is F.Cu, the brand mark, an error, or a destructive action. It never
+3. **Red means red.** Red is F.Cu, an error, or a destructive action. It never
    means "go".
 4. **Colour comes from tokens.** No colour literal outside `theme.css`. Canvas drawing uses
    KiCad's own layer and schematic colours (`web/canvas/colors.ts`) and is the one exception.
@@ -45,7 +45,7 @@ A page never defines a palette of its own; a test in `src/github.rs` fails if on
 | `--sel`, `--sel-soft`, `--on`, `--on-line` | Selected row, hovered row, pressed toggle and its border |
 | `--wire`, `--warn`, `--err`, `--err-2` | Ok and live, warning, error and destructive, destructive hover |
 | `--teal` | Values and references, the editor role |
-| `--copper`, `--copper-2` | F.Cu, the brand mark, the owner role. Not for buttons |
+| `--copper`, `--copper-2` | F.Cu, the owner role. Not for buttons |
 | `--canvas`, `--sheet`, `--silk`, `--mark` | Board background, schematic background, silkscreen, canvas annotations. The same in both themes |
 
 Text on a filled `--accent`, `--err` or `--copper` surface is `--on-accent`. Do not put text on a
@@ -99,6 +99,14 @@ values, coordinates, paths, counts, keys). Weights 400, 500 for controls, 600 fo
 Area styles (`hp-` projects window, `ai-` Assistant, `plg-` plugins, `kp-` vendor parts, `klib-`
 library chooser, `pd-` board dialogs) keep their own layout but take every colour, radius and size
 from the tokens, and their buttons and fields match `.btn` and `.input`.
+
+## The mark
+
+The icon is KiCad's own mark reworked: the blue squircle (`#2B4BB7` to `#2B2FB7`) with a white
+"Ki", KiCad's orange dot (`#FF6D00`) and a second, teal presence dot (`#19C2B0`). It is one file,
+`server/static/icon.svg`, used by `pages::MARK`, `/favicon.svg`, the menu bar and the About
+dialog. Its colours belong to the icon only and are not theme tokens. Use it at 18 to 20px in
+title bars; never recolour or redraw it.
 
 ## Adding UI
 

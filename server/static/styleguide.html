@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Style guide — KiCad Collaborative</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <script>try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
@@ -88,7 +89,7 @@
     <ul class="rules">
       <li><b>It is KiCad.</b> Neutral grey chrome like KiCad's own windows, dense rows, small radii, 1px rules. The design on the canvas is the only colourful thing on screen.</li>
       <li><b>Blue is the accent.</b> Primary buttons, links, selection, focus and the active tab are blue. One primary button per view.</li>
-      <li><b>Red means red.</b> Red is F.Cu, the brand mark, an error, or a destructive action. It never means “go”.</li>
+      <li><b>Red means red.</b> Red is F.Cu, an error, or a destructive action. It never means “go”.</li>
       <li><b>Colour comes from tokens.</b> No colour literal outside the theme. Canvas drawing uses KiCad's own layer and schematic colours and is the one exception.</li>
       <li><b>Light and dark are the same design.</b> Every surface works in both; nothing is styled for one theme only.</li>
       <li><b>Plain words.</b> Labels are KiCad's own where KiCad has one. Sentence case, no exclamation marks, errors say what to do next.</li>
@@ -125,7 +126,7 @@
       <div class="sw" data-token="--warn"><i style="background:var(--warn)"></i><div><b>--warn</b><span class="val"></span><span>Warning, conflict</span></div></div>
       <div class="sw" data-token="--err"><i style="background:var(--err)"></i><div><b>--err</b><span class="val"></span><span>Error, destructive</span></div></div>
       <div class="sw" data-token="--teal"><i style="background:var(--teal)"></i><div><b>--teal</b><span class="val"></span><span>Values, references, editor role</span></div></div>
-      <div class="sw" data-token="--copper"><i style="background:var(--copper)"></i><div><b>--copper</b><span class="val"></span><span>F.Cu, brand mark, owner role</span></div></div>
+      <div class="sw" data-token="--copper"><i style="background:var(--copper)"></i><div><b>--copper</b><span class="val"></span><span>F.Cu, owner role</span></div></div>
     </div>
     <h3>Canvas (the same in both themes)</h3>
     <div class="swatches">
@@ -261,7 +262,7 @@
       </div>
     </div>
     <div>
-      <p>The mark sits at 18 to 20px in title bars and at 32px as the browser icon, always on its own background, never recoloured.</p>
+      <p>The mark is KiCad's own, reworked: the blue squircle and white “Ki”, with KiCad's orange dot joined by a second, teal presence dot. It sits at 18 to 20px in title bars and is the browser icon, and is never recoloured or redrawn. It is one file, <code>static/icon.svg</code>.</p>
       <div class="demo" style="gap:var(--s-4)">
         <span style="width:48px;height:48px;display:block">{{MARK}}</span>
         <span style="width:32px;height:32px;display:block">{{MARK}}</span>
