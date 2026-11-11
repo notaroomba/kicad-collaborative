@@ -18,6 +18,9 @@ export interface ProbeInput {
   win: Win; pref: number[];    // per layer: +1 runs horizontally, -1 vertically, 0 no habit
   W: Weights; allowVias: boolean; maxSteps: number;
   collect?: Features[];        // the trainer's hook: every candidate's features
+  routable?: boolean[];        // this connection's own layer set (a plan may confine a net to some layers)
+  maxVias?: number;            // candidates with more vias than this are not considered
+  extra?: (nodes: Node[]) => number;   // a plan's own cost on top of the trained one
 }
 export interface ProbeResult { nodes: Node[]; feat: Features; cost: number; corners: number; onTerm: boolean; steps: number }
 
@@ -46,18 +49,18 @@ export function dirOf(dx: number, dy: number): number {
 }
 
 export function probe(inp: ProbeInput): ProbeResult | null {
-  const { G, maps, vmaps, win, W } = inp; const ww = win.x1 - win.x0 + 1, wh = win.y1 - win.y0 + 1, n = ww * wh, L = G.layers.length;
+  const { G, maps, vmaps, win, W } = inp; const RT = inp.routable || G.routable; const ww = win.x1 - win.x0 + 1, wh = win.y1 - win.y0 + 1, n = ww * wh, L = G.layers.length;
   if (ww <= 0 || wh <= 0) return null;
   const inWin = (t: Terminal) => t.ix >= win.x0 && t.ix <= win.x1 && t.iy >= win.y0 && t.iy <= win.y1;
   if (!inWin(inp.src) || (inp.tgt && !inWin(inp.tgt))) return null;
   const seen: Uint8Array[][] = [[], []], own: Int32Array[][] = [[], []]; const term: (Uint8Array | null)[] = [];
   for (let l = 0; l < L; l++) {
-    for (let s = 0; s < 2; s++) { seen[s].push(G.routable[l] ? new Uint8Array(n) : (null as unknown as Uint8Array)); own[s].push(G.routable[l] ? new Int32Array(n).fill(-1) : (null as unknown as Int32Array)); }
+    for (let s = 0; s < 2; s++) { seen[s].push(RT[l] ? new Uint8Array(n) : (null as unknown as Uint8Array)); own[s].push(RT[l] ? new Int32Array(n).fill(-1) : (null as unknown as Int32Array)); }
     term.push(null);
   }
   let hasTerm = false;
   for (const t of inp.term) {
-    if (!G.routable[t.l] || t.ix < win.x0 || t.ix > win.x1 || t.iy < win.y0 || t.iy > win.y1) continue;
+    if (!RT[t.l] || t.ix < win.x0 || t.ix > win.x1 || t.iy < win.y0 || t.iy > win.y1) continue;
     (term[t.l] || (term[t.l] = new Uint8Array(n)))[(t.iy - win.y0) * ww + (t.ix - win.x0)] = 1; hasTerm = true;
   }
   if (!inp.tgt && !hasTerm) return null;
@@ -65,7 +68,7 @@ export function probe(inp: ProbeInput): ProbeResult | null {
   const rl: number[] = [], rd: number[] = [], rs: number[] = [], rn: number[] = [], rp: number[] = [], rv: number[] = [], rside: number[] = [];
   const buckets: number[][][] = [[], []];
   let steps = 0, meets = 0, best: ProbeResult | null = null, bestCorners = Infinity;
-  const multi = G.routable.filter(Boolean).length > 1;
+  const multi = RT.filter(Boolean).length > 1; const maxVias = inp.maxVias === undefined ? Infinity : inp.maxVias;
   const viaLevel = Math.max(1, Math.round(W.viaLevel));
 
   const toNode = (li: number, l: number): Node => ({ ix: win.x0 + li % ww, iy: win.y0 + ((li / ww) | 0), l });
@@ -79,7 +82,8 @@ export function probe(inp: ProbeInput): ProbeResult | null {
     return out;
   };
   const consider = (nodes: Node[], corners: number, onTerm: boolean) => {
-    const feat = featuresOf(G, nodes, inp.pref); const cost = costOf(feat, W); meets++;
+    const feat = featuresOf(G, nodes, inp.pref); meets++; if (feat.vias > maxVias) return;
+    const cost = costOf(feat, W) + (inp.extra ? inp.extra(nodes) : 0);
     if (inp.collect && inp.collect.length < 4000) inp.collect.push(feat);
     if (corners < bestCorners) bestCorners = corners;
     if (!best || cost < best.cost) best = { nodes, feat, cost, corners, onTerm, steps };
@@ -133,12 +137,12 @@ export function probe(inp: ProbeInput): ProbeResult | null {
       if (!multi) continue;
       const gi = (y + win.y0) * G.W + x + win.x0; const free = G.thru[gi] !== 0;
       if (!free && !(inp.allowVias && viaOk(li, x, y))) continue;
-      for (let l2 = 0; l2 < L; l2++) if (l2 !== l && G.routable[l2] && !maps[l2][gi] && seen[side][l2][li] !== 255) hub(side, l2, x, y, id, lvl + (free ? 1 : viaLevel));
+      for (let l2 = 0; l2 < L; l2++) if (l2 !== l && RT[l2] && !maps[l2][gi] && seen[side][l2][li] !== 255) hub(side, l2, x, y, id, lvl + (free ? 1 : viaLevel));
     }
   };
 
   // level 0: the two ends
-  const start = (side: number, t: Terminal) => { for (const l of t.layers) if (G.routable[l]) hub(side, l, t.ix - win.x0, t.iy - win.y0, -1, 0); };
+  const start = (side: number, t: Terminal) => { for (const l of t.layers) if (RT[l]) hub(side, l, t.ix - win.x0, t.iy - win.y0, -1, 0); };
   if (inp.tgt) start(1, inp.tgt);
   start(0, inp.src);
   for (let k = 0; k < 64; k++) {

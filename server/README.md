@@ -275,3 +275,23 @@ edits: one undo step, sent to everyone in the session.
 - Tests: `node static/tests/autoroute.test.js`; two browsers in one board: `node scripts/autoroute-ui.mjs`.
 - Other tools can call `PcbAutoRouter.autoroute(ctx, { nets, layers, allowVias, passes, timeMs })` (commits and
   resolves with a summary) or `PcbAutoRouter.route(K, PcbTools, doc, settings, opts)` (pure, returns item nodes).
+
+### Planning and judging from outside (the assistant)
+
+The engine does the geometry and keeps the rules; what to route first, on which layers and how wide can come from a
+plan — the assistant's model, or a person. Everything here is pure (nothing is written to the board):
+
+- `PcbAutoRouter.route(K, P, doc, settings, opts)` also takes `order` (net names routed first, in that order),
+  `netOpts[net] = { layers, width, allowVias, maxVias, avoid: [[x0,y0,x1,y1]…], priority }` and
+  `keepouts: [{ layers?, box }]` for the run. Its result lists every connection in `connections`: pads at both ends,
+  length, vias, bends, layers, detour ratio, and for a failure the `reason` (`blocked` by nets routed earlier,
+  `no-room` past what is on the board, dropped by a `rule` in the exact check, or out of `budget`) with `blockedBy`.
+- `PcbAutoRouter.evaluate(K, P, doc, settings, { drc })` gives the numbers a layout is judged by: ratsnest length,
+  unrouted connections, vias, track length, the nets that wander furthest, and per-net figures.
+- `PcbAutoRouter.place(K, P, doc, settings, { footprints, outline, spacing })` places components the way a person
+  does: each functional group (`group`, with `near` and `anchor` hints) is first laid out as a tight block around
+  its anchor part, then the blocks are positioned and rotated inside the outline — fixed parts and parts on an
+  `edge` first, the rest where their connections are shortest; nets that reach everywhere (ground, rails) do not
+  pull. Without groups, small parts join the larger part they connect to. It returns positions, a score (ratsnest,
+  overlaps, courtyard clashes, parts outside) and the outline it used; `placementChanges` turns the positions into
+  ordinary edits.
