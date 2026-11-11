@@ -219,14 +219,6 @@ pub async fn favicon() -> impl IntoResponse {
 pub async fn landing_image(Path(name): Path<String>) -> Response {
     let bytes: &'static [u8] = match name.as_str() {
         "editor.webp" => include_bytes!("../static/landing/editor.webp"),
-        "schematic.webp" => include_bytes!("../static/landing/schematic.webp"),
-        "projects.webp" => include_bytes!("../static/landing/projects.webp"),
-        "share.webp" => include_bytes!("../static/landing/share.webp"),
-        "github.webp" => include_bytes!("../static/landing/github.webp"),
-        "parts.webp" => include_bytes!("../static/landing/parts.webp"),
-        "autoroute.webp" => include_bytes!("../static/landing/autoroute.webp"),
-        "assistant.webp" => include_bytes!("../static/landing/assistant.webp"),
-        "plugins.webp" => include_bytes!("../static/landing/plugins.webp"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response()
@@ -1196,7 +1188,7 @@ mod landing_tests {
         // Colours come from the app, never from a palette of its own.
         assert!(html.contains("{{THEME}}") && !html.contains("--bench: #"));
         // Every screenshot it shows is one the server can serve.
-        for name in ["editor", "schematic", "projects", "share", "github", "parts", "autoroute", "assistant", "plugins"] {
+        for name in ["editor"] {
             assert!(html.contains(&format!("/static/landing/{name}.webp")), "{name}");
         }
         assert!(html.contains("/auth/github/login?next=/"), "sign-in hands off to the projects home");

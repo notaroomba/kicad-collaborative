@@ -178,29 +178,6 @@
   .notes b { font-weight: 600; display: block; }
   .notes span { color: var(--ink-2); font-size: 15px; line-height: 1.5; display: block; margin-top: 2px; }
 
-  /* ---- bill of materials ---- */
-  .bom-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: clamp(24px, 3.5vw, 52px); margin-top: 44px; align-items: start; }
-  .bom { border-top: 1px solid var(--ink); }
-  .bom-h, .bom-r { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 0 14px; }
-  .bom-h { font: 500 11.5px var(--mono); letter-spacing: .14em; color: var(--ink); padding: 10px 0; border-bottom: 1px solid var(--line); }
-  .bom-r { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 13px 0; position: relative; }
-  .bom-r .ref { font: 13px var(--mono); color: var(--ink-3); padding-top: 3px; transition: color .2s; }
-  .bom-r b { font-weight: 600; font-size: 17px; letter-spacing: -.01em; display: flex; align-items: baseline; gap: 10px; }
-  .bom-r b small { font: 500 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line); border-radius: 2px; padding: 0 5px; }
-  .bom-r .d { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .45s cubic-bezier(.2, .7, .2, 1), opacity .35s; }
-  .bom-r .d > span { overflow: hidden; color: var(--ink-2); font-size: 15px; line-height: 1.5; display: block; }
-  .bom-r .d > span::before { content: ""; display: block; height: 4px; }
-  .bom-r[aria-selected="true"] .d { grid-template-rows: 1fr; opacity: 1; }
-  .bom-r[aria-selected="true"] .ref { color: var(--accent); }
-  .bom-r::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform .5s cubic-bezier(.2, .7, .2, 1); }
-  .bom-r[aria-selected="true"]::after { transform: scaleX(1); }
-  .bom-r:hover b { color: var(--accent); }
-  .bom-view { position: sticky; top: 84px; }
-  .bom-view .shot { position: relative; aspect-ratio: 16 / 10; }
-  .bom-view img { position: absolute; inset: 0; width: 100%; height: 100%; aspect-ratio: auto; opacity: 0; transform: scale(1.012); transition: opacity .45s, transform .7s cubic-bezier(.2, .7, .2, 1); }
-  .bom-view img.on { opacity: 1; transform: none; }
-  .bom-view .cap { margin-top: 10px; }
-
   /* ---- get it ---- */
   .get-grid { display: grid; grid-template-columns: 1fr 1fr; margin-top: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
   .get-grid > div { padding: clamp(22px, 3vw, 36px); display: grid; gap: 14px; align-content: start; }
@@ -212,37 +189,29 @@
   .get-grid .acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   .os { font: 12px var(--mono); color: var(--ink-3); }
 
-  /* ---- how it works ---- */
-  .how-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: clamp(28px, 4vw, 64px); margin-top: 44px; align-items: center; }
-  .how-grid p + p { margin-top: 14px; }
-  .how-grid p { color: var(--ink-2); max-width: 56ch; }
-  .how-grid p b { color: var(--ink); font-weight: 500; }
-  .wiring { width: 100%; height: auto; display: block; font-family: var(--mono); }
-  .wiring .box { fill: var(--panel); stroke: var(--ink); stroke-width: 1.2; }
-  .wiring text { fill: var(--ink); font-size: 12px; }
-  .wiring text.s { fill: var(--ink-3); font-size: 10.5px; }
-  .wiring .w { fill: none; stroke: var(--wire); stroke-width: 1.6; }
-  .wiring .flow { fill: none; stroke: var(--wire); stroke-width: 3.4; stroke-linecap: round; stroke-dasharray: 1 26; animation: flow 1.5s linear infinite; }
-  .wiring .flow.back { animation-direction: reverse; stroke: var(--blue); }
-  .wiring .dot { fill: var(--wire); }
-  @keyframes flow { to { stroke-dashoffset: -27; } }
-
   /* ---- closing and title block ---- */
   .close { text-align: left; padding-bottom: clamp(48px, 6vw, 80px); }
   .close h2 { font-size: clamp(34px, 5.4vw, 68px); letter-spacing: -.035em; max-width: 16ch; }
   .close .acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
-  .titleblock { margin: 0 0 40px; border: 1.5px solid var(--ink); display: grid; grid-template-columns: 2.2fr 1fr 1fr 1fr; font-size: 13.5px; background: var(--paper); }
-  .titleblock > div { padding: 9px 12px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); min-width: 0; }
-  .titleblock > div:nth-child(4n) { border-right: 0; }
-  .titleblock > div:nth-last-child(-n + 4) { border-bottom: 0; }
+  .titleblock { margin: 0 0 40px; border: 1.5px solid var(--ink); display: grid; grid-template-columns: 2.2fr 1fr 1fr 1fr; gap: 1px; font-size: 13.5px; background: var(--ink); }
+  .titleblock > div { padding: 9px 12px; min-width: 0; background: var(--paper); }   /* the rules between cells are the grid's gaps */
   .titleblock small { display: block; font: 500 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
   .titleblock a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
   .titleblock .big { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 9px; }
   .titleblock .big svg { width: 20px; height: 20px; }
-  .titleblock .wide { grid-column: span 4; border-right: 0; color: var(--ink-2); font-size: 12.5px; }
+  .titleblock .wide { grid-column: span 4; color: var(--ink-2); font-size: 12.5px; }
 
   /* ---- the page's own look: KiCad's lettering and drawing-sheet furniture, the app's flat panels ---- */
-  body { background: var(--bench); }
+  :root { --page: var(--sheet); }
+  :root[data-theme="dark"] { --page: var(--panel); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --page: var(--panel); } }
+  /* the page lies on KiCad's schematic canvas: its sheet colour and its grid of dots */
+  body { background-color: var(--page);
+         background-image: radial-gradient(circle, color-mix(in srgb, var(--line-2) 70%, transparent) 0.9px, transparent 1.2px);
+         background-size: 20px 20px; background-position: 10px 10px; }
+  /* Loose text sits on the dotted sheet: a halo of the sheet's colour keeps the dots out of the letters. */
+  main, footer { text-shadow: 0 0 2px var(--page), 0 0 2px var(--page), 0 0 5px var(--page); }
+  .win, .scene, .shot, .get-grid, .sheet-h, .titleblock, .btn { text-shadow: none; }
   [data-stroke] { font-weight: 600; letter-spacing: 0; }
   .lettered { line-height: 0; }
   .lettered .t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -254,20 +223,16 @@
   @media (max-width: 900px) { .hero-side { grid-template-columns: minmax(0, 1fr); } }
   .hero .also { max-width: 52ch; }
   h2 { font-size: clamp(22px, 2.5vw, 31px); line-height: 1.2; letter-spacing: 0; }
-  h3, .steps h3, .get-grid h3, .bom-r b { letter-spacing: 0; }
+  h3, .steps h3, .get-grid h3 { letter-spacing: 0; }
   /* every section opens with a strip of a drawing sheet's title block */
   .sheet-h { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1.5px solid var(--ink); background: var(--paper); }
   .sheet-h h2 { padding: 14px 16px 12px; min-width: 0; }
   .sheet-n { display: flex; align-items: center; padding: 0 16px; border-left: 1px solid var(--ink); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
   .story-head { gap: 0; }
-  .cap, .shot figcaption, figure .cap, .os, .steps .n, .bom-h, .bom-r .ref, .titleblock small, .scene .chip, .scene .turn, .win-bar, .win-status, .layers button {
+  .cap, .shot figcaption, figure .cap, .os, .steps .n, .titleblock small, .scene .chip, .scene .turn, .win-bar, .win-status, .layers button {
     font-family: var(--font); letter-spacing: 0; text-transform: none; }
   .cap, .shot figcaption, figure .cap, .os { font-size: 13px; }
   .steps .n { font-size: 13px; font-weight: 500; }
-  .bom-h { font-size: 13px; font-weight: 600; background: var(--paper); padding: 8px 10px; border: 1px solid var(--line); border-top: 0; }
-  .bom { border-top: 1px solid var(--line); }
-  .bom-r { padding: 11px 10px; }
-  .bom-r .ref { font-size: 13.5px; font-variant-numeric: tabular-nums; }
   .titleblock small { font-size: 11.5px; font-weight: 400; }
   .notes { border-top: 1px solid var(--line); }
   .notes::before { content: none; }
@@ -276,7 +241,6 @@
   /* flat, square surfaces as in the application: no soft cards, no floating shadows, nothing leaning */
   .win, .scene, .shot, .get-grid { border-radius: 2px; box-shadow: none; border-color: var(--line-2); }
   .js .win.rv, .js .win.rv.in { transform: none; }
-  .wiring { font-family: var(--font); }
   .close { padding-top: clamp(40px, 6vw, 72px) !important; }
   .close .lead { max-width: 60ch; }
   .close .acts { margin-top: 18px; }
@@ -302,18 +266,11 @@
     .steps li.on h3 { display: block; margin-top: 12px; }
     .steps li.on .more { display: block; opacity: 1; }
     .win-status .hide-m { display: none; }
-    .together-grid, .bom-grid, .how-grid { grid-template-columns: 1fr; }
-    .bom-view { position: sticky; top: 58px; z-index: 2; order: -1; background: var(--paper); padding: 10px 0 6px; margin: 0 -4px; }
-    .bom-view .cap { margin-top: 6px; }
-    .bom-view .shot { box-shadow: none; }
+    .together-grid { grid-template-columns: 1fr; }
     .get-grid { grid-template-columns: 1fr; }
     .get-grid > div + div { border-left: 0; border-top: 1px solid var(--line); }
     .titleblock { grid-template-columns: 1fr 1fr; }
-    .titleblock > div:nth-child(4n) { border-right: 1px solid var(--ink); }
-    .titleblock > div:nth-child(2n) { border-right: 0; }
-    .titleblock > div:nth-last-child(-n + 4) { border-bottom: 1px solid var(--ink); }
-    .titleblock .wide { grid-column: span 2; border-bottom: 0 !important; }
-    .titleblock .t1 { grid-column: span 2; border-right: 0 !important; }
+    .titleblock .wide, .titleblock .t1, .titleblock > div:nth-child(4), .titleblock > div:nth-last-child(2) { grid-column: span 2; }
   }
   @media (max-width: 520px) {
     .wrap { width: calc(100% - 32px); }
@@ -326,8 +283,8 @@
     html { scroll-behavior: auto; }
     .js .rv { opacity: 1; transform: none; transition: none; }
     .js .win.rv, .js .win.rv.in { transform: none; }
-    .live::before, .wiring .flow { animation: none; }
-    .steps .more, .bom-r .d, .bom-view img, .bom-r::after { transition: none; }
+    .live::before { animation: none; }
+    .steps .more { transition: none; }
   }
 </style>
 </head>
@@ -339,7 +296,6 @@
     <nav aria-label="Sections">
       <a href="#make">How a board gets made</a>
       <a href="#together">Working together</a>
-      <a href="#bom">What ships</a>
       <a href="#get">Get it</a>
     </nav>
     <span class="sp"></span>
@@ -400,7 +356,7 @@
       <div class="win-status"><span class="hide-s" data-counts>Pads 42</span><span data-unrouted>Unrouted 4</span><span class="sp"></span><span class="hide-s" data-z>Z 1.00</span><span data-xy>X --.--  Y --.--</span><span class="hide-s">grid 0.25</span><span class="hide-s">mm</span><span class="hide-m" data-toolname>Select item(s)</span></div>
     </div>
     <div class="keep">
-      <p class="cap">Try it: this is the web editor's renderer on a real .kicad_pcb, with four connections left for you. Drag a part, route a track (X), change layer and drop a via (V). Mara and Jun are scripted here; in a project they are your teammates.</p>
+      <p class="cap">Try it: this is the web editor's renderer on a real .kicad_pcb, with four connections left for you. Drag a part or a label, route a track (X), change layer and drop a via (V). Leave it a moment and Mara or Jun comes over to put it back: here they are scripted, in a project they are your teammates.</p>
       <a class="btn" data-keep href="/auth/github/login?next=%2F%3Fstart%3Dmini" title="Makes a project of this board, with its schematic, and opens it in the editor">Keep going in a real project</a>
     </div>
   </div>
@@ -408,7 +364,7 @@
 
 <section class="story" id="make" data-chapter="0">
   <div class="wrap story-head">
-    <div class="sheet-h rv"><h2 data-stroke>How a board gets made</h2><span class="sheet-n">Sheet 1 / 5</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>How a board gets made</h2><span class="sheet-n">Sheet 1 / 3</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">One design, from the first wire to a finished board, in a file everyone has open. Scroll to follow it.</p>
   </div>
   <div class="story-track">
@@ -435,7 +391,7 @@
 
 <section id="together">
   <div class="wrap">
-    <div class="sheet-h rv"><h2 data-stroke>Working together</h2><span class="sheet-n">Sheet 2 / 5</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>Working together</h2><span class="sheet-n">Sheet 2 / 3</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">What you see when someone else is in the file.</p>
     <div class="together-grid">
       <figure class="rv">
@@ -454,42 +410,9 @@
   </div>
 </section>
 
-<section id="bom" style="padding-top:0">
-  <div class="wrap">
-    <div class="sheet-h rv"><h2 data-stroke>What ships</h2><span class="sheet-n">Sheet 3 / 5</span></div>
-    <p class="lead rv" style="--i:1; margin-top:18px">Everything in this list is in the product today. The screenshots are the real thing.</p>
-    <div class="bom-grid">
-      <div class="bom rv" role="tablist" aria-label="Features" aria-orientation="vertical">
-        <div class="bom-h"><span>Ref</span><span>Item</span></div>
-        <button class="bom-r" role="tab" aria-selected="true" data-shot="editor"><span class="ref">01</span><span><b>Web editor</b><span class="d"><span>The schematic and PCB editors in a browser tab, with KiCad's menus, hotkeys, docked panels and mouse model. Wire, route, edit properties, place parts from the KiCad libraries, run the rule checks, update the board from the schematic, and open the 3D viewer.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="projects"><span class="ref">02</span><span><b>Online projects</b><span class="d"><span>Upload a project in the browser or publish it from the desktop app. Search, stars, thumbnails, and a Trash that keeps things for 30 days.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="share"><span class="ref">03</span><span><b>Sharing and roles</b><span class="d"><span>Invite by GitHub username or email, or send an editor or viewer link you can revoke. Role changes apply at once, also for people who have the project open.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="github"><span class="ref">04</span><span><b>GitHub sync</b><span class="d"><span>Link a project to a repository and pull or push from the browser. When both sides changed a file, items are merged by their UUID, and you pick which side wins where they truly conflict.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="parts"><span class="ref">05</span><span><b>Part search</b><span class="d"><span>Search LCSC with stock and prices, or Mouser, DigiKey and Farnell with your own API keys, then place the symbol and footprint straight into the design. Save parts into libraries you share.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="router"><span class="ref">06</span><span><b>Autorouter</b><span class="d"><span>Routes the connections that are left and shows the result as a preview. Keep it, stop part-way and keep what is done, or cancel and nothing changes.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="assistant"><span class="ref">07</span><span><b>Design assistant</b><span class="d"><span>Reads the sheet, runs the rule checks, looks up datasheets, and proposes edits on a card you preview and accept. Give it a description and it drafts a board stage by stage, from parts and schematic to placement and routing, each step a proposal. Nothing is applied silently.</span></span></span></button>
-        <button class="bom-r" role="tab" aria-selected="false" data-shot="plugins"><span class="ref">08</span><span><b>Plugins</b><span class="d"><span>Sandboxed plugins ask for the permissions they need and add menu items, toolbar buttons and panels. Install from a community registry or publish your own; a project can recommend the plugins it uses.</span></span></span></button>
-      </div>
-      <figure class="bom-view rv" style="--i:1">
-        <div class="shot" id="bomShots">
-          <img class="on" data-shot="editor" src="/static/landing/schematic.webp" width="1600" height="1000" loading="lazy" alt="The web schematic editor with the PIC programmer sheet open, KiCad's toolbars and docked panels around it, and a collaborator's cursor on the sheet.">
-          <img data-shot="projects" data-src="/static/landing/projects.webp" width="1600" height="1000" alt="The projects page with four project cards, each with a thumbnail of its board.">
-          <img data-shot="share" data-src="/static/landing/share.webp" width="1600" height="1000" alt="The share dialog listing people with access, their roles, share links and general access.">
-          <img data-shot="github" data-src="/static/landing/github.webp" width="1600" height="1000" alt="The GitHub sync page showing files to pull and push and a file changed on both sides.">
-          <img data-shot="parts" data-src="/static/landing/parts.webp" width="1600" height="1000" alt="The vendor parts dialog with search results for a microcontroller and its symbol and footprint.">
-          <img data-shot="router" data-src="/static/landing/autoroute.webp" width="1600" height="1000" alt="The autorouter's progress dialog over a board being routed.">
-          <img data-shot="assistant" data-src="/static/landing/assistant.webp" width="1600" height="1000" alt="The assistant panel beside a schematic, with a review and a proposed change waiting to be accepted.">
-          <img data-shot="plugins" data-src="/static/landing/plugins.webp" width="1600" height="1000" alt="A statistics panel added by a plugin beside a schematic.">
-        </div>
-        <figcaption class="cap" id="bomCap">01 / Web editor</figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
 <section id="get" style="padding-top:0">
   <div class="wrap">
-    <div class="sheet-h rv"><h2 data-stroke>Get it</h2><span class="sheet-n">Sheet 4 / 5</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>Get it</h2><span class="sheet-n">Sheet 3 / 3</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">Use the desktop app or the browser. It is the same project either way.</p>
     <div class="get-grid rv" style="--i:2">
       <div>
@@ -516,24 +439,6 @@
       </div>
     </div>
 
-    <div class="sheet-h rv" id="how" style="margin-top:clamp(56px, 8vw, 104px)"><h2 data-stroke>How it works</h2><span class="sheet-n">Sheet 5 / 5</span></div>
-    <div class="how-grid">
-      <div class="rv">
-        <p>The editors send <b>property-level changes</b> over a WebSocket to a Rust server backed by PostgreSQL. The server puts every operation in order and stores it before acknowledging it and passing it on, so everyone applies the same edits in the same sequence.</p>
-        <p>When two people change the same property, the last writer wins. Cursors and selections travel on a separate channel that is never stored.</p>
-        <p>It is open source, and the server is yours to run: <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/server/README.md">self-hosting guide</a>, <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/COLLABORATION.md">collaboration guide</a>.</p>
-      </div>
-      <svg class="wiring rv" style="--i:1" viewBox="0 0 580 250" role="img" aria-label="Diagram: the desktop app and the browser editor both connect to the sync server, which stores operations in PostgreSQL.">
-        <path class="w" d="M170 62 H232 V125 H290"/><path class="w" d="M170 188 H232 V125"/><path class="w" d="M410 125 H452"/>
-        <path class="flow" d="M170 62 H232 V125 H290"/><path class="flow back" d="M170 188 H232 V125 H290"/><path class="flow" d="M410 125 H452"/>
-        <circle class="dot" cx="232" cy="125" r="4"/>
-        <rect class="box" x="10" y="34" width="160" height="56"/><text x="24" y="58">Desktop app</text><text class="s" x="24" y="76">C++, KiCad editors</text>
-        <rect class="box" x="10" y="160" width="160" height="56"/><text x="24" y="184">Browser editor</text><text class="s" x="24" y="202">TypeScript, canvas</text>
-        <rect class="box" x="290" y="90" width="120" height="70"/><text x="304" y="118">Sync server</text><text class="s" x="304" y="136">Rust, WebSocket</text>
-        <rect class="box" x="452" y="97" width="120" height="56"/><text x="464" y="121">PostgreSQL</text><text class="s" x="464" y="139">ops, snapshots</text>
-        <text class="s" x="182" y="54">ops</text><text class="s" x="182" y="208">presence</text>
-      </svg>
-    </div>
   </div>
 </section>
 

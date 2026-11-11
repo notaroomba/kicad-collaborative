@@ -196,6 +196,43 @@ export function copperAt(doc: KDoc, x: number, y: number, layer: string): { net:
   return best;
 }
 
+/** Distance from the segment a-b to an axis-aligned pad rectangle, 0 when they overlap. */
+function segRect(ax: number, ay: number, bx: number, by: number, p: Node): number {
+  const x0 = p.x - p.hw!, x1 = p.x + p.hw!, y0 = p.y - p.hh!, y1 = p.y + p.hh!;
+  // Clip the segment to the rectangle (Liang-Barsky): any part inside means they overlap.
+  let t0 = 0, t1 = 1; const dx = bx - ax, dy = by - ay; let inside = true;
+  for (const [pp, qq] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]]) {
+    if (Math.abs(pp) < 1e-12) { if (qq < 0) { inside = false; break; } continue; }
+    const r = qq / pp;
+    if (pp < 0) { if (r > t1) { inside = false; break; } if (r > t0) t0 = r; } else { if (r < t0) { inside = false; break; } if (r < t1) t1 = r; }
+  }
+  if (inside) return 0;
+  const ptRect = (x: number, y: number): number => Math.hypot(Math.max(x0 - x, 0, x - x1), Math.max(y0 - y, 0, y - y1));
+  return Math.min(ptRect(ax, ay), ptRect(bx, by), segDist(x0, y0, ax, ay, bx, by), segDist(x1, y0, ax, ay, bx, by), segDist(x0, y1, ax, ay, bx, by), segDist(x1, y1, ax, ay, bx, by));
+}
+/** Distance between two segments' centre lines. */
+function segSeg(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): number {
+  const o = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): number => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  const d1 = o(cx, cy, dx, dy, ax, ay), d2 = o(cx, cy, dx, dy, bx, by), d3 = o(ax, ay, bx, by, cx, cy), d4 = o(ax, ay, bx, by, dx, dy);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(segDist(ax, ay, cx, cy, dx, dy), segDist(bx, by, cx, cy, dx, dy), segDist(cx, cy, ax, ay, bx, by), segDist(dx, dy, ax, ay, bx, by));
+}
+/** KiCad's rule for new copper: a track (a to b, `width` wide, on `layers`; null is a via's
+ *  every layer) of `net` may not come within `clearance` of copper that belongs to another
+ *  net.  True when this one would. */
+export function clash(doc: KDoc, a: Pt, b: Pt, width: number, layers: string[] | null, net: number, clearance: number): boolean {
+  const me = { layers } as Node, E = 1e-6;
+  for (const nd of copper(doc, null)) {
+    if (nd.net === net || !shares(me, nd)) continue;
+    let d: number;
+    if (nd.kind === "pad") d = segRect(a[0], a[1], b[0], b[1], nd);
+    else if (nd.kind === "via") d = segDist(nd.x, nd.y, a[0], a[1], b[0], b[1]) - nd.r;
+    else d = segSeg(a[0], a[1], b[0], b[1], nd.x, nd.y, nd.x2!, nd.y2!) - nd.r;
+    if (d - width / 2 < clearance - E) return true;
+  }
+  return false;
+}
+
 /** The track or via under a point, for selecting one. */
 export function trackAt(doc: KDoc, x: number, y: number, slop: number): string | null {
   let best: string | null = null, bd = Infinity;

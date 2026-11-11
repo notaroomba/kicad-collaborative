@@ -12,7 +12,13 @@ export type Solid =
   /** a vertical prism over a footprint-local outline (round: shaded smoothly), from z0 to z1, its top edge bevelled */
   | { k: "prism"; pts: Pt[]; z0: number; z1: number; color: RGBA; round?: boolean; bevel?: number }
   /** a horizontal cylinder between two footprint-local points, axis at height z */
-  | { k: "cyl"; a: Pt; b: Pt; r: number; z: number; color: RGBA };
+  | { k: "cyl"; a: Pt; b: Pt; r: number; z: number; color: RGBA }
+  /**
+   * a profile swept horizontally from a to b (footprint-local): `outer` is the section across the axis as
+   * [offset from the axis, height] pairs, symmetric about the axis; `inner` (same number of points) hollows
+   * it into a tube.  capA / capB close the ends (a ring when hollow).
+   */
+  | { k: "sweep"; a: Pt; b: Pt; outer: Pt[]; inner?: Pt[]; color: RGBA; smooth?: boolean; capA?: boolean; capB?: boolean };
 
 // colours after KiCad's library models (3dmodels/*.wrl materials), toned down a little
 const C = {
@@ -28,6 +34,7 @@ const C = {
   axialCap: [0.30, 0.42, 0.62, 1] as RGBA,
   sleeve: [0.12, 0.15, 0.28, 1] as RGBA,
   can: [0.78, 0.78, 0.80, 1] as RGBA,
+  steel: [0.70, 0.71, 0.73, 1] as RGBA,
   led: [0.80, 0.20, 0.16, 1] as RGBA,
   ledSmd: [0.90, 0.88, 0.80, 1] as RGBA,
   tantalum: [0.84, 0.62, 0.20, 1] as RGBA,
@@ -90,6 +97,45 @@ const padOne = (pads: LocalPad[]): LocalPad => pads.find((p) => p.num === "1") |
 /** Thin tinned leads standing in the drilled pads, up to height z. */
 function thtLeads(pads: LocalPad[], z: number, out: Solid[], size = 0.5, color = C.tin): void {
   for (const p of pads) if (p.drill) out.push(prism(centred(p.x, p.y, size, size), 0, z, color));
+}
+
+/** A stadium section (flat top and bottom, round sides) w wide and h high standing on height z0, as [offset, height] pairs. */
+function stadium(w: number, h: number, z0: number, n = 9): Pt[] {
+  const r = h / 2, cx = Math.max(0, w / 2 - r), out: Pt[] = [];
+  for (let i = 0; i <= n; i++) { const t = -Math.PI / 2 + Math.PI * i / n; out.push([cx + r * Math.cos(t), z0 + r + r * Math.sin(t)]); }
+  for (let i = 0; i <= n; i++) { const t = Math.PI / 2 + Math.PI * i / n; out.push([-cx + r * Math.cos(t), z0 + r + r * Math.sin(t)]); }
+  return out;
+}
+const slab = (w: number, z0: number, z1: number): Pt[] => [[w / 2, z0], [w / 2, z1], [-w / 2, z1], [-w / 2, z0]];
+
+/**
+ * A horizontal USB Type-C receptacle after the connector's own drawing (USB Type-C spec, receptacle
+ * interface): a stamped steel shell 8.94 x 3.16 mm with a 8.34 x 2.56 mm mouth, the 6.69 x 0.7 mm tongue
+ * with its contacts in the middle of it, a moulded body closing the back, the shell's stakes in their
+ * slots and the signal leads on their pads.  The mouth faces away from the signal pads.
+ */
+function usbC(pads: LocalPad[], fab: Box, out: Solid[]): boolean {
+  const sig = pads.filter((p) => !p.drill), stakes = pads.filter((p) => p.drill);
+  if (!sig.length) return false;
+  const fx = (fab.x0 + fab.x1) / 2, fy = (fab.y0 + fab.y1) / 2;
+  let sx = 0, sy = 0; for (const p of sig) { sx += p.x; sy += p.y; } sx /= sig.length; sy /= sig.length;
+  const alongY = Math.abs(sy - fy) >= Math.abs(sx - fx);
+  const dir: Pt = alongY ? [0, sy > fy ? -1 : 1] : [sx > fx ? -1 : 1, 0];
+  const half = (alongY ? bl(fab) : bw(fab)) / 2; if (half < 2) return false;
+  const at = (t: number, u = 0): Pt => [fx + dir[0] * t - dir[1] * u, fy + dir[1] * t + dir[0] * u];   // t along the axis from the middle, u across it
+  const W = 8.94, H = 3.16, wall = 0.3, back = -half, mouth = half, mid = back + 0.42 * 2 * half;
+  out.push({ k: "sweep", a: at(back + 0.3), b: at(mouth), outer: stadium(W, H, 0), inner: stadium(W - 2 * wall, H - 2 * wall, wall), color: C.steel, smooth: true, capA: true, capB: true });
+  out.push({ k: "sweep", a: at(back), b: at(mid), outer: stadium(W - 2 * wall - 0.04, H - 2 * wall - 0.04, wall + 0.02), color: C.black, smooth: true, capA: true, capB: true });
+  const tz0 = H / 2 - 0.35, tz1 = H / 2 + 0.35, tip = mouth - 0.75;
+  out.push({ k: "sweep", a: at(mid), b: at(tip), outer: slab(6.69, tz0, tz1), color: C.plastic, capB: true });
+  for (let i = 0; i < 12; i++) {
+    const u = (i - 5.5) * 0.5, long = i === 0 || i === 3 || i === 8 || i === 11 ? 0.25 : 0.75;   // ground and power reach further forward
+    const quad = (z0: number, z1: number): Solid => ({ k: "prism", pts: [at(mid, u - 0.13), at(tip - long, u - 0.13), at(tip - long, u + 0.13), at(mid, u + 0.13)], z0, z1, color: C.gold });
+    out.push(quad(tz1, tz1 + 0.03), quad(tz0 - 0.03, tz0));
+  }
+  for (const p of stakes) out.push({ k: "prism", pts: rectPts(alongY ? centred(p.x, p.y, 0.3, Math.min(1.1, p.h * 0.7)) : centred(p.x, p.y, Math.min(1.1, p.w * 0.7), 0.3)), z0: 0, z1: 1.3, color: C.steel });
+  for (const p of sig) out.push(prism(centred(p.x, p.y, p.w * (alongY ? 0.55 : 0.9), p.h * (alongY ? 0.9 : 0.55)), 0, 0.14, C.tin));
+  return true;
 }
 
 /** A footprint's placeholder solids (footprint-local), or null when its name says nothing we model. */
@@ -309,6 +355,7 @@ export function partSolids(lib: string, ref: string, pads: LocalPad[], fab: Box 
   if (/DSUB|D-Sub|DB\d+/i.test(name) && fab) { out.push(prism(fab, 0, Math.min(12.5, 0.45 * Math.min(bw(fab), bl(fab)) + 6), C.shell, 0.4)); return out; }
   if (/TerminalBlock/i.test(name) && fab) { out.push(prism(fab, 0, 10, C.terminal, 0.4)); return out; }
   if (/Potentiometer|Trimmer/i.test(name) && fab) { out.push(prism(fab, 0.3, /Vertical/i.test(name) ? 5 : 3, C.trimmer, 0.25)); return out; }
+  if (/USB_C_Receptacle|USB-C|Type-C/i.test(name) && !/Vertical|Plug/i.test(name) && fab && usbC(pads, fab, out)) return out;
   if (/^Conn|Connector|^JST|Molex|USB|RJ45|BarrelJack/i.test(name) && fab) { out.push(prism(fab, 0, clamp(0.6 * Math.min(bw(fab), bl(fab)), 3, 9), C.plastic, 0.3)); return out; }
   return null;
 }

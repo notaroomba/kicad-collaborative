@@ -152,6 +152,53 @@ function cylinderSolid(m: MeshData, a: Pt, b: Pt, r: number, z: number, color: R
   }
 }
 
+/**
+ * A section swept horizontally from a to b (model XY).  `outer` is the section as [offset across the axis,
+ * z] pairs; `inner` (point for point) hollows it into a tube whose inside is drawn too.  Ends are closed
+ * on request: a ring between the two loops when hollow, the whole section otherwise.
+ */
+function sweepSolid(m: MeshData, a: Pt, b: Pt, outer: Pt[], inner: Pt[] | null, color: RGBA, smooth: boolean, capA: boolean, capB: boolean): void {
+  const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy); if (l < 1e-6 || outer.length < 3) return;
+  const ux = dx / l, uy = dy / l, px = -uy, py = ux;
+  const at = (c: Pt, p: Pt): [number, number, number] => [c[0] + p[0] * px, c[1] + p[0] * py, p[1]];
+  const skin = (loop: Pt[], out: number): void => {
+    const n = loop.length; let cu = 0, cz = 0; for (const p of loop) { cu += p[0]; cz += p[1]; } cu /= n; cz /= n;
+    // each edge's normal in the section plane, pointing away from the middle of the loop (towards it for the inside of a tube)
+    const en: Pt[] = [];
+    for (let i = 0; i < n; i++) {
+      const p = loop[i], q = loop[(i + 1) % n]; let nu = q[1] - p[1], nz = -(q[0] - p[0]); const ln = Math.hypot(nu, nz) || 1; nu /= ln; nz /= ln;
+      if (nu * ((p[0] + q[0]) / 2 - cu) + nz * ((p[1] + q[1]) / 2 - cz) < 0) { nu = -nu; nz = -nz; }
+      en.push([nu * out, nz * out]);
+    }
+    const vn = (i: number, e: number): Pt => {
+      if (!smooth) return en[e];
+      const p = en[(i + n - 1) % n], q = en[i]; const su = p[0] + q[0], sz = p[1] + q[1], ln = Math.hypot(su, sz);
+      return ln < 0.2 ? en[e] : [su / ln, sz / ln];
+    };
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, p = loop[i], q = loop[j], np = vn(i, i), nq = vn(j, i), f = en[i];
+      const pa = at(a, p), qa = at(a, q), pb = at(b, p), qb = at(b, q);
+      const v0 = m.vertex(pa[0], pa[1], pa[2], np[0] * px, np[0] * py, np[1], color), v1 = m.vertex(qa[0], qa[1], qa[2], nq[0] * px, nq[0] * py, nq[1], color);
+      const v2 = m.vertex(qb[0], qb[1], qb[2], nq[0] * px, nq[0] * py, nq[1], color), v3 = m.vertex(pb[0], pb[1], pb[2], np[0] * px, np[0] * py, np[1], color);
+      m.tri(v0, v1, v2, f[0] * px, f[0] * py, f[1]); m.tri(v0, v2, v3, f[0] * px, f[0] * py, f[1]);
+    }
+  };
+  skin(outer, 1);
+  if (inner && inner.length === outer.length) skin(inner, -1);
+  for (const [c, sgn, on] of [[a, -1, capA], [b, 1, capB]] as [Pt, number, boolean][]) {
+    if (!on) continue;
+    const nx = sgn * ux, ny = sgn * uy, n = outer.length;
+    const ring = (loop: Pt[]): number[] => loop.map((p) => { const v = at(c, p); return m.vertex(v[0], v[1], v[2], nx, ny, 0, color); });
+    const o = ring(outer);
+    if (inner && inner.length === n) { const i2 = ring(inner); for (let i = 0; i < n; i++) { const j = (i + 1) % n; m.tri(o[i], o[j], i2[j], nx, ny, 0); m.tri(o[i], i2[j], i2[i], nx, ny, 0); } }
+    else {
+      let cu = 0, cz = 0; for (const p of outer) { cu += p[0]; cz += p[1]; }
+      const v = at(c, [cu / n, cz / n]), mid = m.vertex(v[0], v[1], v[2], nx, ny, 0, color);
+      for (let i = 0; i < n; i++) m.tri(mid, o[i], o[(i + 1) % n], nx, ny, 0);
+    }
+  }
+}
+
 function material(opts: THREE.MeshPhongMaterialParameters): THREE.MeshPhongMaterial {
   return new THREE.MeshPhongMaterial(Object.assign({ shininess: 18, specular: new THREE.Color(0x222222) }, opts));
 }
@@ -269,6 +316,7 @@ export class BoardScene {
       const sgn = body.back ? -1 : 1, zOf = (h: number) => (body.back ? -thickness - lift - h : lift + h);
       for (const so of body.solids) {
         if (so.k === "prism") prismSolid(m, so.pts.map(toModel), zOf(so.z0), zOf(so.z1), sgn, so.color, !!so.round, so.bevel || 0);
+        else if (so.k === "sweep") { const sec = (loop: Pt[]): Pt[] => loop.map((p) => [p[0], zOf(p[1])] as Pt); sweepSolid(m, toModel(so.a), toModel(so.b), sec(so.outer), so.inner ? sec(so.inner) : null, so.color, !!so.smooth, !!so.capA, !!so.capB); }
         else cylinderSolid(m, toModel(so.a), toModel(so.b), so.r, zOf(so.z), so.color);
       }
       return;
