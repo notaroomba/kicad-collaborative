@@ -378,7 +378,23 @@ export class Router {
           const [x, y] = swap ? [d(cp.a, cn.b), d(cp.b, cn.a)] : [d(cp.a, cn.a), d(cp.b, cn.b)]; if (x > NEAR || y > NEAR || x < 1e-3 || y < 1e-3) continue;
           if (!best || x + y < best[0]) best = [x + y, cn, swap];
         }
-        if (best) { used.add(best[1]); out.push({ p: e.p, n: e.n, cp, cn: best[1], swap: best[2] }); }
+        if (best) {
+          used.add(best[1]); const pr: Pair = { p: e.p, n: e.n, cp, cn: best[1], swap: best[2] }; out.push(pr);
+          // Each net's tree could as well reach another of its pads on the same side (a USB-C socket has two D+ and
+          // two D- pads, interleaved): take the two that sit closest together and the same way round as the far end.
+          for (const end of ["a", "b"] as const) {
+            const other = end === "a" ? "b" : "a"; const cn = pr.cn, nEnd = (pr.swap ? other : end) as "a" | "b", nOther = (pr.swap ? end : other) as "a" | "b";
+            const side = (net: NetInfo, c: Conn, at: "a" | "b"): Anchor[] => {   // the pads this end may move to and the net's tree stays a tree
+              const seen = new Set<number>([c[at].cluster]); let grew = true;
+              while (grew) { grew = false; for (const o of net.conns) if (o !== c) { const x = o.a.cluster, y = o.b.cluster; if (seen.has(x) !== seen.has(y)) { seen.add(x); seen.add(y); grew = true; } } }
+              return (net.anchors || []).filter((a) => seen.has(a.cluster) && a.axis);
+            };
+            const cps = side(e.p, cp, end), cns = side(e.n, cn, nEnd); const far: Pt = [cp[other].p[0] - cn[nOther].p[0], cp[other].p[1] - cn[nOther].p[1]];
+            let pick: [number, Anchor, Anchor] | null = null;
+            for (const a of cps) for (const b of cns) { const dd = d(a, b); if (dd < 1e-3 || dd > NEAR) continue; const sc = dd + ((a.p[0] - b.p[0]) * far[0] + (a.p[1] - b.p[1]) * far[1] < 0 ? 5 : 0) + 0.05 * (d(a, cp[other]) + d(b, cn[nOther])); if (!pick || sc < pick[0] - 1e-9) pick = [sc, a, b]; }
+            if (pick && (pick[1] !== cp[end] || pick[2] !== cn[nEnd])) { cp[end] = pick[1]; cn[nEnd] = pick[2]; cp.len = d(cp.a, cp.b); cn.len = d(cn.a, cn.b); cp.cls = this.classFor(cp.net, Math.min(this.roomAt(cp.a, cp.net), this.roomAt(cp.b, cp.net))); cn.cls = this.classFor(cn.net, Math.min(this.roomAt(cn.a, cn.net), this.roomAt(cn.b, cn.net))); }
+          }
+        }
       }
     }
     return out;
@@ -436,37 +452,53 @@ export class Router {
       for (const sh of [0, 0.4, -0.4, 0.8, -0.8]) for (const sg of [fwd, -fwd]) { const tq = s1 + jog + Math.abs(sh) + 0.05, t = tq + 2 * d + 0.1 + G.g; const ox = mx - ey * sh, oy = my + ex * sh; const p: Pt = [r6(ox + ex * t * sg), r6(oy + ey * t * sg)]; out.push({ g: { p, layers, shape: { t: "circle", x: p[0], y: p[1], r: G.g * 1.5 } as Shape, cluster: 0 }, e: [ex * sg, ey * sg] as Pt, q: [r6(ox + ex * tq * sg), r6(oy + ey * tq * sg)] as Pt, s: s1 }); }
       return out;
     };
-    let why = "there is no room for the two tracks side by side";
+    let why = "there is no room for the two tracks side by side", close = "";
     this.lift(pr.p, 1, wide); this.lift(pr.n, 1, wide); let laid: { l: number; nodes: Node[]; feat: Features; tp: Pt[]; tn: Pt[] } | null = null;
     // the pair leaves a gathering point away from its pads, never back over them
-    const wall = (m: Uint16Array, at: { g: Anchor; e: Pt }, sign: number) => {
-      const R = Math.max(1.5, Math.hypot(Pa.p[0] - Na.p[0], Pa.p[1] - Na.p[1])), n = Math.ceil(R / G.g), cx = Math.round((at.g.p[0] - G.ox) / G.g), cy = Math.round((at.g.p[1] - G.oy) / G.g);
+    const wall = (m: Uint16Array, at: { g: Anchor; e: Pt }, cell: Terminal, sign: number) => {
+      const R = Math.max(1.5, Math.hypot(Pa.p[0] - Na.p[0], Pa.p[1] - Na.p[1])), n = Math.ceil(R / G.g), cx = cell.ix, cy = cell.iy;   // behind the cell the pair really starts from
       for (let dy = -n; dy <= n; dy++) for (let dx = -n; dx <= n; dx++) { const ix = cx + dx, iy = cy + dy; if (ix < 0 || iy < 0 || ix >= G.W || iy >= G.H) continue; if ((dx * at.e[0] + dy * at.e[1]) * G.g < -G.g * 0.6) m[iy * G.W + ix] += sign; }
     };
     try {
       this.cur = Object.assign({}, cp, { cls: wide }); this.curSoft = false;
+      // Two ends that face each other at close range (series resistors right behind a connector) need no search: the
+      // pair goes straight across from where one end has gathered to where the other has.
+      for (const l of layers) {
+        if (laid) break; const ga = gather(Pa, Na, Pb)[0], gb = gather(Pb, Nb, Pa)[0]; const span = Math.hypot(gb.q[0] - ga.q[0], gb.q[1] - ga.q[1]); if (span < 0.1 || span > 6) continue;
+        const cell = (q: Pt): Node => ({ ix: Math.round((q[0] - G.ox) / G.g), iy: Math.round((q[1] - G.oy) / G.g), l }); const nodes = [cell(ga.q), cell(gb.q)]; const lead: Lead[] = [{ e: ga.e, s: ga.s }, { e: gb.e, s: gb.s }];
+        for (const L1 of [0.4, 0.3, 0.2]) {   // a short piece straight on at each end, so the two tracks stand square to their pads where they meet them
+          if (laid) break; const a1: Pt = [r6(ga.q[0] + ga.e[0] * L1), r6(ga.q[1] + ga.e[1] * L1)], b1: Pt = [r6(gb.q[0] + gb.e[0] * L1), r6(gb.q[1] + gb.e[1] * L1)];
+          const along = (b1[0] - a1[0]) * ga.e[0] + (b1[1] - a1[1]) * ga.e[1], across = Math.abs((b1[0] - a1[0]) * ga.e[1] - (b1[1] - a1[1]) * ga.e[0]);
+          if (along < 0.02 || (a1[0] - b1[0]) * gb.e[0] + (a1[1] - b1[1]) * gb.e[1] < 0.02 || across > along * 1.2 + 0.02) { close = "the two ends are too close together for a coupled run"; continue; }   // no sideways dog-leg for the sake of a millimetre of pair
+          const c: Pt[] = [ga.q, a1, b1, gb.q];
+          for (const sgn of [1, -1]) { const r = this.pairTracks(pr, c, l, w, d, clr, sgn, lead); if (typeof r === "string") { why = r; if ((this.opts as any).debugPairs) console.log("  direct", L1, sgn, r); continue; } pr.laid = { c, l, w, d, clr, sgn, lead }; laid = { l, nodes, feat: featuresOf(G, nodes, this.pref), tp: r.tp, tn: r.tn }; break; }
+        }
+      }
       let tries = 0;
       search: for (const l of layers) for (const ga of gather(Pa, Na, Pb)) for (const gb of gather(Pb, Nb, Pa)) {
+        if (laid) break search;
         this.cur = Object.assign({}, cp, { cls: wide }); this.curSoft = false;
         const rt = G.routable.map((_, i) => i === l); const src = this.access(ga.g, wide.full, rt), tgt = this.access(gb.g, wide.full, rt); if ((this.opts as any).debugPairs) console.log("combo", pr.p.key, JSON.stringify(ga.g.p), JSON.stringify(gb.g.p), !!src, !!tgt); if (!src || !tgt) continue;
-        wall(wide.full[l], ga, 1); wall(wide.full[l], gb, 1); let res: ProbeResult | null = null;
+        wall(wide.full[l], ga, src, 1); wall(wide.full[l], gb, tgt, 1); let res: ProbeResult | null = null;
         try { if (!wide.full[l][src.iy * G.W + src.ix] && !wide.full[l][tgt.iy * G.W + tgt.ix]) res = probe({ G, maps: wide.full, vmaps: wide.vfull, src, tgt, term: [], win: { x0: 0, y0: 0, x1: G.W - 1, y1: G.H - 1 }, pref: this.pref, W: this.W, allowVias: false, maxSteps: 6e6, routable: rt }); }
-        finally { wall(wide.full[l], ga, -1); wall(wide.full[l], gb, -1); }
+        finally { wall(wide.full[l], ga, src, -1); wall(wide.full[l], gb, tgt, -1); }
         if ((this.opts as any).debugPairs) console.log("  probe", !!res);
         if (!res) continue; if (++tries > 12) break search;
         const nodes = this.mitre(simplify(res.nodes), wide.full); let c: Pt[] = []; for (const n of nodes) { const q = this.mm(n); if (!c.length || Math.hypot(q[0] - c[c.length - 1][0], q[1] - c[c.length - 1][1]) > 1e-6) c.push(q); }
         if (c.length < 2) continue;
         if (Math.hypot(c[0][0] - ga.g.p[0], c[0][1] - ga.g.p[1]) > Math.hypot(c[c.length - 1][0] - ga.g.p[0], c[c.length - 1][1] - ga.g.p[1])) c = c.slice().reverse();
-        c = [ga.q, ...c, gb.q];
+        // the lead-in runs exactly along the pads' axis into the gathering cell, wherever the grid put that cell
+        const back = (p: Pt, e: Pt): Pt => [r6(p[0] - e[0] * (2 * d + 0.1 + G.g)), r6(p[1] - e[1] * (2 * d + 0.1 + G.g))];
+        c = [back(c[0], ga.e), ...c, back(c[c.length - 1], gb.e)];
         for (const sgn of [1, -1]) {   // which track is whose: the way round in which the two fans do not cross
           const lead: Lead[] = [{ e: ga.e, s: ga.s }, { e: gb.e, s: gb.s }];
-          const r = this.pairTracks(pr, c, l, w, d, clr, sgn, lead); if (typeof r === "string") { why = r; continue; }
+          const r = this.pairTracks(pr, c, l, w, d, clr, sgn, lead); if (typeof r === "string") { why = r; if ((this.opts as any).debugPairs) console.log("  fail", sgn, r, JSON.stringify(c)); continue; }
           const tp = r.tp, tn = r.tn; pr.laid = { c, l, w, d, clr, sgn, lead };
           laid = { l, nodes, feat: res.feat, tp, tn }; break search;
         }
       }
     } finally { this.lift(pr.n, -1, wide); this.lift(pr.p, -1, wide); }
-    if (!laid) return why;
+    if (!laid) return close || why;
     const put = (c: Conn, t: Pt[]) => {
       c.shapes = []; for (let i = 0; i + 1 < t.length; i++) if (Math.hypot(t[i + 1][0] - t[i][0], t[i + 1][1] - t[i][1]) > 1e-4) c.shapes.push({ net: c.net, layers: [laid!.l], shape: { t: "seg", a: t[i], b: t[i + 1], r: w / 2 } as Shape, clr: c.cls.clr });
       c.nodes = laid!.nodes; c.viaCells = []; c.stubs = []; c.feat = laid!.feat; c.landed = -1; c.zoneEnd = false; c.pair = true; c.rips = 99; c.why = undefined; this.place(c, 1);
@@ -814,6 +846,7 @@ export class Router {
     if (this.opts.fewerVias !== false && !this.stopped) this.fewerVias(timeUp);
     this.widen();
     if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);   // what the last two steps moved may have cut a pour again
+    if (ripUp && this.opts.zones !== false && !this.stopped && conns.some((c) => !c.nodes && !c.moot && c.stitch)) { this.repair(timeUp); this.stitch(timeUp); }   // a cut-off pad still not joined: let it push others aside
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
     this.validate();
     if (this.opts.explain !== false) this.explain();
@@ -955,6 +988,16 @@ export class Router {
         // a connection that was never laid but whose ends are joined after all (through the pour, or another track) is settled
         const comp = this.components(net); for (const c of net.conns) c.moot = !c.nodes && comp[c.a.cluster] === comp[c.b.cluster];
         if (!gained) break;
+      }
+      // A drop into the pour that no longer joins anything (its pad has since been tied to the main body another way,
+      // or it ended in a piece nothing else is in) is a stub: take out each one the net stays whole without.
+      const loose = () => { const st = this.pourState(net); if (!st) return Infinity; let n = 0; for (const a of net.anchors!) if (st.root(a.grp || 0) !== st.main) n++; return n; };
+      let base = -1;
+      for (const c of net.conns) {
+        if (timeUp()) break; if (!c.nodes || !c.zoneEnd || this.conns.some((o) => o.nodes && o.landed === c.id)) continue; if (base < 0) base = loose();
+        const old = { nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd, ends: c.ends, a: c.a, b: c.b };
+        this.rip(c);
+        if (loose() > base) { Object.assign(c, old); this.place(c, 1); } else { c.moot = true; this.stat.stubsRemoved = (this.stat.stubsRemoved || 0) + 1; }
       }
     }
   }
