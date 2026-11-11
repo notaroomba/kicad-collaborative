@@ -254,7 +254,7 @@ await propose({ title: `Board outline ${W} x ${H} mm`, rationale: `Pico length w
 // The floorplan, in mm from the board's top left corner: [x, y, rotation].
 const FLOOR = NARROW ? {
   J1: [10.46, 2.5, 180], J4: [10.46, H - 1.61, 90],
-  R2: [6.96, 9.0, 0], R1: [13.96, 9.0, 0], R4: [9.86, 9.2, 90], R3: [11.06, 9.2, 90],   // D+ on the left, D- on the right, as U1's pins 47 and 46 are: the pair never has to cross
+  R2: [6.96, 9.0, 0], R1: [13.96, 9.0, 0], R4: [9.86, 9.2, 270], R3: [11.06, 9.2, 270],   // D+ on the left, D- on the right, as U1's pins 47 and 46 are: the pair never has to cross
   U2: [14.5, 12.2, 0], C1: [11.5, 12.2, 90], C2: [17.1, 12.2, 90],
   U3: [6.4, 15.6, 90], C15: [10.2, 15.5, 90], R5: [10.2, 17.6, 90], R6: [10.2, 19.7, 90], SW1: [15.3, 17.6, 90],   // flash turned on end to fit between the header rows
   U1: [10.46, 31, 0],
@@ -265,7 +265,7 @@ const FLOOR = NARROW ? {
   D1: [15.9, 41.5, 0], R9: [15.9, 39.8, 0], SW2: [14.6, 45.5, 0], R8: [10.9, 43.6, 90],
 } : {
   J1: [13, 2.5, 180], J4: [10.46, H - 1.61, 90],
-  R2: [9.5, 9.2, 0], R1: [16.5, 9.2, 0], R4: [12.4, 9.4, 90], R3: [13.6, 9.4, 90],              // CC pull-downs either side, USB series resistors under the data pins
+  R2: [9.5, 9.2, 0], R1: [16.5, 9.2, 0], R4: [12.4, 9.4, 270], R3: [13.6, 9.4, 270],              // CC pull-downs either side, USB series resistors under the data pins
   U2: [19.3, 12.5, 0], C1: [16.6, 12.5, 90], C2: [22.0, 14.5, 90],                             // regulator by the connector
   U3: [8.2, 15, 0], C15: [8.2, 11.3, 0], R5: [6.5, 19.2, 0], R6: [9.9, 19.2, 0], SW1: [18.5, 19.5, 90],   // flash above the QSPI pins, a clear lane for USB beside it
   U1: [13, 31, 0],
