@@ -84,12 +84,13 @@ function netOf(node) {
 const NET_STYLE = new WeakMap();
 function netStyle(doc) {
   if (NET_STYLE.has(doc)) return NET_STYLE.get(doc);
-  let style = "code";
+  let style = null;
   for (const it of doc.items.values()) {
     const probe = it.kind === "footprint" ? K.kid(it.node, "pad") : (it.kind === "segment" || it.kind === "via" || it.kind === "arc") ? it.node : null;
     const n = probe && K.kid(probe, "net"); if (!n) continue;
     style = typeof n[1] === "number" ? "code" : "name"; break;
   }
+  if (!style) return "name";   // nothing on a net yet: this build's own form, and not remembered, so the first netted item decides
   NET_STYLE.set(doc, style); return style;
 }
 function netNode(doc, net) { return netStyle(doc) === "name" ? ["net", net && net.name ? net.name : ""] : ["net", net && net.code > 0 ? net.code : 0]; }

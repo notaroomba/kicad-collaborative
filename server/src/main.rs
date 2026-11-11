@@ -1,4 +1,5 @@
 mod ai;
+mod kicadlib;
 mod auth;
 mod doc_actor;
 mod error;
@@ -281,6 +282,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ai", get(ai::status))
         .route("/api/ai/key", axum::routing::put(ai::put_key).delete(ai::delete_key))
         .route("/api/projects/{id}/ai/chat", post(ai::chat))
+        .route("/api/docs/{id}/ops", get(ai::doc_ops))
+        .route("/api/kicad-lib/list", get(kicadlib::list))
+        .route("/api/kicad-lib/item", get(kicadlib::item))
+        .route("/api/kicad-lib/search", get(kicadlib::search))
         // vendor parts and saved part libraries (src/parts)
         .route("/static/dist/parts.js", get(pages::parts_js))
         .route("/static/dist/parts.js.map", get(pages::parts_js_map))
