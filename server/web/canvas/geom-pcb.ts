@@ -109,11 +109,6 @@ export function buildPcbGeom(doc, item) {
     const arm = xShape ? 2 * size / 3 : size / 2, r = xShape ? size / 2 : size / 3;
     for (const [a, b] of [[[-arm, 0], [arm, 0]], [[0, -arm], [0, arm]]]) { const p = R(a[0], a[1]), q = R(b[0], b[1]); G(item, { t: "line", x1: x + p[0], y1: y + p[1], x2: x + q[0], y2: y + q[1], w, color, layer, z }); }
     G(item, { t: "circle", x, y, r, w, color, layer, z });
-  } else if (k === "point") {
-    // PCB_PAINTER::draw( PCB_POINT ): an X of the size in LAYER_POINTS' colour and a ring of half that in the layer's
-    const [x, y] = atOf(n); const layer = layerOf(n, "F.Cu"); const sizeN = kid(n, "size"); const h = (sizeN ? num(sizeN[1]) : 1) / 2; const z = pcbZ(layer);
-    for (const [a, b] of [[[-h, -h], [h, h]], [[h, -h], [-h, h]]]) G(item, { t: "line", x1: x + a[0], y1: y + a[1], x2: x + b[0], y2: y + b[1], w: 0, color: POINT_COLOR, layer, z });
-    G(item, { t: "circle", x, y, r: h / 2, w: 0, color: pcbColor(layer), layer, z });
   } else if (k === "footprint") {
     buildFootprintGeom(doc, item);
   } else if (k === "table") {
@@ -123,9 +118,6 @@ export function buildPcbGeom(doc, item) {
   }
   // groups, gr_bbox, generated items: nothing to draw
 }
-
-// LAYER_POINTS in the KiCad default colour theme
-const POINT_COLOR = "#FF26E2";
 
 // m_HoleWallThickness (0.020 mm) × m_HoleWallPaintingMultiplier (1.5): how wide the plating is painted
 export const HOLE_WALL = 0.020 * 1.5;

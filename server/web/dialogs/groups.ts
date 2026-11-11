@@ -44,7 +44,8 @@ function enterGroup(ctx: Ctx): boolean {
   const doc = ctx.doc; if (!doc) return true;
   let g: KItem | null = null; for (const id of selectionIds(ctx)) { const it = doc.items.get(id)!; g = it.kind === "group" ? topGroupOf(doc, id, enteredGroup()) || it : topGroupOf(doc, id, enteredGroup()); if (g) break; }
   if (!g) { ctx.toast("Select a group to enter"); return true; }
-  entered = g.id; ctx.setSelection(groupMembers(g.node).filter((m) => doc.items.has(m))); ctx.setHighlight(null);   // KiCad's EnterGroup selects the members setStatusBar({ mode: `Editing group${g.node[1] ? " " + String(g.node[1]) : ""} — Leave Group to finish` }); requestRender();
+  entered = g.id; ctx.setSelection(groupMembers(g.node).filter((m) => doc.items.has(m))); ctx.setHighlight(null);   // KiCad's EnterGroup selects the members
+  setStatusBar({ mode: `Editing group${g.node[1] ? " " + String(g.node[1]) : ""} — Leave Group to finish` }); requestRender();
   return true;
 }
 function leaveGroup(ctx: Ctx): boolean {
