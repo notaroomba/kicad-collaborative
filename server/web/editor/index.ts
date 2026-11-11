@@ -28,6 +28,7 @@ import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
 import { installPcbRouting, pcbLayerKey } from "./pcbrouting";
+import { installProjectWatch } from "./projectwatch";
 import { breakFollow, sendPresence } from "./peers";
 import { collapseSelectionTo, drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
 import { clearSelection, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto } from "./selection";
@@ -369,6 +370,7 @@ document.addEventListener("keydown", (ev) => {
 installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();
+installProjectWatch();
 installLibrary();   // window.KiCadLibrary + the placeFootprint / library browser actions (editor/library.ts)
 
 

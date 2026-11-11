@@ -123,6 +123,13 @@ function ensureProject(): void {
   }).catch(() => { /* no project file: KiCad's defaults */ });
 }
 
+/** A project file another client wrote (editor/projectwatch.ts): the size lists, netclasses and layer pair presets follow it. */
+export function adoptRoutingProject(text: string): void {
+  if (!proDoc()) return;
+  const st = R(); st.layerPairPresets = presetsFromProject(text);
+  if (!st.load(text)) st.emit();
+}
+
 let seenInputs = "";
 /** Every store update lands here (pointer moves included), so only a new project, document, view or unit does any work. */
 function onStore(): void {
