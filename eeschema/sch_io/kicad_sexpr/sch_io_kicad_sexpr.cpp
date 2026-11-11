@@ -599,7 +599,7 @@ std::pair<int, int> SCH_IO_KICAD_SEXPR::chooseFileFormatVersion( SCH_SHEET* aShe
                     if( !aSymbol )
                         return false;
 
-                    std::vector<const SCH_PIN*> pins = aSymbol->GetGraphicalPins();
+                    const auto pins = aSymbol->GetGraphicalPins();
 
                     return std::any_of( pins.begin(), pins.end(),
                                         []( const SCH_PIN* aPin )

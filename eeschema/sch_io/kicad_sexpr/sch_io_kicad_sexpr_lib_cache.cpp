@@ -1002,7 +1002,7 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::formatLibrary( OUTPUTFORMATTER& aFormatter,
             if( !symbol )
                 continue;
 
-            std::vector<const SCH_PIN*> pins = symbol->GetGraphicalPins();
+            const auto pins = symbol->GetGraphicalPins();
 
             if( std::any_of( pins.begin(), pins.end(),
                              []( const SCH_PIN* aPin )
