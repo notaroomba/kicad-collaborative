@@ -38,6 +38,7 @@
 #include <map>
 #include <sch_field.h>
 #include <sch_line.h>
+#include <sch_shape.h>
 #include <tools/sch_actions.h>
 #include <tools/sch_line_wire_bus_tool.h>
 #include <tools/sch_move_tool.h>
@@ -819,6 +820,7 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
     nlohmann::json selection = nlohmann::json::array();
     nlohmann::json boxes = nlohmann::json::array();
+    nlohmann::json at = nlohmann::json::array();
 
     // Symbol fields have no persisted uuid (each client mints its own at load), so a
     // dragged field is named by its owner's uuid and its field name instead.
@@ -850,6 +852,16 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
         const BOX2I bbox = item->GetBoundingBox();
         boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+
+        // The item's anchor: a receiver holding its own copy ghosts it displaced by
+        // `at - GetPosition()`, which is exact where bounding boxes never agree across
+        // clients (fonts, text layers).  Shapes anchored off their start (arcs) are left
+        // out so the web, which only knows the file's points, cannot misplace them.
+        if( item->Type() == SCH_SHAPE_T
+            && static_cast<SCH_SHAPE*>( item )->GetShape() == SHAPE_T::ARC )
+            at.push_back( nullptr );
+        else
+            at.push_back( { item->GetPosition().x, item->GetPosition().y } );
 
         if( dragAddedIds.count( item->m_Uuid ) || item->HasFlag( SELECTED_BY_DRAG ) )
             dragAdded.push_back( item->m_Uuid.AsStdString() );
@@ -912,6 +924,7 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selection },
         { "boxes", boxes },
+        { "at", at },
         { "dragAdded", dragAdded },
         { "children", children },
         { "ghost", ghost },
@@ -1896,6 +1909,32 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                 if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
                     idList = &peer.state[ "selection" ];
 
+                // Presence `at` (newer senders) is selection[i]'s anchor, the sender's
+                // GetPosition(): against our own copy that gives the exact drag offset,
+                // where a bounding-box difference never does (fonts, text layers).  An
+                // older sender, or an item without an anchor, falls back to the box.
+                auto peerOffset = [&peer]( size_t aIdx, const EDA_ITEM* aItem,
+                                           const nlohmann::json& aBox, VECTOR2I& aOffset )
+                {
+                    if( peer.state.contains( "at" ) && peer.state[ "at" ].is_array()
+                        && aIdx < peer.state[ "at" ].size() )
+                    {
+                        const nlohmann::json& anchor = peer.state[ "at" ][ aIdx ];
+
+                        if( anchor.is_array() && anchor.size() >= 2 && anchor[ 0 ].is_number()
+                            && anchor[ 1 ].is_number() )
+                        {
+                            aOffset = VECTOR2I( anchor[ 0 ].get<int>(), anchor[ 1 ].get<int>() )
+                                      - aItem->GetPosition();
+                            return true;
+                        }
+                    }
+
+                    aOffset = VECTOR2I( aBox[ 0 ].get<int>() - aItem->GetBoundingBox().GetX(),
+                                        aBox[ 1 ].get<int>() - aItem->GetBoundingBox().GetY() );
+                    return false;
+                };
+
                 for( size_t ii = 0; ii < boxList.size(); ++ii )
                 {
                     const nlohmann::json& box = boxList[ ii ];
@@ -1907,6 +1946,23 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                         && ( *idList )[ ii ].is_string()
                         && dragAdded.count( ( *idList )[ ii ].get<std::string>() ) )
                         continue;
+
+                    // An item we hold is framed by our own box moved by the exact offset: the
+                    // sender's box (a browser's font metrics) can sit visibly off the item.
+                    if( idList && ii < idList->size() && ( *idList )[ ii ].is_string() )
+                    {
+                        KIID kiid( wxString::FromUTF8( ( *idList )[ ii ].get<std::string>() ) );
+                        SCH_ITEM* own = m_frame->Schematic().ResolveItem( kiid, nullptr, true );
+                        VECTOR2I  offset;
+
+                        if( own && !own->HasFlag( IS_MOVING ) && peerOffset( ii, own, box, offset ) )
+                        {
+                            BOX2I bbox = own->GetBoundingBox();
+                            bbox.Move( offset );
+                            draw.selectionBoxes.push_back( bbox );
+                            continue;
+                        }
+                    }
 
                     draw.selectionBoxes.emplace_back(
                             VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
@@ -1954,10 +2010,8 @@ void SCH_COLLAB_TOOL::rebuildOverlay()
                                 continue;
                         }
 
-                        VECTOR2I offset( boxes[ ii ][ 0 ].get<int>()
-                                                 - item->GetBoundingBox().GetX(),
-                                         boxes[ ii ][ 1 ].get<int>()
-                                                 - item->GetBoundingBox().GetY() );
+                        VECTOR2I offset;
+                        peerOffset( ii, item, boxes[ ii ], offset );
 
                         // Only ghost items that are actually displaced (i.e. mid-drag).
                         if( std::abs( offset.x ) <= 1 && std::abs( offset.y ) <= 1 )

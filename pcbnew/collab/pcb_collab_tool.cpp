@@ -18,6 +18,7 @@
  */
 
 #include "pcb_collab_tool.h"
+#include <pcb_shape.h>
 
 #include "pcb_collab_sync.h"
 
@@ -1358,6 +1359,7 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
     nlohmann::json selectionIds = nlohmann::json::array();
     nlohmann::json boxes = nlohmann::json::array();
+    nlohmann::json at = nlohmann::json::array();
 
     // Send our own bounding boxes rather than only ids: the receiver would
     // otherwise draw them from its own (last committed) copy, so a drag in
@@ -1376,6 +1378,17 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 
         const BOX2I bbox = item->GetBoundingBox();
         boxes.push_back( { bbox.GetX(), bbox.GetY(), bbox.GetWidth(), bbox.GetHeight() } );
+
+        // The item's anchor: a receiver holding its own copy ghosts it displaced by
+        // `at - GetPosition()`, which is exact where bounding boxes never agree across
+        // clients (fonts, text layers).  Arcs anchor off their centre, which the web (file
+        // points only) cannot reproduce, so they carry no anchor.
+        if( item->Type() == PCB_ARC_T
+            || ( item->Type() == PCB_SHAPE_T
+                 && static_cast<PCB_SHAPE*>( item )->GetShape() == SHAPE_T::ARC ) )
+            at.push_back( nullptr );
+        else
+            at.push_back( { item->GetPosition().x, item->GetPosition().y } );
     }
 
     // The route (or track drag) in flight ghosts live on peers' canvases.
@@ -1391,6 +1404,7 @@ void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
             KiROUND( viewport.GetSize().x ), KiROUND( viewport.GetSize().y ) } },
         { "selection", selectionIds },
         { "boxes", boxes },
+        { "at", at },
         { "ghost", ghost },
         { "sheetFile", file.ToStdString( wxConvUTF8 ) },
     };
@@ -1748,10 +1762,61 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
             // back to resolving ids locally for peers on an older client.
             if( peer.state.contains( "boxes" ) && peer.state[ "boxes" ].is_array() )
             {
-                for( const nlohmann::json& box : peer.state[ "boxes" ] )
+                const nlohmann::json& boxList = peer.state[ "boxes" ];
+                const nlohmann::json* idList = nullptr;
+
+                if( peer.state.contains( "selection" ) && peer.state[ "selection" ].is_array() )
+                    idList = &peer.state[ "selection" ];
+
+                // Presence `at` (newer senders) is selection[i]'s anchor, the sender's
+                // GetPosition(): against our own copy that gives the exact drag offset,
+                // where a bounding-box difference never does (fonts, text layers).  An
+                // older sender, or an item without an anchor, falls back to the box.
+                auto peerOffset = [&peer]( size_t aIdx, const BOARD_ITEM* aItem,
+                                           const nlohmann::json& aBox, VECTOR2I& aOffset )
                 {
+                    if( peer.state.contains( "at" ) && peer.state[ "at" ].is_array()
+                        && aIdx < peer.state[ "at" ].size() )
+                    {
+                        const nlohmann::json& anchor = peer.state[ "at" ][ aIdx ];
+
+                        if( anchor.is_array() && anchor.size() >= 2 && anchor[ 0 ].is_number()
+                            && anchor[ 1 ].is_number() )
+                        {
+                            aOffset = VECTOR2I( anchor[ 0 ].get<int>(), anchor[ 1 ].get<int>() )
+                                      - aItem->GetPosition();
+                            return true;
+                        }
+                    }
+
+                    aOffset = VECTOR2I( aBox[ 0 ].get<int>() - aItem->GetBoundingBox().GetX(),
+                                        aBox[ 1 ].get<int>() - aItem->GetBoundingBox().GetY() );
+                    return false;
+                };
+
+                for( size_t ii = 0; ii < boxList.size(); ++ii )
+                {
+                    const nlohmann::json& box = boxList[ ii ];
+
                     if( !box.is_array() || box.size() < 4 )
                         continue;
+
+                    // An item we hold is framed by our own box moved by the exact offset: the
+                    // sender's box (a browser's font metrics) can sit visibly off the item.
+                    if( idList && ii < idList->size() && ( *idList )[ ii ].is_string() )
+                    {
+                        KIID       kiid( wxString::FromUTF8( ( *idList )[ ii ].get<std::string>() ) );
+                        BOARD_ITEM* own = board()->ResolveItem( kiid, true );
+                        VECTOR2I    offset;
+
+                        if( own && own->GetParent() == board() && peerOffset( ii, own, box, offset ) )
+                        {
+                            BOX2I bbox = own->GetBoundingBox();
+                            bbox.Move( offset );
+                            draw.selectionBoxes.push_back( bbox );
+                            continue;
+                        }
+                    }
 
                     draw.selectionBoxes.emplace_back(
                             VECTOR2I( box[ 0 ].get<int>(), box[ 1 ].get<int>() ),
@@ -1780,10 +1845,8 @@ void PCB_COLLAB_TOOL::rebuildOverlay()
                         if( !item || item->GetParent() != board() )
                             continue;
 
-                        VECTOR2I offset( boxesJson[ ii ][ 0 ].get<int>()
-                                                 - item->GetBoundingBox().GetX(),
-                                         boxesJson[ ii ][ 1 ].get<int>()
-                                                 - item->GetBoundingBox().GetY() );
+                        VECTOR2I offset;
+                        peerOffset( ii, item, boxesJson[ ii ], offset );
 
                         // Only ghost items that are actually displaced (mid-drag).
                         if( std::abs( offset.x ) <= 1 && std::abs( offset.y ) <= 1 )

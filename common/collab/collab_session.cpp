@@ -741,6 +741,7 @@ void COLLAB_SESSION::ClampPresence( nlohmann::json& aState )
     {
         trim( "selection", keep );
         trim( "boxes", keep );
+        trim( "at", keep );
 
         if( aState.dump().size() <= BUDGET )
             return;
@@ -750,6 +751,7 @@ void COLLAB_SESSION::ClampPresence( nlohmann::json& aState )
 
     trim( "selection", 0 );
     trim( "boxes", 0 );
+    trim( "at", 0 );
 }
 
 
