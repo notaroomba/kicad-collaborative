@@ -205,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app = Router::new()
-        .route("/", get(pages::app_page))
+        .route("/", get(pages::home))
         .route("/app", get(pages::app_page))
         .route("/p/{id}/edit", get(pages::app_page))
         .route("/static/dist/editor.js", get(pages::editor_js))
@@ -220,7 +220,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/dist/ui.js", get(pages::ui_js))
         .route("/static/dist/ui.js.map", get(pages::ui_js_map))
         .route("/static/dist/ui.css", get(pages::ui_css))
-        .route("/welcome", get(pages::index))
+        .route("/welcome", get(pages::landing_page))
+        .route("/static/dist/landing.js", get(pages::landing_js))
+        .route("/static/dist/landing.js.map", get(pages::landing_js_map))
+        .route("/static/landing/{name}", get(pages::landing_image))
         .route("/api/projects/{id}/info", get(http::project_info))
         .route("/healthz", get(http::healthz))
         .route("/j/{token}", get(pages::join_page))

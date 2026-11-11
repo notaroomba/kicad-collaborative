@@ -1686,7 +1686,7 @@ pub async fn page() -> Html<String> {
 /// The app's colour tokens (light, OS-dark and `data-theme="dark"`), lifted from
 /// app.html so this page can never drift from the editor's theme: everything in
 /// its `<style>` from the first `:root {` up to the first non-token rule.
-fn theme_tokens() -> &'static str {
+pub(crate) fn theme_tokens() -> &'static str {
     static TOKENS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TOKENS.get_or_init(|| {
         let app = include_str!("../static/app.html");

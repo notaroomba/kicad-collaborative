@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiCad Collaborative: KiCad with everyone on the same board</title>
+<meta name="description" content="A fork of KiCad with real-time collaboration built into the schematic and PCB editors. Shared cursors, live edits, comments and history, in the desktop app and in the browser.">
+<meta property="og:title" content="KiCad Collaborative">
+<meta property="og:description" content="KiCad with everyone on the same board. Shared cursors, live edits, comments and history, in the desktop app and in the browser.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#001023">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23001023'/%3E%3Ccircle cx='11' cy='11' r='4' fill='%23C83434'/%3E%3Ccircle cx='21' cy='21' r='4' fill='%234D7FC4'/%3E%3Cpath d='M11 11 L21 21' stroke='%23F2EDA1' stroke-width='2.5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script>document.documentElement.classList.add("js"); try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<style>
+{{THEME}}
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  html, body { margin: 0; }
+  body { color: var(--ink); font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased;
+         background-color: var(--paper);
+         background-image: radial-gradient(color-mix(in srgb, var(--line-2) 50%, transparent) 1px, transparent 1.3px);
+         background-size: 20px 20px; overflow-x: clip; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  img { max-width: 100%; display: block; }
+  h1, h2, h3, p { margin: 0; }
+  .wrap { width: min(1180px, 100% - 48px); margin-inline: auto; }
+  .mono { font-family: var(--mono); }
+
+  /* ---- nav ---- */
+  .nav { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid transparent;
+         transition: background-color .25s, border-color .25s; }
+  .nav.stuck { background: color-mix(in srgb, var(--bench) 88%, transparent); border-bottom-color: var(--line);
+               -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .nav .wrap { display: flex; align-items: center; gap: 28px; height: 58px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 600; font-size: 15px; letter-spacing: -.005em; }
+  .brand:hover { text-decoration: none; }
+  .brand svg { width: 24px; height: 24px; display: block; }
+  .nav nav { display: flex; gap: 22px; margin-left: 8px; }
+  .nav nav a { color: var(--ink-2); font-size: 14px; }
+  .nav nav a:hover { color: var(--ink); text-decoration: none; }
+  .nav .sp { flex: 1; }
+  .icon-btn { width: 34px; height: 34px; display: grid; place-items: center; background: none; border: 1px solid transparent;
+              border-radius: 3px; color: var(--ink-2); }
+  .icon-btn:hover { border-color: var(--line); color: var(--ink); }
+  .icon-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .icon-btn .moon { display: none; }
+  :root[data-theme="dark"] .icon-btn .moon { display: block; } :root[data-theme="dark"] .icon-btn .sun { display: none; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .icon-btn .moon { display: block; } :root:not([data-theme="light"]) .icon-btn .sun { display: none; } }
+
+  .btn { display: inline-flex; align-items: center; gap: 9px; padding: 10px 18px; border-radius: 3px; border: 1px solid var(--line);
+         background: var(--panel); color: var(--ink); font: 500 15px/1.3 var(--font); white-space: nowrap;
+         transition: border-color .15s, background-color .15s, transform .15s; }
+  .btn:hover { border-color: var(--ink-3); text-decoration: none; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
+  .btn.primary:hover { background: var(--copper-2); }
+  .btn.sm { padding: 6px 13px; font-size: 14px; }
+  .btn svg { width: 17px; height: 17px; fill: currentColor; flex: none; }
+
+  /* ---- section furniture: every section opens like a sheet reference ---- */
+  .tag { display: flex; align-items: center; gap: 12px; font: 500 11.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+  .tag b { color: var(--copper); font-weight: 500; }
+  .tag::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  h2 { font-size: clamp(28px, 3.5vw, 44px); line-height: 1.08; letter-spacing: -.025em; font-weight: 600; text-wrap: balance; }
+  .lead { color: var(--ink-2); font-size: clamp(16px, 1.35vw, 18.5px); line-height: 1.55; max-width: 62ch; text-wrap: pretty; }
+  section { padding: clamp(72px, 10vw, 136px) 0; }
+  section[id] { scroll-margin-top: 84px; }
+  #make { scroll-margin-top: 0; }
+
+  /* ---- hero ---- */
+  .hero { padding: clamp(36px, 6vw, 76px) 0 clamp(48px, 6vw, 80px); }
+  .hero .eyebrow { font: 500 11.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .hero .eyebrow span + span::before { content: "/"; margin-right: 14px; color: var(--line-2); }
+  .hero h1 { font-size: clamp(40px, 5.9vw, 80px); line-height: .98; letter-spacing: -.04em; font-weight: 600; margin: 0;
+             text-wrap: balance; }
+  .hero h1 em { font-style: normal; color: var(--copper); }
+  .hero-row { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 28px clamp(32px, 4vw, 64px); align-items: end; margin-top: 22px; }
+  .hero-side { display: grid; gap: 22px; padding-bottom: 8px; }
+  .hero .acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .hero .also { font-size: 14px; color: var(--ink-2); margin-top: 12px; }
+  .hero .also a { color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+  .hero .also a:hover { color: var(--ink); }
+
+  .win { margin-top: clamp(32px, 4.5vw, 56px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #001023;
+         box-shadow: 0 1px 0 #ffffff14 inset, 0 30px 60px -28px #000a, 0 8px 18px -8px #0005; }
+  .win-bar, .win-status { display: flex; align-items: center; gap: 12px; background: var(--bench); color: var(--ink-2); font: 12px var(--mono); padding: 0 12px; }
+  .win-bar { height: 38px; border-bottom: 1px solid var(--line); }
+  .win-bar b { font-weight: 500; color: var(--ink); }
+  .win-bar .layer { display: inline-flex; align-items: center; gap: 6px; }
+  .win-bar .layer::before { content: ""; width: 9px; height: 9px; background: #C83434; border-radius: 1px; }
+  .win-bar .sp, .win-status .sp { flex: 1; }
+  .avs { display: flex; }
+  .avs i { width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff; font: 600 11px/24px var(--font); text-align: center;
+           font-style: normal; margin-left: -6px; box-shadow: 0 0 0 2px var(--bench); }
+  .win-status { height: 26px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-3); gap: 18px; white-space: nowrap; overflow: hidden; }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--wire); box-shadow: 0 0 0 0 color-mix(in srgb, var(--wire) 60%, transparent); animation: ping 2.2s ease-out infinite; }
+  @keyframes ping { 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
+  .win canvas { display: block; width: 100%; height: clamp(250px, min(58vh, 74vw), 620px); cursor: crosshair; touch-action: pan-y; }
+  .cap { margin-top: 12px; font: 12px var(--mono); color: var(--ink-3); }
+
+  /* ---- the scroll story ---- */
+  .story { padding: 0; }
+  .story-head { padding: clamp(40px, 6vw, 80px) 0 0; display: grid; gap: 18px; }
+  .story-track { height: 560vh; position: relative; }
+  .story-pin { position: sticky; top: 0; height: 100vh; height: 100svh; display: grid; grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
+               gap: clamp(24px, 4vw, 64px); align-items: center; padding-top: 58px; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; }
+  .steps li { position: relative; padding: 15px 0 15px 22px; cursor: pointer; border-left: 2px solid var(--line); }
+  .steps li::before { content: ""; position: absolute; left: -2px; top: 0; width: 2px; height: 100%; background: var(--copper);
+                      transform-origin: top; transform: scaleY(var(--p, 0)); }
+  .steps li.done::before { transform: scaleY(1); }
+  .steps .n { font: 500 11.5px var(--mono); letter-spacing: .1em; color: var(--ink-3); text-transform: uppercase; }
+  .steps li.on .n { color: var(--copper); }
+  .steps h3 { font-size: 21px; font-weight: 600; letter-spacing: -.015em; line-height: 1.25; margin-top: 3px; color: var(--ink-3); transition: color .3s; }
+  .steps li.on h3, .steps li:hover h3 { color: var(--ink); }
+  .steps .more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .5s cubic-bezier(.2, .7, .2, 1), opacity .4s; opacity: 0; }
+  .steps .more > div { overflow: hidden; }
+  .steps li.on .more { grid-template-rows: 1fr; opacity: 1; }
+  .steps p { color: var(--ink-2); font-size: 15.5px; line-height: 1.55; padding-top: 8px; }
+  .scene { position: relative; height: min(76vh, 700px); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #F5F4EF;
+           box-shadow: 0 30px 60px -30px #0009, 0 8px 18px -10px #0004; }
+  .scene canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .scene .chip { position: absolute; left: 12px; top: 12px; font: 500 11px var(--mono); padding: 3px 8px; border-radius: 3px; letter-spacing: .04em;
+                 background: #1b1b1bcc; color: #fff; transition: opacity .3s; pointer-events: none; }
+  .scene .chip span { display: none; }
+  .scene .turn { position: absolute; right: 12px; bottom: 10px; font: 11px var(--mono); color: #ffffff8c; opacity: 0; transition: opacity .4s; pointer-events: none; }
+  .story[data-chapter="3"] .scene .turn { opacity: 1; }
+  .story[data-chapter="3"] .scene canvas { cursor: grab; touch-action: pan-y; }
+  .story[data-chapter="3"] .scene canvas:active { cursor: grabbing; }
+  .story[data-chapter="0"] .chip .c0, .story[data-chapter="1"] .chip .c1, .story[data-chapter="2"] .chip .c2, .story[data-chapter="3"] .chip .c3 { display: inline; }
+
+  /* ---- together ---- */
+  .together-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: clamp(28px, 4vw, 60px); margin-top: 44px; align-items: start; }
+  .shot { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--bench);
+          box-shadow: 0 30px 60px -32px #0009, 0 8px 18px -10px #0004; }
+  .shot img { width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: left top; }
+  .shot figcaption, figure .cap { font: 12px var(--mono); color: var(--ink-3); }
+  figure { margin: 0; }
+  .notes { list-style: none; margin: 0; padding: 0; counter-reset: n; border-top: 1px solid var(--ink); }
+  .notes::before { content: "NOTES"; display: block; font: 500 11.5px var(--mono); letter-spacing: .14em; color: var(--ink); padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .notes li { counter-increment: n; display: grid; grid-template-columns: 30px 1fr; padding: 13px 0; border-bottom: 1px solid var(--line); }
+  .notes li::before { content: counter(n) "."; font: 13px var(--mono); color: var(--ink-3); padding-top: 2px; }
+  .notes b { font-weight: 600; display: block; }
+  .notes span { color: var(--ink-2); font-size: 15px; line-height: 1.5; display: block; margin-top: 2px; }
+
+  /* ---- bill of materials ---- */
+  .bom-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: clamp(24px, 3.5vw, 52px); margin-top: 44px; align-items: start; }
+  .bom { border-top: 1px solid var(--ink); }
+  .bom-h, .bom-r { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 0 14px; }
+  .bom-h { font: 500 11.5px var(--mono); letter-spacing: .14em; color: var(--ink); padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .bom-r { width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 13px 0; position: relative; }
+  .bom-r .ref { font: 13px var(--mono); color: var(--ink-3); padding-top: 3px; transition: color .2s; }
+  .bom-r b { font-weight: 600; font-size: 17px; letter-spacing: -.01em; display: flex; align-items: baseline; gap: 10px; }
+  .bom-r b small { font: 500 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); border: 1px solid var(--line); border-radius: 2px; padding: 0 5px; }
+  .bom-r .d { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .45s cubic-bezier(.2, .7, .2, 1), opacity .35s; }
+  .bom-r .d > span { overflow: hidden; color: var(--ink-2); font-size: 15px; line-height: 1.5; display: block; }
+  .bom-r .d > span::before { content: ""; display: block; height: 4px; }
+  .bom-r[aria-selected="true"] .d { grid-template-rows: 1fr; opacity: 1; }
+  .bom-r[aria-selected="true"] .ref { color: var(--copper); }
+  .bom-r::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 100%; background: var(--copper); transform: scaleX(0); transform-origin: left; transition: transform .5s cubic-bezier(.2, .7, .2, 1); }
+  .bom-r[aria-selected="true"]::after { transform: scaleX(1); }
+  .bom-r:hover b { color: var(--copper); }
+  .bom-view { position: sticky; top: 84px; }
+  .bom-view .shot { position: relative; aspect-ratio: 16 / 10; }
+  .bom-view img { position: absolute; inset: 0; width: 100%; height: 100%; aspect-ratio: auto; opacity: 0; transform: scale(1.012); transition: opacity .45s, transform .7s cubic-bezier(.2, .7, .2, 1); }
+  .bom-view img.on { opacity: 1; transform: none; }
+  .bom-view .cap { margin-top: 10px; }
+
+  /* ---- get it ---- */
+  .get-grid { display: grid; grid-template-columns: 1fr 1fr; margin-top: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
+  .get-grid > div { padding: clamp(22px, 3vw, 36px); display: grid; gap: 14px; align-content: start; }
+  .get-grid > div + div { border-left: 1px solid var(--line); }
+  .get-grid h3 { font-size: 22px; letter-spacing: -.015em; font-weight: 600; }
+  .get-grid p { color: var(--ink-2); font-size: 15.5px; }
+  .get-grid ol { margin: 0; padding: 0 0 0 20px; color: var(--ink-2); font-size: 15px; display: grid; gap: 4px; }
+  .get-grid ol b { color: var(--ink); font-weight: 500; }
+  .get-grid .acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+  .os { font: 12px var(--mono); color: var(--ink-3); }
+
+  /* ---- how it works ---- */
+  .how-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: clamp(28px, 4vw, 64px); margin-top: 44px; align-items: center; }
+  .how-grid p + p { margin-top: 14px; }
+  .how-grid p { color: var(--ink-2); max-width: 56ch; }
+  .how-grid p b { color: var(--ink); font-weight: 500; }
+  .wiring { width: 100%; height: auto; display: block; font-family: var(--mono); }
+  .wiring .box { fill: var(--panel); stroke: var(--ink); stroke-width: 1.2; }
+  .wiring text { fill: var(--ink); font-size: 12px; }
+  .wiring text.s { fill: var(--ink-3); font-size: 10.5px; }
+  .wiring .w { fill: none; stroke: var(--wire); stroke-width: 1.6; }
+  .wiring .flow { fill: none; stroke: var(--wire); stroke-width: 3.4; stroke-linecap: round; stroke-dasharray: 1 26; animation: flow 1.5s linear infinite; }
+  .wiring .flow.back { animation-direction: reverse; stroke: var(--blue); }
+  .wiring .dot { fill: var(--wire); }
+  @keyframes flow { to { stroke-dashoffset: -27; } }
+
+  /* ---- closing and title block ---- */
+  .close { text-align: left; padding-bottom: clamp(48px, 6vw, 80px); }
+  .close h2 { font-size: clamp(34px, 5.4vw, 68px); letter-spacing: -.035em; max-width: 16ch; }
+  .close .acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+  .titleblock { margin: 0 0 40px; border: 1.5px solid var(--ink); display: grid; grid-template-columns: 2.2fr 1fr 1fr 1fr; font-size: 13.5px; background: var(--paper); }
+  .titleblock > div { padding: 9px 12px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); min-width: 0; }
+  .titleblock > div:nth-child(4n) { border-right: 0; }
+  .titleblock > div:nth-last-child(-n + 4) { border-bottom: 0; }
+  .titleblock small { display: block; font: 500 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .titleblock a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+  .titleblock .big { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 9px; }
+  .titleblock .big svg { width: 20px; height: 20px; }
+  .titleblock .wide { grid-column: span 4; border-right: 0; color: var(--ink-2); font-size: 12.5px; }
+
+  /* ---- entrances ---- */
+  .js .rv { opacity: 0; transform: translateY(16px); transition: opacity .8s cubic-bezier(.2, .7, .2, 1), transform .8s cubic-bezier(.2, .7, .2, 1); transition-delay: calc(var(--i, 0) * 70ms); }
+  .js .rv.in { opacity: 1; transform: none; }
+
+  @media (max-width: 900px) {
+    .nav nav { display: none; }
+    .hero-row { grid-template-columns: 1fr; }
+    .story-track { height: 480vh; }
+    .story-pin { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); gap: 14px; align-items: start; padding: 66px 0 16px; }
+    .scene { order: -1; height: 52vh; height: 52svh; }
+    .steps { grid-template-columns: repeat(4, 1fr); column-gap: 8px; }
+    .steps li { border-left: 0; border-top: 2px solid var(--line); padding: 8px 0 0; display: contents; }
+    .steps li::before { display: none; }
+    .steps li .n { grid-row: 1; border-top: 2px solid var(--line); padding-top: 8px; }
+    .steps li.on .n, .steps li.done .n { border-top-color: var(--copper); }
+    .steps li h3, .steps li .more { grid-column: 1 / -1; display: none; }
+    .steps li h3 { grid-row: 2; } .steps li .more { grid-row: 3; }
+    .steps li.on h3 { display: block; margin-top: 12px; }
+    .steps li.on .more { display: block; opacity: 1; }
+    .together-grid, .bom-grid, .how-grid { grid-template-columns: 1fr; }
+    .bom-view { position: sticky; top: 58px; z-index: 2; order: -1; background: var(--paper); padding: 10px 0 6px; margin: 0 -4px; }
+    .bom-view .cap { margin-top: 6px; }
+    .bom-view .shot { box-shadow: none; }
+    .get-grid { grid-template-columns: 1fr; }
+    .get-grid > div + div { border-left: 0; border-top: 1px solid var(--line); }
+    .titleblock { grid-template-columns: 1fr 1fr; }
+    .titleblock > div:nth-child(4n) { border-right: 1px solid var(--ink); }
+    .titleblock > div:nth-child(2n) { border-right: 0; }
+    .titleblock > div:nth-last-child(-n + 4) { border-bottom: 1px solid var(--ink); }
+    .titleblock .wide { grid-column: span 2; border-bottom: 0 !important; }
+    .titleblock .t1 { grid-column: span 2; border-right: 0 !important; }
+  }
+  @media (max-width: 520px) {
+    .wrap { width: calc(100% - 32px); }
+    .brand span { display: none; }
+    .win-bar .layer, .win-status .hide-s { display: none; }
+    .btn { padding: 10px 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .js .rv { opacity: 1; transform: none; transition: none; }
+    .live::before, .wiring .flow { animation: none; }
+    .steps .more, .bom-r .d, .bom-view img, .bom-r::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="/welcome" aria-label="KiCad Collaborative">{{MARK}}<span>KiCad Collaborative</span></a>
+    <nav aria-label="Sections">
+      <a href="#make">How a board gets made</a>
+      <a href="#together">Working together</a>
+      <a href="#bom">What ships</a>
+      <a href="#get">Get it</a>
+    </nav>
+    <span class="sp"></span>
+    <button class="icon-btn" id="theme" type="button" aria-label="Switch between light and dark">
+      <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.5 1.5M17.2 17.2l1.5 1.5M5.3 18.7l1.5-1.5M17.2 6.8l1.5-1.5"/></svg>
+      <svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
+    </button>
+    <a class="btn sm" data-signin href="/auth/github/login?next=/">Sign in</a>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow rv"><span>A fork of KiCad 10</span><span>GPL-3.0</span><span>macOS, Windows, Linux, browser</span></p>
+    <div class="hero-row">
+      <h1 class="rv" style="--i:1">KiCad, with everyone on the <em>same board</em>.</h1>
+      <div class="hero-side">
+        <p class="lead rv" style="--i:2">Real-time collaboration built into the schematic and PCB editors. You see each other's cursors, edits land as they are made, and the project lives online, so nobody has to pass a zip around. It works in the desktop app and in the browser.</p>
+        <div class="rv" style="--i:3">
+          <div class="acts">
+            <a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 .2a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.87.5-1.07-1.77-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.19c0 .21.15.46.55.38A8 8 0 0 0 8 .2z"/></svg><span>Sign in with GitHub</span></a>
+            <a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases/latest">Get the desktop app</a>
+          </div>
+          <p class="also">or <a href="/gallery">browse public projects</a> without an account</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="win rv" style="--i:4" id="hero">
+      <div class="win-bar">
+        <b>blinker.kicad_pcb</b><span class="layer">F.Cu</span>
+        <span class="sp"></span>
+        <span class="live">live</span>
+        <span class="avs" aria-label="Mara, Jun and Ada are in this file"><i style="--c:#A45BD6">M</i><i style="--c:#149C94">J</i><i style="--c:#D9822B">A</i></span>
+      </div>
+      <canvas aria-label="A circuit board being finished by three people at once: one moves an LED into place, one routes the last tracks, one leaves a comment."></canvas>
+      <div class="win-status"><span>3 people editing</span><span class="hide-s">555 blinker, 12 parts</span><span class="sp"></span><span data-xy>X --.--  Y --.--</span><span>mm</span><span class="hide-s">grid 0.25</span></div>
+    </div>
+    <p class="cap">A scripted session, drawn live in your browser. Move your pointer over the board.</p>
+  </div>
+</section>
+
+<section class="story" id="make" data-chapter="0">
+  <div class="wrap story-head">
+    <p class="tag rv"><b>01</b> How a board gets made</p>
+    <h2 class="rv" style="--i:1">From the first wire to a finished board, in a file everyone has open.</h2>
+  </div>
+  <div class="story-track">
+    <div class="wrap story-pin">
+      <ol class="steps">
+        <li data-step class="on"><span class="n">Sheet 1 / Schematic</span><h3>Draw the circuit together</h3>
+          <div class="more"><div><p>Symbols, wires and labels show up on everyone's sheet as they are placed. A wire someone is still drawing appears as a preview, so two people never wire the same net twice.</p></div></div></li>
+        <li data-step><span class="n">Sheet 2 / Placement</span><h3>Split the board and place it</h3>
+          <div class="more"><div><p>Parts arrive on the board in a pile, with airwires showing what connects to what. Take the connector while someone else takes the timing parts. A part being dragged is outlined in its owner's colour.</p></div></div></li>
+        <li data-step><span class="n">Sheet 3 / Routing</span><h3>Route it, by hand or not</h3>
+          <div class="more"><div><p>Tracks appear for everyone segment by segment as they are laid. In the web editor, the autorouter can finish the connections you leave and shows its result as a preview before anything is kept.</p></div></div></li>
+        <li data-step><span class="n">Sheet 4 / Board</span><h3>It is still KiCad</h3>
+          <div class="more"><div><p>The files are ordinary .kicad_sch and .kicad_pcb. Design rule checks, the 3D viewer and fabrication outputs are the desktop app's own. Name a checkpoint before you order, and restore it if you need to.</p></div></div></li>
+      </ol>
+      <div class="scene">
+        <canvas aria-label="A 555 LED blinker drawn as a schematic, then placed, routed and shown as a finished board as you scroll."></canvas>
+        <span class="turn">drag to turn</span>
+        <span class="chip"><span class="c0">blinker.kicad_sch</span><span class="c1">blinker.kicad_pcb</span><span class="c2">blinker.kicad_pcb</span><span class="c3">3D view</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="together">
+  <div class="wrap">
+    <p class="tag rv"><b>02</b> Working together</p>
+    <h2 class="rv" style="--i:1; margin-top:18px">What you see when someone else is in the file.</h2>
+    <div class="together-grid">
+      <figure class="rv">
+        <div class="shot"><img src="/static/landing/editor.webp" width="1600" height="1000" loading="lazy" alt="The web PCB editor in dark mode. Bob has a routed board open and Alice's named cursor is visible in the middle of it."></div>
+        <figcaption class="cap" style="margin-top:10px">The web PCB editor. Bob's window, Alice's cursor.</figcaption>
+      </figure>
+      <ol class="notes rv" style="--i:1">
+        <li><div><b>Named cursors and selections</b><span>Everyone gets a colour. Their pointer and whatever they have selected are drawn in it on your canvas.</span></div></li>
+        <li><div><b>Edits before they land</b><span>A track being routed, a wire being drawn or a part being dragged shows as a preview until it is committed.</span></div></li>
+        <li><div><b>Follow</b><span>Follow a collaborator's viewport while they walk you through a design.</span></div></li>
+        <li><div><b>Comments</b><span>Pin a comment to a spot on the canvas, or keep a thread on the document.</span></div></li>
+        <li><div><b>Checkpoints</b><span>Name a version. The project's owner can restore it later.</span></div></li>
+        <li><div><b>Offline</b><span>Lose the connection and keep working. Edits are journalled locally and replayed when you are back.</span></div></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section id="bom" style="padding-top:0">
+  <div class="wrap">
+    <p class="tag rv"><b>03</b> What ships</p>
+    <h2 class="rv" style="--i:1; margin-top:18px">Bill of materials.</h2>
+    <p class="lead rv" style="--i:2; margin-top:14px">Everything in this list is in the product today. The screenshots are the real thing.</p>
+    <div class="bom-grid">
+      <div class="bom rv" role="tablist" aria-label="Features" aria-orientation="vertical">
+        <div class="bom-h"><span>REF</span><span>ITEM</span></div>
+        <button class="bom-r" role="tab" aria-selected="true" data-shot="editor"><span class="ref">01</span><span><b>Web editor</b><span class="d"><span>The schematic and PCB editors in a browser tab, drawn on canvas with KiCad's colours, menus, hotkeys and mouse model. Move, wire, route, edit properties and place parts from the KiCad libraries.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="projects"><span class="ref">02</span><span><b>Online projects</b><span class="d"><span>Upload a project in the browser or publish it from the desktop app. Search, stars, thumbnails, and a Trash that keeps things for 30 days.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="share"><span class="ref">03</span><span><b>Sharing and roles</b><span class="d"><span>Invite by GitHub username or email, or send an editor or viewer link you can revoke. Role changes apply at once, also for people who have the project open.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="github"><span class="ref">04</span><span><b>GitHub sync</b><span class="d"><span>Link a project to a repository and pull or push from the browser. When both sides changed a file, items are merged by their UUID, and you pick which side wins where they truly conflict.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="parts"><span class="ref">05</span><span><b>Part search</b><span class="d"><span>Search LCSC with stock and prices, then place the symbol and footprint straight into the design. Save parts into libraries you share.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="router"><span class="ref">06</span><span><b>Autorouter</b><span class="d"><span>Routes the connections that are left and shows the result as a preview. Keep it, stop part-way and keep what is done, or cancel and nothing changes.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="assistant"><span class="ref">07</span><span><b>Design assistant</b><span class="d"><span>Reads the sheet, runs the rule checks, looks up datasheets, and proposes edits on a card you preview and accept. Nothing is applied silently. It runs on the server's API key or your own.</span></span></span></button>
+        <button class="bom-r" role="tab" aria-selected="false" data-shot="plugins"><span class="ref">08</span><span><b>Plugins</b><span class="d"><span>Sandboxed plugins ask for the permissions they need and add menu items, toolbar buttons and panels. BOM export, design statistics, snap to grid, field lint and placement import come with the editor.</span></span></span></button>
+      </div>
+      <figure class="bom-view rv" style="--i:1">
+        <div class="shot" id="bomShots">
+          <img class="on" data-shot="editor" src="/static/landing/schematic.webp" width="1600" height="1000" loading="lazy" alt="The web schematic editor with a sheet open, toolbars and the properties panel around it.">
+          <img data-shot="projects" data-src="/static/landing/projects.webp" width="1600" height="1000" alt="The projects page with four project cards, each with a thumbnail of its board.">
+          <img data-shot="share" data-src="/static/landing/share.webp" width="1600" height="1000" alt="The share dialog listing people with access, their roles, share links and general access.">
+          <img data-shot="github" data-src="/static/landing/github.webp" width="1600" height="1000" alt="The GitHub sync page showing files to pull and push and a file changed on both sides.">
+          <img data-shot="parts" data-src="/static/landing/parts.webp" width="1600" height="1000" alt="The vendor parts dialog with search results for a microcontroller and its symbol and footprint.">
+          <img data-shot="router" data-src="/static/landing/autoroute.webp" width="1600" height="1000" alt="The autorouter's progress dialog over a board being routed.">
+          <img data-shot="assistant" data-src="/static/landing/assistant.webp" width="1600" height="1000" alt="The assistant panel beside a schematic, with a review and a proposed change waiting to be accepted.">
+          <img data-shot="plugins" data-src="/static/landing/plugins.webp" width="1600" height="1000" alt="A statistics panel added by a plugin beside a schematic.">
+        </div>
+        <figcaption class="cap" id="bomCap">01 / Web editor</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="get" style="padding-top:0">
+  <div class="wrap">
+    <p class="tag rv"><b>04</b> Get it</p>
+    <h2 class="rv" style="--i:1; margin-top:18px">Two ways in. Same project either way.</h2>
+    <div class="get-grid rv" style="--i:2">
+      <div>
+        <h3>Desktop app</h3>
+        <p>All of KiCad, with collaboration built into the editors. Use it when you need the full toolset.</p>
+        <ol>
+          <li>Open the project manager and choose <b>File, Online Projects</b>.</li>
+          <li>Sign in with GitHub. Upload a project or open one shared with you.</li>
+          <li>Use <b>Share</b> to invite someone, then open the same sheet or board.</li>
+        </ol>
+        <div class="acts"><a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases/latest">Download a release</a></div>
+        <p class="os">macOS / Windows / Linux</p>
+      </div>
+      <div>
+        <h3>Browser</h3>
+        <p>Nothing to install. Good for a review, a quick fix from another machine, or a collaborator who does not have KiCad.</p>
+        <ol>
+          <li>Sign in with GitHub.</li>
+          <li>Upload a KiCad project, import one from a repository, or open an invite link.</li>
+          <li>Edit. People in the desktop app see you, and you see them.</li>
+        </ol>
+        <div class="acts"><a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><span>Sign in with GitHub</span></a><a class="btn" href="/gallery">Browse public projects</a></div>
+        <p class="os">kicad.notaroomba.dev</p>
+      </div>
+    </div>
+
+    <div class="how-grid">
+      <div class="rv">
+        <p class="tag" style="margin-bottom:18px"><b>05</b> Under the hood</p>
+        <p>The editors send <b>property-level changes</b> over a WebSocket to a Rust server backed by PostgreSQL. The server puts every operation in order and stores it before acknowledging it and passing it on, so everyone applies the same edits in the same sequence.</p>
+        <p>When two people change the same property, the last writer wins. Cursors and selections travel on a separate channel that is never stored.</p>
+        <p>It is open source, and the server is yours to run: <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/server/README.md">self-hosting guide</a>, <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/COLLABORATION.md">collaboration guide</a>.</p>
+      </div>
+      <svg class="wiring rv" style="--i:1" viewBox="0 0 580 250" role="img" aria-label="Diagram: the desktop app and the browser editor both connect to the sync server, which stores operations in PostgreSQL.">
+        <path class="w" d="M170 62 H232 V125 H290"/><path class="w" d="M170 188 H232 V125"/><path class="w" d="M410 125 H452"/>
+        <path class="flow" d="M170 62 H232 V125 H290"/><path class="flow back" d="M170 188 H232 V125 H290"/><path class="flow" d="M410 125 H452"/>
+        <circle class="dot" cx="232" cy="125" r="4"/>
+        <rect class="box" x="10" y="34" width="160" height="56"/><text x="24" y="58">Desktop app</text><text class="s" x="24" y="76">C++, KiCad editors</text>
+        <rect class="box" x="10" y="160" width="160" height="56"/><text x="24" y="184">Browser editor</text><text class="s" x="24" y="202">TypeScript, canvas</text>
+        <rect class="box" x="290" y="90" width="120" height="70"/><text x="304" y="118">Sync server</text><text class="s" x="304" y="136">Rust, WebSocket</text>
+        <rect class="box" x="452" y="97" width="120" height="56"/><text x="464" y="121">PostgreSQL</text><text class="s" x="464" y="139">ops, snapshots</text>
+        <text class="s" x="182" y="54">ops</text><text class="s" x="182" y="208">presence</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section class="close" style="padding-top:0">
+  <div class="wrap">
+    <h2 class="rv">Open a board with someone.</h2>
+    <div class="acts rv" style="--i:1">
+      <a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><span>Sign in with GitHub</span></a>
+      <a class="btn" href="https://github.com/notaroomba/kicad-collaborative/releases/latest">Get the desktop app</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="wrap">
+  <div class="titleblock">
+    <div class="t1"><small>Title</small><span class="big">{{MARK}}KiCad Collaborative</span></div>
+    <div><small>Source</small><a href="https://github.com/notaroomba/kicad-collaborative">GitHub</a></div>
+    <div><small>Releases</small><a href="https://github.com/notaroomba/kicad-collaborative/releases">Downloads</a></div>
+    <div><small>License</small>GPL-3.0</div>
+    <div class="t1"><small>Drawn by</small><a href="https://github.com/notaroomba">notaroomba</a></div>
+    <div><small>Guide</small><a href="https://github.com/notaroomba/kicad-collaborative/blob/master/COLLABORATION.md">Collaboration</a></div>
+    <div><small>Explore</small><a href="/gallery">Public projects</a></div>
+    <div><small>Sheet</small>1 / 1</div>
+    <div class="wide">An independent fork of <a href="https://www.kicad.org/">KiCad</a>, not affiliated with or endorsed by the KiCad project. Built on the work of the KiCad developers.</div>
+  </div>
+</footer>
+
+<script src="/static/dist/landing.js" defer></script>
+</body>
+</html>
