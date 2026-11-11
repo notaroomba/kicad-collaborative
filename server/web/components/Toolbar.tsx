@@ -132,7 +132,7 @@ function Control({ item }: { item: ControlItem }) {
   if (c === "ipcScripting") return null;
   let inner: ReactElement | null = null;
   if (c === "currentVariant") inner = <select className={KSEL} title="Select the current variant to display and edit." defaultValue="default"><option value="default">&lt; Default &gt;</option></select>;
-  else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" /> Override locks</label>;
+  else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" onChange={(ev) => { const ed = (window as unknown as { CollabEditor?: { overrideLocks?: boolean } }).CollabEditor; if (ed) ed.overrideLocks = ev.currentTarget.checked; }} /> Override locks</label>;
   else if (c === "trackWidth") inner = <TrackWidthSelect />;
   else if (c === "viaDiameter") inner = <ViaSizeSelect />;
   else if (c === "viaStack") inner = <select className={KSEL} title="Via stack" defaultValue="Through"><option>Through</option></select>;

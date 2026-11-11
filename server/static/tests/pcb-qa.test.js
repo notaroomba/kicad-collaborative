@@ -111,3 +111,33 @@ test("hit tests: text by its own box, an arc only on its sweep", () => {
   assert.equal(hit.id, "fp-1"); assert.equal(hit.cls, 0, "a pad hit is class 0");
   assert.equal(K.hitTestDetail(doc, 100, 49, 0.1).cls, 1, "a silkscreen hit is class 1");
 });
+
+test("a selection box that takes what it touches goes by shape: a diagonal track by its copper, a zone by its outline", () => {
+  const doc = load(); const seg = doc.items.get("s-1"), zone = doc.items.get("z-1"), circle = doc.items.get("g-2");
+  // s-1 runs (110,50)-(115,52): a box in the corner of its bounding rectangle does not touch the copper
+  assert.ok(!K.itemTouchesRect(seg, 113.5, 49.9, 114.9, 50.6, null), "corner of the bounding box, away from the track");
+  assert.ok(K.itemTouchesRect(seg, 112, 50.5, 113, 51.5, null), "across the track");
+  // a box inside the pour takes neither the fill nor the zone; one across its edge does
+  assert.ok(!K.itemTouchesRect(zone, 152, 43, 157, 50, null), "inside the zone");
+  assert.ok(K.itemTouchesRect(zone, 149, 43, 151, 45, null), "across the zone's outline");
+  // inside the hole of an unfilled circle: not touching; across the ring: touching
+  assert.ok(!K.itemTouchesRect(circle, 119.5, 69.5, 120.5, 70.5, null));
+  assert.ok(K.itemTouchesRect(circle, 121.5, 69.5, 122.5, 70.5, null));
+  // hidden layers do not count, and an item with nothing on a visible layer is not selectable
+  assert.ok(!K.itemTouchesRect(seg, 112, 50.5, 113, 51.5, new Set(["F.Cu"])));
+  assert.ok(!K.itemVisible(seg, new Set(["F.Cu"]))); assert.ok(K.itemVisible(seg, new Set(["B.Cu"])));
+});
+
+test("flip and rotate write a footprint's zero orientation the way pcbnew does: no angle at all", () => {
+  const doc = load(); const fp = doc.items.get("fp-1");
+  const flipped = P.flipFootprintNode(K.cloneNode(fp.node));
+  assert.deepEqual(K.kid(flipped, "at"), ["at", 100, 50], "not (at 100 50 0)");
+  assert.equal(K.str(K.kid(flipped, "layer")[1]), "B.Cu");
+  const pads = K.kids(flipped, "pad");
+  assert.deepEqual(K.kid(pads[0], "at").slice(1), [1.5, 0, -90], "pad 1 mirrored in X, its angle negated");
+  assert.deepEqual(K.kid(pads[0], "layers").slice(1), ["B.Cu"]);
+  assert.equal(K.str(K.kid(K.kids(flipped, "fp_line")[0], "layer")[1]), "B.SilkS");
+  const back = P.rotateFootprintNode(P.rotateFootprintNode(K.cloneNode(fp.node), 90), -90);
+  assert.deepEqual(K.kid(back, "at"), ["at", 100, 50]);
+  assert.deepEqual(K.kid(K.kids(back, "pad")[1], "at"), ["at", 1.5, 0], "a pad back at zero carries no angle either");
+});

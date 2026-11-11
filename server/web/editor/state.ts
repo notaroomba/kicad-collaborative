@@ -7,6 +7,7 @@ export const E: any = {
   retries: 0,
   canJoin: false,
   viewOnly: false,
+  overrideLocks: false,   // the aux bar's "Override locks": locked board items may be moved, turned, flipped and deleted
   myClientId: "",
   wsToken: "",
   IU: 1e6,

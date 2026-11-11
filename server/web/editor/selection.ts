@@ -181,8 +181,12 @@ export function finishBoxSel(ev) {
   if (b.lasso) { for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const c = itemBoxCentre(it); if (c && pointInPoly(c, b.pts)) picked.push(it); } }
   else {
     const x0 = Math.min(b.start[0], b.cur[0]), x1 = Math.max(b.start[0], b.cur[0]), y0 = Math.min(b.start[1], b.cur[1]), y1 = Math.max(b.start[1], b.cur[1]), enclose = b.cur[0] >= b.start[0];
+    const board = !isSch();
     for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const bb = it.bbox;
-      const inside = bb[0] >= x0 && bb[2] <= x1 && bb[1] >= y0 && bb[3] <= y1, touches = bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
+      if (board && !KiCadCanvas.itemVisible(it, E.hiddenLayers)) continue;                 // nothing of it is shown: not selectable
+      const inside = bb[0] >= x0 && bb[2] <= x1 && bb[1] >= y0 && bb[3] <= y1; let touches = bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
+      // a board item counts by its own shape (a diagonal track by its copper, a zone by its outline), a footprint by its box
+      if (touches && !inside && board && it.kind !== "footprint" && it.geom && it.geom.length) touches = KiCadCanvas.itemTouchesRect(it, x0, y0, x1, y1, E.hiddenLayers);
       if (enclose ? inside : touches) picked.push(it); }
   }
   if (!b.add) E.selection.clear();

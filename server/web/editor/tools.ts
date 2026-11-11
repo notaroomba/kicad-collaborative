@@ -153,16 +153,23 @@ export function rotateSelected(delta) {
   drawSelection(); renderProps();
 }
 
+/** The ids a board edit may touch: locked items sit out unless "Override locks" is on (a schematic has no locks). */
+export function unlockedForEdit(ids, quiet = false) {
+  const m = !isSch() && CollabTools.pcb;
+  if (!m || !m.unlockedIds || !E.kdoc) return ids;
+  try { return m.unlockedIds(toolCtx(), ids, quiet); } catch (e) { console.warn(e); return ids; }
+}
+
 export function deleteSelected() {
-  // With the document loaded this is an ordinary undoable commit (and the module tidies up what the item
-  // alone justified: junctions, a group it emptied); it used to go out as a bare op that Ctrl+Z could not bring back.
-  const it = E.kdoc && E.selected ? E.kdoc.items.get(E.selected.id) : null;
-  if (it) {
+  if (!E.selected) return;
+  // through commitChanges, so the delete has an inverse: Undo brings the item back (it used to be gone for good)
+  const doomed = E.kdoc && E.kdoc.items.get(E.selected.id);
+  if (doomed) {
+    if (!unlockedForEdit([doomed.id]).length) return;
     const m = activeModule(); let changes = null;
-    if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, [it]); } catch (e) { console.warn(e); } }
-    if (!changes) changes = [KiCadCanvas.removeChange(it)];
-    E.selected = null; E.selection.delete(it.id);
-    commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
+    if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, [doomed]); } catch (e) { console.warn(e); } }
+    if (!changes) changes = [KiCadCanvas.removeChange(doomed)];
+    clearSelection(); commitChanges(changes, "delete"); drawSelection(); renderProps(); renderObjects(); requestRender(); toast("Deleted");
     return;
   }
   sendOp([{ id: E.selected.id, typeName: E.ITEM_TYPE, kind: "REMOVED", properties: [] }]);
@@ -198,7 +205,8 @@ export function selectAll() {
 export function deleteSelection() {
   if (!E.kdoc || !E.selection.size) return;
   E.selection = groupExpand(E.selection);
-  const its = [...E.selection].map((id) => E.kdoc.items.get(id)).filter(Boolean);
+  const its = unlockedForEdit([...E.selection]).map((id) => E.kdoc.items.get(id)).filter(Boolean);
+  if (!its.length) return;
   const m = activeModule(); let changes = null;
   if (m && m.deleteChanges) { try { changes = m.deleteChanges(E.kdoc, its); } catch (e) { console.warn(e); } }
   if (!changes) changes = its.map((it) => KiCadCanvas.removeChange(it));

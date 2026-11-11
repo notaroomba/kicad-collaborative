@@ -33,7 +33,7 @@ import { collapseSelectionTo, drawDrag, drawMeasure, drawZoomRect, finishGroupDr
 import { clearSelection, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto } from "./selection";
 import { E } from "./state";
 import "./panels/index";
-import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack } from "./tools";
+import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
 import { closePopover, toast } from "./util";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
 import { applyView, fitView, requestRender, worldMm } from "./view";
@@ -193,6 +193,7 @@ stage.addEventListener("pointerdown", (ev) => {
   E.selected = best; drawSelection(); renderProps(); renderObjects();
   if (!hadSelection && E.tool === "select") { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
+  if (!isSch() && !unlockedForEdit([best.id], true).length) return;   // a locked footprint is selected by the click but does not follow a drag
   { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
   E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
@@ -297,6 +298,9 @@ const onPointerUp = (ev) => {
   if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
   for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, w.item) });
   if (changes.length) {
+    // our copy must end where we say it ends: a peer's move of the same item that arrived while the button was
+    // down (and the pointer still) would otherwise stay on screen here although the server has ours
+    if (E.kdoc && (nx !== fp.x || ny !== fp.y)) KiCadCanvas.applyChange(E.kdoc, moveOp(fp, nx, ny), E.IU);
     sendOp(changes);
     // inverse: put the symbol and the wire ends back
     const inverse = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];

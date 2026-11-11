@@ -30,7 +30,7 @@ import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingShee
 import { buildGeom } from "./geom";
 import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
-import { bboxOf, geomBox, geomHit, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
+import { bboxOf, geomBox, geomHit, geomTouchesRect, itemTouchesRect, itemVisible, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
 import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawPad, drawSelectionHalo, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
 import { boardSetup } from "./board-setup";
@@ -72,6 +72,7 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
   pcbSizes };
 
+api.itemTouchesRect = itemTouchesRect; api.itemVisible = itemVisible; api.geomTouchesRect = geomTouchesRect;
 api.boardItemBox = boardItemBox; api.presenceSelection = presenceSelection;   // BOARD_ITEM::GetBoundingBox for the presence payload (web/canvas/kicad-bbox.ts)
 api.pcbNetlist = pcbNetlist; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;

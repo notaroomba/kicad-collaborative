@@ -20,7 +20,7 @@ import { sendOp } from "./net";
 import { breakFollow, sendPresence } from "./peers";
 import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps } from "./selection";
 import { E } from "./state";
-import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw } from "./tools";
+import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw } from "./view";
 
 // typed faces of the untyped editor modules this file leans on
@@ -256,8 +256,9 @@ export function startMove(mode: "move" | "drag"): boolean {
   }
   // anything but footprints alone (tracks, vias, graphics, text, zones, a mixed selection): the board module carries it
   if (selectionItems().some((it) => it.kind !== "footprint")) return runModuleAction("move");
-  const fps = selectionIds().map((id) => (E.items as { id: string; x: number; y: number }[]).find((f) => f.id === id)).filter(Boolean) as { id: string; x: number; y: number }[];
-  if (!fps.length) return false;
+  const all = selectionIds(); if (!all.length) return false;
+  const fps = (unlockedForEdit(all) as string[]).map((id) => (E.items as { id: string; x: number; y: number }[]).find((f) => f.id === id)).filter(Boolean) as { id: string; x: number; y: number }[];
+  if (!fps.length) return true;   // everything selected is locked: said so, nothing to carry
   const fp = fps[0];
   if (fps.length === 1) E.drag = { fp, startMm: mm, curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, grabOff: [mm[0] - fp.x / E.IU, mm[1] - fp.y / E.IU], wires: [], engine: false, sticky: true };
   else E.drag = { fp, group: fps.map((f) => ({ fp: f, ox: f.x, oy: f.y })), startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0], sticky: true };
@@ -363,6 +364,14 @@ function onUpCapture(ev: PointerEvent): void {
 export function installGestures(open: OpenMenu): void {
   openMenu = open;
   stage.addEventListener("wheel", onWheel, { passive: false });
+  // A press on the canvas takes the keyboard back from a toolbar selector or checkbox that was just used
+  // (the press is default-prevented further down, so the focus would otherwise stay there and swallow the hotkeys).
+  stage.addEventListener("pointerdown", () => {
+    const ae = document.activeElement as HTMLElement | null;
+    if (!ae || ae === document.body || stage.contains(ae) || ae.closest(".kd-overlay, [role='dialog']")) return;
+    const choice = ae.tagName === "INPUT" && /^(checkbox|radio|range)$/i.test((ae as HTMLInputElement).type || "");
+    if (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || choice) ae.blur();
+  }, true);
   stage.addEventListener("pointerdown", onDownCapture, true);
   stage.addEventListener("pointermove", onMoveCapture, true);
   stage.addEventListener("pointerup", onUpCapture, true);

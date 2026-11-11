@@ -488,9 +488,11 @@ function connectedRun(doc, seedIds) {
 // Pad and text angles in the file are absolute (KiCad writes lib angle + footprint angle), so a footprint
 // turn re-derives each one from its angle relative to the footprint; a flip negates that relative angle.
 const ANGLED = (c) => isList(c) && (c[0] === "pad" || c[0] === "property" || c[0] === "fp_text") && !!K.kid(c, "at");
-function setAngle(c, a) { const at = K.kid(c, "at"); a = norm180(r6(a)); if (at.length >= 4) at[3] = a; else if (a !== 0) at.push(a); }
+// the writer leaves a zero orientation out of a pad's and a footprint's (at x y): "(at 1 2)", never "(at 1 2 0)"; text always carries its angle
+function setAngle(c, a) { const at = K.kid(c, "at"); a = norm180(r6(a)); if (a === 0 && c[0] === "pad") { at.length = Math.min(at.length, 3); return; } if (at.length >= 4) at[3] = a; else if (a !== 0) at.push(a); }
+function setFootprintAt(node, x, y, a) { K.setAt(node, x, y, a); const at = K.kid(node, "at"); if (at && !K.kid(node, "transform") && a === 0 && at.length === 4 && typeof at[3] === "number") at.length = 3; }
 function rotateFootprintNode(node, deg) {
-  const [x, y, a0] = K.atOf(node); const a1 = norm180(a0 + deg); K.setAt(node, x, y, a1);
+  const [x, y, a0] = K.atOf(node); const a1 = norm180(a0 + deg); setFootprintAt(node, x, y, a1);
   for (const c of node) if (ANGLED(c)) setAngle(c, K.atOf(c)[2] - a0 + a1);
   return node;
 }
@@ -513,7 +515,7 @@ function toggleMirror(c) {
 }
 /** Flip to the other side about the footprint's own origin (KiCad's F): mirror local X, negate angles, swap F./B. layers. */
 function flipFootprintNode(node) {
-  const [x, y, a0] = K.atOf(node); const a1 = norm180(-a0); K.setAt(node, x, y, a1);
+  const [x, y, a0] = K.atOf(node); const a1 = norm180(-a0); setFootprintAt(node, x, y, a1);
   const lay = K.kid(node, "layer"); if (lay) lay[1] = flipLayerName(K.str(lay[1]));
   for (const c of node) {
     if (!isList(c)) continue; const t = c[0];
@@ -693,7 +695,7 @@ function stepLayer(ctx, forward) {
 function rotateSelected(ctx) { if (!selectionIds(ctx).size) return false; return runAction("rotateSelection", ctx); }
 function flipSelected(ctx) { if (!selectionIds(ctx).size) return false; return runAction("flipSelection", ctx); }
 function deleteSelection(ctx) {
-  const changes = []; for (const id of S.sel) { const it = ctx.doc.items.get(id); if (it) changes.push(removedChange(it)); }
+  const changes = []; for (const id of unlockedIds(ctx, Array.from(S.sel))) { const it = ctx.doc.items.get(id); if (it) changes.push(removedChange(it)); }
   S.sel.clear(); if (!changes.length) return;
   ctx.commit(changes, "delete"); ctx.toast(`Deleted ${changes.length} item${changes.length > 1 ? "s" : ""}`);
 }
@@ -775,6 +777,7 @@ function finishDrag(ctx, keepTool) {
 // footprint hit-test found nothing on the footprint's geometry; the capture-phase stage listeners
 // below then drive the drag while app.js's select tool stays passive.
 function beginSelectDrag(ctx, it, mm) {
+  if (isLocked(it.node) && !overrideLocks()) { ctx.toast("Locked — tick Override locks to move it", 2500); return false; }
   if (it.kind === "segment") { const plan = dragPlan(ctx.doc, it); if (!plan) return false; plan.bySelect = true; plan.anchor = mm.slice(); S.drag = plan; S.sel = new Set([it.id]); return true; }
   const m = { ids: [it.id], start: ctx.snapOn ? ctx.snap([mm[0], mm[1]]) : mm.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false };
   m.orig.set(it.id, clone(it.node));
@@ -815,16 +818,15 @@ function finishSelectMove(ctx, commit) {
  * selected group — follows the cursor from where it is; a click drops it, Escape puts it back.  Unlike a drag,
  * nothing attached follows.  Locked items stay put unless "Override locks" is on.
  */
-function beginCarryMove(ctx) {
-  const doc = ctx.doc; if (!doc) return false;
-  const override = appGlobal(() => editorState().overrideLocks, false);
+function beginCarryMove(ctx, opts) {
+  const doc = ctx.doc; if (!doc) return false; opts = opts || {};
   const ids = Array.from(expandGroups(doc, selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
   if (!ids.length) return false;
-  const free = ids.filter((id) => override || !isLocked(doc.items.get(id).node));
-  if (!free.length) { ctx.toast("The selection is locked"); return true; }
+  const free = unlockedIds(ctx, ids);
+  if (!free.length) return true;
   cancelOps();
-  const at = cursorPoint(ctx);
-  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: true };
+  const at = opts.at ? (ctx.snapOn ? ctx.snap(opts.at.slice()) : opts.at.slice()) : cursorPoint(ctx);
+  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
   S.move = m; ctx.requestRender(); return true;
 }
@@ -2088,6 +2090,18 @@ act("filterSelection", "Filter Selected Items…", "", (ctx) => {
 });
 act("unselectAll", "Unselect All", "", (ctx) => { applySelection(ctx, []); return true; });
 // placement
+const overrideLocks = () => !!appGlobal(() => editorState().overrideLocks, false);
+/**
+ * Locked items sit out of every move, turn, flip and delete unless "Override locks" is ticked
+ * (PCB_SELECTION_TOOL::FilterCollectorForLockedItems): the ids that may be edited, with a word about the rest.
+ */
+function unlockedIds(ctx, ids, quiet) {
+  if (overrideLocks()) return ids;
+  const free = ids.filter((id) => { const it = ctx.doc.items.get(id); return it && !isLocked(it.node); });
+  if (free.length < ids.length && !quiet) ctx.toast(free.length ? "Locked items were left as they are — tick Override locks to edit them" : "The selection is locked — tick Override locks to edit it", 3500);
+  return free;
+}
+function editableOrToast(ctx, what) { const ids = selectionOrToast(ctx, what); if (!ids) return null; const free = unlockedIds(ctx, ids); return free.length ? free : null; }
 function selectionOrToast(ctx, what) { const ids = needSel(ctx, what); return ids && canEdit(ctx) ? Array.from(expandGroups(ctx.doc, ids)) : null; }
 act("move", "Move", "M", (ctx) => {
   const items = selectedItems(ctx); if (!items.length) return false;
@@ -2096,13 +2110,13 @@ act("move", "Move", "M", (ctx) => {
   return beginCarryMove(ctx);
 });
 act("moveExactly", "Move Exactly…", "Shift+M", (ctx) => {
-  const ids = selectionOrToast(ctx, "Select items to move"); if (!ids) return true;
+  const ids = editableOrToast(ctx, "Select items to move"); if (!ids) return true;
   return openForm({ title: "Move Item Exactly", fields: [{ k: "dx", label: "Move X (mm)", type: "num", value: 0 }, { k: "dy", label: "Move Y (mm)", type: "num", value: 0 }, { k: "rotation", label: "Rotate (°)", type: "num", value: 0 }, { k: "about", label: "Rotate around", type: "select", value: "center", options: [["center", "Selection center"], ["anchor", "Item anchor"]] }],
     apply: (v) => commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about }), "move exactly") });
 });
 alias("moveExact", "moveExactly");
 act("positionRelative", "Position Relative To…", "Shift+P", (ctx) => {
-  const ids = selectionOrToast(ctx, "Select items to position"); if (!ids) return true;
+  const ids = editableOrToast(ctx, "Select items to position"); if (!ids) return true;
   const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((a, b) => (a.ref || "").localeCompare(b.ref || "", undefined, { numeric: true }));
   const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean); const a = topLeftAnchor(items);
   return openForm({ title: "Position Relative To Reference Item", fields: [
@@ -2112,27 +2126,27 @@ act("positionRelative", "Position Relative To…", "Shift+P", (ctx) => {
     apply: (v) => { const ref = v.ref === "origin" ? [0, 0] : v.ref === "point" ? [num0(v.px, 0), num0(v.py, 0)] : anchorOf(ctx.doc.items.get(v.ref)); return commitSel(ctx, positionRelativeChanges(ctx.doc, ids, ref, num0(v.dx, 0), num0(v.dy, 0)), "position relative"); } });
 });
 for (const [id, mode, label] of [["alignLeft", "left", "Align to Left"], ["alignRight", "right", "Align to Right"], ["alignTop", "top", "Align to Top"], ["alignBottom", "bottom", "Align to Bottom"], ["alignCenterX", "centerX", "Align to Vertical Center"], ["alignCenterY", "centerY", "Align to Horizontal Center"]])
-  act(id, label, "", (ctx) => { const ids = selectionOrToast(ctx, "Select two or more items to align"); if (!ids) return true; return commitSel(ctx, alignChanges(ctx.doc, ids, mode, ctx.cursor), label.toLowerCase()); });
+  act(id, label, "", (ctx) => { const ids = editableOrToast(ctx, "Select two or more items to align"); if (!ids) return true; return commitSel(ctx, alignChanges(ctx.doc, ids, mode, ctx.cursor), label.toLowerCase()); });
 for (const [id, axis, centers, label] of [["distributeH", "x", false, "Distribute Horizontally by Gaps"], ["distributeV", "y", false, "Distribute Vertically by Gaps"], ["distributeHCenters", "x", true, "Distribute Horizontally by Centers"], ["distributeVCenters", "y", true, "Distribute Vertically by Centers"]])
-  act(id, label, "", (ctx) => { const ids = selectionOrToast(ctx, "Select three or more items to distribute"); if (!ids) return true; if (ids.length < 3) { ctx.toast("Distribute needs at least three items"); return true; } return commitSel(ctx, distributeChanges(ctx.doc, ids, axis, centers), label.toLowerCase()); });
+  act(id, label, "", (ctx) => { const ids = editableOrToast(ctx, "Select three or more items to distribute"); if (!ids) return true; if (ids.length < 3) { ctx.toast("Distribute needs at least three items"); return true; } return commitSel(ctx, distributeChanges(ctx.doc, ids, axis, centers), label.toLowerCase()); });
 alias("distributeHorizontallyGaps", "distributeH"); alias("distributeVerticallyGaps", "distributeV"); alias("distributeHorizontallyCenters", "distributeHCenters"); alias("distributeVerticallyCenters", "distributeVCenters");
 function rotateBy(ctx, deg) {
-  const ids = selectionOrToast(ctx, "Select items to rotate"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
+  const ids = editableOrToast(ctx, "Select items to rotate"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
   if (items.length === 1 && items[0].kind === "footprint") { ctx.commit([replacedChange(items[0], rotateFootprintNode(clone(items[0].node), deg))], "rotate"); return true; }
   const c = selectionCenter(items); return commitSel(ctx, rotateChanges(ctx.doc, ids, c[0], c[1], deg), "rotate");
 }
 act("rotateSelection", "Rotate Counterclockwise", "R", (ctx) => rotateBy(ctx, 90)); alias("rotateCcw", "rotateSelection");
 act("rotateSelectionCw", "Rotate Clockwise", "", (ctx) => rotateBy(ctx, -90)); alias("rotateCw", "rotateSelectionCw");
 act("flipSelection", "Flip", "F", (ctx) => {
-  const ids = selectionOrToast(ctx, "Select items to flip"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
+  const ids = editableOrToast(ctx, "Select items to flip"); if (!ids) return true; const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group");
   if (items.length === 1 && items[0].kind === "footprint") { const node = flipFootprintNode(clone(items[0].node)); ctx.commit([replacedChange(items[0], node)], "flip"); ctx.toast(`${items[0].ref || "Footprint"} flipped to ${layerOf(node)}`); return true; }
   const c = selectionCenter(items); return commitSel(ctx, flipChanges(ctx.doc, ids, c[0]), "flip");
 });
 alias("flip", "flipSelection");
 for (const [id, axis, label] of [["mirrorH", "h", "Mirror Horizontally"], ["mirrorV", "v", "Mirror Vertically"]])
-  act(id, label, "", (ctx) => { const ids = selectionOrToast(ctx, "Select items to mirror"); if (!ids) return true; const items = ids.map((i) => ctx.doc.items.get(i)); const c = selectionCenter(items); const ch = mirrorChanges(ctx.doc, ids, c[0], c[1], axis); if (!ch.length && items.some((it) => it.kind === "footprint")) { ctx.toast("Footprints cannot be mirrored in the board editor (use Flip)"); return true; } return commitSel(ctx, ch, label.toLowerCase()); });
-act("swap", "Swap", "Alt+S", (ctx) => { const ids = selectionOrToast(ctx, "Select two or more items to swap"); if (!ids) return true; return commitSel(ctx, swapChanges(ctx.doc, ids), "swap"); });
-act("pack", "Pack and Move Footprints", "P", (ctx) => { const ids = selectionOrToast(ctx, "Select footprints to pack"); if (!ids) return true; return commitSel(ctx, packChanges(ctx.doc, ids), "pack footprints"); });
+  act(id, label, "", (ctx) => { const ids = editableOrToast(ctx, "Select items to mirror"); if (!ids) return true; const items = ids.map((i) => ctx.doc.items.get(i)); const c = selectionCenter(items); const ch = mirrorChanges(ctx.doc, ids, c[0], c[1], axis); if (!ch.length && items.some((it) => it.kind === "footprint")) { ctx.toast("Footprints cannot be mirrored in the board editor (use Flip)"); return true; } return commitSel(ctx, ch, label.toLowerCase()); });
+act("swap", "Swap", "Alt+S", (ctx) => { const ids = editableOrToast(ctx, "Select two or more items to swap"); if (!ids) return true; return commitSel(ctx, swapChanges(ctx.doc, ids), "swap"); });
+act("pack", "Pack and Move Footprints", "P", (ctx) => { const ids = editableOrToast(ctx, "Select footprints to pack"); if (!ids) return true; return commitSel(ctx, packChanges(ctx.doc, ids), "pack footprints"); });
 alias("packAndMoveFootprints", "pack");
 act("createArray", "Create Array…", "", (ctx) => {
   const ids = selectionOrToast(ctx, "Select items to array"); if (!ids) return true;
@@ -2709,7 +2723,7 @@ const pcb = {
     case "Delete":
       if (shift && selectionIds(ctx).size && connectedRun(ctx.doc, selectionIds(ctx)).size) return runAction("deleteFull", ctx);   // Shift+Delete: the whole connected run
       if (S.sel.size) { if (editing()) deleteSelection(ctx); return true; }
-      if (ctx.selection && ctx.selection.size) { if (editing()) { ctx.commit(deleteChanges(ctx.doc, Array.from(ctx.selection)), "delete"); applySelection(ctx, []); } return true; }   // app.js's box selection of one item
+      if (ctx.selection && ctx.selection.size) { if (editing()) { const free = unlockedIds(ctx, Array.from(ctx.selection)); if (free.length) { ctx.commit(deleteChanges(ctx.doc, free), "delete"); applySelection(ctx, []); } } return true; }   // app.js's box selection of one item
       return false;
     default: return false;
     }
@@ -2730,6 +2744,9 @@ const pcb = {
   },
   // app.js deletes a multi-selection through this; the prompt and the image picker are swappable for tests
   deleteChanges,
+  // the app's drag of a mixed selection, and Move: everything selected goes along (sticky = follows the cursor until a click)
+  beginMove(ctx, at, sticky) { bind(ctx); return beginCarryMove(ctx, { at, sticky }); },
+  unlockedIds(ctx, ids, quiet) { bind(ctx); return unlockedIds(ctx, ids, quiet); },
   setPrompt(fn) { promptImpl = fn; },
   setImagePicker(fn) { pickerImpl = fn; },
   cancel() { cancelOps(); },              // drop whatever is in flight and put a moved item back (a lost button release, Escape)

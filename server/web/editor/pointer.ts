@@ -6,7 +6,7 @@ import { NS } from "./dom";
 import { sendOp } from "./net";
 import { drawSelection, groupExpand, renderProps } from "./selection";
 import { E } from "./state";
-import { moveOp, publishUndo, redoStack, toolCtx, undoStack } from "./tools";
+import { moveOp, publishUndo, redoStack, toolCtx, undoStack, unlockedForEdit } from "./tools";
 import { UNITS, fmtLen } from "./util";
 import { dragG, fitBox, isSch, pxPerMm, requestRender, stage, svgText, worldMm, zoomBy } from "./view";
 /** E: KiCad's "Edit properties" for whatever is selected — a field, the app selection, or a tool module's own selection. */
@@ -23,6 +23,7 @@ export function openSelectionProperties() {
 export function drawDrag() {
   dragG.replaceChildren();
   if (!E.drag) return;
+  if (E.kdoc && !isSch()) return;   // a board shows the footprint itself moving, as pcbnew does: no leader line or library name on top
   const s = pxPerMm(), [x, y] = E.drag.curMm;
   const line = document.createElementNS(NS, "line");
   line.setAttribute("x1", E.drag.fp.x / E.IU); line.setAttribute("y1", E.drag.fp.y / E.IU);
@@ -74,8 +75,14 @@ export function startGroupDrag(hit, mm, ev) {
     let d = null; try { d = CollabTools.sch.beginDrag(toolCtx(), its, mm, true); } catch (e) { d = null; }
     if (d) { E.drag = { fp, engine: true, clickId: hit.id, startMm: mm, curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, wires: [] }; stage.setPointerCapture(ev.pointerId); return; }
   }
+  // board: tracks, vias, graphics, text or zones in the selection — the module moves everything together
+  if (!isSch() && its.some((it) => it.kind !== "footprint") && CollabTools.pcb && CollabTools.pcb.beginMove) {
+    try { if (CollabTools.pcb.beginMove(toolCtx(), mm, false)) stage.setPointerCapture(ev.pointerId); } catch (e) { console.warn(e); }
+    return;
+  }
   // board (or a schematic module without group support): move the footprints together
-  const members = its.filter((it) => it.kind === "footprint" || it.kind === "symbol").map((it) => { const f = E.items.find((q) => q.id === it.id); return f ? { fp: f, ox: f.x, oy: f.y } : null; }).filter(Boolean);
+  const free = isSch() ? null : new Set(unlockedForEdit(its.map((it) => it.id)));
+  const members = its.filter((it) => !free || free.has(it.id)).filter((it) => it.kind === "footprint" || it.kind === "symbol").map((it) => { const f = E.items.find((q) => q.id === it.id); return f ? { fp: f, ox: f.x, oy: f.y } : null; }).filter(Boolean);
   if (!members.length) return;
   E.drag = { fp, group: members, clickId: hit.id, startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0] };
   stage.setPointerCapture(ev.pointerId);
@@ -100,6 +107,8 @@ export function finishGroupDrag() {
   const g = E.drag; E.drag = null; dragG.replaceChildren(); if (!g.moved) collapseSelectionTo(g.clickId); if (!g.moved || (!g.last[0] && !g.last[1])) return;
   const changes = g.group.map((m) => moveOp({ id: m.fp.id, x: m.ox, y: m.oy }, m.fp.x, m.fp.y));
   const inverse = g.group.map((m) => moveOp({ id: m.fp.id, x: m.fp.x, y: m.fp.y }, m.ox, m.oy));
+  // our copy must end where we say it ends: a peer's move of the same footprint that arrived mid-drag would otherwise stay on screen here
+  if (E.kdoc) for (const c of changes) KiCadCanvas.applyChange(E.kdoc, c, E.IU);
   sendOp(changes);
   undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();

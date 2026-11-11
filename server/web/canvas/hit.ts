@@ -65,6 +65,69 @@ export function geomHit(g, x, y, tol) {
   }
 }
 
+/** Does the segment a-b pass through (or lie inside) the rectangle?  Liang-Barsky. */
+export function segTouchesRect(ax, ay, bx, by, x0, y0, x1, y1) {
+  let t0 = 0, t1 = 1; const dx = bx - ax, dy = by - ay;
+  for (const [p, q] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return true;
+}
+
+/** Does this geometry record reach into the rectangle — its stroke or filled area, not merely its bounding box? */
+export function geomTouchesRect(g, x0, y0, x1, y1) {
+  const b = geomBox(g); if (!b || b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) return false;
+  const w = (g.w || 0) / 2;
+  switch (g.t) {
+  case "line": return segTouchesRect(g.x1, g.y1, g.x2, g.y2, x0 - w, y0 - w, x1 + w, y1 + w);
+  case "poly": {
+    const n = g.pts.length; if (!n) return false;
+    for (let i = 0; i < (g.close || g.fill ? n : n - 1); i++) { const a = g.pts[i], c = g.pts[(i + 1) % n]; if (segTouchesRect(a[0], a[1], c[0], c[1], x0 - w, y0 - w, x1 + w, y1 + w)) return true; }
+    return !!g.fill && pointInPoly(g.pts, x0, y0);          // the rectangle sits wholly inside a filled outline
+  }
+  case "circle": {
+    const cx = Math.max(x0, Math.min(g.x, x1)), cy = Math.max(y0, Math.min(g.y, y1));
+    if (Math.hypot(cx - g.x, cy - g.y) > g.r + w) return false;
+    if (g.fill) return true;
+    const far = Math.max(Math.hypot(x0 - g.x, y0 - g.y), Math.hypot(x1 - g.x, y0 - g.y), Math.hypot(x0 - g.x, y1 - g.y), Math.hypot(x1 - g.x, y1 - g.y));
+    return far >= g.r - w;                                  // not swallowed by the hole of an unfilled circle
+  }
+  case "arc": {
+    if (g.a0 === undefined || g.a1 === undefined) return true;
+    const TWO = Math.PI * 2, nrm = (v) => ((v % TWO) + TWO) % TWO;
+    const from = g.anticlockwise ? g.a1 : g.a0, sweep = nrm((g.anticlockwise ? g.a0 : g.a1) - from) || TWO, steps = Math.max(4, Math.ceil(sweep / (Math.PI / 16)));
+    let px = g.x + g.r * Math.cos(from), py = g.y + g.r * Math.sin(from);
+    for (let i = 1; i <= steps; i++) { const a = from + sweep * i / steps, qx = g.x + g.r * Math.cos(a), qy = g.y + g.r * Math.sin(a); if (segTouchesRect(px, py, qx, qy, x0 - w, y0 - w, x1 + w, y1 + w)) return true; px = qx; py = qy; }
+    return false;
+  }
+  default: return true;                                     // pads, text, images: by their box
+  }
+}
+
+/**
+ * A selection box that takes what it touches (dragged right to left): does any visible geometry of the item
+ * reach into it?  A zone counts by its outline only, as in ZONE::HitTest — a box inside a pour does not take
+ * the pour — and a diagonal track by its copper, not by the rectangle around it.
+ */
+export function itemTouchesRect(it, x0, y0, x1, y1, hidden) {
+  for (const g of it.geom || []) {
+    if (g.zoneFill || g.padText || g.padNum || g.noBox) continue;
+    if (hidden && g.layer && hidden.has(g.layer)) continue;
+    if (geomTouchesRect(g, x0, y0, x1, y1)) return true;
+  }
+  return false;
+}
+
+/** Is anything of the item on a layer that is shown?  (What cannot be seen cannot be selected.) */
+export function itemVisible(it, hidden) {
+  if (!hidden || !hidden.size) return true;
+  let drawn = false;
+  for (const g of it.geom || []) { if (!g.layer) continue; drawn = true; if (!hidden.has(g.layer)) return true; }
+  return !drawn;
+}
+
 /**
  * The movable item under (x, y) with KiCad's candidate ranking (PCB_SELECTION_TOOL::GuessSelectionCandidates):
  * only geometry on visible layers counts (opts.hidden = Set of layer keys), a hit on the item's own
