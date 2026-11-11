@@ -100,6 +100,11 @@ public:
     ///< Cycle viewport-following through the connected peers.
     int FollowNextPeer( const TOOL_EVENT& aEvent );
     void OnSnapshotRequest( const wxString& aDocId ) override;
+
+    /// Called by the sync engine around a remote edit that may free schematic items: the
+    /// overlay must not keep pointers to them across it.
+    void ForgetGhostItems() { m_cursorItem.ForgetGhostItems(); }
+    void RefreshOverlay() { rebuildOverlay(); }
     void OnReset( const wxString& aDocId, long long aSeq ) override;
     void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
     void OnDocInfo( const nlohmann::json& aDocInfo ) override;

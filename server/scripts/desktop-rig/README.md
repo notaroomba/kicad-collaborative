@@ -21,3 +21,9 @@ wizard once before `setup.py` copies it.
 `groups.py` has two checks that describe the API rather than the sync (a group cannot be
 given a member created in the same uncommitted call, and its zone sits off the board);
 both sides still agree, which is what the last checks assert.
+
+Tuning patterns have no API, so `retune.sh <display> <pattern y> <spacing>` clicks one and
+changes its spacing through the properties dialog.  Set the project up from a board that
+has patterns (`RIG_SRC=<folder holding qa/data/pcbnew/issue22536> RIG_NAME=issue22536
+python3 setup.py`), retune from each side in turn (`./retune.sh :91 440 0.8`,
+`./retune.sh :92 505 1.0`) and compare `track_sig()` from `common.py` on both editors.

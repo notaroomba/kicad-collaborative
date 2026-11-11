@@ -144,6 +144,14 @@ private:
     std::vector<BOARD_ITEM*>           m_ghostRatsItems;
     VECTOR2I                           m_ghostLastOffset;
     void OnSnapshotRequest( const wxString& aDocId ) override;
+
+public:
+    /// Called by the sync engine around a remote edit that may free board items: the
+    /// overlay must not keep pointers to them across it.
+    void ForgetGhostItems();
+    void RefreshOverlay() { rebuildOverlay(); }
+
+private:
     void OnRequest( const wxString& aDocId, const wxString& aAction,
                     const wxString& aFromName ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;

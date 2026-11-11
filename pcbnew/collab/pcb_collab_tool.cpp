@@ -1552,6 +1552,14 @@ void PCB_COLLAB_TOOL::OnAck( const wxString& aClientOpId, long long aSeq )
 }
 
 
+void PCB_COLLAB_TOOL::ForgetGhostItems()
+{
+    m_cursorItem.ForgetGhostItems();
+    m_ghostDynamicData.reset();
+    m_ghostRatsItems.clear();
+}
+
+
 void PCB_COLLAB_TOOL::OnSnapshotRequest( const wxString& aDocId )
 {
     // pcbnew holds a single board doc, so the requested id is always its own.

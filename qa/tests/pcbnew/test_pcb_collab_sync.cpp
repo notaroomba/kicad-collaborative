@@ -201,6 +201,76 @@ BOOST_AUTO_TEST_CASE( GeneratorRoundTrips )
 }
 
 
+// Retuning a pattern is one edit: the generator modified, every track it had removed, and
+// the ones it regenerated added.  Two real editors showed the receiver's pattern left
+// pointing at the freed tracks, and its next redraw crashed.
+BOOST_AUTO_TEST_CASE( RegeneratedPatternHoldsOnlyItsNewTracks )
+{
+    PCB_TRACK* oldTwin = nullptr;
+    PCB_TRACK* oldTrack = MakeTrackPair( &oldTwin );
+
+    PCB_GENERATOR* gen = GENERATORS_MGR::Instance().CreateFromType( wxS( "meanders" ) );
+    BOOST_REQUIRE( gen != nullptr );
+    gen->SetLayer( F_Cu );
+    gen->AddItem( oldTrack );
+    m_authoring->Add( gen );
+
+    nlohmann::json first = MakeChange( gen, "ADDED" );
+    first[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( gen );
+    first[ "groupMembers" ] = { oldTrack->m_Uuid.AsStdString() };
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), first, nullptr ) );
+
+    PCB_GENERATOR* applied =
+            dynamic_cast<PCB_GENERATOR*>( m_receiving->ResolveItem( gen->m_Uuid, true ) );
+    BOOST_REQUIRE( applied );
+    BOOST_REQUIRE_EQUAL( applied->GetItems().size(), 1 );
+
+    // The author retunes: the old track goes, a new one takes its place in the pattern.
+    PCB_TRACK* newTrack = new PCB_TRACK( m_authoring.get() );
+    newTrack->SetStart( VECTOR2I( 1000000, 7000000 ) );
+    newTrack->SetEnd( VECTOR2I( 3000000, 7000000 ) );
+    newTrack->SetWidth( 250000 );
+    newTrack->SetLayer( F_Cu );
+    newTrack->SetNetCode( 1 );
+    m_authoring->Add( newTrack );
+
+    const KIID oldId = oldTrack->m_Uuid;
+    gen->RemoveItem( oldTrack );
+    gen->AddItem( newTrack );
+
+    nlohmann::json remote = nlohmann::json::array();
+
+    // In the order the wire carried it.
+    remote.push_back( MakeChange( gen, "MODIFIED" ) );
+    remote.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( gen );
+    // ...and as an older sender wrote it: the pattern captured before its old track
+    // was dropped, so the list still names the track the same edit removes.
+    remote.back()[ "groupMembers" ] = { oldId.AsStdString(), newTrack->m_Uuid.AsStdString() };
+
+    remote.push_back( MakeChange( oldTrack, "REMOVED" ) );
+
+    remote.push_back( MakeChange( newTrack, "ADDED" ) );
+    remote.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( newTrack );
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, {}, &toolMgr, nullptr );
+
+    applied = dynamic_cast<PCB_GENERATOR*>( m_receiving->ResolveItem( gen->m_Uuid, true ) );
+    BOOST_REQUIRE( applied );
+    BOOST_CHECK( m_receiving->ResolveItem( oldId, true ) == nullptr );
+    BOOST_REQUIRE_EQUAL( applied->GetItems().size(), 1 );
+
+    EDA_ITEM* member = *applied->GetItems().begin();
+    BOOST_CHECK( member->m_Uuid == newTrack->m_Uuid );
+    BOOST_CHECK( m_receiving->ResolveItem( member->m_Uuid, true ) == member );
+
+    // Walks every member: the crash, if one of them was freed.
+    (void) applied->GetBoundingBox();
+}
+
+
 BOOST_AUTO_TEST_CASE( GroupWithMissingMemberIsGraceful )
 {
     PCB_TRACK* twin = nullptr;

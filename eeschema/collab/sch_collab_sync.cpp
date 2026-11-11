@@ -18,6 +18,7 @@
  */
 
 #include "sch_collab_sync.h"
+#include "sch_collab_tool.h"
 
 #include <algorithm>
 #include <functional>
@@ -2485,6 +2486,15 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     if( !screen )
         return false;
 
+    // The presence overlay draws ghosts of local items a collaborator is dragging, by
+    // pointer, and this edit may free those very items.  See PCB_COLLAB_SYNC::applyOp.
+    SCH_COLLAB_TOOL* collabTool = m_frame->GetToolManager()
+                                          ? m_frame->GetToolManager()->GetTool<SCH_COLLAB_TOOL>()
+                                          : nullptr;
+
+    if( collabTool )
+        collabTool->ForgetGhostItems();
+
     SCH_COLLAB::ApplyRemoteOp( m_frame->Schematic(), screen, aOp.changes, newerOwn,
                                m_frame->GetToolManager(),
                                [this]( SCH_ITEM* aItem )
@@ -2493,6 +2503,9 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
                                    // so a later local undo cannot dereference it.
                                    m_frame->PurgeItemFromUndoRedo( aItem->m_Uuid );
                                } );
+
+    if( collabTool )
+        collabTool->RefreshOverlay();
 
     // The frame only re-tests dangling ends after its own edits, so a remote move or
     // upsert left "unconnected" circles on pins whose wires plainly reach them.

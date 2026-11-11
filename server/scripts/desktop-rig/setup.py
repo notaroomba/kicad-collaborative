@@ -1,5 +1,5 @@
 import json, os, shutil, subprocess, sys, time, hmac, hashlib, base64, io, zipfile, urllib.request
-RIG='/tmp/claude-0/rig'; SRC='/home/claude/kicad-collaborative/demos/pic_programmer'; BASE='http://127.0.0.1:8099'; NAME='pic_programmer'
+RIG='/tmp/claude-0/rig'; SRC=os.environ.get('RIG_SRC','/home/claude/kicad-collaborative/demos/pic_programmer'); BASE='http://127.0.0.1:8099'; NAME=os.environ.get('RIG_NAME','pic_programmer')
 def psql(q): return subprocess.check_output(['psql','postgres://postgres:test@127.0.0.1:5432/collabtest','-Atc',q]).decode().strip().split('\n')[0]
 def user(gh,login): return int(psql(f"INSERT INTO users (github_id, login, name) VALUES ({gh}, '{login}', '{login}') ON CONFLICT (github_id) DO UPDATE SET login = EXCLUDED.login RETURNING id"))
 b64=lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()

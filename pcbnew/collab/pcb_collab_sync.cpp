@@ -18,6 +18,7 @@
  */
 
 #include "pcb_collab_sync.h"
+#include "pcb_collab_tool.h"
 
 #include <collab/collab_auth.h>
 #include <collab/collab_rest.h>
@@ -365,6 +366,19 @@ const COMMIT::COMMIT_LINE* stagedEntry( const BOARD_COMMIT& aCommit, const EDA_I
 }
 
 
+/// Whether @p aItem is staged for removal in @p aCommit.
+bool stagedRemovalOf( const BOARD_COMMIT& aCommit, const EDA_ITEM* aItem )
+{
+    for( const COMMIT::COMMIT_LINE& entry : aCommit.GetEntries() )
+    {
+        if( entry.m_item == aItem && ( entry.m_type & CHT_TYPE ) == CHT_REMOVE )
+            return true;
+    }
+
+    return false;
+}
+
+
 /// The entry staging the add of an item with KIID aId, or nullptr.
 const COMMIT::COMMIT_LINE* stagedAddOf( const BOARD_COMMIT& aCommit, const KIID& aId )
 {
@@ -582,6 +596,11 @@ bool PCB_COLLAB::ApplyItemChange( BOARD* aBoard, const nlohmann::json& aChange,
                             }
                         }
 
+                        // A member the same commit removes is about to be freed.  Senders
+                        // no longer list one, but an older client or the browser might.
+                        if( member && aCommit && stagedRemovalOf( *aCommit, member ) )
+                            member = nullptr;
+
                         // (A staged item's parent is whatever the parser left; the push
                         // sets it.  Only an item already on the board can be a child.)
                         if( member && member != group
@@ -797,6 +816,10 @@ void PCB_COLLAB::ApplyRemoteOp( BOARD* aBoard, const nlohmann::json& aChanges,
                         item->m_Uuid.AsString() );
             continue;
         }
+
+        // Nothing may still list it as a member once it is gone.
+        if( EDA_GROUP* holder = item->GetParentGroup() )
+            holder->RemoveItem( item );
 
         if( aBeforeFree )
             aBeforeFree( item );
@@ -1076,6 +1099,61 @@ void PCB_COLLAB_SYNC::flushBatch()
     // on a large board runs to megabytes.  Then it goes out as consecutive ops, cut
     // between items.  Order is what matters to the receivers and that is preserved.
     static const size_t OP_BYTES = 512 * 1024;
+
+    // A group or tuning pattern is captured while the commit is still being assembled,
+    // when it can still list items the same commit goes on to delete (retuning a pattern
+    // replaces every track in it).  Send it as it stands now, and never with a member
+    // this very edit removes: a receiver that believed the list was left holding freed
+    // tracks.
+    {
+        std::set<std::string> removed;
+
+        for( const nlohmann::json& change : m_batch )
+        {
+            if( change.value( "kind", "" ) == "REMOVED" )
+                removed.insert( change.value( "id", "" ) );
+        }
+
+        BOARD* board = m_frame->GetBoard();
+
+        for( nlohmann::json& change : m_batch )
+        {
+            if( !change.contains( "groupMembers" ) || change.value( "kind", "" ) == "REMOVED" )
+                continue;
+
+            const KIID id( wxString::FromUTF8( change.value( "id", "" ) ) );
+            PCB_GROUP* group = board ? dynamic_cast<PCB_GROUP*>( board->ResolveItem( id, true ) )
+                                     : nullptr;
+
+            nlohmann::json members = nlohmann::json::array();
+
+            if( group )
+            {
+                for( EDA_ITEM* member : group->GetItems() )
+                {
+                    std::string memberId = member->m_Uuid.AsStdString();
+
+                    if( !removed.count( memberId ) )
+                        members.push_back( memberId );
+                }
+
+                std::string sexpr = PCB_COLLAB::FormatItemSexpr( group );
+
+                if( !sexpr.empty() && change.contains( "sexpr" ) )
+                    change[ "sexpr" ] = sexpr;
+            }
+            else
+            {
+                for( const nlohmann::json& member : change[ "groupMembers" ] )
+                {
+                    if( member.is_string() && !removed.count( member.get<std::string>() ) )
+                        members.push_back( member );
+                }
+            }
+
+            change[ "groupMembers" ] = std::move( members );
+        }
+    }
 
     std::vector<nlohmann::json> ops;
     nlohmann::json              current = nlohmann::json::array();
@@ -2101,6 +2179,17 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
     for( const UNACKED* op : unacked )
         newerOwn.push_back( &op->changes );
 
+    // The presence overlay draws ghosts of local items a collaborator is dragging, by
+    // pointer.  This edit may free those very items (a retuned pattern replaces the
+    // tracks its author was just dragging), and anything that repaints before the next
+    // presence update -- the preview plot yields to the event loop -- drew through them.
+    PCB_COLLAB_TOOL* collabTool = m_frame->GetToolManager()
+                                          ? m_frame->GetToolManager()->GetTool<PCB_COLLAB_TOOL>()
+                                          : nullptr;
+
+    if( collabTool )
+        collabTool->ForgetGhostItems();
+
     PCB_COLLAB::ApplyRemoteOp( board, aOp.changes, newerOwn, m_frame->GetToolManager(), view,
                                [this]( BOARD_ITEM* aItem )
                                {
@@ -2108,6 +2197,9 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
                                    // so a later local undo cannot dereference it.
                                    m_frame->PurgeItemFromUndoRedo( aItem->m_Uuid );
                                } );
+
+    if( collabTool )
+        collabTool->RefreshOverlay();
 
     saveMissingLibraries( aOp.changes );
 }

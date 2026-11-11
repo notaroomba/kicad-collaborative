@@ -102,6 +102,15 @@ public:
 
     void SetPeers( std::vector<REMOTE_PEER_DRAW>&& aPeers ) { m_peers = std::move( aPeers ); }
 
+    /// Drop every pointer to a document item.  A ghost draws a local item at the place
+    /// a peer is dragging it to, so it must go before that item can be freed: a repaint
+    /// in between would draw through a dead pointer.
+    void ForgetGhostItems()
+    {
+        for( REMOTE_PEER_DRAW& peer : m_peers )
+            peer.ghostItems.clear();
+    }
+
     void SetCommentPins( std::vector<COMMENT_PIN>&& aPins ) { m_commentPins = std::move( aPins ); }
 
     /**

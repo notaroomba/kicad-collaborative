@@ -27,3 +27,7 @@ def check(name, ok, detail=''):
     results.append(ok); print(('PASS  ' if ok else 'FAIL  ')+name+(f' — {detail}' if detail else ''), flush=True)
 from kipy.proto.common.types import KiCadObjectType
 def groups(b): return list(b.get_items(types=[KiCadObjectType.KOT_PCB_GROUP]))
+def track_sig(b):
+    h=hashlib.sha1(); ts=b.get_tracks()
+    for s in sorted(f'{t.start.x},{t.start.y},{getattr(t,"end",t.start).x},{getattr(t,"end",t.start).y},{t.layer}' for t in ts): h.update(s.encode())
+    return len(ts), h.hexdigest()[:10]
