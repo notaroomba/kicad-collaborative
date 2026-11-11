@@ -43,11 +43,15 @@ export function comboOf(ev: KeyboardEvent): string {
   return [...mods, k].join("+");
 }
 
+const NON_TEXT_INPUT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color"]);
+
 /** True while keys belong to something else: a text field, a KiCad dialog, an open menu or a modal. */
 export function typingTarget(ev: KeyboardEvent): boolean {
   const t = ev.target as HTMLElement | null;
   if (t && t.tagName) {
-    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable) return true;
+    // a ticked checkbox / radio / button (Selection Filter, panel toggles) keeps only Space and Enter for itself
+    if (t.tagName === "INPUT" && NON_TEXT_INPUT.has((t as HTMLInputElement).type)) { if (ev.key === " " || ev.key === "Enter") return true; }
+    else if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable) return true;
     if (typeof t.closest === "function" && t.closest(".kd-overlay, [role='dialog'], [role='menu'], #popover")) return true;
   }
   const w = window as unknown as { KDialogs?: { isOpen?: () => boolean } };

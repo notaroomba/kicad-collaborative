@@ -1094,7 +1094,8 @@ function onUpCapture() {
 }
 function onKeyCapture(ev) {
   const ctx = S.ctx; if (!ctx || !schActive() || ev.metaKey || ev.ctrlKey) return;
-  const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA") return;
+  const tag = ev.target && ev.target.tagName; if (tag === "TEXTAREA" || (tag === "INPUT" && !/^(checkbox|radio|button|submit|reset|range|color)$/.test(ev.target.type))) return;
+  if (tag === "INPUT" && (ev.key === " " || ev.key === "Enter")) return;   // a ticked filter box keeps Space / Enter
   if (ev.key === "Escape") {
     let took = true;
     if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) { S.wire = null; S.unfold = null; ctx.requestRender(); } else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
