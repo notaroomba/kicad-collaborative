@@ -400,17 +400,30 @@ function padCovers(p, x, y) { const [lx, ly] = rotator(-p.rot)(x - p.x, y - p.y)
 /** Magnetic target near (x, y): a pad (centre within tol, or the cursor over it), via or track end on the layer (strict: of `net` only). */
 function snapTarget(doc, x, y, tol, layer, net, strict) {
   let best = null, bd = Infinity;
-  const take = (px, py, n, kind, inside) => {
+  const take = (px, py, n, kind, inside, extra) => {
     const d = Math.hypot(px - x, py - y); if (!inside && d > tol) return;
     if (hasNet(net) && hasNet(n) && !sameNet(n, net)) return;   // never pull a routed net onto another net
     if (strict && !sameNet(n, net) && !(kind === "pad" && inside)) return;   // pickSingleItem: the routed net only; a free pad when the cursor is inside it
-    if (d < bd) { bd = d; best = { x: px, y: py, net: n, kind }; }
+    if (d < bd) { bd = d; best = Object.assign({ x: px, y: py, net: n, kind }, extra); }
   };
+  const mids = [];
   for (const it of doc.items.values()) {
     const b = it.bbox; if (b && (x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol)) continue;
     if (it.kind === "footprint") { for (const p of padsOf(it)) if (padOnLayer(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y)); }
     else if (it.kind === "via") { const a = pt(it.node, "at"); if (a) take(a[0], a[1], netOf(it.node), "via", false); }
-    else if (it.kind === "segment" && layerOf(it.node) === layer) { for (const key of ["start", "end"]) { const p = pt(it.node, key); if (p) take(p[0], p[1], netOf(it.node), "track", false); } }
+    else if ((it.kind === "segment" || it.kind === "arc") && layerOf(it.node) === layer) {
+      const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) continue;
+      take(a[0], a[1], netOf(it.node), "track", false); take(b[0], b[1], netOf(it.node), "track", false);
+      if (strict && it.kind === "segment" && Math.hypot(a[0] - x, a[1] - y) > tol && Math.hypot(b[0] - x, b[1] - y) > tol) mids.push({ it, a, b });
+    }
+  }
+  // while routing, the body of a routed-net track under the cursor is an end too (TOOL_BASE::snapToItem: the nearest
+  // point on it); the route ends there and the track is split (LINE_PLACER::splitAdjacentSegments)
+  if (!best) for (const { it, a, b } of mids) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; if (!(l2 > 0)) continue;
+    const k = ((x - a[0]) * dx + (y - a[1]) * dy) / l2; if (k <= 0 || k >= 1) continue;
+    const q = rp([a[0] + k * dx, a[1] + k * dy]); const inside = Math.hypot(q[0] - x, q[1] - y) <= widthOf(it.node, 0.25) / 2;
+    take(q[0], q[1], netOf(it.node), "trackMid", inside, { id: it.id });
   }
   return best;
 }
@@ -831,7 +844,7 @@ function jointIndex(doc) {
 const trackEnds = (it) => [pt(it.node, "start"), pt(it.node, "end")];
 /**
  * NODE::AssembleLine: the segment and every segment reached through trivial joints (exactly two same-net segments of
- * one width meeting, no via, no pad centre, no arc).  { ids, pts, index (the seed's segment index), width, layer, net, netKey }.
+ * one width meeting, no via, no pad centre, no arc, and the next segment not locked).  { ids, pts, index (the seed's segment index), width, layer, net, netKey }.
  */
 function assembleLine(doc, seg) {
   const J = jointIndex(doc); const L = layerOf(seg.node), w = widthOf(seg.node, 0.25), net = netOf(seg.node), key = J.NT.key(net);
@@ -847,6 +860,7 @@ function assembleLine(doc, seg) {
       if (links.length !== 2) return;
       const o = links[0] === cur ? links[1] : links[0];
       if (o.kind !== "segment" || ids.includes(o.id) || Math.abs(widthOf(o.node, 0.25) - w) > 1e-9) return;
+      if (isLocked(o.node)) return;   // JOINT::NextSegment( aAllowLockedSegs = false ): a locked segment ends the line
       const [a, b] = trackEnds(o); const nq = samePt(a, q) ? b : a;
       if (atEnd) { ids.push(o.id); pts.push(nq.slice()); } else { ids.unshift(o.id); pts.unshift(nq.slice()); }
       cur = o; q = nq;
@@ -861,12 +875,24 @@ function viaFanout(doc, via) {
   const key = J.NT.key(netOf(via.node)); const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const layers = viaLayers(via.node, copper);
   const out = [], seen = new Set();
   for (const L of layers) for (const o of J.ends.get(L + "|" + ptKey(at)) || []) {
-    if (o.kind !== "segment" || seen.has(o.id) || J.NT.key(netOf(o.node)) !== key) continue;
+    if ((o.kind !== "segment" && o.kind !== "arc") || seen.has(o.id) || J.NT.key(netOf(o.node)) !== key) continue;
+    if (o.kind === "arc") { const ln = arcStubLine(o, at, L, key); seen.add(o.id); if (ln) out.push(ln); continue; }
     const ln = assembleLine(doc, o); if (!ln) continue; ln.ids.forEach((id) => seen.add(id));
     if (peq(ln.pts[ln.pts.length - 1], at) && !peq(ln.pts[0], at)) { ln.pts.reverse(); ln.ids.reverse(); }
     ln.vertex = 0; out.push(ln);
   }
   return out;
+}
+/**
+ * An arc ending on a dragged via (an ARC_T link of the via's joint): the arc keeps its shape and a new line grows from its
+ * end to where the via goes, leaving at 45° or straight as the arc's tangent there does (dragCornerInternal on a line
+ * whose last piece is the arc).  ids is empty — the arc itself is never replaced.
+ */
+function arcStubLine(arc, at, layer, netKey) {
+  const a = pt(arc.node, "start"), m = pt(arc.node, "mid"), b = pt(arc.node, "end"); if (!a || !m || !b) return null;
+  const e = samePt(a, at) ? a : b; const c = K.arcFrom3(a, m, b); let diag = false;
+  if (c) { let t = [-(e[1] - c.y), e[0] - c.x]; if ((m[0] - e[0]) * t[0] + (m[1] - e[1]) * t[1] > 0) t = [-t[0], -t[1]]; diag = isDiagDir(dir8(e, [e[0] + t[0], e[1] + t[1]])); }
+  return { ids: [], pts: [at.slice(), at.slice()], index: 0, vertex: 0, width: widthOf(arc.node, 0.25), layer, net: netOf(arc.node), netKey, arc, arcDiag: diag, tmpl: arc };
 }
 /** TOOL_BASE::snapToItem: a grab within half the width of a track end takes the end, otherwise the nearest (grid) point on it. */
 function snapGrab(ctx, it, mm) {
@@ -903,14 +929,16 @@ function dragStart(ctx, it, mm, free) {
 /** One drag step's geometry: each line rebuilt for cursor p (no collision handling). */
 function dragSolution(d, p) {
   const thresh = (l) => (d.free ? 0 : l.width / 4);   // smooth_dragged_segments: a quarter width in walk around
-  if (d.mode === "via") return { lines: d.lines.map((l) => ({ l, pts: d.free ? dragCornerFree(l.pts, l.vertex, p) : dragCorner45(l.pts, l.vertex, p, 0) })), viaAt: p.slice() };
+  const viaLine = (l) => l.arc ? (d.free ? chainSimplify([p.slice(), l.pts[1].slice()]) : chainSimplify(initialTrace(l.pts[1], p, -1, l.arcDiag).reverse()))
+    : d.free ? dragCornerFree(l.pts, l.vertex, p) : dragCorner45(l.pts, l.vertex, p, 0);
+  if (d.mode === "via") return { lines: d.lines.map((l) => ({ l, pts: viaLine(l) })), viaAt: p.slice() };
   const l = d.lines[0];
   const pts = d.mode === "segment" ? dragSegment45(l.pts, l.index, p, thresh(l)) : d.free ? dragCornerFree(l.pts, l.vertex, p) : dragCorner45(l.pts, l.vertex, p, thresh(l));
   return { lines: [{ l, pts }] };
 }
 function dragObstacles(ctx, d, layer) {
   let O = d.obs.get(layer); if (O) return O;
-  O = routeObstacles(ctx.doc, settingsOf(ctx), d.netKey, layer, d.netKey ? null : d.ids); d.obs.set(layer, O); return O;
+  O = routeObstacles(ctx.doc, settingsOf(ctx), d.netKey, layer, d.netKey ? null : d.ids, d.excl); d.obs.set(layer, O); return O;
 }
 /** NODE::CheckColliding for a drag solution: every obstacle a dragged line or the dragged via violates. */
 function solutionHits(ctx, d, sol) {
@@ -937,6 +965,64 @@ function walkSolution(ctx, d, sol) {
   }
   return Object.assign({}, sol, { lines });
 }
+// ---- OPTIMIZER as DRAGGER::optimizeAndUpdateDraggedLine runs it: MERGE_SEGMENTS | MERGE_COLINEAR (smooth_dragged_segments),
+// the vertex under the cursor preserved, the changes kept inside the area the drag changed (optimize_entire_dragged_track off)
+const CORNER_COST = [5, 10, 30, 50, 60];   // COST_ESTIMATOR::CornerCost by DIRECTION_45::Angle: straight, obtuse, right, acute, half full
+function cornerCost(pts) { let t = 0; for (let i = 0; i + 2 < pts.length; i++) { const d1 = dir8(pts[i], pts[i + 1]), d2 = dir8(pts[i + 1], pts[i + 2]); t += d1 < 0 || d2 < 0 ? 100 : CORNER_COST[dirAngle(d1, d2)]; } return t; }
+const segPtDist = (a, b, p) => distSeg(p[0], p[1], a[0], a[1], b[0], b[1]);
+/** LINE::ChangedArea: the box around the part of `pts` that differs from `orig`, grown by the width (null when nothing changed). */
+function changedArea(pts, orig, w) {
+  const self = simplifyPts(pts), other = simplifyPts(orig); const ns = self.length, no = other.length, n = Math.min(ns, no);
+  let iStart = -1, iEndS = -1, iEndO = -1;
+  for (let i = 0; i < n; i++) if (!peq(self[i], other[i])) { if (i !== n - 1) { if (segPtDist(self[i], self[i + 1], other[i]) > PEPS) { iStart = i; break; } } else { iStart = i; break; } }
+  for (let i = 0; i < n; i++) if (!peq(self[ns - 1 - i], other[no - 1 - i])) { iEndS = ns - 1 - i; iEndO = no - 1 - i; break; }
+  if (iStart < 0) iStart = n; if (iEndS < 0) iEndS = ns - 1; if (iEndO < 0) iEndO = no - 1;
+  let box = null; const ext = (p) => { box = box ? [Math.min(box[0], p[0]), Math.min(box[1], p[1]), Math.max(box[2], p[0]), Math.max(box[3], p[1])] : [p[0], p[1], p[0], p[1]]; };
+  for (let i = iStart; i <= iEndS; i++) ext(self[i]); for (let i = iStart; i <= iEndO; i++) ext(other[i]);
+  return box ? [box[0] - w, box[1] - w, box[2] + w, box[3] + w] : null;
+}
+const inBox = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
+/** OPTIMIZER::mergeStep's constraints: PRESERVE_VERTEX_CONSTRAINT and AREA_CONSTRAINT (strict) for replacing vertices v1..v2. */
+function mergeAllowed(path, v1, v2, bypass, anchor, area) {
+  let covers = false; for (let i = v1; i < v2; i++) if (segPtDist(path[i], path[i + 1], anchor) <= 1e-6) { covers = true; break; }
+  if (covers) { let keeps = false; for (let i = 0; i + 1 < bypass.length; i++) if (segPtDist(bypass[i], bypass[i + 1], anchor) <= 1e-6) { keeps = true; break; } if (!keeps) return false; }
+  const p1 = path[v1], p2 = path[v2], in1 = inBox(area, p1), in2 = inBox(area, p2);
+  if (in1 && in2) return true;
+  const horiz = (a0, a1, b0, b1) => { const d1 = dir8(a0, a1), d2 = dir8(b0, b1); return d1 >= 0 && d1 === d2; };   // SEG::Angle(...).IsHorizontal(): the bypass carries on the kept segment
+  if (v1 < path.length - 1 && !in1 && in2 && inBox(area, path[v1 + 1])) return horiz(bypass[0], bypass[1], path[v1], path[v1 + 1]);
+  if (in1 && !in2 && inBox(area, path[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path[v2 - 1], path[v2]);
+  return false;
+}
+/**
+ * DRAGGER::optimizeAndUpdateDraggedLine: OPTIMIZER::mergeFull (each run of segments replaced by the cheaper of the two 45°
+ * two-segment bypasses when it is clear and the corner cost drops) then mergeColinear, the cursor's vertex kept, the
+ * changes kept to the area the drag touched.
+ */
+function optimizeDragged(O, pts, orig, p, w) {
+  if (pts.length < 3) return pts;
+  // bestAnchorForPoint: the cursor's vertex, or the nearest point of the line, split in there
+  let anchor = null, at = -1, bd = Infinity;
+  for (let i = 0; i + 1 < pts.length; i++) { const a = pts[i], b = pts[i + 1]; const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0; const q = rp([a[0] + k * dx, a[1] + k * dy]); const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; anchor = q; at = i; } }
+  let path = pts.map((q) => q.slice()); if (!path.some((q) => peq(q, anchor))) path.splice(at + 1, 0, anchor);
+  const area = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
+  const r = w / 2; path = simplifyPts(path); let step = path.length - 2;
+  for (let guard = 0; guard < 200; guard++) {
+    const nSegs = path.length - 1; if (step > nSegs - 2) step = nSegs - 2; if (step < 1) break;
+    const costOrig = cornerCost(path); let picked = null;
+    for (let n = 0; n < nSegs - step && !picked; n++) {
+      const a = path[n], b = path[n + step + 1]; const cands = [null, null], cost = [Infinity, Infinity];
+      for (let i = 0; i < 2; i++) {
+        const bypass = initialTrace(a, b, -1, i === 1); if (bypass.length < 2) continue;
+        if (!pathClear(O, bypass, r) || !mergeAllowed(path, n, n + step + 1, bypass, anchor, area)) continue;
+        cands[i] = simplifyPts(path.slice(0, n).concat(bypass, path.slice(n + step + 2))); cost[i] = cornerCost(cands[i]);
+      }
+      if (cost[0] < costOrig && cost[0] < cost[1]) picked = cands[0]; else if (cost[1] < costOrig) picked = cands[1];
+    }
+    if (picked) path = picked; else step--;
+    if (!step) break;
+  }
+  return simplifyPts(path);   // mergeColinear
+}
 /**
  * DRAGGER::Drag: free angle (and a drag that started in violation) marks obstacles - the step is taken, its status is
  * whether it is clear; walk around takes a step only when it is clear (walking around what it crosses), otherwise the
@@ -947,7 +1033,8 @@ function dragTo(ctx, d, p) {
   const raw = dragSolution(d, p);
   if (d.free || d.forceMark) { d.sol = raw; d.hits = solutionHits(ctx, d, raw); d.status = !d.hits.length; d.lastValid = p.slice(); return true; }
   const viaClear = !raw.viaAt || !solutionHits(ctx, d, { lines: [], viaAt: raw.viaAt }).length;
-  const walked = viaClear ? walkSolution(ctx, d, raw) : null;
+  let walked = viaClear ? walkSolution(ctx, d, raw) : null;
+  if (walked && (d.mode !== "via" || walked !== raw)) walked = Object.assign({}, walked, { lines: walked.lines.map(({ l, pts }, i) => (d.mode === "via" && pts === raw.lines[i].pts) ? { l, pts } : { l, pts: optimizeDragged(dragObstacles(ctx, d, l.layer), pts, l.pts, p, l.width) }) });
   if (walked) { d.sol = walked; d.hits = []; d.status = true; d.lastValid = p.slice(); return true; }
   if (first) { d.forceMark = true; d.sol = raw; d.hits = solutionHits(ctx, d, raw); d.status = !d.hits.length; d.lastValid = p.slice(); return true; }
   d.status = true; d.hits = []; return false;   // the previous solution stays
@@ -959,13 +1046,17 @@ function dragChanges(ctx, d) {
     const olds = l.ids.map((id) => doc.items.get(id)).filter(Boolean); const kept = new Set();
     const fresh = [];
     for (let i = 0; i + 1 < pts.length; i++) {
-      const a = pts[i], b = pts[i + 1];
+      const a = pts[i], b = pts[i + 1]; if (peq(a, b)) continue;
       const same = olds.find((o) => !kept.has(o.id) && (() => { const [p, q] = trackEnds(o); return (peq(p, a) && peq(q, b)) || (peq(p, b) && peq(q, a)); })());
       if (same) kept.add(same.id); else fresh.push([a, b]);
     }
     for (const o of olds) if (!kept.has(o.id)) changes.push(removedChange(o));
-    for (const [a, b] of fresh) {   // a new segment carries the dragged one's own attributes (locked, tstamp-less uuid fresh)
-      const tmpl = olds[0] ? clone(olds[0].node) : segmentNode(doc, a, b, l.width, l.layer, l.net);
+    // a new segment carries the dragged segment's own attributes (its lock state; a fresh uuid) — the grabbed segment
+    // when it is on this line, otherwise the line's own segments (all alike: a locked one ends a line); an arc's new
+    // stub is a plain track of the arc's width, layer and net
+    const own = olds.find((o) => o.id === d.id) || olds[0];
+    for (const [a, b] of fresh) {
+      const tmpl = own ? clone(own.node) : segmentNode(doc, a, b, l.width, l.layer, l.net);
       const u = K.kid(tmpl, "uuid"); if (u) tmpl.splice(tmpl.indexOf(u), 1);
       K.kid(tmpl, "start").splice(1, 2, r6(a[0]), r6(a[1])); K.kid(tmpl, "end").splice(1, 2, r6(b[0]), r6(b[1]));
       changes.push(addedChange(doc, tmpl, l.net));
@@ -1099,6 +1190,7 @@ function fixHead(ctx) {
   const changes = []; for (let i = 0; i + 1 < pts.length; i++) changes.push(addedChange(ctx.doc, segmentNode(ctx.doc, pts[i], pts[i + 1], rt.width, rt.layer, rt.net), rt.net));
   const ids = changes.map((c) => c.id);
   if (rt.split) { changes.push(...splitChanges(ctx.doc, rt.split)); rt.split = null; }
+  if (rt.endSplit) { changes.push(...splitChanges(ctx.doc, rt.endSplit)); rt.endSplit = null; }
   const end = pts[pts.length - 1].slice(), lastDir = dir8(pts[pts.length - 2], end);
   rt.legs.push({ ids, from: rt.last.slice(), layer: rt.layer });
   ctx.commit(changes, "route");
@@ -1190,7 +1282,8 @@ function routeClick(ctx, hv, mm) {
   if (!samePt(p, rt.cursor || rt.last)) { rt.cursor = p.slice(); updateHead(ctx); }
   // landing on the routed net (a pad, via or track end) ends the trace once the walk reaches it, as in KiCad
   const lands = hv.snap && rt.netKey && sameNet(hv.snap.net, rt.net) && rt.reached && samePt(rt.target, [hv.x, hv.y]);
-  if (!fixHead(ctx)) { ctx.requestRender(); return; }
+  if (lands && hv.snap.kind === "trackMid" && !(rt.split && rt.split.id === hv.snap.id)) { const it = ctx.doc.items.get(hv.snap.id); if (it) rt.endSplit = { id: it.id, point: [hv.x, hv.y], node: clone(it.node) }; }
+  if (!fixHead(ctx)) { rt.endSplit = null; ctx.requestRender(); return; }
   if (lands) { const done = S.route; S.route = null; routeUnhighlight(ctx, done); sizesOf(ctx).endRoute(); refreshChip(ctx); }
   ctx.requestRender();
 }
@@ -1303,10 +1396,10 @@ const distToItem = (it, p) => { if (it.kind === "via") { const a = pt(it.node, "
  * ROUTER_TOOL::InlineDrag: the item nearest the grab point leads (snapped onto it), the other selected tracks follow with
  * the same displacement (MULTI_DRAGGER), the dragged net is highlighted.  S.drag = { subs, tool, bySelect, moved }.
  */
-function beginInlineDrag(ctx, its, mm, free, how) {
+function beginInlineDrag(ctx, its, mm, free, how, lockOk) {
   if (!its || !its.length) return false;
-  if (its.some((it) => isLocked(it.node)) && !overrideLocks()) { ctx.toast("Locked — tick Override locks to move it", 2500); return false; }
   const sorted = its.slice().sort((a, b) => distToItem(a, mm) - distToItem(b, mm));
+  if (!lockOk && isLocked(sorted[0].node) && !overrideLocks()) return askDragLocked(ctx, () => beginInlineDrag(ctx, its, mm, free, "tool", true));
   const lead = dragStart(ctx, sorted[0], mm, free); if (!lead) return false;
   const subs = [lead], taken = new Set(lead.ids);
   for (const it of sorted.slice(1)) {
@@ -1316,10 +1409,22 @@ function beginInlineDrag(ctx, its, mm, free, how) {
     if (d.mode !== "segment" && !free) d.mode = "segment";
     d.ids.forEach((id) => taken.add(id)); subs.push(d);
   }
+  if (subs.length > 1) { const excl = new Set(); for (const d of subs) d.ids.forEach((id) => excl.add(id)); for (const d of subs) { d.excl = excl; d.obs = new Map(); } }   // the other dragged lines are not where they were
   cancelOps(); S.violations = null;
   S.drag = { subs, tool: how === "tool", bySelect: how !== "tool", moved: false, cursor: lead.start.slice(), appSel: how === "app" };   // a left-drag commits on release, D / G on the next click
   dragHighlight(ctx, lead);
   ctx.requestRender(); return true;
+}
+/**
+ * ROUTER_TOOL::performDragging: a drag that starts on a locked item asks first (KIDIALOG "The selected item is locked.",
+ * OK labelled "Drag Anyway"); the drag then follows the cursor until the next click, as D does.
+ */
+function askDragLocked(ctx, go) {
+  const kd = KD(); if (!kd || typeof document === "undefined") { ctx.toast("The selected item is locked."); return false; }
+  kd.open({ title: "Confirmation", width: 360, okLabel: "Drag Anyway",
+    build(body) { const p = document.createElement("p"); p.style.margin = "4px 0"; p.textContent = "The selected item is locked."; body.appendChild(p); },
+    ok() { go(); } });
+  return true;
 }
 /** NeighboringSegmentFilter: the track or via under the cursor when nothing is selected. */
 function dragCandidate(ctx, p) {
@@ -1340,7 +1445,34 @@ function dragMove(ctx, mm) {
   D.cursor = mm.slice(); const lead = D.subs[0];
   if (!D.moved && peq(p, lead.start)) return;
   D.moved = true; const dx = p[0] - lead.start[0], dy = p[1] - lead.start[1];
-  for (const d of D.subs) dragTo(ctx, d, d === lead ? p : rp([d.start[0] + dx, d.start[1] + dy]));
+  const done = [];
+  for (const d of D.subs) {
+    const prev = { sol: d.sol, lastValid: d.lastValid, hits: d.hits, status: d.status };
+    dragTo(ctx, d, d === lead ? p : rp([d.start[0] + dx, d.start[1] + dy]));
+    // MULTI_DRAGGER drags the lines one after another in one node: each meets the ones already moved
+    const peers = peerHits(ctx, d, done);
+    if (peers.length) {
+      if (d.free || d.forceMark) { d.hits = (d.hits || []).concat(peers); d.status = false; }
+      else Object.assign(d, prev);   // walk around: the previous solution stays
+    }
+    done.push(d);
+  }
+}
+/** Where a sub-drag's lines (and via) break clearance with lines of another net already moved in this step. */
+function peerHits(ctx, d, others) {
+  if (!others.length) return []; const s = settingsOf(ctx); const out = [];
+  const segs = (pts, r) => pts.length === 1 ? [{ t: "circle", x: pts[0][0], y: pts[0][1], r }] : pts.slice(0, -1).map((a, i) => ({ t: "seg", a, b: pts[i + 1], r }));
+  const mine = d.sol.lines.map(({ l, pts }) => ({ layer: l.layer, net: l.netKey, shapes: segs(pts, l.width / 2) }));
+  if (d.sol.viaAt && d.via) { const copper = ctx.doc.copper.length ? ctx.doc.copper : ["F.Cu", "B.Cu"]; for (const L of viaLayers(d.via.node, copper)) mine.push({ layer: L, net: d.netKey, shapes: [{ t: "circle", x: d.sol.viaAt[0], y: d.sol.viaAt[1], r: viaNow(d.via.node).size / 2 }] }); }
+  for (const o of others) for (const { l, pts } of o.sol.lines) {
+    if (pts.length < 1) continue;
+    for (const m of mine) {
+      if (m.layer !== l.layer || (m.net && m.net === l.netKey)) continue;
+      const clr = Math.max(netClearance(s, m.net), netClearance(s, l.netKey), s.minClearance || 0);
+      for (const b of segs(pts, l.width / 2)) if (m.shapes.some((a) => shapeGap(a, b) < clr - ROUTE_EPS)) { out.push({ id: l.ids[0], kind: "segment", net: l.netKey, shape: b, bbox: shapeBBox(b), clr }); break; }
+    }
+  }
+  return out;
 }
 /** The changes a drag commits (FixRoute for each sub-drag), or null when any of them refuses. */
 function dragFixChanges(ctx, d, force) {
@@ -1448,13 +1580,12 @@ function finishSelectMove(ctx, commit, force) {
     applySelection(ctx, []); ctx.requestRender(); return;
   }
   if (!commit || !m.moved || (!dx && !dy)) { ctx.requestRender(); return; }
-  const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
-  if (m.conns && m.conns.length) {
-    const lines = connLines(m, dx, dy); const s = settingsOf(ctx); const hits = [];
-    for (const { l, pts } of lines) hits.push(...pathHits(routeObstacles(ctx.doc, s, l.netKey, l.layer, l.netKey ? null : new Set(l.ids)), pts, l.width / 2));
-    if (hits.length && !force) { showViolations(hits, lines[0].pts[0]); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }   // COMPONENT_DRAGGER::FixRoute: refused while it collides (Ctrl+click forces)
-    changes.push(...dragChanges(ctx, { sol: { lines } }));
+  if (m.conns && !force) {   // COMPONENT_DRAGGER::FixRoute: refused while the dragged items collide (Ctrl+click forces)
+    moveApply(ctx, m, dx, dy); const hits = componentDragHits(ctx, m, dx, dy); moveApply(ctx, m, 0, 0); S.rworld = null;
+    if (hits.length) { showViolations(hits, hits.at || cursorPoint(ctx)); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }
   }
+  const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
+  if (m.conns && m.conns.length) changes.push(...dragChanges(ctx, { sol: { lines: connLines(m, dx, dy) } }));
   ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing ? { amend: true } : undefined);
   ctx.requestRender();
 }
@@ -1506,6 +1637,46 @@ function dragEnds(doc, m) {
       m.conns.push({ l: ln, vertex: atFirst ? 0 : ln.pts.length - 1 }); break;
     }
   }
+}
+/**
+ * NODE::CheckColliding( m_draggedItems ) for a component drag, with the document already at the dragged offset: the
+ * moved pads and the re-bent attached lines against everything else at its place after the drag (the attached lines'
+ * old shapes are gone from the node, the footprint's pads are where they were dropped).  Returns the obstacles hit,
+ * with `at` the first place a hit was found.
+ */
+function componentDragHits(ctx, m, dx, dy) {
+  const doc = ctx.doc, s = settingsOf(ctx); S.rworld = null;
+  const lines = connLines(m, dx, dy); const gone = new Set(); for (const c of m.conns || []) for (const id of c.l.ids) gone.add(id);
+  const moved = new Set(m.ids); const hits = new Set(); let at = null;
+  const hit = (ob, p) => { if (!hits.has(ob)) { hits.add(ob); if (!at) at = p; } };
+  const segsOf = (pts) => pts.slice(0, -1).map((a, i) => ({ t: "seg", a, b: pts[i + 1] }));
+  // the moved lines against the board, and against each other when their nets differ
+  lines.forEach(({ l, pts }, i) => {
+    if (pts.length < 2) return; const r = l.width / 2;
+    for (const ob of pathHits(routeObstacles(doc, s, l.netKey, l.layer, l.netKey ? null : new Set(l.ids)), pts, r)) if (!gone.has(ob.id)) hit(ob, pts[0]);
+    lines.forEach((o, j) => {
+      if (j <= i || o.l.layer !== l.layer || o.pts.length < 2 || (l.netKey && o.l.netKey === l.netKey)) return;
+      const clr = Math.max(netClearance(s, l.netKey), netClearance(s, o.l.netKey), s.minClearance || 0);
+      for (const a of segsOf(pts)) for (const b of segsOf(o.pts)) if (shapeGap(Object.assign({ r }, a), Object.assign({ r: o.l.width / 2 }, b)) < clr - ROUTE_EPS) {
+        const shape = Object.assign({ r: o.l.width / 2 }, b); hit({ id: o.l.ids[0], kind: "segment", net: o.l.netKey, shape, bbox: shapeBBox(shape), clr }, a.a);
+      }
+    });
+  });
+  // the moved pads against the board (other than their own footprint and the lines that were re-bent) and the new lines
+  for (const c of routerWorld(doc).conds) {
+    if (c.kind !== "pad" || !moved.has(c.id) || isFreePad(c.pad)) continue;
+    for (const layer of c.layers) {
+      const O = routeObstacles(doc, s, c.net, layer, null);
+      obstaclesNear(O, c.bbox, 0, (ob) => { if (!moved.has(ob.id) && !gone.has(ob.id) && ob.kind !== "keepout" && shapeGap(c.shape, ob.shape) < ob.clr - ROUTE_EPS) hit(ob, [c.pad.x, c.pad.y]); return false; });
+      for (const { l, pts } of lines) {
+        if (l.layer !== layer || pts.length < 2 || (c.net ? c.net === l.netKey : !l.netKey)) continue;
+        const clr = Math.max(netClearance(s, l.netKey), netClearance(s, c.net), s.minClearance || 0);
+        for (const sg of segsOf(pts)) { const shape = Object.assign({ r: l.width / 2 }, sg); if (shapeGap(c.shape, shape) < clr - ROUTE_EPS) hit({ id: l.ids[0], kind: "segment", net: l.netKey, shape, bbox: shapeBBox(shape), clr }, [c.pad.x, c.pad.y]); }
+      }
+    }
+  }
+  S.rworld = null;
+  const out = Array.from(hits); out.at = at; return out;
 }
 /** The attached lines at a component drag's offset (LINE::DragCorner of the attached end, 45°). */
 function connLines(m, dx, dy) { return (m.conns || []).map((c) => { const p = c.l.pts[c.vertex]; return { l: c.l, pts: dragCorner45(c.l.pts, c.vertex, rp([p[0] + dx, p[1] + dy]), 0) }; }); }
@@ -2378,16 +2549,23 @@ function routeClearance(s, netKey, ob) {
 }
 /**
  * The obstacles a route on `layer` meets: everything on the layer that is not the routed net's copper.  Pads without a
- * net are free pads (they collide with nothing); other net-less copper collides with every route but the route's own
- * items (`own`: the start item and the fixed segments of a route that has no net).
+ * net block every route with a net, free pads block nothing; other net-less copper collides with every route but the
+ * route's own items (`own`: the start item and the fixed segments of a route that has no net).
  */
-function routeObstacles(doc, s, netKey, layer, own) {
+/** PAD::IsFreePad: a pin of type free whose net is still its own "unconnected-(…)" net. */
+function isFreePad(p) {
+  const t = p && p.node && K.kid(p.node, "pintype"); const n = p && p.net;
+  return !!t && K.str(t[1]) === "free" && !!n && /^(.*\/)?unconnected-\(/.test(n.name || "");
+}
+function routeObstacles(doc, s, netKey, layer, own, skip) {
   const W = routerWorld(doc); const out = [];
   const take = (o, net) => { const ob = { id: o.id, kind: o.kind, net: net || "", shape: o.shape, bbox: o.bbox, src: o }; ob.clr = routeClearance(s, netKey, ob); out.push(ob); };
   for (const c of W.conds) {
-    if (!c.layers.has(layer)) continue;
+    if (!c.layers.has(layer) || (skip && skip.has(c.id) && c.kind !== "pad")) continue;
     if (netKey && c.net === netKey) continue;
-    if (c.kind === "pad" && !c.net) continue;
+    // PNS ITEM::collideSimple: a net-less pad is the orphaned net's copper, an obstacle to every routed net (only a
+    // net-less route shares its net); a free pad (PAD::IsFreePad) collides with nothing
+    if (c.kind === "pad" && (!c.net ? !netKey : isFreePad(c.pad))) continue;
     if (own && own.has(c.id) && c.kind !== "pad") continue;
     take(c, c.net);
   }
@@ -3889,6 +4067,10 @@ const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V v
  */
 function ghostSegs() {
   const rt = S.route;
+  // a drag in progress (the router's dragger, or a footprint's attached lines) travels the same way
+  const lineSegs = (lines) => { const out = []; for (const { l, pts } of lines) for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], l.width]); return out; };
+  if (!rt && S.drag && S.drag.moved) { const out = []; for (const d of S.drag.subs) if (d.sol) out.push(...lineSegs(d.sol.lines)); return out; }
+  if (!rt && S.move && S.move.conns && S.move.conns.length && S.move.moved) return lineSegs(connLines(S.move, S.move.last[0], S.move.last[1]));
 
   if (!rt)
     return [];
@@ -4107,7 +4289,7 @@ root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
 root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
-  flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
+  flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Walk around)
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools

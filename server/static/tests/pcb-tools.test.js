@@ -1407,3 +1407,165 @@ test("point editor: Create Corner and Remove Corner (PCB_POINT_EDITOR::addCorner
   assert.notEqual(ch[1].id, "g-1", "the new half has its own uuid");
   ctx.selection = null;
 });
+
+// ---- review fixes: net-less pads, component drag clearance, arcs on a dragged via, locked neighbours, mid-track ends,
+// the dragger's optimizer, multi-drag peers, drag ghosts
+const RV_HDR = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+`;
+test("router: a pad without a net is an obstacle to every routed net (ITEM::collideSimple); a free pad is not", () => {
+  const src = RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1"))
+    (pad "2" smd rect (at 20 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-2")))
+  (footprint "MountingHole" (layer "F.Cu") (uuid "fp-2") (at 110 50)
+    (pad "1" thru_hole circle (at 0 0) (size 3 3) (drill 2) (layers "*.Cu" "*.Mask") (uuid "pad-m")))
+)`;
+  const doc = K.parseDoc(src, "kicad_pcb"); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx); P.state.layer = "F.Cu";
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [100, 50], ctx); pcb.onPointerMove(ev(), [120, 50], ctx);
+  const rt = P.state.route; assert.ok(rt.head.length > 2, "the head goes round the mounting hole pad: " + JSON.stringify(rt.head));
+  pcb.onPointerDown(ev(), [120, 50], ctx); assert.equal(P.state.route, null);
+  const ids = new Set(log.commits.at(-1).changes.map((c) => c.id));
+  assert.ok(minGapTo(doc, ids, "A") >= 0.2 - 1e-4, "clear of the net-less pad: " + minGapTo(doc, ids, "A"));
+  // PAD::IsFreePad: pin type free on its own unconnected-( net collides with nothing
+  const free = { node: K.parse(`(pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "unconnected-(U1-NC-Pad3)") (pintype "free"))`), net: { name: "unconnected-(U1-NC-Pad3)" } };
+  assert.equal(P.isFreePad(free), true);
+  assert.equal(P.isFreePad({ node: free.node, net: { name: "A" } }), false);
+});
+
+const CD_SRC = (other) => RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net "B") (uuid "pad-2")))
+  (segment (start 100 50) (end 90 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "t1"))
+${other}
+)`;
+function componentDrag(src, to) {
+  const doc = K.parseDoc(src, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(); ctx.selected = { id: "fp-1" }; ctx.selection = new Set(["fp-1"]); ctx.cursor = [100, 50];
+  pcb.onKey("d", ev(), ctx); P.selectMoveTo(ctx, to); P.finishSelectMove(ctx, true, false);
+  ctx.selected = null; ctx.selection = new Set();
+  return { doc, log };
+}
+test("component drag: clearance is checked where the footprint was dropped — its own pads never refuse, a moved pad on another net's track does", () => {
+  // the footprint's own other-net pad at its old place is no obstacle
+  let { doc, log } = componentDrag(CD_SRC(""), [104, 50]);
+  assert.equal(log.commits.length, 1, log.toasts.join()); assert.deepEqual(log.toasts, []);
+  assert.deepEqual(P.padsOf(doc.items.get("fp-1")).map((p) => [p.x, p.y]), [[104, 50], [106, 50]]);
+  // pad 2 (net B) dropped onto net C's track is refused
+  ({ doc, log } = componentDrag(CD_SRC(`  (segment (start 99 65) (end 120 65) (width 0.25) (layer "F.Cu") (net "C") (uuid "t2"))`), [98, 65]));
+  assert.equal(log.commits.length, 0); assert.deepEqual(log.toasts, ["Track violates DRC."]);
+  assert.deepEqual(P.padsOf(doc.items.get("fp-1")).map((p) => [p.x, p.y]), [[100, 50], [102, 50]]);
+  // a footprint with no attached tracks is checked too (COMPONENT_DRAGGER's dragged items are its pads)
+  const bare = RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1")))
+  (segment (start 95 60) (end 105 60) (width 0.25) (layer "F.Cu") (net "C") (uuid "t2"))
+)`;
+  ({ log } = componentDrag(bare, [100, 60]));
+  assert.equal(log.commits.length, 0); assert.deepEqual(log.toasts, ["Track violates DRC."]);
+});
+
+test("via drag: an arc ending on the via stays and a 45° stub joins it to the via's new place (ARC_T links of the joint)", () => {
+  const src = RV_HDR + `  (via (at 118 53) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "GND") (uuid "v-1"))
+  (arc (start 118 53) (mid 119 54) (end 120 53) (width 0.25) (layer "F.Cu") (net "GND") (uuid "a-1"))
+  (segment (start 118 53) (end 118 60) (width 0.25) (layer "B.Cu") (net "GND") (uuid "s-3"))
+)`;
+  const doc = K.parseDoc(src, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(["v-1"]); ctx.cursor = [118, 53];
+  pcb.onKey("d", ev(), ctx); assert.equal(P.state.drag.subs[0].lines.length, 2);
+  pcb.onPointerMove(ev(), [118, 56], ctx); pcb.onPointerDown(ev(), [118, 56], ctx);
+  const ch = log.commits.at(-1).changes; assert.ok(!ch.some((c) => c.id === "a-1"), "the arc itself is not touched");
+  assert.deepEqual(P.pt(doc.items.get("a-1").node, "start"), [118, 53]); assert.deepEqual(P.pt(doc.items.get("v-1").node, "at"), [118, 56]);
+  const fronts = [...doc.items.values()].filter((it) => it.kind === "segment" && K.kid(it.node, "layer")[1] === "F.Cu").map((it) => [P.pt(it.node, "start"), P.pt(it.node, "end")]);
+  assert.deepEqual(fronts, [[[118, 56], [118, 53]]], "the stub runs from the via to the arc");
+});
+
+test("AssembleLine stops at a locked segment; new segments take the dragged segment's own lock state", () => {
+  const hdr = RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1"))
+    (pad "2" smd rect (at 20 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-2")))
+`;
+  let doc = K.parseDoc(hdr + `  (segment (start 100 50) (end 110 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s1"))
+  (segment (start 110 50) (end 115 50) (width 0.25) (layer "F.Cu") (locked yes) (net "A") (uuid "s2"))
+  (segment (start 115 50) (end 120 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s3"))
+)`, "kicad_pcb");
+  assert.deepEqual(P.assembleLine(doc, doc.items.get("s1")).ids, ["s1"]);
+  assert.deepEqual(P.assembleLine(doc, doc.items.get("s2")).ids, ["s1", "s2", "s3"], "from a locked seed the unlocked neighbours follow (JOINT::NextSegment)");
+  let { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(["s1"]); ctx.cursor = [105, 50];
+  pcb.onKey("d", ev(), ctx); pcb.onPointerMove(ev(), [105, 47], ctx); pcb.onPointerDown(ev(), [105, 47], ctx);
+  let ch = log.commits.at(-1).changes; assert.ok(doc.items.has("s2"), "the locked neighbour survives");
+  assert.ok(!ch.some((c) => c.id === "s2" || c.id === "s3"));
+  for (const c of ch.filter((x) => x.kind === "ADDED")) assert.doesNotMatch(c.sexpr, /locked/);
+  // the line's first segment is locked: the dragged (unlocked) part does not inherit it
+  doc = K.parseDoc(hdr + `  (segment (start 100 50) (end 105 50) (width 0.25) (layer "F.Cu") (locked yes) (net "A") (uuid "s1"))
+  (segment (start 105 50) (end 112 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s2"))
+  (segment (start 112 50) (end 120 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s3"))
+)`, "kicad_pcb");
+  ({ ctx, log } = fakeCtx(doc)); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(["s3"]); ctx.cursor = [116, 50];
+  pcb.onKey("d", ev(), ctx); pcb.onPointerMove(ev(), [116, 53], ctx); pcb.onPointerDown(ev(), [116, 53], ctx);
+  ch = log.commits.at(-1).changes; assert.ok(ch.some((c) => c.kind === "ADDED"));
+  for (const c of ch.filter((x) => x.kind === "ADDED")) assert.doesNotMatch(c.sexpr, /locked/);
+  assert.ok(doc.items.has("s1"));
+});
+
+test("router: landing on the body of a same-net track ends the route there and splits the track (splitAdjacentSegments)", () => {
+  const src = RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1")))
+  (segment (start 120 40) (end 120 60) (width 0.25) (layer "F.Cu") (net "A") (uuid "t1"))
+)`;
+  const doc = K.parseDoc(src, "kicad_pcb"); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx); P.state.layer = "F.Cu";
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [100, 50], ctx);
+  pcb.onPointerMove(ev(), [120.05, 50], ctx); assert.deepEqual(P.state.route.target, [120, 50]);
+  pcb.onPointerDown(ev(), [120.05, 50], ctx);
+  assert.equal(P.state.route, null, "the route ends on the track");
+  const ch = log.commits.at(-1).changes;
+  assert.ok(ch.some((c) => c.kind === "MODIFIED" && c.id === "t1"));
+  assert.deepEqual(P.pt(doc.items.get("t1").node, "end"), [120, 50]);
+  const tails = [...doc.items.values()].filter((it) => it.kind === "segment" && JSON.stringify(P.pt(it.node, "start")) === "[120,50]" && JSON.stringify(P.pt(it.node, "end")) === "[120,60]");
+  assert.equal(tails.length, 1);
+});
+
+test("drag optimizer (MERGE_SEGMENTS | MERGE_COLINEAR, preserved anchor): no stub back over the pad, no micro-jogs", () => {
+  let doc = K.parseDoc(RV_HDR + `  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-1"))
+    (pad "2" smd rect (at 20 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pad-2")))
+  (segment (start 100 50) (end 110 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s1"))
+  (segment (start 110 50) (end 110 60) (width 0.25) (layer "F.Cu") (net "A") (uuid "s2"))
+  (segment (start 110 60) (end 120 60) (width 0.25) (layer "F.Cu") (net "A") (uuid "s3"))
+  (segment (start 120 60) (end 120 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s4"))
+)`, "kicad_pcb");
+  let { ctx } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let d = P.dragStart(ctx, doc.items.get("s2"), [110, 55], false); P.dragTo(ctx, d, [98, 55]);
+  const pts = d.sol.lines[0].pts; assert.deepEqual(pts[0], [100, 50]); assert.deepEqual(pts.at(-1), [120, 50]);
+  assert.ok(!pts.some((p) => p[1] === 50 && p[0] < 100), "no segment doubling back along y=50 past the pad: " + JSON.stringify(pts));
+  doc = K.parseDoc(RV_HDR + `  (segment (start 204.73401 119.39001) (end 204.724 119.38) (width 0.25) (layer "F.Cu") (net "A") (uuid "m0"))
+  (segment (start 204.724 119.38) (end 193.04 119.38) (width 0.25) (layer "F.Cu") (net "A") (uuid "m1"))
+  (segment (start 193.04 119.38) (end 190.5 121.92) (width 0.25) (layer "F.Cu") (net "A") (uuid "m2"))
+  (segment (start 190.5 121.92) (end 189.23 121.92) (width 0.25) (layer "F.Cu") (net "A") (uuid "m3"))
+)`, "kicad_pcb");
+  ({ ctx } = fakeCtx(doc)); pcb.onDocChanged(ctx);
+  d = P.dragStart(ctx, doc.items.get("m1"), [199, 119.38], false);
+  for (let dy = -1; dy >= -6; dy--) {
+    P.dragTo(ctx, d, [199, 119.38 + dy]); const q = d.sol.lines[0].pts;
+    for (let i = 0; i + 1 < q.length; i++) assert.ok(Math.hypot(q[i + 1][0] - q[i][0], q[i + 1][1] - q[i][1]) > 0.1, "dy " + dy + ": " + JSON.stringify(q));
+    assert.deepEqual(q[0], [204.73401, 119.39001]); assert.deepEqual(q.at(-1), [189.23, 121.92]);
+  }
+  // LINE::ChangedArea: the box of what differs, grown by the width; nothing changed gives null
+  assert.equal(P.changedArea([[0, 0], [10, 0]], [[0, 0], [10, 0]], 0.25), null);
+  assert.deepEqual(P.changedArea([[0, 0], [2, 2], [8, 2], [10, 0]], [[0, 0], [10, 0]], 0.25), [1.75, 1.75, 8.25, 2.25]);
+});
+
+test("multi-drag: followers of another net meet the lines already moved, not their old places; the drag ghosts to peers", () => {
+  const doc = K.parseDoc(RV_HDR + `  (segment (start 100 50) (end 110 50) (width 0.25) (layer "F.Cu") (net "A") (uuid "s1"))
+  (segment (start 100 51) (end 110 51) (width 0.25) (layer "F.Cu") (net "B") (uuid "s2"))
+)`, "kicad_pcb");
+  const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.state.sel = new Set(["s1", "s2"]); ctx.cursor = [105, 50];
+  pcb.onKey("d", ev(), ctx); assert.equal(P.state.drag.subs.length, 2);
+  pcb.onPointerMove(ev(), [105, 52], ctx);
+  for (const d of P.state.drag.subs) assert.equal(d.status, true);
+  assert.deepEqual(P.state.drag.subs.map((d) => d.sol.lines[0].pts[1][1]), [52, 53], "both lines move up together, 1 mm apart");
+  assert.ok(pcb.ghostSegs().length >= 2, "the drag in progress is offered to peers");
+  pcb.onPointerDown(ev(), [105, 52], ctx); assert.equal(log.commits.at(-1).label, "drag track");
+  assert.deepEqual(pcb.ghostSegs(), []);
+});
