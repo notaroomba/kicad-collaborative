@@ -192,6 +192,22 @@ const bad = JSON.stringify((await requests()).pop().body.messages.at(-1));
 check('invalid edit: reason goes back to the model', /R99/.test(bad) && /is_error|valid\\":false|not found|no component/i.test(bad), bad.slice(0, 300));
 check('invalid edit: no card', (await a.locator('[data-proposal]').count()) === cards);
 
+// ---- a schematic proposal says whether it changes connections
+await post(`${AI}/__ctl/reset`);
+await script([
+  { content: [{ type: 'tool_use', id: 'toolu_c1', name: 'propose_changes', input: { title: 'Move R1 alone', edits: [{ op: 'move', ref: 'R1', x: 200.66, y: 120.65 }] } }] },
+  { content: [{ type: 'tool_use', id: 'toolu_c2', name: 'propose_changes', input: { title: 'Note', edits: [{ op: 'add_text', text: 'Output stage', x: 150, y: 50 }] } }] },
+  { content: [{ type: 'text', text: 'Two cards.' }] },
+]);
+await ask(a, 'Tidy R1.');
+const conn = (await requests()).pop().body.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((x) => x.type === 'tool_result');
+const c1 = conn.find((x) => x.tool_use_id === 'toolu_c1'), c2 = conn.find((x) => x.tool_use_id === 'toolu_c2');
+check('a move that leaves wires behind is reported as changing connections', !!c1 && /"changed"/.test(c1.content) && /R1\.[12]: no longer connected/.test(c1.content), c1 && c1.content.slice(0, 400));
+check('an edit that touches no wiring is reported unchanged', !!c2 && /unchanged/.test(c2.content), c2 && c2.content.slice(0, 300));
+check('the cards say so too', (await a.locator('[data-proposal] .conn.changed').count()) === 1 && (await a.locator('[data-proposal] .conn:not(.changed)').count()) >= 1);
+await shot(a, '06b-connectivity');
+for (const c of await a.locator('[data-proposal]').all()) { const r = c.getByRole('button', { name: /reject/i }); if (await r.count()) await r.click(); }
+
 // ---- a proposal goes stale when the item changes underneath it
 await post(`${AI}/__ctl/reset`);
 await script([

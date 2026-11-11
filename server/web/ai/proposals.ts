@@ -8,7 +8,7 @@
 // new items are serialised without being added.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry } from "./design";
+import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -23,6 +23,8 @@ export interface Proposal {
   basis: Record<string, string>;
   status: "pending" | "accepted" | "rejected" | "stale";
   note?: string;
+  /** schematics: how pin connections differ once applied. Empty: unchanged. Absent: not checked. */
+  connectivity?: string[];
 }
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -252,7 +254,35 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
   });
   if (problems.length) throw new ToolError(`No proposal was shown, because ${problems.length === 1 ? "an edit is" : "some edits are"} invalid:\n- ${problems.join("\n- ")}`);
   return { id: "p" + Math.random().toString(36).slice(2, 9), title: String(input.title || "Proposed change").slice(0, 120), rationale: String(input.rationale || "").slice(0, 600),
-    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending" };
+    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
+}
+
+/**
+ * Which pins end up connected differently if the changes are applied to a schematic: the nets are
+ * worked out on the sheet as it is and on a scratch copy with the changes, and compared pin by pin.
+ * This is what catches a moved symbol that left its wires behind, or a wire that lands on a pin it
+ * should not. Undefined when the check itself could not run.
+ */
+function connectivityDiff(doc: any, changes: any[]): string[] | undefined {
+  try {
+    const k = K(); const ed = ED();
+    const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
+    for (const c of changes) { if (c.kind === "REMOVED") scratch.items.delete(c.id); else k.applyChange(scratch, c, ed.IU); }
+    const groups = (d: any) => {
+      const of = new Map<string, string[]>();
+      for (const n of schNets(d)) { const pins = n.pins.map((q) => `${q.ref}.${q.number}`); for (const q of pins) of.set(q, pins); }
+      return of;
+    };
+    const before = groups(doc), after = groups(scratch); const out: string[] = []; const seen = new Set<string>();
+    for (const [pin, was] of before) {
+      const now = after.get(pin); if (!now) continue;   // the part was removed: said by the edit itself
+      const lost = was.filter((q) => after.has(q) && !now.includes(q)), gained = now.filter((q) => before.has(q) && !was.includes(q));
+      if (!lost.length && !gained.length) continue;
+      const key = [pin, ...lost, "|", ...gained].sort().join(","); if (seen.has(key)) continue; seen.add(key);
+      out.push(`${pin}: ${lost.length ? `no longer connected to ${lost.slice(0, 6).join(", ")}` : ""}${lost.length && gained.length ? "; " : ""}${gained.length ? `now connected to ${gained.slice(0, 6).join(", ")}` : ""}`);
+    }
+    return out.slice(0, 24);
+  } catch (e) { console.warn("assistant: connectivity check failed", e); return undefined; }
 }
 
 /** Why a pending proposal can no longer be applied as it stands, or null when it can. */

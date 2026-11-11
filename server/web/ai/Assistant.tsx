@@ -16,6 +16,7 @@ const QUICK: Record<"sch" | "pcb", [string, string][]> = {
   sch: [
     ["Review this sheet", "Review this schematic sheet. Read the components, the nets and the ERC results, then tell me what would stop it working, what is risky, and what is only polish, most important first."],
     ["Check the parts against their datasheets", "For the ICs and other non-trivial parts on this sheet, read their datasheets and check the design against them: pin functions, supply and decoupling requirements, absolute maximum ratings, and the recommended application circuit. Say which page each finding comes from."],
+    ["Tidy this schematic", "Tidy this schematic so it reads like a professional production schematic: signal flow left to right, supplies up and ground down, parts grouped by function and aligned on the grid, decoupling next to its pins, short straight wires with labels instead of long runs, and readable reference and value text. Connectivity must not change. Start with the block that needs it most and propose the changes one block at a time."],
     ["Explain the selection", "Explain what the selected part or circuit does and how it is connected here."],
     ["Find missing decoupling and pull-ups", "Check every IC on this sheet for missing or wrong decoupling capacitors and for pins that need a pull-up or pull-down and do not have one."],
   ],
@@ -53,6 +54,9 @@ function ProposalCard({ id }: { id: string }) {
       {p.rationale ? <div className="why">{p.rationale}</div> : null}
       <div className="doc">{p.docPath} · {p.lines.length} edit{p.lines.length === 1 ? "" : "s"}</div>
       <ul>{p.lines.map((l, i) => <li key={i} className={l.kind}><i>{mark[l.kind]}</i><span>{l.text}</span></li>)}</ul>
+      {p.connectivity ? (p.connectivity.length
+        ? <div className="conn changed" title={p.connectivity.join("\n")}>Changes {p.connectivity.length} connection{p.connectivity.length === 1 ? "" : "s"}: {p.connectivity.slice(0, 3).join(" · ")}{p.connectivity.length > 3 ? " …" : ""}</div>
+        : <div className="conn">Connections unchanged</div>) : null}
       {pending ? (
         <footer>
           <button type="button" className={cx("ai-btn", previewId === p.id && "on")} disabled={!!blocked && !/edited since|deleted since/.test(blocked)} onClick={() => preview(previewId === p.id ? null : p.id)}>Preview</button>

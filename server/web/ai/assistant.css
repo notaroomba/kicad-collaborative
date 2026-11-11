@@ -66,11 +66,13 @@
 .ai-card.accepted header .tag { color: var(--wire); }
 .ai-card .why { padding: 2px 8px 0; color: var(--ink-2); line-height: 1.45; }
 .ai-card .doc { padding: 3px 8px 0; color: var(--ink-3); font-size: 10px; font-family: var(--mono); }
+.ai-card .conn { padding: 4px 8px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 11px; }
+.ai-card .conn.changed { color: var(--warn); }
 .ai-card ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 170px; overflow: auto; border-top: 1px solid var(--line); }
 .ai-card li { display: flex; gap: 6px; padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); line-height: 1.35; overflow-wrap: anywhere; }
 .ai-card li:last-child { border-bottom: 0; }
 .ai-card li i { flex: none; width: 10px; font-style: normal; font-family: var(--mono); font-weight: 700; }
-.ai-card li.add i { color: #1f9d55; } .ai-card li.modify i { color: #d98e04; } .ai-card li.remove i { color: #d64545; }
+.ai-card li.add i { color: var(--wire); } .ai-card li.modify i { color: var(--warn); } .ai-card li.remove i { color: var(--err); }
 .ai-card footer { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--bench); }
 .ai-card footer .msg { flex: 1; min-width: 0; color: var(--ink-2); font-size: 11px; }
 .ai-btn { padding: 3px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
