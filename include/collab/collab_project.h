@@ -107,6 +107,20 @@ KICOMMON_API bool DownloadAndExtract( const wxString& aServer, const wxString& a
 KICOMMON_API void WriteLocalLink( const wxString& aProjectPath, const wxString& aProjectName,
                                   const wxString& aServer, const wxString& aProjectId );
 
+/**
+ * Keep what an editor needs of the server's description of a project (its id, its owner
+ * and which document each file is) beside the local copy, in
+ * <project>.collab/project.json.  With it a copy opened without a connection can still
+ * start its session: edits queue, and go out when the server is reached.
+ */
+KICOMMON_API void WriteCachedProject( const wxString& aProjectPath, const wxString& aProjectName,
+                                      const nlohmann::json& aProject );
+
+/// The description kept by WriteCachedProject for @p aProjectId, or nothing.
+KICOMMON_API std::optional<nlohmann::json> ReadCachedProject( const wxString& aProjectPath,
+                                                              const wxString& aProjectName,
+                                                              const wxString& aProjectId );
+
 /// The server project id recorded beside the local project, or empty.  aServer
 /// receives the recorded server URL.
 /**

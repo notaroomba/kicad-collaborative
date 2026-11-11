@@ -1142,7 +1142,9 @@ size_t SCH_COLLAB_SYNC::CaptureCommitBegin( COMMIT& aCommit, int aCommitFlags )
 {
     size_t count = aCommit.GetEntries().size();
 
-    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    // Captured whether or not the connection is up: an edit made while it is down waits
+    // in the outbox and goes out when it returns.
+    if( m_applyingRemote )
         return count;
 
     // Before-images (COMMIT_LINE::m_copy) are consumed during pushSchEdit, so MODIFIED
@@ -1164,7 +1166,7 @@ void SCH_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int a
 
 void SCH_COLLAB_SYNC::FlushCommitCapture()
 {
-    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    if( m_applyingRemote )
         return;
 
     flushBatch();
@@ -1173,7 +1175,7 @@ void SCH_COLLAB_SYNC::FlushCommitCapture()
 
 void SCH_COLLAB_SYNC::CaptureCommitPhase( COMMIT& aCommit, size_t aPreCount )
 {
-    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    if( m_applyingRemote )
         return;
 
     size_t count = aCommit.GetEntries().size();
@@ -1354,28 +1356,90 @@ void SCH_COLLAB_SYNC::flushBatch()
         wxString clientOpId = wxString::Format( wxS( "%s:%d" ), session.ClientId(),
                                                 ++m_opCounter );
 
-        std::optional<long long> baseSeq;
-        auto                     seqIt = m_lastAppliedSeq.find( docId );
+        // Queued before sending: an op that reaches the server but whose ack we never
+        // see must still be replayable (the server dedups it), and one made while the
+        // connection is down has nowhere else to wait.
+        m_outbox.Push( docId, clientOpId, std::move( changes ) );
 
-        if( seqIt != m_lastAppliedSeq.end() )
-            baseSeq = seqIt->second;
-
-        // Journal before sending: an op that reaches the server but whose ack
-        // we never see must still be replayable (the server dedups it).
-        m_journal.Append( docId, clientOpId, changes );
-
-        session.SendOp( docId, clientOpId, baseSeq, changes );
-
-        m_unacked[ clientOpId ] = { docId, std::move( changes ), ++m_unackedOrder };
+        if( !session.IsLive() )
+            m_offlineEdits++;
     }
 
     m_batch.clear();
+
+    pump();
+}
+
+
+void SCH_COLLAB_SYNC::pump()
+{
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    if( !session.IsLive() )
+        return;
+
+    m_outbox.Pump(
+            [&]( const COLLAB_OUTBOX::OP& aOp )
+            {
+                // Not before the catch-up of this connection has arrived for the op's
+                // document: what it holds decides whether the waiting ops are replayed
+                // (an ops tail) or folded into a merge (a snapshot).
+                if( !m_caughtUp.count( aOp.docId ) )
+                    return false;
+
+                std::optional<long long> baseSeq;
+                auto                     seqIt = m_lastAppliedSeq.find( aOp.docId );
+
+                if( seqIt != m_lastAppliedSeq.end() )
+                    baseSeq = seqIt->second;
+
+                return session.SendOp( aOp.docId, aOp.clientOpId, baseSeq, aOp.changes );
+            } );
+}
+
+
+void SCH_COLLAB_SYNC::OnConnectionChanged( bool aLive )
+{
+    if( aLive )
+    {
+        // Sheets added while the server was out of reach have no document yet.
+        retrySheetDocs();
+        return;
+    }
+
+    // Each sheet as it stands is the last state this editor and the server agreed on
+    // (give or take the ops still in the outbox, which the merge treats as local
+    // whatever the base says).  If the server has let go of the ops we miss by the time
+    // we are back, these are the bases of the merge: against the files on disk, every
+    // edit made online since the last save would read as an offline one and beat
+    // whatever a collaborator did to the same item in the meantime.
+    for( const wxString& docId : m_caughtUp )
+    {
+        std::string text = formatDoc( docId );
+
+        if( !text.empty() )
+            m_offlineBase[ docId ] = std::move( text );
+    }
+
+    m_caughtUp.clear();
+    m_outbox.MarkAllUnsent();
+
+    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+        fprintf( stderr, "COLLAB offline: connection lost, %zu op(s) waiting\n", m_outbox.Size() );
+}
+
+
+void SCH_COLLAB_SYNC::caughtUp( const wxString& aDocId )
+{
+    m_caughtUp.insert( aDocId );
+    m_offlineBase.erase( aDocId );
+    pump();
 }
 
 
 void SCH_COLLAB_SYNC::CaptureUndoRedo( PICKED_ITEMS_LIST* aList )
 {
-    if( !aList || m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    if( !aList || m_applyingRemote )
         return;
 
     for( unsigned ii = 0; ii < aList->GetCount(); ++ii )
@@ -1465,6 +1529,10 @@ void SCH_COLLAB_SYNC::OnOpsTail( const nlohmann::json& aOpsMsg )
             m_queue.push_back( std::move( op ) );
     }
 
+    // Caught up by replaying what we missed: the ops waiting here are newer than all of
+    // it (applyOp re-asserts them over each one), so they simply go out now.
+    caughtUp( docId );
+
     wxWakeUpIdle();
 }
 
@@ -1517,11 +1585,34 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
         COLLAB_SESSION::Get().SetAppliedSeq( docId, m_lastAppliedSeq[ docId ] );
 
         m_reconcilePending.erase( docId );
-        m_pendingRollback.erase( docId );
-        reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ), thenOps );
+
+        // What the server refused goes back to the server's version, whatever the base
+        // says about it.
+        std::set<KIID> refused;
+
+        if( auto pendIt = m_pendingRollback.find( docId ); pendIt != m_pendingRollback.end() )
+        {
+            refused.swap( pendIt->second );
+            m_pendingRollback.erase( pendIt );
+        }
+
+        // Everything still in the outbox is an edit made here that the snapshot may not
+        // hold.  The ones not on the wire are not replayed on top of the merge: the
+        // merge publishes the state they left instead, with a deletion made online in
+        // the meantime winning as it does everywhere else.
+        std::set<std::string> ownIds = m_outbox.TouchedIds( docId );
+        size_t                folded = m_outbox.TakeUnsent( docId ).size();
+
+        m_offlineEdits -= std::min( m_offlineEdits, folded );
+
+        reconcileFromSnapshot( docId, aSnapshotMsg.value( "file", "" ), thenOps, ownIds,
+                               refused );
+        caughtUp( docId );
     }
     else
     {
+        caughtUp( docId );
+
         // Replay the ops since the snapshot through the normal queue.
         for( const nlohmann::json& opJson : thenOps )
         {
@@ -1544,28 +1635,50 @@ void SCH_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
 
 void SCH_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
 {
-    auto it = m_unacked.find( aClientOpId );
+    COLLAB_OUTBOX::OP acked;
 
-    if( it == m_unacked.end() )
+    if( !m_outbox.Ack( aClientOpId, &acked ) )
         return;
 
     // Advance lastAppliedSeq through the queue rather than directly: broadcasts of
     // earlier remote ops may still be queued, and skipping past them would drop edits.
     PENDING_OP marker;
-    marker.docId = it->second.docId;
+    marker.docId = acked.docId;
     marker.seq = aSeq;
     marker.authorClientId = COLLAB_SESSION::Get().ClientId();
 
     m_queue.push_back( std::move( marker ) );
-    m_ownRecent[ it->second.docId ][ aSeq ] = std::move( it->second.changes );
-    m_unacked.erase( it );
-    m_journal.Ack( aClientOpId );
+    m_ownRecent[ acked.docId ][ aSeq ] = std::move( acked.changes );
 
-    if( m_baseRefreshWanted && m_unacked.empty() && !m_frame->IsContentModified() )
+    // A merge pushed changes of this document; with the last of them acknowledged the
+    // file on disk is its sync base.
+    if( m_baseRefreshAfterMerge.count( acked.docId ) && m_outbox.Count( acked.docId ) == 0 )
+        refreshBaseAfterMerge( acked.docId );
+
+    if( m_outbox.Empty() )
     {
-        m_baseRefreshWanted = false;
-        RefreshSyncBasesFromDisk();
+        if( m_baseRefreshWanted && !m_frame->IsContentModified() )
+        {
+            m_baseRefreshWanted = false;
+            RefreshSyncBasesFromDisk();
+        }
+
+        if( m_offlineEdits > 0 )
+        {
+            if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                fprintf( stderr, "COLLAB online: %zu offline op(s) sent\n", m_offlineEdits );
+
+            m_frame->ShowInfoBarMsg( wxString::Format(
+                    wxPLURAL( "Back online: %zu edit made while offline was sent.",
+                              "Back online: %zu edits made while offline were sent.",
+                              m_offlineEdits ),
+                    m_offlineEdits ) );
+            m_offlineEdits = 0;
+        }
     }
+
+    // The window has room again.
+    pump();
 
     wxWakeUpIdle();
 }
@@ -1573,18 +1686,20 @@ void SCH_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
 
 void SCH_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
 {
-    auto it = m_unacked.find( aClientOpId );
+    COLLAB_OUTBOX::OP refused;
 
-    if( it == m_unacked.end() )
+    // Rejected is as final as acked for replay purposes: the server will
+    // refuse it again on every reconnect forever.
+    if( !m_outbox.Ack( aClientOpId, &refused ) )
         return;
 
-    wxString docId = it->second.docId;
+    wxString docId = refused.docId;
 
     // Remember which items the rejected op touched: the resync snapshot
     // below carries the server's state for them.
-    if( it->second.changes.is_array() )
+    if( refused.changes.is_array() )
     {
-        for( const nlohmann::json& change : it->second.changes )
+        for( const nlohmann::json& change : refused.changes )
         {
             if( change.is_object() )
                 m_pendingRollback[ docId ].insert(
@@ -1592,11 +1707,8 @@ void SCH_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
         }
     }
 
-    m_unacked.erase( it );
-
-    // Rejected is as final as acked for replay purposes: the server will
-    // refuse it again on every reconnect forever.
-    m_journal.Ack( aClientOpId );
+    if( m_offlineEdits > 0 )
+        m_offlineEdits--;
 
     // The op was applied optimistically here; a resync (snapshot + tail)
     // restores the server's version of the document.
@@ -1605,41 +1717,16 @@ void SCH_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
         m_resyncPending[ docId ] = true;
         COLLAB_SESSION::Get().RequestResync( docId );
     }
-}
 
-
-void SCH_COLLAB_SYNC::OpenJournal( const wxString& aProjectPath, const wxString& aProjectName )
-{
-    m_journal.Open( aProjectPath, aProjectName );
-
-    // Anything left from a previous run was never acknowledged: re-stage it so
-    // the next connection replays it. The server dedups by clientOpId, so a
-    // replay of something it already has is harmless.
-    for( const COLLAB_JOURNAL::ENTRY& entry : m_journal.Pending() )
-        m_unacked[ entry.clientOpId ] = { entry.docId, entry.changes, ++m_unackedOrder };
-}
-
-
-void SCH_COLLAB_SYNC::ReplayUnacked()
-{
-    if( m_unacked.empty() )
-        return;
-
-    COLLAB_SESSION& session = COLLAB_SESSION::Get();
-
-    if( !session.IsLive() )
-        return;
-
-    wxLogTrace( traceCollab, wxS( "replaying %zu unacknowledged op(s)" ), m_unacked.size() );
-
-    for( const auto& [clientOpId, op] : m_unacked )
-        session.SendOp( op.docId, clientOpId, std::nullopt, op.changes );
+    pump();
 }
 
 
 void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
                                              const std::string& aFileText,
-                                             const nlohmann::json& aThenOps )
+                                             const nlohmann::json& aThenOps,
+                                             const std::set<std::string>& aOwnIds,
+                                             const std::set<KIID>& aRefusedIds )
 {
     SCH_SCREEN* screen = screenForDocId( aDocId );
 
@@ -1699,9 +1786,23 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
     // the board engine for the rules); without one the online version wins.
     wxString    relPath = m_pathByDocId.count( aDocId ) ? m_pathByDocId.at( aDocId )
                                                          : wxString();
-    std::string baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
-                                                         m_frame->Prj().GetProjectName(),
-                                                         relPath );
+    std::string baseText;
+
+    // After a connection lost mid-session the base is the sheet as it was when the
+    // connection went (see OnConnectionChanged), not the file on disk.
+    bool memoryBase = false;
+
+    if( auto baseIt = m_offlineBase.find( aDocId ); baseIt != m_offlineBase.end() )
+    {
+        baseText = baseIt->second;
+        memoryBase = !baseText.empty();
+    }
+
+    if( baseText.empty() )
+    {
+        baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
+                                                 m_frame->Prj().GetProjectName(), relPath );
+    }
 
     // A screen that was just rebuilt empty (see ensureSheetDocs) has nothing of its own to
     // merge: measured against the base, its emptiness would read as "this user deleted
@@ -1785,9 +1886,14 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
     // between them is the last save, not an edit made offline.  Treating it as one pushed
     // the stale file over everyone's newer work.  A file written after the base is the
     // only kind that can hold offline edits.
+    //
+    // That is a statement about the file, though.  A sheet edited since it was opened
+    // (a copy opened with the server out of reach, worked on, and joining only now) holds
+    // edits no file time knows about, and they are measured against the base like any
+    // other.
     bool localIsStale = false;
 
-    if( haveBase )
+    if( haveBase && !memoryBase && !screen->IsContentModified() )
     {
         wxFileName localFile( screen->GetFileName() );
         wxFileName baseFile( COLLAB_PROJECT::SyncBasePath( m_frame->Prj().GetProjectPath(),
@@ -1821,19 +1927,54 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
         if( ( L && ls.empty() ) || ( R && rs.empty() ) )
             continue;
 
+        // Both sides agree already, whoever changed what.
+        if( ( !L && !R ) || ( L && R && ls == rs ) )
+            continue;
+
+        // An edit of ours the server would not take: its version stands.
+        if( aRefusedIds.count( id ) )
+        {
+            if( R )
+                fromOnline.push_back( upsertChange( R, std::move( rs ) ) );
+            else
+                fromOnline.push_back( removeChange( id ) );
+
+            continue;
+        }
+
+        // An item one of our unacknowledged ops touched was changed here, whatever a
+        // comparison with the base makes of it.
+        const bool own = aOwnIds.count( id.AsStdString() ) > 0;
+
         if( !haveBase )
         {
-            if( L && !R )
+            if( own )
+            {
+                // No base to tell whether the online copy moved as well: ours is the
+                // edit known to be newer than the snapshot.
+                if( L )
+                    toOnline.push_back( upsertChange( L, std::move( ls ) ) );
+                else
+                    toOnline.push_back( removeChange( id ) );
+
+                kept++;
+            }
+            else if( L && !R )
+            {
                 fromOnline.push_back( removeChange( id ) );
-            else if( R && ( !L || ls != rs ) )
+            }
+            else
+            {
                 fromOnline.push_back( upsertChange( R, std::move( rs ) ) );
+            }
 
             continue;
         }
 
         const bool haveB = B && !bs.empty();
-        const bool localChanged = !localIsStale
-                                  && ( ( L != nullptr ) != haveB || ( L && ls != bs ) );
+        const bool localChanged = own
+                                  || ( !localIsStale
+                                       && ( ( L != nullptr ) != haveB || ( L && ls != bs ) ) );
         const bool remoteChanged = ( R != nullptr ) != haveB || ( R && rs != bs );
 
         if( !localChanged && !remoteChanged )
@@ -1855,10 +1996,6 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
                 toOnline.push_back( removeChange( id ) );
 
             kept++;
-        }
-        else if( L && R && ls == rs )
-        {
-            continue;   // the same edit on both sides
         }
         else
         {
@@ -1898,26 +2035,15 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
     // merged board instead would be wrong whenever the user then closes without saving: the
     // next merge would compare the old file with a newer base, read every collaborator's
     // change as a local edit that undoes it, and push those "edits" back to everyone.
-    {
-        bool fromDisk = false;
-
-        if( m_pathByDocId.count( aDocId ) )
-        {
-            const wxString& rel = m_pathByDocId.at( aDocId );
-            wxFileName      onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
-                                    + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
-
-            if( onDisk.FileExists() )
-            {
-                COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
-                                                         m_frame->Prj().GetProjectName(), rel );
-                fromDisk = true;
-            }
-        }
-
-        if( !fromDisk )
-            writeSyncBase( aDocId );
-    }
+    //
+    // Not while anything of ours is still unacknowledged, though: what the file holds
+    // that the server does not have yet would become "unchanged", and if the editor
+    // closed before the acknowledgement the next merge would take its absence online
+    // for a deletion.  OnAck does it once nothing of this document is waiting.
+    if( m_outbox.Count( aDocId ) == 0 )
+        refreshBaseAfterMerge( aDocId );
+    else
+        m_baseRefreshAfterMerge.insert( aDocId );
 
     if( kept || conflicts )
     {
@@ -1938,12 +2064,53 @@ void SCH_COLLAB_SYNC::reconcileFromSnapshot( const wxString& aDocId,
 }
 
 
+void SCH_COLLAB_SYNC::refreshBaseAfterMerge( const wxString& aDocId )
+{
+    m_baseRefreshAfterMerge.erase( aDocId );
+
+    bool fromDisk = false;
+
+    if( m_pathByDocId.count( aDocId ) )
+    {
+        const wxString& rel = m_pathByDocId.at( aDocId );
+        wxFileName      onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
+                                + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
+
+        if( onDisk.FileExists() )
+        {
+            COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                                     m_frame->Prj().GetProjectName(), rel );
+            fromDisk = true;
+        }
+    }
+
+    if( !fromDisk )
+        writeSyncBase( aDocId );
+}
+
+
 void SCH_COLLAB_SYNC::writeSyncBase( const wxString& aDocId )
+{
+    if( !m_pathByDocId.count( aDocId ) )
+        return;
+
+    std::string text = formatDoc( aDocId );
+
+    if( !text.empty() )
+    {
+        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
+                                       m_frame->Prj().GetProjectName(),
+                                       m_pathByDocId.at( aDocId ), text );
+    }
+}
+
+
+std::string SCH_COLLAB_SYNC::formatDoc( const wxString& aDocId )
 {
     SCH_SCREEN* screen = screenForDocId( aDocId );
 
-    if( !screen || !m_pathByDocId.count( aDocId ) )
-        return;
+    if( !screen )
+        return std::string();
 
     SCH_SHEET* sheet = nullptr;
 
@@ -1957,7 +2124,7 @@ void SCH_COLLAB_SYNC::writeSyncBase( const wxString& aDocId )
     }
 
     if( !sheet )
-        return;
+        return std::string();
 
     try
     {
@@ -1976,14 +2143,14 @@ void SCH_COLLAB_SYNC::writeSyncBase( const wxString& aDocId )
         if( formatReporter.HasMessage() )
             wxLogTrace( traceCollab, wxS( "sync base: %s" ), formatReporter.GetMessages() );
 
-        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
-                                       m_frame->Prj().GetProjectName(),
-                                       m_pathByDocId.at( aDocId ), formatter.GetString() );
+        return formatter.GetString();
     }
     catch( const IO_ERROR& ioe )
     {
         wxLogTrace( traceCollab, wxS( "sync base serialization failed: %s" ), ioe.What() );
     }
+
+    return std::string();
 }
 
 
@@ -1991,16 +2158,7 @@ void SCH_COLLAB_SYNC::RefreshSyncBasesFromDisk()
 {
     for( const auto& [path, docId] : m_docIdByPath )
     {
-        bool inFlight = false;
-
-        for( const auto& [opId, unacked] : m_unacked )
-        {
-            if( unacked.docId == docId )
-            {
-                inFlight = true;
-                break;
-            }
-        }
+        const bool inFlight = m_outbox.Count( docId ) > 0;
 
         // Only a fully acknowledged save is the server's state.  Otherwise take it once
         // the last acknowledgement is in (OnAck), if nothing was edited again by then.
@@ -2231,14 +2389,10 @@ void SCH_COLLAB_SYNC::OnSnapshotRequest( const wxString& aDocId )
     if( docId.IsEmpty() || !screen )
         return;
 
-    for( const auto& [opId, unacked] : m_unacked )
+    if( m_outbox.Count( docId ) > 0 )
     {
-        if( unacked.docId == docId )
-        {
-            wxLogTrace( traceCollab, wxS( "snapshot request skipped: ops in flight for %s" ),
-                        docId );
-            return;
-        }
+        wxLogTrace( traceCollab, wxS( "snapshot request skipped: ops in flight for %s" ), docId );
+        return;
     }
 
     SCH_SHEET_LIST hierarchy = m_frame->Schematic().Hierarchy();
@@ -2299,11 +2453,7 @@ void SCH_COLLAB_SYNC::OnReset( const wxString& aDocId, long long aSeq )
                        return aPending.docId == aDocId;
                    } );
 
-    std::erase_if( m_unacked,
-                   [&]( const auto& aEntry )
-                   {
-                       return aEntry.second.docId == aDocId;
-                   } );
+    m_outbox.Clear( aDocId );
 
     m_pendingRollback.erase( aDocId );
 
@@ -2434,20 +2584,12 @@ bool SCH_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
             newerOwn.push_back( &changes );
     }
 
-    std::vector<const UNACKED*> unacked;
-
-    for( const auto& [clientOpId, op] : m_unacked )
+    // The outbox holds them in the order they were made.
+    for( const COLLAB_OUTBOX::OP& op : m_outbox.Ops() )
     {
         if( op.docId == aOp.docId )
-            unacked.push_back( &op );
+            newerOwn.push_back( &op.changes );
     }
-
-    // The map is keyed by clientOpId, whose text order is not send order.
-    std::sort( unacked.begin(), unacked.end(),
-               []( const UNACKED* a, const UNACKED* b ) { return a->order < b->order; } );
-
-    for( const UNACKED* op : unacked )
-        newerOwn.push_back( &op->changes );
 
     // A sheet that is about to be removed may be the one on display, or above it: step
     // out to its parent first.  The removal frees the sheet, and a frame left showing a
@@ -2597,6 +2739,47 @@ void SCH_COLLAB_SYNC::ensureSheetDocs( const wxString& aOpDocId, const nlohmann:
             continue;
         }
 
+        createSheetDoc( file, sheet, aIsAuthor );
+    }
+}
+
+
+void SCH_COLLAB_SYNC::retrySheetDocs()
+{
+    if( m_failedSheetFiles.empty() )
+        return;
+
+    std::set<wxString> failed;
+    failed.swap( m_failedSheetFiles );
+
+    for( const SCH_SHEET_PATH& path : m_frame->Schematic().Hierarchy() )
+    {
+        if( path.size() < 2 )
+            continue;   // the root sheet has no file of its own to add
+
+        SCH_SHEET* sheet = path.Last();
+        wxString   file = relPathForSheet( path.at( path.size() - 2 )->GetScreen(), sheet );
+        file.Replace( wxS( "\\" ), wxS( "/" ) );
+
+        // Once per file, with the sheet as it is now: what was drawn in it while the
+        // server was out of reach goes up as the document's first snapshot.
+        if( !failed.erase( file ) || m_docIdByPath.count( file ) )
+            continue;
+
+        m_ensuredSheetFiles.insert( file );
+        createSheetDoc( file, sheet, true );
+    }
+}
+
+
+void SCH_COLLAB_SYNC::createSheetDoc( const wxString& aFile, SCH_SHEET* aSheet, bool aIsAuthor )
+{
+    wxString projectId = COLLAB_SESSION::Get().ProjectId();
+    wxString file = aFile;
+
+    {
+        SCH_SHEET* sheet = aSheet;
+
         // Authors upload the new sheet's content as the doc's first snapshot;
         // receivers join with an empty screen and reconcile from it.
         std::string content;
@@ -2645,7 +2828,26 @@ void SCH_COLLAB_SYNC::ensureSheetDocs( const wxString& aOpDocId, const nlohmann:
                     std::string docId = created ? created->value( "docId", "" ) : "";
 
                     if( docId.empty() )
+                    {
+                        // Out of reach, most likely.  An author tries again when the
+                        // connection is back (retrySheetDocs); until then the sheet's
+                        // content has no document to go to.
+                        wxTheApp->CallAfter(
+                                [this, alive, fileStd, aIsAuthor]()
+                                {
+                                    if( !*alive )
+                                        return;
+
+                                    wxString failedFile = wxString::FromUTF8( fileStd );
+
+                                    m_ensuredSheetFiles.erase( failedFile );
+
+                                    if( aIsAuthor )
+                                        m_failedSheetFiles.insert( failedFile );
+                                } );
+
                         return;
+                    }
 
                     if( aIsAuthor && !content.empty() )
                     {

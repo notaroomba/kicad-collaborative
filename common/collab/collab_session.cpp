@@ -787,16 +787,16 @@ void COLLAB_SESSION::SendPresence( const wxString& aDocId, const nlohmann::json&
 }
 
 
-void COLLAB_SESSION::SendOp( const wxString& aDocId, const wxString& aClientOpId,
+bool COLLAB_SESSION::SendOp( const wxString& aDocId, const wxString& aClientOpId,
                              std::optional<long long> aBaseSeq, const nlohmann::json& aChanges )
 {
     if( m_state != STATE::LIVE )
-        return;
+        return false;
 
     auto docIt = m_docs.find( aDocId );
 
     if( docIt != m_docs.end() && !docIt->second.joined )
-        return;   // the server refused (or has not yet accepted) this doc
+        return false;   // the server refused (or has not yet accepted) this doc
 
     nlohmann::json op = {
         { "type", "op" },
@@ -809,6 +809,7 @@ void COLLAB_SESSION::SendOp( const wxString& aDocId, const wxString& aClientOpId
         op[ "baseSeq" ] = *aBaseSeq;
 
     sendJson( op );
+    return true;
 }
 
 

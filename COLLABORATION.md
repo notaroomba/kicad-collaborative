@@ -126,18 +126,51 @@ server's message limit.
 
 ## Offline
 
-Edits made while disconnected are journalled beside the project in
-`<project>.collab/oplog.ndjson` (`oplog-board.ndjson` for the board editor). On
-reconnect the client catches up on what it missed, then replays its own
-unacknowledged ops. Duplicate submissions are ignored by the server, so a
-replay after a crash is safe.
+A copy of an online project keeps working without a connection, on the desktop, and
+merges when the connection returns.  Nothing has to be clicked.
+
+**The connection drops while you work.**  The editor says so once and the status bar
+shows `Collaboration: offline · N edits to send`.  Every edit is still captured, and
+waits in a queue in the order it was made.  The WebSocket client keeps trying (1 s,
+doubling to 30 s).  A link that goes quiet without closing (a sleeping laptop, a pulled
+cable) is noticed too: the server pings every 20 s, and 45 s of silence counts as gone.
+
+When it is back the editor rejoins from the last op it applied:
+
+- If the server still has the ops it missed (it keeps them for at least a week), they
+  are applied and the queue is sent on top, oldest first, 32 ops in flight at a time.
+  Where a collaborator and you changed the same item, yours is the later edit and
+  stands; where one side deleted it, it stays deleted.
+- If not, the server sends a snapshot and the editor does a three-way merge per item
+  instead: changed only online, take it; changed only here, publish it; changed on
+  both sides, this copy wins unless either side deleted the item.  The base of that
+  merge is the document as it stood when the connection dropped, so an edit you made
+  *online* before the drop is not mistaken for an offline one.
+
+Refilling zones repeatedly while offline queues only the last fill of each zone.
+
+**You open the project with no connection at all.**  The editor starts the session
+from what the server said about the project last time (`<project>.collab/project.json`:
+the project id, its owner, and which document each file is), queues edits as above and
+joins by itself as soon as the server can be reached.  A copy that has never been
+opened online on this version has no such file yet: it shows the offline notice, asks
+the server again every 30 s (or at once, with the notice's Reconnect link), and merges
+what was done in the meantime when it answers.
+
+**You close the editor while offline.**  What you saved is in the files, and the next
+launch merges them: each sheet and the board are compared with their sync base
+(`<project>.collab/base/…`, the file as it was when it last matched the server) and
+with the online version, by the same three-way rule.  What you did not save is gone,
+as in any KiCad session; it was never sent to anyone.  Nothing is replayed from a
+journal on the next run (earlier versions did, in the wrong order and under a new
+client id; a leftover `oplog*.ndjson` is deleted).
+
+A hierarchical sheet added while offline gets its server document when the connection
+returns, with whatever was drawn in it by then.
 
 The `<project>.collab/link.json` file written when you upload, join or download
 a project records which server project the local copy belongs to; it is what
 makes the editors rejoin the session automatically on open.
-
-If you were away long enough that the server no longer has the ops you missed,
-it sends a fresh snapshot instead.
 
 ## Version history
 

@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-#include <collab/collab_journal.h>
+#include <collab/collab_outbox.h>
 #include <kiid.h>
 #include <nlohmann/json.hpp>
 #include <wx/event.h>
@@ -180,10 +180,25 @@ private:
     ///< here (offline edits) are kept and pushed, a deletion on either side
     ///< wins, and a true conflict goes to this copy as the last writer.
     ///< Without a base the server wins outright.
-    void reconcileFromSnapshot( const std::string& aFileText, const nlohmann::json& aThenOps );
+    ///<
+    ///< @param aOwnIds     items our unacknowledged ops touched: changed here, whatever
+    ///<                    the base says
+    ///< @param aRefusedIds items of ops the server refused: its version stands
+    void reconcileFromSnapshot( const std::string& aFileText, const nlohmann::json& aThenOps,
+                                const std::set<std::string>& aOwnIds = {},
+                                const std::set<KIID>&        aRefusedIds = {} );
 
     ///< Record the current board as the sync base (it matches the server now).
     void writeSyncBase();
+
+    ///< The open board as file text; empty if it will not serialize.
+    std::string formatBoard();
+
+    ///< Make the file on disk the sync base once a merge is fully acknowledged.
+    void refreshBaseAfterMerge();
+
+    ///< Send what the outbox may send now.
+    void pump();
 
     ///< The board file's project-relative path (forward slashes).
     wxString docRelPath() const;
@@ -191,13 +206,17 @@ private:
 public:
 
     /**
-     * Attach the on-disk op journal for a project and re-stage anything left
-     * unacknowledged by a previous run (a crash, or edits made while offline).
+     * The session went live (@p aLive) or lost its connection.  Edits made while it is
+     * down queue in the outbox; they go out, or are merged, when the catch-up of the
+     * next connection arrives.
      */
-    void OpenJournal( const wxString& aProjectPath, const wxString& aProjectName );
+    void OnConnectionChanged( bool aLive );
 
-    /// Re-send every unacknowledged op; call once the session goes live again.
-    void ReplayUnacked();
+    /// Edits made here that the server has not acknowledged yet.
+    size_t PendingOps() const { return m_outbox.Size(); }
+
+    /// Of those, the ones made while the connection was down.
+    size_t OfflineOps() const { return m_offlineEdits; }
 
     /**
      * The board was just saved while live: if every op of ours is acknowledged
@@ -260,16 +279,24 @@ private:
     ///< Library nicknames already handled by saveMissingLibraries this session.
     std::set<wxString> m_savedLibNicknames;
 
-    struct UNACKED
-    {
-        nlohmann::json changes;
-        unsigned       order = 0;   ///< send order (journal first); re-asserts follow it
-    };
+    ///< Our ops the server has not acknowledged: in flight while live, queued while
+    ///< the connection is down.
+    COLLAB_OUTBOX m_outbox;
 
-    ///< clientOpId -> sent-but-unacked op. Mirrored to m_journal so edits made
-    ///< while offline (or lost to a crash mid-flight) can be replayed.
-    std::map<wxString, UNACKED> m_unacked;
-    unsigned                    m_unackedOrder = 0;
+    ///< The catch-up (ops tail or snapshot) of the current connection has arrived, so
+    ///< ops may go out.
+    bool m_caughtUp = false;
+
+    ///< The board as it was when the connection was lost: the base of the merge if the
+    ///< server answers the rejoin with a snapshot.  Empty while connected.
+    std::string m_offlineBase;
+
+    ///< Ops queued while the connection was down and not yet acknowledged.
+    size_t m_offlineEdits = 0;
+
+    ///< A merge pushed changes that are not acknowledged yet; the file on disk becomes
+    ///< the sync base when they are.
+    bool m_baseRefreshAfterMerge = false;
 
     ///< Own acked ops kept until lastAppliedSeq passes them, so a concurrent
     ///< remote op with a lower seq cannot clobber our newer edit (LWW).
@@ -282,8 +309,6 @@ private:
     ///< A doc reset arrived (checkpoint restore); the next resync snapshot is
     ///< reconciled wholesale instead of item-by-item.
     bool m_reconcilePending = false;
-
-    COLLAB_JOURNAL              m_journal;
 
     long long             m_lastAppliedSeq; ///< last applied/acked seq
     bool                  m_resyncPending;  ///< resync requested, tail awaited

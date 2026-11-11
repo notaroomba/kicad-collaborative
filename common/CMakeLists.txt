@@ -351,7 +351,7 @@ set( KICOMMON_SRCS
     notifications_manager.cpp
     page_info.cpp
     collab/collab_auth.cpp
-    collab/collab_journal.cpp
+    collab/collab_outbox.cpp
     collab/collab_project.cpp
     collab/collab_rest.cpp
     collab/collab_session.cpp

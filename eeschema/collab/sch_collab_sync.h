@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 
-#include <collab/collab_journal.h>
+#include <collab/collab_outbox.h>
 #include <kiid.h>
 #include <nlohmann/json.hpp>
 #include <wx/event.h>
@@ -257,19 +257,44 @@ private:
     ///< Reconcile a whole screen against the server's snapshot: upsert items
     ///< that differ or are missing locally, remove local items the server does
     ///< not have.  Used after a doc reset (checkpoint restore).
+    ///<
+    ///< @param aOwnIds     items our unacknowledged ops touched: changed here, whatever
+    ///<                    the base says
+    ///< @param aRefusedIds items of ops the server refused: its version stands
     void reconcileFromSnapshot( const wxString& aDocId, const std::string& aFileText,
-                                const nlohmann::json& aThenOps );
+                                const nlohmann::json& aThenOps,
+                                const std::set<std::string>& aOwnIds = {},
+                                const std::set<KIID>&        aRefusedIds = {} );
 
     ///< Record aDocId's screen as its sync base (it matches the server now).
     void writeSyncBase( const wxString& aDocId );
 
+    ///< aDocId's sheet as file text; empty if it will not serialize.
+    std::string formatDoc( const wxString& aDocId );
+
+    ///< Make the file on disk aDocId's sync base once a merge is fully acknowledged.
+    void refreshBaseAfterMerge( const wxString& aDocId );
+
+    ///< Send what the outbox may send now.
+    void pump();
+
+    ///< The catch-up of the current connection has arrived for aDocId.
+    void caughtUp( const wxString& aDocId );
+
 public:
 
     /**
-     * Attach the on-disk op journal for a project and re-stage anything left
-     * unacknowledged by a previous run (a crash, or edits made while offline).
+     * The session went live (@p aLive) or lost its connection.  Edits made while it is
+     * down queue in the outbox; they go out, or are merged, when the catch-up of the
+     * next connection arrives.
      */
-    void OpenJournal( const wxString& aProjectPath, const wxString& aProjectName );
+    void OnConnectionChanged( bool aLive );
+
+    /// Edits made here that the server has not acknowledged yet.
+    size_t PendingOps() const { return m_outbox.Size(); }
+
+    /// Of those, the ones made while the connection was down.
+    size_t OfflineOps() const { return m_offlineEdits; }
 
     /// The adapter (the collab tool) used when this engine joins docs it
     /// discovers mid-session (new sheet files).
@@ -277,9 +302,6 @@ public:
 
     /// Register a mid-session document in the path maps.
     void RegisterDoc( const wxString& aRelPath, const wxString& aDocId );
-
-    /// Re-send every unacknowledged op; call once the session goes live again.
-    void ReplayUnacked();
 
     /**
      * The project was just saved while live: every doc with no op of ours in
@@ -327,6 +349,12 @@ private:
     void ensureSheetDocs( const wxString& aOpDocId, const nlohmann::json& aChanges,
                           bool aIsAuthor );
 
+    ///< Create (or find) the server document of a sheet file and join it.
+    void createSheetDoc( const wxString& aFile, SCH_SHEET* aSheet, bool aIsAuthor );
+
+    ///< Create the documents of the sheets added while the server was out of reach.
+    void retrySheetDocs();
+
     ///< The server doc id for the document containing aScreen, or empty when the
     ///< screen's file is not part of the shared project.
     wxString docIdForScreen( const SCH_SCREEN* aScreen ) const;
@@ -358,17 +386,28 @@ private:
     ///< docId -> wire changes staged for the op currently being captured.
     std::map<wxString, nlohmann::json> m_batch;
 
-    struct UNACKED
-    {
-        wxString       docId;
-        nlohmann::json changes;
-        unsigned       order = 0;   ///< send order (journal first); re-asserts follow it
-    };
+    ///< Our ops the server has not acknowledged: in flight while live, queued while
+    ///< the connection is down.
+    COLLAB_OUTBOX m_outbox;
 
-    ///< clientOpId -> sent-but-unacked op. Mirrored to m_journal so edits made
-    ///< while offline (or lost to a crash mid-flight) can be replayed.
-    std::map<wxString, UNACKED> m_unacked;
-    unsigned                    m_unackedOrder = 0;
+    ///< Docs whose catch-up (ops tail or snapshot) of the current connection has
+    ///< arrived, so their ops may go out.
+    std::set<wxString> m_caughtUp;
+
+    ///< docId -> the sheet as it was when the connection was lost: the base of the merge
+    ///< if the server answers the rejoin with a snapshot.
+    std::map<wxString, std::string> m_offlineBase;
+
+    ///< Ops queued while the connection was down and not yet acknowledged.
+    size_t m_offlineEdits = 0;
+
+    ///< Docs a merge pushed changes of that are not acknowledged yet; the file on disk
+    ///< becomes their sync base when they are.
+    std::set<wxString> m_baseRefreshAfterMerge;
+
+    ///< Sheet files added here whose server document could not be created (no
+    ///< connection); retried when the session is live again.
+    std::set<wxString> m_failedSheetFiles;
 
     ///< docId -> (seq -> changes): own acked ops kept until lastAppliedSeq passes
     ///< them, so a concurrent remote op with a lower seq cannot clobber our newer
@@ -390,8 +429,6 @@ private:
     /// A save happened while ops were still unacknowledged; refresh the sync base from
     /// disk when the last one is in.
     bool m_baseRefreshWanted = false;
-
-    COLLAB_JOURNAL              m_journal;
 
     COLLAB_DOC_ADAPTER*         m_adapter = nullptr;
 

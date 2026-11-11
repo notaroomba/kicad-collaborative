@@ -40,6 +40,7 @@
 #include <generators_mgr.h>
 #include <pcb_generator.h>
 #include <pcb_group.h>
+#include <pcb_point.h>
 #include <pcb_track.h>
 #include <richio.h>
 #include <reporter.h>
@@ -661,6 +662,77 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
     wxSetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ), wxS( "1" ) );
     BOOST_CHECK( savedVersion( 20260206 ) != "20260206" );
     wxUnsetEnv( wxS( "KICAD_COLLAB_STAMP_VERSIONS" ) );
+}
+
+
+// A board keeps the file format version it was opened at (above), and below 20260616 a
+// footprint's reference points and zone outlines are stored in the board frame.  Written
+// in the footprint's own frame at such a version, each save and load moved them by the
+// footprint's position: the three-way merge after an offline spell then saw every such
+// footprint as edited here, and published it.
+BOOST_AUTO_TEST_CASE( FootprintChildrenSurviveSaveAtOlderVersion )
+{
+    FOOTPRINT* fp = new FOOTPRINT( m_authoring.get() );
+    fp->SetPosition( VECTOR2I( 40000000, 60000000 ) );
+    fp->SetOrientation( ANGLE_90 );
+    fp->SetReference( wxS( "U1" ) );
+    m_authoring->Add( fp );
+
+    PCB_POINT* point = new PCB_POINT( fp, VECTOR2I( 41000000, 62000000 ), 1000000 );
+    point->SetLayer( F_Fab );
+    fp->Add( point );
+    point->SetPosition( VECTOR2I( 41000000, 62000000 ) );
+
+    ZONE* area = new ZONE( fp );
+    area->SetIsRuleArea( true );
+    area->SetLayer( F_Cu );
+    fp->Add( area );
+    area->Outline()->NewOutline();
+
+    for( const VECTOR2I& corner : { VECTOR2I( 0, 0 ), VECTOR2I( 2000000, 0 ),
+                                    VECTOR2I( 2000000, 3000000 ), VECTOR2I( 0, 3000000 ) } )
+    {
+        area->Outline()->Append( corner );
+    }
+
+    const VECTOR2I        pointAt = point->GetPosition();
+    const SHAPE_POLY_SET  areaAt = area->GetBoardOutline();
+    const KIID            id = fp->m_Uuid;
+
+    for( int version : { 20260206, 0 } )
+    {
+        m_authoring->SetFileFormatVersionAtLoad( version );
+
+        wxString           tmp = wxFileName::CreateTempFileName( wxS( "collab_fpframe" ) );
+        PCB_IO_KICAD_SEXPR io;
+
+        io.SaveBoard( tmp, *m_authoring );
+
+        std::unique_ptr<BOARD> loaded( io.LoadBoard( tmp, nullptr ) );
+        wxRemoveFile( tmp );
+        BOOST_REQUIRE( loaded );
+
+        FOOTPRINT* again = dynamic_cast<FOOTPRINT*>( loaded->ResolveItem( id, true ) );
+        BOOST_REQUIRE( again );
+        BOOST_REQUIRE_EQUAL( again->Points().size(), 1 );
+        BOOST_REQUIRE_EQUAL( again->Zones().size(), 1 );
+
+        BOOST_TEST_CONTEXT( "saved at version " << version )
+        {
+            BOOST_CHECK_EQUAL( again->Points().front()->GetPosition().x, pointAt.x );
+            BOOST_CHECK_EQUAL( again->Points().front()->GetPosition().y, pointAt.y );
+
+            SHAPE_POLY_SET outline = again->Zones().front()->GetBoardOutline();
+
+            BOOST_REQUIRE_EQUAL( outline.TotalVertices(), areaAt.TotalVertices() );
+
+            for( int ii = 0; ii < areaAt.TotalVertices(); ii++ )
+            {
+                BOOST_CHECK_EQUAL( outline.CVertex( ii ).x, areaAt.CVertex( ii ).x );
+                BOOST_CHECK_EQUAL( outline.CVertex( ii ).y, areaAt.CVertex( ii ).y );
+            }
+        }
+    }
 }
 
 

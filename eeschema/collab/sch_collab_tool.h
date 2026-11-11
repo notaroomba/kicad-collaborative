@@ -158,6 +158,35 @@ private:
 
     bool m_offlineBanner = false;   ///< our offline banner is up
 
+    ///< Second half of tryAutoJoin(), back on the UI thread with the server's answer
+    ///< (nothing when it could not be reached).
+    void finishAutoJoin( const wxString& aProjectPath, const wxString& aProjectId,
+                         const wxString& aToken, const std::optional<nlohmann::json>& aProject );
+
+    ///< Tell the user the connection is down and that work goes on.
+    void showWorkingOfflineBanner();
+
+    ///< Fetch the project description again (docs, owner) and remember it for the next
+    ///< time the schematic is opened without a connection.
+    void refreshProjectFromServer();
+
+    ///< Ask the server again for a linked copy it could not be reached for.
+    void retryAutoJoin();
+
+    wxTimer m_autoJoinRetry;            ///< one-shot, re-armed by each failed attempt
+    bool    m_autoJoinQuiet = false;    ///< the offline banner has been shown already
+
+    bool   m_wasLive = false;           ///< the session was live at the last state change
+    size_t m_lastPendingShown = 0;      ///< pending-edit count in the status text
+    wxString m_statusMsg;               ///< what the status bar should say about the session
+
+    wxString m_otherStatusMsg;          ///< what another tool wrote over it
+    wxLongLong m_otherStatusSince;      ///< when that was first seen, in ms
+
+    /// Put the session status back once another message in its field has had its time.
+    void restoreStatusText();
+    bool   m_projectFromCache = false;  ///< session started from the remembered project
+
 
     ///< The displayed screen's file name, relative to the project (forward slashes).
     wxString currentSheetFile() const;

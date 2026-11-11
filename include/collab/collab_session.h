@@ -185,7 +185,14 @@ public:
     /// drops an oversized one outright, which silently freezes the sender's cursor for
     /// everyone.  Public for the tests.
     static void ClampPresence( nlohmann::json& aState );
-    void SendOp( const wxString& aDocId, const wxString& aClientOpId,
+
+    /**
+     * Send one op.
+     *
+     * @return false when it did not go out (not live, or the doc's join is not confirmed
+     *         yet); the caller keeps it and sends it again once the doc has caught up.
+     */
+    bool SendOp( const wxString& aDocId, const wxString& aClientOpId,
                  std::optional<long long> aBaseSeq, const nlohmann::json& aChanges );
     void RequestResync( const wxString& aDocId );
 

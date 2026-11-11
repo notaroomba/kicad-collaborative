@@ -1641,7 +1641,19 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_REFERENCE_IMAGE* aBitmap ) const
 
 void PCB_IO_KICAD_SEXPR::format( const PCB_POINT* aPoint ) const
 {
-    m_out->Print( "(point (at %s) (size %s)", formatInternalUnits( aPoint->GetLibraryPosition() ).c_str(),
+    // A footprint's points were stored in the board frame until (transform) arrived in
+    // 20260616, and the parser reads them that way below it.  Written in the lib frame at
+    // such a version, a point moved by the footprint's position on every save and load.
+    const int fileVersion = m_out->GetFileFormatVersion();
+    VECTOR2I  pos = aPoint->GetLibraryPosition();
+
+    if( aPoint->GetParentFootprint() && fileVersion > 0 && fileVersion < 20260616 )
+    {
+        pos = aPoint->GetPosition();
+        m_out->SetUsedLegacyRepresentation();
+    }
+
+    m_out->Print( "(point (at %s) (size %s)", formatInternalUnits( pos ).c_str(),
                   formatInternalUnits( aPoint->GetSize() ).c_str() );
 
     formatLayer( aPoint->GetLayer() );
@@ -4029,7 +4041,20 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
 
     if( aZone->GetNumCorners() )
     {
-        SHAPE_POLY_SET::POLYGON poly = aZone->Outline()->Polygon(0);
+        SHAPE_POLY_SET outline = *aZone->Outline();
+
+        // Like its points, a footprint's zone outlines were stored in the board frame until
+        // 20260616, and the parser converts them from it below that version.
+        const int        fileVersion = m_out->GetFileFormatVersion();
+        const FOOTPRINT* parentFP = aZone->GetParentFootprint();
+
+        if( parentFP && fileVersion > 0 && fileVersion < 20260616 )
+        {
+            outline = aZone->GetBoardOutline();
+            m_out->SetUsedLegacyRepresentation();
+        }
+
+        SHAPE_POLY_SET::POLYGON poly = outline.Polygon(0);
 
         for( const SHAPE_LINE_CHAIN& chain : poly )
         {

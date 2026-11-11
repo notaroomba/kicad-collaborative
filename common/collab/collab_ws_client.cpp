@@ -40,6 +40,14 @@ static constexpr int    BACKOFF_START_MS = 1000;
 static constexpr int    BACKOFF_MAX_MS = 30000;
 static constexpr size_t OUTBOX_LIMIT = 1000;
 
+/// The server pings every 20 s.  A link that has delivered nothing for this long is dead
+/// even though the socket still looks open (a pulled cable, a sleeping laptop, a NAT that
+/// forgot us): drop it and reconnect instead of talking into the void.
+static constexpr auto   IDLE_TIMEOUT = 45s;
+
+/// A frame that cannot make progress for this long is on a dead link too.
+static constexpr auto   WRITE_STALL_TIMEOUT = 30s;
+
 
 COLLAB_WS_CLIENT::COLLAB_WS_CLIENT() = default;
 
@@ -97,6 +105,12 @@ void COLLAB_WS_CLIENT::Stop()
 
 void COLLAB_WS_CLIENT::Send( std::string aTextFrame )
 {
+    // Nothing is queued across connections: what was meant for a socket that is gone
+    // would otherwise go out ahead of the next connection's hello.  Ops lost this way are
+    // unacknowledged and get replayed by their owner.
+    if( !m_connected.load( std::memory_order_acquire ) )
+        return;
+
     std::lock_guard<std::mutex> lock( m_outMutex );
 
     // Bounded so a dead connection can't grow the queue without limit. Drop the
@@ -224,9 +238,16 @@ void COLLAB_WS_CLIENT::runConnection()
     std::string partial;
     char        buf[ 65536 ];
     bool        alive = true;
+    auto        lastInbound = std::chrono::steady_clock::now();
 
     while( alive && m_running.load( std::memory_order_acquire ) )
     {
+        if( std::chrono::steady_clock::now() - lastInbound > IDLE_TIMEOUT )
+        {
+            wxLogTrace( wxT( "COLLAB" ), wxS( "ws idle for too long; reconnecting" ) );
+            break;
+        }
+
         // Drain the outbox first.
         std::deque<std::string> toSend;
         {
@@ -237,6 +258,7 @@ void COLLAB_WS_CLIENT::runConnection()
         for( std::string& frame : toSend )
         {
             size_t offset = 0;
+            auto   lastProgress = std::chrono::steady_clock::now();
 
             while( offset < frame.size() )
             {
@@ -246,9 +268,13 @@ void COLLAB_WS_CLIENT::runConnection()
                                             offset == 0 ? CURLWS_TEXT : ( CURLWS_TEXT | CURLWS_OFFSET ) );
                 offset += sent;
 
+                if( sent > 0 )
+                    lastProgress = std::chrono::steady_clock::now();
+
                 if( rc == CURLE_AGAIN )
                 {
-                    if( !m_running.load( std::memory_order_acquire ) )
+                    if( !m_running.load( std::memory_order_acquire )
+                        || std::chrono::steady_clock::now() - lastProgress > WRITE_STALL_TIMEOUT )
                     {
                         alive = false;
                         break;
@@ -293,6 +319,7 @@ void COLLAB_WS_CLIENT::runConnection()
             }
 
             sawData = true;
+            lastInbound = std::chrono::steady_clock::now();
 
             if( meta->flags & CURLWS_CLOSE )
             {
@@ -350,6 +377,11 @@ void COLLAB_WS_CLIENT::runConnection()
     }
 
     m_connected.store( false, std::memory_order_release );
+
+    {
+        std::lock_guard<std::mutex> lock( m_outMutex );
+        m_outbox.clear();
+    }
 
     if( m_cb.onDisconnected )
         m_cb.onDisconnected();
@@ -509,6 +541,7 @@ void COLLAB_WS_CLIENT::runOwnFraming()
     auto sendAll = [&]( const std::string& aBytes ) -> bool
     {
         size_t offset = 0;
+        auto   lastProgress = std::chrono::steady_clock::now();
 
         while( offset < aBytes.size() )
         {
@@ -516,10 +549,17 @@ void COLLAB_WS_CLIENT::runOwnFraming()
             CURLcode rc = curl_easy_send( curl, aBytes.data() + offset, aBytes.size() - offset, &sent );
             offset += sent;
 
+            if( sent > 0 )
+                lastProgress = std::chrono::steady_clock::now();
+
             if( rc == CURLE_AGAIN )
             {
-                if( !m_running.load( std::memory_order_acquire ) )
+                if( !m_running.load( std::memory_order_acquire )
+                    || std::chrono::steady_clock::now() - lastProgress > WRITE_STALL_TIMEOUT )
+                {
                     return false;
+                }
+
 
                 waitOnSocket( socketOf(), POLL_MS, WAIT_FOR::WRITE );
                 continue;
@@ -601,9 +641,17 @@ void COLLAB_WS_CLIENT::runOwnFraming()
     std::string message;        // a text message being assembled from fragments
     bool        inMessage = false;
     bool        alive = true;
+    auto        lastInbound = std::chrono::steady_clock::now();
 
     while( alive && m_running.load( std::memory_order_acquire ) )
     {
+        // Any bytes count, the server's pings included.
+        if( std::chrono::steady_clock::now() - lastInbound > IDLE_TIMEOUT )
+        {
+            wxLogTrace( wxT( "COLLAB" ), wxS( "ws idle for too long; reconnecting" ) );
+            break;
+        }
+
         std::deque<std::string> toSend;
         {
             std::lock_guard<std::mutex> lock( m_outMutex );
@@ -639,6 +687,7 @@ void COLLAB_WS_CLIENT::runOwnFraming()
             }
 
             sawData = true;
+            lastInbound = std::chrono::steady_clock::now();
             inbox.append( buf, got );
         }
 
@@ -769,6 +818,11 @@ void COLLAB_WS_CLIENT::runOwnFraming()
         sendAll( buildFrame( WS_CLOSE, "\x03\xe8", 2, rng ) );
 
     m_connected.store( false, std::memory_order_release );
+
+    {
+        std::lock_guard<std::mutex> lock( m_outMutex );
+        m_outbox.clear();
+    }
 
     if( m_cb.onDisconnected )
         m_cb.onDisconnected();

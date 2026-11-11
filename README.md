@@ -18,7 +18,7 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 - **Comments and review.** Discuss the design through document comment threads and canvas pins.
 - **Fabrication outputs from the browser.** Gerbers, drill files, the pick-and-place file and the BOM in one click, with presets for JLCPCB and PCBWay, checked against KiCad's own plot output.
 - **Version history.** Create named checkpoints and restore an earlier version as the project owner.
-- **Offline recovery.** Local edits are journalled and replayed after reconnection, with duplicate operations suppressed.
+- **Offline editing on desktop.** Keep working when the connection drops or was never there: edits queue in order and are sent, or three-way merged, when it returns. Nothing to click.
 - **Libraries travel with your work.** Placed symbols and footprints are embedded in synchronization operations; project archives can include local libraries and 3D models.
 - **Synchronized undo and redo.** Reverted edits are broadcast to collaborators. Undo is per-user and can overwrite newer changes to the same item.
 

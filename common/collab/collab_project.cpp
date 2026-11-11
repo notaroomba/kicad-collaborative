@@ -518,6 +518,80 @@ bool COLLAB_PROJECT::IsLinked( const wxString& aProjectPath, const wxString& aPr
 }
 
 
+void COLLAB_PROJECT::WriteCachedProject( const wxString& aProjectPath,
+                                         const wxString& aProjectName,
+                                         const nlohmann::json& aProject )
+{
+    wxFileName file( collabDirPath( aProjectPath, aProjectName ), wxS( "project.json" ) );
+
+    if( !file.DirExists() )
+        return;     // not a linked copy
+
+    // Only what a session needs to start; the rest (members, sharing) is the server's
+    // business and has no place in a file that travels with the project folder.
+    nlohmann::json kept = {
+        { "projectId", aProject.value( "projectId", "" ) },
+        { "ownerId", aProject.value( "ownerId", 0LL ) },
+        { "docs", nlohmann::json::array() },
+    };
+
+    if( aProject.contains( "docs" ) && aProject[ "docs" ].is_array() )
+    {
+        for( const nlohmann::json& doc : aProject[ "docs" ] )
+        {
+            if( !doc.is_object() )
+                continue;
+
+            kept[ "docs" ].push_back( {
+                { "docId", doc.value( "docId", "" ) },
+                { "path", doc.value( "path", "" ) },
+                { "docType", doc.value( "docType", "" ) },
+            } );
+        }
+    }
+
+    std::string text = kept.dump( 2 );
+
+    if( readWholeFile( file.GetFullPath() ) == text )
+        return;
+
+    wxFFileOutputStream out( file.GetFullPath() );
+
+    if( out.IsOk() )
+        out.Write( text.data(), text.size() );
+}
+
+
+std::optional<nlohmann::json> COLLAB_PROJECT::ReadCachedProject( const wxString& aProjectPath,
+                                                                 const wxString& aProjectName,
+                                                                 const wxString& aProjectId )
+{
+    wxFileName file( collabDirPath( aProjectPath, aProjectName ), wxS( "project.json" ) );
+
+    std::string text = readWholeFile( file.GetFullPath() );
+
+    if( text.empty() )
+        return std::nullopt;
+
+    try
+    {
+        nlohmann::json project = nlohmann::json::parse( text );
+
+        if( project.is_object()
+            && wxString::FromUTF8( project.value( "projectId", "" ) ) == aProjectId
+            && project.contains( "docs" ) && project[ "docs" ].is_array() )
+        {
+            return project;
+        }
+    }
+    catch( ... )
+    {
+    }
+
+    return std::nullopt;
+}
+
+
 bool COLLAB_PROJECT::ConfirmRelink( wxWindow* aParent, const wxString& aProjectPath,
                                     const wxString& aProjectName, const wxString& aNewProjectId )
 {

@@ -57,6 +57,7 @@
 #include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
+#include <wx/statusbr.h>
 #include <wx/textdlg.h>
 
 static const wxChar* const traceCollab = wxT( "COLLAB" );
@@ -116,6 +117,13 @@ SCH_COLLAB_TOOL::SCH_COLLAB_TOOL() :
         m_presenceDirty( false )
 {
     m_timer.SetOwner( this );
+
+    // Its own handler: a linked copy the server could not be reached for asks again.
+    m_autoJoinRetry.Bind( wxEVT_TIMER,
+                          [this]( wxTimerEvent& )
+                          {
+                              retryAutoJoin();
+                          } );
     Bind( wxEVT_TIMER, &SCH_COLLAB_TOOL::onTimer, this );
 }
 
@@ -128,6 +136,7 @@ SCH_COLLAB_TOOL::~SCH_COLLAB_TOOL()
     *m_alive = false;
 
     m_timer.Stop();
+    m_autoJoinRetry.Stop();
 
     // The session is process-wide and outlives every frame, so a registration
     // left behind here is a dangling COLLAB_DOC_ADAPTER*.
@@ -198,7 +207,9 @@ void SCH_COLLAB_TOOL::tryAutoJoin()
 
     if( token.IsEmpty() )
     {
-        showOfflineBanner( _( "you are not signed in" ) );
+        if( !m_autoJoinQuiet )
+            showOfflineBanner( _( "you are not signed in" ) );
+
         return;
     }
 
@@ -218,17 +229,164 @@ void SCH_COLLAB_TOOL::tryAutoJoin()
         return;
     }
 
-    std::optional<nlohmann::json> project = COLLAB_REST::GetProject( server, token, projectId );
+    // Off the UI thread: with no network to speak of the request can take as long as
+    // its timeout, and this runs as the schematic opens.
+    std::shared_ptr<bool> alive = m_alive;
+    std::string           serverUtf8 = server.ToStdString( wxConvUTF8 );
+    std::string           tokenUtf8 = token.ToStdString( wxConvUTF8 );
+    std::string           projectIdUtf8 = projectId.ToStdString( wxConvUTF8 );
+    std::string           pathUtf8 = projectPath.ToStdString( wxConvUTF8 );
 
-    if( project )
+    session.RunAsync(
+            [this, alive, serverUtf8, tokenUtf8, projectIdUtf8, pathUtf8]()
+            {
+                std::optional<nlohmann::json> project = COLLAB_REST::GetProject(
+                        wxString::FromUTF8( serverUtf8 ), wxString::FromUTF8( tokenUtf8 ),
+                        wxString::FromUTF8( projectIdUtf8 ) );
+
+                wxTheApp->CallAfter(
+                        [this, alive, tokenUtf8, projectIdUtf8, pathUtf8, project]()
+                        {
+                            if( *alive )
+                            {
+                                finishAutoJoin( wxString::FromUTF8( pathUtf8 ),
+                                                wxString::FromUTF8( projectIdUtf8 ),
+                                                wxString::FromUTF8( tokenUtf8 ), project );
+                            }
+                        } );
+            } );
+}
+
+
+void SCH_COLLAB_TOOL::finishAutoJoin( const wxString& aProjectPath, const wxString& aProjectId,
+                                      const wxString& aToken,
+                                      const std::optional<nlohmann::json>& aProject )
+{
+    // The answer took a while; the user may have opened another project or joined by hand.
+    if( !m_frame || sessionActive() || m_frame->Prj().GetProjectPath() != aProjectPath )
+        return;
+
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    if( session.GetState() != COLLAB_SESSION::STATE::DISCONNECTED )
     {
-        wxLogTrace( traceCollab, wxS( "auto-joining cloud project %s" ), projectId );
-        beginSession( *project, token, wxEmptyString );
+        // The board editor started the session while we were asking: join beside it.
+        if( session.ProjectDocs().is_array() && !session.ProjectDocs().empty() )
+        {
+            nlohmann::json project = { { "docs", session.ProjectDocs() },
+                                       { "projectId", aProjectId.ToStdString() } };
+            beginSession( project, aToken, wxEmptyString, false );
+        }
+
+        return;
     }
-    else
+
+    if( aProject )
     {
+        wxLogTrace( traceCollab, wxS( "auto-joining cloud project %s" ), aProjectId );
+        beginSession( *aProject, aToken, wxEmptyString );
+        return;
+    }
+
+    // The server cannot be reached.  What it said about the project last time is enough
+    // to start the session anyway: edits queue, the connection is retried for as long as
+    // the schematic is open, and everything is merged when it comes up.
+    std::optional<nlohmann::json> cached = COLLAB_PROJECT::ReadCachedProject(
+            aProjectPath, m_frame->Prj().GetProjectName(), aProjectId );
+
+    if( cached )
+    {
+        beginSession( *cached, aToken, wxEmptyString );
+
+        if( sessionActive() )
+        {
+            m_projectFromCache = true;
+            showWorkingOfflineBanner();
+            OnSessionStateChanged();     // the status text depends on the banner
+            return;
+        }
+    }
+
+    // Said once.  From here the editor keeps asking, and joins (and merges what was done
+    // meanwhile) as soon as the server answers, banner or no banner.
+    if( !m_autoJoinQuiet )
         showOfflineBanner( _( "the online project could not be reached" ) );
+
+    m_autoJoinRetry.StartOnce( 30000 );
+}
+
+
+void SCH_COLLAB_TOOL::retryAutoJoin()
+{
+    SCH_EDIT_FRAME* editFrame = m_frame;
+
+    if( !editFrame || sessionActive()
+        || editFrame->Prj().GetProjectPath() != m_autoJoinProject )
+    {
+        return;
     }
+
+    m_autoJoinQuiet = true;
+    m_autoJoinProject.clear();
+    tryAutoJoin();
+}
+
+
+void SCH_COLLAB_TOOL::showWorkingOfflineBanner()
+{
+    WX_INFOBAR* infoBar = m_frame->GetInfoBar();
+
+    infoBar->RemoveAllButtons();
+    infoBar->AddCloseButton();
+    infoBar->ShowMessage( _( "No connection to the online project.  Keep working: your edits "
+                             "are kept here and merged with the online version as soon as "
+                             "the connection returns." ),
+                          wxICON_WARNING );
+    m_offlineBanner = true;
+}
+
+
+void SCH_COLLAB_TOOL::refreshProjectFromServer()
+{
+    std::shared_ptr<bool> alive = m_alive;
+    std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
+    std::string token =
+            COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
+    std::string projectId = m_projectId.ToStdString( wxConvUTF8 );
+
+    if( token.empty() || projectId.empty() )
+        return;
+
+    COLLAB_SESSION::Get().RunAsync(
+            [this, alive, server, token, projectId]()
+            {
+                std::optional<nlohmann::json> project = COLLAB_REST::GetProject(
+                        wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                        wxString::FromUTF8( projectId ) );
+
+                if( !project )
+                    return;
+
+                wxTheApp->CallAfter(
+                        [this, alive, projectId, project]()
+                        {
+                            // Still the same session?
+                            if( !*alive || !m_frame
+                                || m_projectId != wxString::FromUTF8( projectId ) )
+                            {
+                                return;
+                            }
+
+                            COLLAB_SESSION::Get().SetProjectDocs(
+                                    project->value( "docs", nlohmann::json::array() ) );
+                            m_projectOwnerId = SCH_COLLAB::ResolveOwnerId( *project,
+                                                                           m_projectOwnerId );
+
+                            COLLAB_PROJECT::WriteCachedProject( m_frame->Prj().GetProjectPath(),
+                                                                m_frame->Prj().GetProjectName(),
+                                                                *project );
+                        } );
+            } );
 }
 
 
@@ -240,6 +398,7 @@ void SCH_COLLAB_TOOL::showOfflineBanner( const wxString& aWhy )
     infoBar->AddLink( _( "Reconnect" ),
                       [this]( wxHyperlinkEvent& )
                       {
+                          m_autoJoinQuiet = false;
                           m_autoJoinProject.clear();
                           withSignIn( [this]( const wxString& ) { tryAutoJoin(); } );
                       } );
@@ -280,6 +439,7 @@ void SCH_COLLAB_TOOL::unlinkFromOnline()
     m_offlineBanner = false;
     m_frame->GetInfoBar()->Dismiss();
     m_frame->ShowInfoBarMsg( _( "This project is now local only." ) );
+    m_statusMsg.clear();
     m_frame->SetStatusText( wxEmptyString, 0 );
 }
 
@@ -325,6 +485,7 @@ int SCH_COLLAB_TOOL::JoinSession( const TOOL_EVENT& aEvent )
 int SCH_COLLAB_TOOL::LeaveSession( const TOOL_EVENT& aEvent )
 {
     endSession();
+    m_statusMsg.clear();
     m_frame->SetStatusText( wxEmptyString, 0 );
 
     return 0;
@@ -518,15 +679,29 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
     // Ours, and only for as long as the session lasts.
     m_projectId = session.ProjectId();
 
+    m_projectFromCache = false;
+    m_autoJoinQuiet = false;
+
     if( aConnect )
+    {
+        // Remembered beside a linked copy, so the next open can start without the server.
+        COLLAB_PROJECT::WriteCachedProject( m_frame->Prj().GetProjectPath(),
+                                            m_frame->Prj().GetProjectName(), aProject );
+
         session.Connect( aToken, aLinkToken );
+    }
 
     // The sync engine must exist before the joins so it sees the join-time messages.
     m_sync = std::make_unique<SCH_COLLAB_SYNC>( m_frame, m_docIdByPath );
     m_sync->SetAdapter( this );
 
-    // Picks up ops left unacknowledged by a previous run (crash, or offline edits).
-    m_sync->OpenJournal( m_frame->Prj().GetProjectPath(), m_frame->Prj().GetProjectName() );
+    // Earlier versions kept unacknowledged ops in a file here and replayed it on the
+    // next run; what a closed editor did offline now travels in the saved sheets.
+    COLLAB_OUTBOX::RemoveLegacyJournal( m_frame->Prj().GetProjectPath(),
+                                        m_frame->Prj().GetProjectName(),
+                                        wxS( "oplog.ndjson" ) );
+    m_wasLive = session.IsLive();
+    m_lastPendingShown = 0;
 
     for( const auto& [docId, path] : m_pathByDocId )
         session.JoinDoc( docId, std::nullopt, this );
@@ -585,6 +760,7 @@ void SCH_COLLAB_TOOL::endSession()
     m_cachedShareLink.clear();
     m_projectId.clear();
     m_timer.Stop();
+    m_autoJoinRetry.Stop();
     m_sync.reset();
 
     // The checkpoint list and its Restore button belong to the project we are leaving.
@@ -774,6 +950,36 @@ void SCH_COLLAB_TOOL::openThread( long long aRootId )
 }
 
 
+
+void SCH_COLLAB_TOOL::restoreStatusText()
+{
+    // The first field of the status bar is shared: saving writes there, a tool that
+    // finishes clears it, and with it goes the only standing sign that this editor is
+    // working offline.  Whatever else is written there is left up for a few seconds.
+    wxStatusBar* bar = m_frame->GetStatusBar();
+
+    if( !bar || m_statusMsg.IsEmpty() )
+        return;
+
+    wxString shown = bar->GetStatusText( 0 );
+
+    if( shown == m_statusMsg )
+    {
+        m_otherStatusMsg.clear();
+    }
+    else if( !shown.IsEmpty() && shown != m_otherStatusMsg )
+    {
+        m_otherStatusMsg = shown;
+        m_otherStatusSince = wxGetLocalTimeMillis();
+    }
+    else if( shown.IsEmpty() || wxGetLocalTimeMillis() - m_otherStatusSince > 4000 )
+    {
+        m_otherStatusMsg.clear();
+        m_frame->SetStatusText( m_statusMsg, 0 );
+    }
+}
+
+
 void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 {
     updateCommentCard();
@@ -797,11 +1003,26 @@ void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
         if( session.GetState() == COLLAB_SESSION::STATE::DISCONNECTED )
         {
             endSession();
+            m_statusMsg.clear();
             m_frame->SetStatusText( wxEmptyString, 0 );
+        }
+        else if( m_sync && m_sync->PendingOps() != m_lastPendingShown )
+        {
+            // The count of edits waiting to be sent is part of the status text.
+            OnSessionStateChanged();
+        }
+        else
+        {
+            restoreStatusText();
         }
 
         return;
     }
+
+    if( m_sync && m_sync->PendingOps() != m_lastPendingShown )
+        OnSessionStateChanged();
+    else
+        restoreStatusText();
 
     wxString sheetFile = currentSheetFile();
 
@@ -1149,11 +1370,9 @@ void SCH_COLLAB_TOOL::OnReset( const wxString& aDocId, long long aSeq )
 
 void SCH_COLLAB_TOOL::OnDocInfo( const nlohmann::json& )
 {
-    // The server has accepted this doc on the current socket: only now can edits made
-    // while disconnected go out.  Replaying on the LIVE transition instead raced the
-    // join_doc messages and got every replayed op refused.
-    if( m_sync )
-        m_sync->ReplayUnacked();
+    // Nothing is replayed here: the catch-up that follows decides whether the edits
+    // waiting in the outbox are sent as they are or merged (SCH_COLLAB_SYNC::OnOpsTail,
+    // OnSnapshot).
 }
 
 
@@ -1211,7 +1430,14 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
     if( !sessionActive() )
         return;
 
-    wxString msg;
+    wxString     msg;
+    const bool   live = COLLAB_SESSION::Get().IsLive();
+    const size_t pending = m_sync ? m_sync->PendingOps() : 0;
+
+    // The engine first: it stops sending and notes where the sheets stood when the
+    // connection went, or gets ready for the catch-up of the new one.
+    if( m_sync && live != m_wasLive )
+        m_sync->OnConnectionChanged( live );
 
     switch( COLLAB_SESSION::Get().GetState() )
     {
@@ -1223,16 +1449,58 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
             m_frame->GetInfoBar()->Dismiss();
         }
 
+        // Started from what was remembered of the project: ask for the real thing now.
+        if( m_projectFromCache )
+        {
+            m_projectFromCache = false;
+            refreshProjectFromServer();
+        }
+
         size_t peers = COLLAB_SESSION::Get().Peers( currentDocId() ).size();
 
         msg = peers > 0 ? wxString::Format( _( "Collaboration: live \u00b7 %zu collaborator(s)" ),
                                             peers )
                         : _( "Collaboration: live" );
+
+        // Only the backlog of an offline spell: an edit in flight for a few
+        // milliseconds is not news.
+        if( m_sync && m_sync->OfflineOps() > 0 )
+        {
+            msg += wxString::Format( wxPLURAL( " \u00b7 sending %zu edit",
+                                               " \u00b7 sending %zu edits", pending ),
+                                     pending );
+        }
+
         break;
     }
-    case COLLAB_SESSION::STATE::CONNECTING:   msg = _( "Collaboration: connecting..." ); break;
+    case COLLAB_SESSION::STATE::CONNECTING:
+        if( m_wasLive && !live && !m_offlineBanner )
+        {
+            // Said once, when it happens; the status bar carries it from there.
+            showWorkingOfflineBanner();
+        }
+
+        if( pending > 0 )
+        {
+            msg = wxString::Format( wxPLURAL( "Collaboration: offline \u00b7 %zu edit to send",
+                                              "Collaboration: offline \u00b7 %zu edits to send",
+                                              pending ),
+                                    pending );
+        }
+        else
+        {
+            msg = m_offlineBanner ? _( "Collaboration: offline \u00b7 reconnecting..." )
+                                  : _( "Collaboration: connecting..." );
+        }
+
+        break;
+
     case COLLAB_SESSION::STATE::DISCONNECTED: msg = _( "Collaboration: offline" );       break;
     }
+
+    m_wasLive = live;
+    m_lastPendingShown = pending;
+    m_statusMsg = msg;
 
     m_frame->SetStatusText( msg, 0 );
 
@@ -1245,11 +1513,6 @@ void SCH_COLLAB_TOOL::OnSessionStateChanged()
                 _( "Collaboration sign-in expired or was revoked, so the live session ended. "
                    "Rejoin from File > Join Shared Project to continue." ) );
     }
-
-    // Back online: push anything edited while disconnected. The server dedups
-    // by clientOpId, so re-sending an op it already has is a no-op.
-    if( m_sync && COLLAB_SESSION::Get().IsLive() )
-        m_sync->ReplayUnacked();
 }
 
 

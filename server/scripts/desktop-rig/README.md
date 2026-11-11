@@ -27,3 +27,40 @@ changes its spacing through the properties dialog.  Set the project up from a bo
 has patterns (`RIG_SRC=<folder holding qa/data/pcbnew/issue22536> RIG_NAME=issue22536
 python3 setup.py`), retune from each side in turn (`./retune.sh :91 440 0.8`,
 `./retune.sh :92 505 1.0`) and compare `track_sig()` from `common.py` on both editors.
+
+## Working offline
+
+`cut_proxy.py` is a TCP proxy in front of the server whose cable can be pulled: `down`
+closes and refuses connections, `stall` keeps them open but carries nothing (the editor has
+to notice the silence by itself), `up` restores it.  `offline.py` puts editor A behind it
+(B stays on the server itself) and runs six scenarios, each ending with both boards compared
+track by track and footprint by footprint:
+
+    python3 cut_proxy.py &                   # 8097 -> 8099, control on 8096
+    python3 setup.py
+    python3 offline.py                       # or: offline.py drop stall snapshot start discard saved
+
+- `drop`: the connection goes mid-session; A adds 81 tracks, edits one of them twelve
+  times, moves footprints and deletes a track while B works too, including on the same
+  items; on return A's queue goes out in order and both boards agree.
+- `stall`: the link goes quiet without closing; A reconnects after 45 s of silence.
+- `snapshot`: the server no longer has the ops A missed, so A merges against a snapshot
+  (three-way, the base being the board as it was when the connection dropped).
+- `start`: A is opened with no server in reach, edits, and joins by itself later.
+- `discard`: offline edits, quit without saving: nothing of them reaches anyone.
+- `saved`: offline edits, saved, editor closed; the next launch carries them online.
+
+`launch.sh` takes the server from `RIG_SERVER` (default the server itself); `offline.py`
+sets it for A and rewrites A's `link.json` to match.  Screenshots land in `<rig>/shots`.
+
+
+`sch_offline.py` does the same for the schematic editor (`drop` and `snapshot`).  There is
+no scripting API for the schematic, so it draws wires with the mouse in the margin below
+the drawing frame and reads the result from the saved files; it has room for 30 wires, then
+wants fresh copies from `setup.py`.
+
+When a three-way merge keeps more than you expect, launch the editor with
+`RIG_ENV=KICAD_COLLAB_MERGE_TRACE=1` (launch.sh passes `RIG_ENV` into the editor's
+environment): each item the merge treats as edited here is printed with the text where it
+departs from the base.  That is how footprint reference points written in the wrong frame
+at older file format versions were found.

@@ -851,7 +851,9 @@ size_t PCB_COLLAB_SYNC::CaptureCommitBegin( COMMIT& aCommit, int aCommitFlags )
 {
     size_t count = aCommit.GetEntries().size();
 
-    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    // Captured whether or not the connection is up: an edit made while it is down waits
+    // in the outbox and goes out when it returns.
+    if( m_applyingRemote )
         return count;
 
     // A fill is an edit like any other: the zones it touched ship whole, so everyone
@@ -870,7 +872,7 @@ size_t PCB_COLLAB_SYNC::CaptureCommitBegin( COMMIT& aCommit, int aCommitFlags )
 
 void PCB_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int aCommitFlags )
 {
-    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    if( m_applyingRemote )
         return;
 
     m_capturingFill = ( aCommitFlags & ZONE_FILL_OP ) != 0;
@@ -1190,20 +1192,67 @@ void PCB_COLLAB_SYNC::flushBatch()
         if( m_lastAppliedSeq > 0 )
             baseSeq = m_lastAppliedSeq;
 
-        // Journal before sending: an op that reaches the server but whose ack
-        // we never see must still be replayable (the server dedups it).
-        m_journal.Append( m_docId, clientOpId, changes );
+        // Queued before sending: an op that reaches the server but whose ack we never
+        // see must still be replayable (the server dedups it), and one made while the
+        // connection is down has nowhere else to wait.
+        m_outbox.Push( m_docId, clientOpId, std::move( changes ) );
 
-        session.SendOp( m_docId, clientOpId, baseSeq, changes );
-
-        m_unacked[ clientOpId ] = { std::move( changes ), ++m_unackedOrder };
+        if( !session.IsLive() )
+            m_offlineEdits++;
     }
+
+    pump();
+}
+
+
+void PCB_COLLAB_SYNC::pump()
+{
+    COLLAB_SESSION& session = COLLAB_SESSION::Get();
+
+    // Not before the catch-up of this connection has arrived: what it holds decides
+    // whether the waiting ops are replayed (an ops tail) or folded into a merge (a
+    // snapshot), and an op sent ahead of the join is refused anyway.
+    if( !session.IsLive() || !m_caughtUp )
+        return;
+
+    m_outbox.Pump(
+            [&]( const COLLAB_OUTBOX::OP& aOp )
+            {
+                std::optional<long long> baseSeq;
+
+                if( m_lastAppliedSeq > 0 )
+                    baseSeq = m_lastAppliedSeq;
+
+                return session.SendOp( m_docId, aOp.clientOpId, baseSeq, aOp.changes );
+            } );
+}
+
+
+void PCB_COLLAB_SYNC::OnConnectionChanged( bool aLive )
+{
+    if( aLive )
+        return;     // nothing goes out until this connection's catch-up is in
+
+    // The board as it stands is the last state this editor and the server agreed on
+    // (give or take the ops still in the outbox, which the merge treats as local
+    // whatever the base says).  If the server has let go of the ops we miss by the
+    // time we are back, this is the base of the merge: against the file on disk, every
+    // edit made online since the last save would read as an offline one and beat
+    // whatever a collaborator did to the same item in the meantime.
+    if( m_caughtUp )
+        m_offlineBase = formatBoard();
+
+    m_caughtUp = false;
+    m_outbox.MarkAllUnsent();
+
+    if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+        fprintf( stderr, "COLLAB offline: connection lost, %zu op(s) waiting\n", m_outbox.Size() );
 }
 
 
 void PCB_COLLAB_SYNC::CaptureUndoRedo( PICKED_ITEMS_LIST* aList )
 {
-    if( !aList || m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+    if( !aList || m_applyingRemote )
         return;
 
     for( unsigned ii = 0; ii < aList->GetCount(); ++ii )
@@ -1285,6 +1334,12 @@ void PCB_COLLAB_SYNC::OnOpsTail( const nlohmann::json& aOpsMsg )
             m_queue.push_back( std::move( op ) );
     }
 
+    // Caught up by replaying what we missed: the ops waiting here are newer than all of
+    // it (applyOp re-asserts them over each one), so they simply go out now.
+    m_caughtUp = true;
+    m_offlineBase.clear();
+    pump();
+
     wxWakeUpIdle();
 }
 
@@ -1323,11 +1378,32 @@ void PCB_COLLAB_SYNC::OnSnapshot( const nlohmann::json& aSnapshotMsg )
         COLLAB_SESSION::Get().SetAppliedSeq( m_docId, m_lastAppliedSeq );
 
         m_reconcilePending = false;
-        m_pendingRollback.clear();
-        reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ), thenOps );
+
+        // What the server refused goes back to the server's version, whatever the base
+        // says about it.
+        std::set<KIID> refused;
+        refused.swap( m_pendingRollback );
+
+        // Everything still in the outbox is an edit made here that the snapshot may not
+        // hold.  The ones not on the wire are not replayed on top of the merge: the
+        // merge publishes the state they left instead, with a deletion made online in
+        // the meantime winning as it does everywhere else.
+        std::set<std::string> ownIds = m_outbox.TouchedIds( m_docId );
+        m_outbox.TakeUnsent( m_docId );
+
+        reconcileFromSnapshot( aSnapshotMsg.value( "file", "" ), thenOps, ownIds, refused );
+
+        m_caughtUp = true;
+        m_offlineBase.clear();
+        m_offlineEdits = 0;
+        pump();
     }
     else
     {
+        m_caughtUp = true;
+        m_offlineBase.clear();
+        pump();
+
         // Replay the ops since the snapshot through the normal queue.
         for( const nlohmann::json& opJson : thenOps )
         {
@@ -1378,7 +1454,9 @@ std::string normalizeNetNumbers( const std::string& aSexpr )
 
 
 void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
-                                             const nlohmann::json& aThenOps )
+                                             const nlohmann::json& aThenOps,
+                                             const std::set<std::string>& aOwnIds,
+                                             const std::set<KIID>& aRefusedIds )
 {
     BOARD* board = m_frame->GetBoard();
 
@@ -1432,9 +1510,18 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
     // it, a differing item can be attributed to an edit made here while
     // offline or to a change made online; without one (a copy older than
     // bases) the online version wins outright, as it always did.
-    std::string baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
-                                                         m_frame->Prj().GetProjectName(),
-                                                         docRelPath() );
+    //
+    // After a connection lost mid-session the base is the board as it was when the
+    // connection went (see OnConnectionChanged), not the file on disk.
+    std::string baseText = m_offlineBase;
+
+    if( baseText.empty() )
+    {
+        baseText = COLLAB_PROJECT::ReadSyncBase( m_frame->Prj().GetProjectPath(),
+                                                 m_frame->Prj().GetProjectName(),
+                                                 docRelPath() );
+    }
+
     std::unique_ptr<BOARD> base = baseText.empty() ? nullptr : parseBoard( baseText );
     const bool             haveBase = base != nullptr;
 
@@ -1544,20 +1631,55 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
             continue;
         }
 
-        if( !haveBase )
+        // Both sides agree already, whoever changed what.
+        if( ( !L && !R ) || ( L && R && ls == rs ) )
         {
-            if( L && !R )
-                fromOnline.push_back( removeChange( id ) );
-            else if( R && ( !L || ls != rs ) )
+            unchanged++;
+            continue;
+        }
+
+        // An edit of ours the server would not take: its version stands.
+        if( aRefusedIds.count( id ) )
+        {
+            if( R )
                 fromOnline.push_back( upsertChange( R, std::move( rawR ) ) );
             else
-                unchanged++;
+                fromOnline.push_back( removeChange( id ) );
+
+            continue;
+        }
+
+        // An item one of our unacknowledged ops touched was changed here, whatever a
+        // comparison with the base makes of it.
+        const bool own = aOwnIds.count( id.AsStdString() ) > 0;
+
+        if( !haveBase )
+        {
+            if( own )
+            {
+                // No base to tell whether the online copy moved as well: ours is the
+                // edit known to be newer than the snapshot.
+                if( L )
+                    toOnline.push_back( upsertChange( L, std::move( rawL ) ) );
+                else
+                    toOnline.push_back( removeChange( id ) );
+
+                kept++;
+            }
+            else if( L && !R )
+            {
+                fromOnline.push_back( removeChange( id ) );
+            }
+            else
+            {
+                fromOnline.push_back( upsertChange( R, std::move( rawR ) ) );
+            }
 
             continue;
         }
 
         const bool haveB = B && !bs.empty();
-        const bool localChanged = ( L != nullptr ) != haveB || ( L && ls != bs );
+        const bool localChanged = own || ( L != nullptr ) != haveB || ( L && ls != bs );
         const bool remoteChanged = ( R != nullptr ) != haveB || ( R && rs != bs );
 
         if( !localChanged && !remoteChanged )
@@ -1575,16 +1697,26 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
         else if( !remoteChanged )
         {
             // Only this copy changed — an edit made offline: keep it, publish it.
+            if( wxGetEnv( wxS( "KICAD_COLLAB_MERGE_TRACE" ), nullptr ) )
+            {
+                size_t at = 0;
+
+                while( at < ls.size() && at < bs.size() && ls[at] == bs[at] )
+                    at++;
+
+                fprintf( stderr, "COLLAB kept %s %s own=%d\n  here: %s\n  base: %s\n",
+                         L ? L->GetClass().ToStdString().c_str() : "(removed)",
+                         id.AsStdString().c_str(), own ? 1 : 0,
+                         ls.substr( at > 40 ? at - 40 : 0, 160 ).c_str(),
+                         bs.substr( at > 40 ? at - 40 : 0, 160 ).c_str() );
+            }
+
             if( L )
                 toOnline.push_back( upsertChange( L, std::move( rawL ) ) );
             else
                 toOnline.push_back( removeChange( id ) );
 
             kept++;
-        }
-        else if( L && R && ls == rs )
-        {
-            unchanged++;    // the same edit on both sides
         }
         else
         {
@@ -1633,21 +1765,15 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
     // merged board instead would be wrong whenever the user then closes without saving: the
     // next merge would compare the old file with a newer base, read every collaborator's
     // change as a local edit that undoes it, and push those "edits" back to everyone.
-    {
-        wxString   rel = docRelPath();
-        wxFileName onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
-                           + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
-
-        if( !rel.IsEmpty() && onDisk.FileExists() )
-        {
-            COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
-                                                     m_frame->Prj().GetProjectName(), rel );
-        }
-        else
-        {
-            writeSyncBase();
-        }
-    }
+    //
+    // Not while anything of ours is still unacknowledged, though: what the file holds
+    // that the server does not have yet would become "unchanged", and if the editor
+    // closed before the acknowledgement the next merge would take its absence online
+    // for a deletion.  OnAck does it once the outbox is empty.
+    if( m_outbox.Empty() )
+        refreshBaseAfterMerge();
+    else
+        m_baseRefreshAfterMerge = true;
 
     if( kept || conflicts )
     {
@@ -1668,7 +1794,27 @@ void PCB_COLLAB_SYNC::reconcileFromSnapshot( const std::string& aFileText,
 }
 
 
-void PCB_COLLAB_SYNC::writeSyncBase()
+void PCB_COLLAB_SYNC::refreshBaseAfterMerge()
+{
+    m_baseRefreshAfterMerge = false;
+
+    wxString   rel = docRelPath();
+    wxFileName onDisk( m_frame->Prj().GetProjectPath() + wxFileName::GetPathSeparator()
+                       + wxFileName( rel, wxPATH_UNIX ).GetFullPath() );
+
+    if( !rel.IsEmpty() && onDisk.FileExists() )
+    {
+        COLLAB_PROJECT::RefreshSyncBaseFromDisk( m_frame->Prj().GetProjectPath(),
+                                                 m_frame->Prj().GetProjectName(), rel );
+    }
+    else
+    {
+        writeSyncBase();
+    }
+}
+
+
+std::string PCB_COLLAB_SYNC::formatBoard()
 {
     try
     {
@@ -1687,13 +1833,25 @@ void PCB_COLLAB_SYNC::writeSyncBase()
         if( formatReporter.HasMessage() )
             wxLogTrace( traceCollab, wxS( "sync base: %s" ), formatReporter.GetMessages() );
 
-        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
-                                       m_frame->Prj().GetProjectName(), docRelPath(),
-                                       formatter.GetString() );
+        return formatter.GetString();
     }
     catch( const IO_ERROR& ioe )
     {
         wxLogTrace( traceCollab, wxS( "sync base serialization failed: %s" ), ioe.What() );
+    }
+
+    return std::string();
+}
+
+
+void PCB_COLLAB_SYNC::writeSyncBase()
+{
+    std::string text = formatBoard();
+
+    if( !text.empty() )
+    {
+        COLLAB_PROJECT::WriteSyncBase( m_frame->Prj().GetProjectPath(),
+                                       m_frame->Prj().GetProjectName(), docRelPath(), text );
     }
 }
 
@@ -1716,7 +1874,7 @@ void PCB_COLLAB_SYNC::RefreshSyncBaseFromDisk()
 {
     // Only a fully acknowledged save is the server's state.  Otherwise take it once the
     // last acknowledgement is in (OnAck), if the board has not been edited again by then.
-    if( !m_unacked.empty() )
+    if( !m_outbox.Empty() )
     {
         m_baseRefreshWanted = true;
         return;
@@ -1840,9 +1998,9 @@ void PCB_COLLAB_SYNC::rollbackFromSnapshot( const std::string& aFileText )
 
 void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
 {
-    auto it = m_unacked.find( aClientOpId );
+    COLLAB_OUTBOX::OP acked;
 
-    if( it == m_unacked.end() )
+    if( !m_outbox.Ack( aClientOpId, &acked ) )
         return;
 
     // Advance lastAppliedSeq through the queue rather than directly: broadcasts of
@@ -1852,12 +2010,32 @@ void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
     marker.authorClientId = COLLAB_SESSION::Get().ClientId();
 
     m_queue.push_back( std::move( marker ) );
-    m_ownRecent[ aSeq ] = std::move( it->second.changes );
-    m_unacked.erase( it );
-    m_journal.Ack( aClientOpId );
+    m_ownRecent[ aSeq ] = std::move( acked.changes );
 
-    if( m_baseRefreshWanted && m_unacked.empty() && !m_frame->IsContentModified() )
-        RefreshSyncBaseFromDisk();
+    if( m_outbox.Empty() )
+    {
+        if( m_baseRefreshAfterMerge )
+            refreshBaseAfterMerge();
+
+        if( m_baseRefreshWanted && !m_frame->IsContentModified() )
+            RefreshSyncBaseFromDisk();
+
+        if( m_offlineEdits > 0 )
+        {
+            if( wxGetEnv( wxS( "KICAD_LOG_TO_STDERR" ), nullptr ) )
+                fprintf( stderr, "COLLAB online: %zu offline op(s) sent\n", m_offlineEdits );
+
+            m_frame->ShowInfoBarMsg( wxString::Format(
+                    wxPLURAL( "Back online: %zu edit made while offline was sent.",
+                              "Back online: %zu edits made while offline were sent.",
+                              m_offlineEdits ),
+                    m_offlineEdits ) );
+            m_offlineEdits = 0;
+        }
+    }
+
+    // The window has room again.
+    pump();
 
     wxWakeUpIdle();
 }
@@ -1865,16 +2043,18 @@ void PCB_COLLAB_SYNC::OnAck( const wxString& aClientOpId, long long aSeq )
 
 void PCB_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
 {
-    auto it = m_unacked.find( aClientOpId );
+    COLLAB_OUTBOX::OP refused;
 
-    if( it == m_unacked.end() )
+    // Rejected is as final as acked for replay purposes: the server will
+    // refuse it again on every reconnect forever.
+    if( !m_outbox.Ack( aClientOpId, &refused ) )
         return;
 
     // Remember which items the rejected op touched: the resync snapshot
     // below carries the server's state for them.
-    if( it->second.changes.is_array() )
+    if( refused.changes.is_array() )
     {
-        for( const nlohmann::json& change : it->second.changes )
+        for( const nlohmann::json& change : refused.changes )
         {
             if( change.is_object() )
                 m_pendingRollback.insert(
@@ -1882,11 +2062,8 @@ void PCB_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
         }
     }
 
-    m_unacked.erase( it );
-
-    // Rejected is as final as acked for replay purposes: the server will
-    // refuse it again on every reconnect forever.
-    m_journal.Ack( aClientOpId );
+    if( m_offlineEdits > 0 )
+        m_offlineEdits--;
 
     // The op was applied optimistically here; a resync (snapshot + tail)
     // restores the server's version of the document.
@@ -1895,46 +2072,14 @@ void PCB_COLLAB_SYNC::OnOpRejected( const wxString& aClientOpId )
         m_resyncPending = true;
         COLLAB_SESSION::Get().RequestResync( m_docId );
     }
-}
 
-
-void PCB_COLLAB_SYNC::OpenJournal( const wxString& aProjectPath, const wxString& aProjectName )
-{
-    // Not the schematic editor's journal file: each journal compacts from its own
-    // in-memory state and would drop the other's lines.
-    m_journal.Open( aProjectPath, aProjectName, wxS( "oplog-board.ndjson" ) );
-
-    // Anything left from a previous run was never acknowledged: re-stage it so
-    // the next connection replays it. The server dedups by clientOpId, so a
-    // replay of something it already has is harmless.
-    for( const COLLAB_JOURNAL::ENTRY& entry : m_journal.Pending() )
-    {
-        if( entry.docId == m_docId )
-            m_unacked[ entry.clientOpId ] = { entry.changes, ++m_unackedOrder };
-    }
-}
-
-
-void PCB_COLLAB_SYNC::ReplayUnacked()
-{
-    if( m_unacked.empty() )
-        return;
-
-    COLLAB_SESSION& session = COLLAB_SESSION::Get();
-
-    if( !session.IsLive() )
-        return;
-
-    wxLogTrace( traceCollab, wxS( "replaying %zu unacknowledged op(s)" ), m_unacked.size() );
-
-    for( const auto& [clientOpId, op] : m_unacked )
-        session.SendOp( m_docId, clientOpId, std::nullopt, op.changes );
+    pump();
 }
 
 
 void PCB_COLLAB_SYNC::OnSnapshotRequest()
 {
-    if( !m_unacked.empty() )
+    if( !m_outbox.Empty() )
     {
         wxLogTrace( traceCollab, wxS( "snapshot request skipped: ops in flight for %s" ),
                     m_docId );
@@ -2046,7 +2191,8 @@ void PCB_COLLAB_SYNC::OnReset( long long aSeq )
 
     // Everything in flight predates the restored state.
     m_queue.clear();
-    m_unacked.clear();
+    m_outbox.Clear();
+    m_offlineEdits = 0;
     m_pendingRollback.clear();
 
     // Pull the restored file and reconcile the open board against it.
@@ -2167,17 +2313,9 @@ void PCB_COLLAB_SYNC::applyOp( const PENDING_OP& aOp )
             newerOwn.push_back( &changes );
     }
 
-    std::vector<const UNACKED*> unacked;
-
-    for( const auto& [clientOpId, op] : m_unacked )
-        unacked.push_back( &op );
-
-    // The map is keyed by clientOpId, whose text order is not send order.
-    std::sort( unacked.begin(), unacked.end(),
-               []( const UNACKED* a, const UNACKED* b ) { return a->order < b->order; } );
-
-    for( const UNACKED* op : unacked )
-        newerOwn.push_back( &op->changes );
+    // The outbox holds them in the order they were made.
+    for( const COLLAB_OUTBOX::OP& op : m_outbox.Ops() )
+        newerOwn.push_back( &op.changes );
 
     // The presence overlay draws ghosts of local items a collaborator is dragging, by
     // pointer.  This edit may free those very items (a retuned pattern replaces the
