@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <optional>
 #include <functional>
 #include <map>
 #include <memory>
@@ -124,6 +125,10 @@ private:
 
     void joinWithToken( const wxString& aToken, const wxString& aLinkToken );
     void startWithToken( const wxString& aToken );
+
+    ///< The second half of startWithToken, once the background upload has finished.
+    void finishStart( const std::optional<nlohmann::json>& aProject, const wxString& aToken,
+                      const wxString& aUrl, const wxString& aError );
 
     ///< Connect and join every schematic doc of aProject (a server project json).
     ///< With aConnect false the process-wide session is reused rather than
@@ -243,5 +248,6 @@ private:
     ///< File > Copy Share Link went on minting invites for a project we had left.
     wxString       m_projectId;
     long long      m_projectOwnerId = 0; ///< owner of the joined online project (0 = unknown)
+    bool           m_publishing = false;  ///< the project is being uploaded in the background
     bool           m_startedHere = false; ///< this frame published the project / started the session
 };

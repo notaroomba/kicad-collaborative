@@ -32,6 +32,11 @@
 #include <wx/wfstream.h>
 #include <wx/msgdlg.h>
 #include <wx/zipstrm.h>
+#include <wx/app.h>
+#include <wx/weakref.h>
+#include <wx/window.h>
+
+#include <thread>
 
 
 static const wxChar* const traceCollab = wxT( "COLLAB" );
@@ -163,6 +168,59 @@ std::optional<nlohmann::json> COLLAB_PROJECT::CreateAndShare( const wxString& aS
     SeedSyncBases( aProjectPath, aProjectName );
 
     return project;
+}
+
+
+void COLLAB_PROJECT::CreateAndShareAsync(
+        wxWindow* aOwner, const wxString& aServer, const wxString& aToken,
+        const wxString& aProjectPath, const wxString& aProjectName,
+        std::function<void( std::optional<nlohmann::json>, const wxString&, const wxString& )> aDone )
+{
+    // Strings cross the thread boundary as UTF-8 so no wxString buffer is shared.
+    std::string server = aServer.ToStdString( wxConvUTF8 );
+    std::string token = aToken.ToStdString( wxConvUTF8 );
+    std::string path = aProjectPath.ToStdString( wxConvUTF8 );
+    std::string name = aProjectName.ToStdString( wxConvUTF8 );
+
+    wxWeakRef<wxWindow> owner( aOwner );
+
+    std::thread(
+            [server, token, path, name, owner, aDone]()
+            {
+                wxString url;
+                wxString error;
+
+                std::optional<nlohmann::json> project;
+
+                try
+                {
+                    project = CreateAndShare( wxString::FromUTF8( server ), wxString::FromUTF8( token ),
+                                              wxString::FromUTF8( path ), wxString::FromUTF8( name ),
+                                              url, error );
+                }
+                catch( ... )
+                {
+                    error = _( "Publishing the project failed." );
+                }
+
+                std::string urlStd = url.ToStdString( wxConvUTF8 );
+                std::string errorStd = error.ToStdString( wxConvUTF8 );
+
+                if( !wxTheApp )
+                    return;
+
+                wxTheApp->CallAfter(
+                        [owner, aDone, project, urlStd, errorStd]()
+                        {
+                            // The window that asked is gone: nobody to tell.
+                            if( !owner )
+                                return;
+
+                            aDone( project, wxString::FromUTF8( urlStd ),
+                                   wxString::FromUTF8( errorStd ) );
+                        } );
+            } )
+            .detach();
 }
 
 

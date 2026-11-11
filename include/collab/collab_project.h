@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -53,6 +54,21 @@ KICOMMON_API std::optional<nlohmann::json> CreateAndShare( const wxString& aServ
                                                            const wxString& aProjectName,
                                                            wxString& aShareUrl,
                                                            wxString& aError );
+
+/**
+ * CreateAndShare() off the UI thread.
+ *
+ * Zipping and uploading take as long as the project is big and the network is slow, and
+ * an unreachable server takes its whole timeout; done on the UI thread that froze the
+ * window for all of it.  @p aDone runs back on the UI thread with the project (or
+ * std::nullopt), the share link and the error message -- unless @p aOwner has been
+ * destroyed in the meantime, in which case nothing runs.
+ */
+KICOMMON_API void CreateAndShareAsync(
+        wxWindow* aOwner, const wxString& aServer, const wxString& aToken,
+        const wxString& aProjectPath, const wxString& aProjectName,
+        std::function<void( std::optional<nlohmann::json> aProject, const wxString& aShareUrl,
+                            const wxString& aError )> aDone );
 
 /**
  * Claim a share link and fetch the project it points at.

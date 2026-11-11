@@ -248,8 +248,27 @@ serves, but sign-in returns 503.
 railway up --service kicad-collab
 ```
 
-**Single replica only** — the doc actors are authoritative in memory. Scaling out
-requires sharding documents across instances first.
+**Replicas.** Run as many as you like behind the load balancer; they need the same
+`DATABASE_URL` and `JWT_SECRET` and nothing else (no Redis, no sticky sessions).
+Each replica keeps an actor per open document for its own sockets, and they stay
+in step through Postgres:
+
+- an op gets its number from the `ops` primary key `(doc_id, seq)`, and while more
+  than one replica is alive they queue on a per-document advisory lock, so the
+  sequence is gapless and nobody is starved;
+- everything else (who is here, cursors, comments, restores, access changes,
+  requests) crosses on `LISTEN/NOTIFY`; a payload too big for a notification is
+  parked in `relay_overflow` and fetched by id;
+- sign-in state lives in the `auth_pending` table, so a flow can start on one
+  replica and finish on another;
+- replicas heartbeat every 10 s; one that goes silent for 35 s has its people
+  removed from the documents on the others.
+
+A replica running alone skips the lock and the per-op access re-check.
+`server/scripts/replicas-e2e.mjs` drives four clients through two replicas
+(600 concurrent ops, presence, comments, restore, demotion, sign-in, a replica
+being killed); `e2e.mjs` takes `E2E_BASE_B` to put its second user on another
+replica.
 
 ## Tests
 
@@ -273,6 +292,10 @@ Chromium, desktop and phone sizes) test repository sync against
 `fake-github.mjs`, an in-memory stand-in for GitHub's OAuth and git database
 API, so no real repository is touched. `KICAD_FILES_DIR=.. cargo test --
 --ignored real_files` runs the merge over every KiCad file in the source tree.
+`REAL_REPO=owner/throwaway server/scripts/github-real.sh` runs the same flows
+against real github.com (push, pull, item merge, pull request, push on
+checkpoint, import, new branch) on a repository you can throw away, with a
+token from `gh auth token`. Its bridge refuses writes to any other repository.
 
 `server/scripts/ai-ui.mjs` drives the assistant in Chromium against
 `fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every

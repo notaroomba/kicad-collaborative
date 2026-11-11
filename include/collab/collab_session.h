@@ -73,6 +73,10 @@ public:
     /// joined to several must serve the one asked for, not whatever it is displaying).
     virtual void OnSnapshotRequest( const wxString& aDocId ) {}
     virtual void OnReset( const wxString& aDocId, long long aSeq ) {}
+    /// Another editor asks this application to do something theirs cannot.  The only
+    /// action so far is "fill_zones", sent by the browser editor, which has no zone filler.
+    virtual void OnRequest( const wxString& aDocId, const wxString& aAction,
+                            const wxString& aFromName ) {}
     /// The server refused to let us into this doc (access revoked, or the doc is gone).
     /// Nothing further will arrive for it and nothing we send for it will be accepted.
     virtual void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) {}

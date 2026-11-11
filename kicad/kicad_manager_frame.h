@@ -296,6 +296,7 @@ private:
 
 private:
     COLLAB_AUTH           m_collabAuth;
+    bool                  m_collabPublishing = false;   ///< an upload is running in the background
     bool                  m_collabSignedIn = false;
     wxString              m_collabLogin;
     std::shared_ptr<bool> m_collabAlive = std::make_shared<bool>( true );

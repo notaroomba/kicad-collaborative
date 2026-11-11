@@ -214,7 +214,11 @@ export function symbolInstance(o: SymbolInstanceOpts): SNode {
     return `(property ${q(name)} ${q(value)} (at ${mm(x + lx)} ${mm(y - ly)} ${mm(rot)})${hidden ? " (hide yes)" : ""} (show_name ${yes(lp && kid(lp, "show_name"), false) ? "yes" : "no"})`
       + ` (do_not_autoplace ${yes(lp && kid(lp, "do_not_autoplace"), false) ? "yes" : "no"}) ${effectsText(lp)})`;
   };
-  const libProps = kids(lib, "property").filter((p) => !isMeta(text(p[1])));
+  // KiCad 10 library symbols carry private properties, (property private "Name" "Value" …): notes for the
+  // library's own checks.  They stay in the library copy; read as a field named "private" they made a placed
+  // symbol desktop KiCad refuses to load.
+  const isPrivate = (p: SNode) => text(p[1]) === "private" && p.length > 3 && !isList(p[2]) && !isList(p[3]);
+  const libProps = kids(lib, "property").filter((p) => !isMeta(text(p[1])) && !isPrivate(p));
   const seen = new Set<string>();
   for (const name of MANDATORY_FIELDS) {
     const lp = libProps.find((p) => text(p[1]) === name) || null;

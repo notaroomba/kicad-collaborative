@@ -69,13 +69,14 @@ sync live.
 | Schematic item edits (move, rename, properties, add, delete) | Live |
 | Wires, junctions, and other connectivity side-effects | Live, atomically with the edit that caused them |
 | Board edits: tracks, vias, footprints, text, shapes, dimensions | Live |
-| Zones | Live (outline; each client refills fills locally) |
+| Zones | Live, outline and fill. A fill is computed once, by whoever refills, and everyone receives that exact copper. The browser draws fills and asks a desktop editor to refill (B) |
 | Ratsnest / connectivity after remote board edits | Rebuilt automatically |
 | Undo / redo | Live — your undo broadcasts the restored state |
 | Symbols & footprints from libraries you don't have | Arrive embedded; a project-local library copy is saved automatically (see below) |
 | Project-local libraries, 3D models, tables in cloud projects | Travel with the project archive, types auto-detected |
-| Board groups & tuning-pattern generators | Removal only; add/edit is next |
-| Sheet add/remove/reparent, schematic group membership | Not yet — save and re-share |
+| Board groups & tuning-pattern generators | Live: create, edit, regroup, nest, remove |
+| Schematic groups | Live, membership included, in both the desktop and browser editors |
+| Hierarchical sheets: add, remove, move, a second instance of the same file | Live. A new sheet's contents follow as their own document; removing the sheet someone is looking at moves them to its parent |
 
 ## Libraries
 
@@ -115,9 +116,13 @@ Ops reuse KiCad's own diff/merge machinery (`common/diff_merge/`), so the wire
 format is the same typed property-delta representation the built-in file diff
 already produces.  Board items travel the same way; their s-expression payloads
 are wrapped in a versioned `kicad_pcb` document (the clipboard trick), nets are
-re-resolved **by name** on the receiving board, footprint pad nets ride along as
-a pad→net map, and zone fills are stripped from the wire — each client refills
-locally.
+re-resolved **by name** on the receiving board, and footprint pad nets ride along as
+a pad→net map.  A zone travels with its fill, so every client shows the copper the
+filler actually produced instead of refilling on its own and hoping the results
+agree.  A refill is shared as an edit marked as a fill; an outline or setting change
+from someone else marks the zone as needing a refill, exactly as a local edit does.
+Large edits (a refill of a dense board) are split into several ops under the
+server's message limit.
 
 ## Offline
 
@@ -165,27 +170,29 @@ The sync server is a single Rust binary plus Postgres — see
 export KICAD_COLLAB_SERVER=https://your-server.example.com
 ```
 
-## Limitations
+<a id="limitations"></a>
+## How it behaves
 
-- **One server instance.** Documents are authoritative in memory, so the server
-  does not scale horizontally without sharding first.
-- **Same project on both sides.** Live editing requires everyone to have a copy
-  of the project open. Opening from **Online Projects…** (or *Join from Link*'s
-  download offer) provides that copy; a locally modified copy can still drift
-  until the stale-file resync flow lands.
-- **Simultaneous edits to one text field** clobber rather than merge, as in
-  Figma. Per-character text merging is not implemented.
-- **Undo is per-user.** Undoing restores the whole item, which can overwrite a
-  collaborator's newer change to that item — the result is broadcast, so
-  everyone stays consistent, but it can surprise.
-- **Remote zone edits arrive unfilled** until you refill (B), unless auto-refill
-  is enabled.
-- **Publishing blocks the window.** The Online Projects and Share dialogs talk
-  to the server in the background, but publishing the open project still
-  freezes the window until the upload returns; fine on a healthy network,
-  unpleasant when the server is unreachable.
-- **macOS needs a WebSocket-capable libcurl** (Homebrew's, not Apple's system
-  one). The client now tells you instead of silently retrying forever.
+These are choices, not gaps.
+
+- **Two people editing the same property at the same instant** end up with the
+  later value, for a text field as for a coordinate. Different properties of the
+  same item, and different items, never collide. This is the model Figma uses;
+  design data is not prose, and a character-by-character merge of two net names
+  is not a name anyone chose.
+- **Undo is yours.** It restores your version of the items you changed, and that
+  is broadcast like any edit, so everyone stays consistent. If a collaborator
+  changed the same item after you, your undo wins over their change.
+- **Zone fills come from the desktop application.** Its filler is what the
+  fabrication output is made from, so the browser editor draws fills but never
+  computes its own. *Fill All Zones* (B) in the browser asks a desktop editor in
+  the document to refill, and says so when nobody has the board open there; the
+  zones then keep their last fill until someone does.
+- **A zone edited by someone else needs a refill**, as it would after your own
+  edit. Whoever refills shares the result with everyone.
+- **Any libcurl works.** Where the system libcurl has no WebSocket support
+  (Apple's, Ubuntu's), the client speaks the protocol itself over a connection
+  libcurl opens.
 
 ## Testing hooks
 

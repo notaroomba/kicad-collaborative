@@ -243,7 +243,10 @@ function symbolNode(doc, libId, p, rot, mirror) {
   const n = ["symbol", ["lib_id", libId], ["at", r4(p[0]), r4(p[1]), rot || 0]];
   if (mirror) n.push(["mirror", mirror]);
   n.push(["unit", 1], ["body_style", 1], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["uuid", K.newUuid()]);
-  const libProps = lib ? kids(lib, "property").filter((lp) => !str(lp[1]).startsWith("ki_")) : [];
+  // KiCad 10 libraries carry (property private "Name" "Value" …) notes; they stay in the library copy
+  // (as a field named "private" on the placed symbol they stop desktop KiCad loading the sheet)
+  const isPrivate = (lp) => str(lp[1]) === "private" && lp.length > 3 && !Array.isArray(lp[2]) && !Array.isArray(lp[3]);
+  const libProps = lib ? kids(lib, "property").filter((lp) => !str(lp[1]).startsWith("ki_") && !isPrivate(lp)) : [];
   const fromLib = (name) => libProps.find((lp) => str(lp[1]) === name);
   const prop = (name, lp) => {
     let val = lp ? str(lp[2]) : (name === "Value" ? libId.split(":").pop() : name === "Datasheet" ? "~" : "");

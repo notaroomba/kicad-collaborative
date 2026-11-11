@@ -80,7 +80,7 @@ struct PCB_COLLAB_SYNC_FIXTURE
 
         PCB_TRACK* twin = static_cast<PCB_TRACK*>( track->Clone() );
         const_cast<KIID&>( twin->m_Uuid ) = track->m_Uuid;
-        twin->SetParent( m_receiving.get() );   // net codes resolve against the item's board
+        twin->SetParent( m_receiving.get() );   // the clone still points at the authoring board
         twin->SetNetCode( 2 );      // GND under the receiver's numbering
         m_receiving->Add( twin );
 
@@ -235,6 +235,58 @@ BOOST_AUTO_TEST_CASE( GroupWithMissingMemberIsGraceful )
     // The unknown member is skipped, the known one is grouped.
     BOOST_CHECK_EQUAL( applied->GetItems().size(), 1 );
     BOOST_CHECK( twin->GetParentGroup() == applied );
+}
+
+
+BOOST_AUTO_TEST_CASE( GroupArrivingWithItsNewMembersKeepsThem )
+{
+    // A pasted group, or a tuning pattern with the tracks it generated: the op adds the
+    // members and the group together.  Through a commit the members are only staged when
+    // the group resolves them, and the group used to land empty.
+    PCB_TRACK* trackA = new PCB_TRACK( m_authoring.get() );
+    trackA->SetStart( VECTOR2I( 1000000, 9000000 ) );
+    trackA->SetEnd( VECTOR2I( 3000000, 9000000 ) );
+    trackA->SetLayer( F_Cu );
+    m_authoring->Add( trackA );
+
+    PCB_TRACK* trackB = new PCB_TRACK( m_authoring.get() );
+    trackB->SetStart( VECTOR2I( 3000000, 9000000 ) );
+    trackB->SetEnd( VECTOR2I( 5000000, 9000000 ) );
+    trackB->SetLayer( F_Cu );
+    m_authoring->Add( trackB );
+
+    PCB_GROUP* group = new PCB_GROUP( m_authoring.get() );
+    group->SetName( wxS( "pasted" ) );
+    group->AddItem( trackA );
+    group->AddItem( trackB );
+    m_authoring->Add( group );
+
+    nlohmann::json remote = nlohmann::json::array();
+
+    // Group first on the wire, as a commit that staged it first would send it.
+    remote.push_back( MakeChange( group, "ADDED" ) );
+    remote.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( group );
+    remote.back()[ "groupMembers" ] = { trackA->m_Uuid.AsStdString(), trackB->m_Uuid.AsStdString() };
+
+    for( PCB_TRACK* track : { trackA, trackB } )
+    {
+        remote.push_back( MakeChange( track, "ADDED" ) );
+        remote.back()[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( track );
+    }
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_receiving.get(), nullptr, nullptr, nullptr, nullptr );
+
+    PCB_COLLAB::ApplyRemoteOp( m_receiving.get(), remote, {}, &toolMgr, nullptr );
+
+    PCB_GROUP* applied =
+            dynamic_cast<PCB_GROUP*>( m_receiving->ResolveItem( group->m_Uuid, true ) );
+    BOOST_REQUIRE( applied );
+    BOOST_CHECK_EQUAL( applied->GetItems().size(), 2 );
+
+    BOARD_ITEM* landedA = m_receiving->ResolveItem( trackA->m_Uuid, true );
+    BOOST_REQUIRE( landedA );
+    BOOST_CHECK( landedA->GetParentGroup() == applied );
 }
 
 
@@ -427,7 +479,7 @@ BOOST_AUTO_TEST_CASE( FootprintUpsertReplacesInPlace )
 }
 
 
-BOOST_AUTO_TEST_CASE( ZoneSexprShipsUnfilled )
+BOOST_AUTO_TEST_CASE( ZoneTravelsWithItsFill )
 {
     ZONE* zone = new ZONE( m_authoring.get() );
     zone->SetLayer( F_Cu );
@@ -440,26 +492,64 @@ BOOST_AUTO_TEST_CASE( ZoneSexprShipsUnfilled )
 
     KIID id = zone->m_Uuid;
 
-    std::string sexpr = PCB_COLLAB::FormatItemSexpr( zone );
-    BOOST_REQUIRE( !sexpr.empty() );
-
+    // An unfilled zone arrives unfilled and wants a fill.
     nlohmann::json change = MakeChange( zone, "ADDED" );
-    change[ "sexpr" ] = sexpr;
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( zone );
     change[ "netName" ] = "GND";
 
     BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
 
-    BOARD_ITEM* rebuilt = m_receiving->ResolveItem( id, true );
+    ZONE* rebuilt = dynamic_cast<ZONE*>( m_receiving->ResolveItem( id, true ) );
     BOOST_REQUIRE( rebuilt );
-    BOOST_REQUIRE_EQUAL( rebuilt->Type(), PCB_ZONE_T );
+    BOOST_CHECK( !rebuilt->IsFilled() );
+    BOOST_CHECK( rebuilt->NeedRefill() );
+    BOOST_CHECK_EQUAL( rebuilt->Outline()->FullPointCount(), 3 );
 
-    ZONE* rebuiltZone = static_cast<ZONE*>( rebuilt );
+    // The author fills it.  The fill is document content: it travels with the zone, so
+    // the receiver shows the same copper without running a fill of its own.
+    SHAPE_POLY_SET fill;
+    fill.NewOutline();
+    fill.Append( VECTOR2I( 100000, 50000 ) );
+    fill.Append( VECTOR2I( 900000, 50000 ) );
+    fill.Append( VECTOR2I( 900000, 800000 ) );
+    zone->SetFilledPolysList( F_Cu, fill );
+    zone->SetIsFilled( true );
+    zone->SetNeedRefill( false );
 
-    // Fills are local derived state: the wire ships the outline only and the
-    // receiver's copy is marked for refill.
-    BOOST_CHECK( !rebuiltZone->IsFilled() );
-    BOOST_CHECK( rebuiltZone->NeedRefill() );
-    BOOST_CHECK_EQUAL( rebuiltZone->Outline()->FullPointCount(), 3 );
+    change = MakeChange( zone, "MODIFIED" );
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( zone );
+    change[ "netName" ] = "GND";
+    change[ "zoneFill" ] = true;
+
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    rebuilt = dynamic_cast<ZONE*>( m_receiving->ResolveItem( id, true ) );
+    BOOST_REQUIRE( rebuilt );
+    BOOST_CHECK( rebuilt->IsFilled() );
+    BOOST_CHECK( !rebuilt->NeedRefill() );
+    BOOST_REQUIRE( rebuilt->HasFilledPolysForLayer( F_Cu ) );
+    BOOST_CHECK_EQUAL( rebuilt->GetFilledPolysList( F_Cu )->FullPointCount(), 3 );
+    BOOST_CHECK( rebuilt->GetFilledPolysList( F_Cu )->CVertex( 0 ) == VECTOR2I( 100000, 50000 ) );
+
+    // An ordinary edit of the zone still carries the fill it had, but nobody can vouch
+    // for it any more: the receiver keeps the copper and flags the zone.
+    change.erase( "zoneFill" );
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    rebuilt = dynamic_cast<ZONE*>( m_receiving->ResolveItem( id, true ) );
+    BOOST_REQUIRE( rebuilt );
+    BOOST_CHECK( rebuilt->IsFilled() );
+    BOOST_CHECK( rebuilt->NeedRefill() );
+
+    // Unfilling travels too.
+    zone->UnFill();
+    change[ "sexpr" ] = PCB_COLLAB::FormatItemSexpr( zone );
+    change[ "zoneFill" ] = true;
+    BOOST_REQUIRE( PCB_COLLAB::ApplyItemChange( m_receiving.get(), change, nullptr ) );
+
+    rebuilt = dynamic_cast<ZONE*>( m_receiving->ResolveItem( id, true ) );
+    BOOST_REQUIRE( rebuilt );
+    BOOST_CHECK( !rebuilt->IsFilled() );
 }
 
 
@@ -478,7 +568,7 @@ BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
         PCB_IO_KICAD_SEXPR io;
 
         io.SetReporter( &reporter );
-        io.SaveBoard( tmp, *m_authoring );
+        io.SaveBoard( tmp, m_authoring.get() );
 
         wxFFile   file( tmp, wxS( "r" ) );
         wxString  content;

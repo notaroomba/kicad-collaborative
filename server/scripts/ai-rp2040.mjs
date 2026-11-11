@@ -35,7 +35,7 @@ const now = Math.floor(Date.now() / 1000);
 const head = b64({ alg: 'HS256', typ: 'JWT' }), body = b64({ sub: uid, login: 'ai-rp', iat: now, exp: now + 7200 });
 const jwt = `${head}.${body}.${crypto.createHmac('sha256', SECRET).update(`${head}.${body}`).digest('base64url')}`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {});   // PW_CHANNEL=chrome uses an installed Chrome
 const ctx = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
 const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('PAGEERR', String(e).slice(0, 300)));
@@ -63,6 +63,10 @@ const save = async (file) => { if (!OUT) return; const text = await page.evaluat
   out.push(['embedded_fonts', 'no']);
   return K.serialize(out);
 }, doc(file.endsWith('sch') ? 'kicad_sch' : 'kicad_pcb')); fs.writeFileSync(path.join(OUT, file), text + '\n'); };
+
+// The project file holds the board rules; desktop KiCad checks against its own defaults without it.
+const savePro = async (file) => { if (!OUT) return; const id = (made.docs.find((d) => d.docType === 'kicad_pro') || {}).docId; if (!id) return;
+  fs.writeFileSync(path.join(OUT, file), await page.evaluate((i) => fetch(`/api/docs/${i}/content?v=${Date.now()}`).then((r) => r.text()), id)); };
 
 // ------------------------------------------------------------------ the plan: schematic
 await open('kicad_sch');
@@ -160,14 +164,15 @@ const GP = (n) => n >= 26 ? `GPIO${n}_ADC${n - 26}` : `GPIO${n}`;
 }
 { // Decoupling
   const b = new Block('Decoupling capacitors', 'One 100 nF per supply pin as the RP2040 hardware design guide lays out: six for IOVDD, one each for USB_VDD and ADC_AVDD, 1 µF on the core regulator input and output, and two 100 nF on the 1.1 V core rail.');
-  b.text('Decoupling: place each capacitor at its RP2040 supply pin', 185.42, 20.32);
+  b.text('Decoupling: place each capacitor at its RP2040 supply pin', 177.8, 20.32);
+  const P = 11.43;   // room for each capacitor's reference and value beside it
   const row = (x0, y, n, rail, first, values) => {
     b.wire([x0 - 5.08, y], [x0, y]).pwr(rail, x0 - 5.08, y); b.wire([x0 - 5.08, y + 7.62], [x0, y + 7.62]); b.pwr('GND', x0 - 5.08, y + 7.62);
-    for (let i = 0; i < n; i++) { const x = r2(x0 + 7.62 * i); b.two('Device:C', `C${first + i}`, values[i] || '100nF', [x, y]);
-      if (i) { b.wire([r2(x - 7.62), y], [x, y]).wire([r2(x - 7.62), y + 7.62], [x, y + 7.62]); } }
+    for (let i = 0; i < n; i++) { const x = r2(x0 + P * i); b.two('Device:C', `C${first + i}`, values[i] || '100nF', [x, y]);
+      if (i) { b.wire([r2(x - P), y], [x, y]).wire([r2(x - P), y + 7.62], [x, y + 7.62]); } }
   };
-  row(190.5, 27.94, 9, '+3V3', 3, { 8: '1uF' });
-  row(190.5, 45.72, 3, '+1V1', 12, { 2: '1uF' });
+  row(182.88, 27.94, 9, '+3V3', 3, { 8: '1uF' });
+  row(182.88, 45.72, 3, '+1V1', 12, { 2: '1uF' });
   blocks.push(b);
 }
 { // Flash and BOOTSEL
@@ -188,26 +193,26 @@ const GP = (n) => n >= 26 ? `GPIO${n}_ADC${n - 26}` : `GPIO${n}`;
 }
 { // Crystal
   const b = new Block('12 MHz crystal', '12 MHz crystal the USB bootloader expects, with 15 pF load capacitors (for a 10 pF load crystal and about 2.5 pF of stray) and 1 k in series with XOUT to limit drive, as in the RP2040 hardware design guide.');
-  b.text('12 MHz crystal', 129.54, 167.64);
-  const X = 144.78, Y = 177.8, y = b.sym('Device:Crystal_GND24', 'Y1', '12MHz', X, Y, { fp: FP.Y1 });
-  const xl = r2(X - 8.89), xr = r2(X + 8.89);
+  b.text('12 MHz crystal', 124.46, 167.64);
+  const X = 139.7, Y = 177.8, y = b.sym('Device:Crystal_GND24', 'Y1', '12MHz', X, Y, { fp: FP.Y1 });
+  const xl = r2(X - 11.43), xr = r2(X + 8.89);
   b.wire(y(1), [xl, Y]).stub([xl, Y], -2.54, 'XIN'); b.two('Device:C', 'C16', '15pF', [xl, Y]);
-  b.wire(y(3), [xr, Y]).wire([xr, Y], [r2(xr + 2.54), Y]); b.two('Device:C', 'C17', '15pF', [xr, Y]);
-  b.two('Device:R', 'R7', '1k', [r2(xr + 2.54), Y], { flat: true }); b.stub([r2(xr + 10.16), Y], 2.54, 'XOUT');
+  b.wire(y(3), [xr, Y]).wire([xr, Y], [r2(xr + 7.62), Y]); b.two('Device:C', 'C17', '15pF', [xr, Y]);
+  b.two('Device:R', 'R7', '1k', [r2(xr + 7.62), Y], { flat: true }); b.stub([r2(xr + 15.24), Y], 2.54, 'XOUT');
   b.wire([xl, Y + 7.62], [xl, Y + 10.16], [X, Y + 10.16]).wire([X, Y + 10.16], [xr, Y + 10.16]).wire([xr, Y + 7.62], [xr, Y + 10.16]).wire(y(2), [X, Y + 10.16]).gnd([xr, Y + 10.16]).junction(X, Y + 10.16).junction(xr, Y + 10.16);
   blocks.push(b);
 }
 { // Reset and LED
   const b = new Block('Reset button and LED', 'RUN pulled up with 10 k and a button to ground for reset; a status LED on GPIO25 through 1 k (about 1.3 mA), the pin the Pico uses.');
-  b.text('Reset', 205.74, 96.52);
-  b.two('Device:R', 'R8', '10k', [213.36, 104.14]); b.up([213.36, 104.14], '+3V3');
-  b.wire([213.36, 111.76], [213.36, 114.3]).stub([213.36, 114.3], -5.08, 'RUN').junction(213.36, 114.3);
-  const s = b.sym('Switch:SW_Push', 'SW2', 'RESET', 220.98, 114.3, { fp: FP.SW });
-  b.wire([213.36, 114.3], s(1)).wire(s(2), [228.6, 114.3]).gnd([228.6, 114.3]);
-  b.text('Status LED', 200.66, 142.24);
-  b.label('GPIO25', 203.2, 149.86, 180).wire([203.2, 149.86], [205.74, 149.86]); b.two('Device:R', 'R9', '1k', [205.74, 149.86], { flat: true });
-  const d = b.sym('Device:LED', 'D1', 'LED', 219.71, 149.86, { rot: 180, fp: FP.D1 });
-  b.wire([213.36, 149.86], d(2)).wire(d(1), [226.06, 149.86]).gnd([226.06, 149.86]);
+  b.text('Reset', 193.04, 96.52);
+  b.two('Device:R', 'R8', '10k', [200.66, 104.14]); b.up([200.66, 104.14], '+3V3');
+  b.wire([200.66, 111.76], [200.66, 114.3]).stub([200.66, 114.3], -5.08, 'RUN').junction(200.66, 114.3);
+  const s = b.sym('Switch:SW_Push', 'SW2', 'RESET', 210.82, 114.3, { fp: FP.SW });
+  b.wire([200.66, 114.3], s(1)).gnd(s(2));
+  b.text('Status LED', 193.04, 142.24);
+  b.label('GPIO25', 195.58, 149.86, 180).wire([195.58, 149.86], [198.12, 149.86]); b.two('Device:R', 'R9', '1k', [198.12, 149.86], { flat: true });
+  const d = b.sym('Device:LED', 'D1', 'LED', 212.09, 149.86, { rot: 180, fp: FP.D1 });
+  b.wire([205.74, 149.86], d(2)).wire(d(1), [218.44, 149.86]).gnd([218.44, 149.86]);
   blocks.push(b);
 }
 { // Headers
@@ -216,11 +221,11 @@ const GP = (n) => n >= 26 ? `GPIO${n}_ADC${n - 26}` : `GPIO${n}`;
   const left = [0, 1, 'GND', 2, 3, 4, 5, 'GND', 6, 7, 8, 9, 'GND', 10, 11, 12, 13, 'GND', 14, 15];
   const right = [16, 17, 'GND', 18, 19, 20, 21, 'GND', 22, 'RUN', 26, 27, 'GND', 28, '+3V3', '+3V3', 'NC', 'GND', 'VBUS', 'VBUS'];
   const header = (ref, x, nets) => { const j = b.sym('Connector_Generic:Conn_01x20', ref, 'Conn_01x20', x, 100.33, { fp: FP.H20 });
-    nets.forEach((n, i) => { const p = j(i + 1); if (n === 'NC') b.nc(p); else if (typeof n === 'number') b.stub(p, -2.54, GP(n)); else if (n === 'RUN') b.stub(p, -2.54, n); else b.rail(p, -2.54, n); }); };
-  header('J2', 246.38, left); header('J3', 276.86, right);
+    nets.forEach((n, i) => { const p = j(i + 1); if (n === 'NC') b.nc(p); else if (typeof n === 'number') b.stub(p, -12.7, GP(n)); else if (n === 'RUN') b.stub(p, -12.7, n); else b.rail(p, -2.54, n); }); };   // signal names start clear of the supply symbols on the rows between them
+  header('J2', 246.38, left); header('J3', 279.4, right);
   b.text('SWD', 238.76, 139.7);
   const j = b.sym('Connector_Generic:Conn_01x03', 'J4', 'SWD', 246.38, 147.32, { fp: FP.H3 });
-  b.stub(j(1), -2.54, 'SWCLK').rail(j(2), -2.54, 'GND').stub(j(3), -2.54, 'SWDIO');
+  b.stub(j(1), -12.7, 'SWCLK').rail(j(2), -2.54, 'GND').stub(j(3), -12.7, 'SWDIO');
   blocks.push(b);
 }
 
@@ -242,13 +247,25 @@ const usync = sync.details && sync.details[0] && sync.details[0].update_from_sch
 check('all 37 parts reached the board', usync && usync.added.length === 37 && !usync.problems.length, usync ? `${usync.added.length} added, ${usync.nets} nets, problems: ${JSON.stringify(usync.problems)}` : '');
 
 // A long two-layer board with the headers down the long edges in Pico order, 22.86 mm apart, USB at the top.
-const X0 = 100, Y0 = 50, W = 26, H = 51.1;
-await propose({ title: `Board outline ${W} x ${H} mm`, rationale: 'Pico length with the header rows 22.86 mm (0.9 in) apart: breadboard friendly, and wide enough to keep every part on the top side of a two-layer board.', edits: [{ op: 'add_item',
+const NARROW = process.env.NARROW === '1', ROWS = NARROW ? 17.78 : 22.86;   // NARROW=1: the Pico's own 21 mm width and row spacing
+const X0 = 100, Y0 = 50, W = NARROW ? 21 : 26, H = 51.1;
+await propose({ title: `Board outline ${W} x ${H} mm`, rationale: `Pico length with the header rows ${ROWS} mm apart: breadboard friendly, and wide enough to keep every part on the top side of a two-layer board.`, edits: [{ op: 'add_item',
   sexpr: `(gr_rect (start ${X0} ${Y0}) (end ${X0 + W} ${Y0 + H}) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "${crypto.randomUUID()}"))` }] });
 // The floorplan, in mm from the board's top left corner: [x, y, rotation].
-const FLOOR = {
+const FLOOR = NARROW ? {
+  J1: [10.46, 2.5, 180], J4: [10.46, H - 1.61, 90],
+  R2: [6.96, 9.0, 0], R1: [13.96, 9.0, 0], R4: [9.86, 9.2, 90], R3: [11.06, 9.2, 90],   // D+ on the left, D- on the right, as U1's pins 47 and 46 are: the pair never has to cross
+  U2: [14.5, 12.2, 0], C1: [11.5, 12.2, 90], C2: [17.1, 12.2, 90],
+  U3: [6.4, 15.6, 90], C15: [10.2, 15.5, 90], R5: [10.2, 17.6, 90], R6: [10.2, 19.7, 90], SW1: [15.3, 17.6, 90],   // flash turned on end to fit between the header rows
+  U1: [10.46, 31, 0],
+  C3: [5.26, 25.9, 0], C10: [13.4, 24.9, 90], C11: [14.6, 24.9, 90], C14: [15.8, 24.9, 90], C9: [17.0, 24.9, 90],
+  C4: [5.26, 27.2, 0], C5: [5.26, 35.4, 0], C7: [15.66, 27.2, 0], C8: [15.66, 35.4, 0],
+  C6: [13.86, 37.1, 90], C13: [15.06, 37.1, 90], C12: [16.26, 37.1, 90],
+  Y1: [7.96, 40.5, 0], R7: [9.06, 37.3, 0], C16: [4.86, 40.0, 90], C17: [11.06, 41.0, 90],
+  D1: [15.9, 41.5, 0], R9: [15.9, 39.8, 0], SW2: [14.6, 45.5, 0], R8: [10.9, 43.6, 90],
+} : {
   J1: [13, 2.5, 180], J4: [10.46, H - 1.61, 90],
-  R2: [9.5, 9.2, 0], R1: [16.5, 9.2, 0], R3: [12.4, 9.4, 90], R4: [13.6, 9.4, 90],              // CC pull-downs either side, USB series resistors under the data pins
+  R2: [9.5, 9.2, 0], R1: [16.5, 9.2, 0], R4: [12.4, 9.4, 90], R3: [13.6, 9.4, 90],              // CC pull-downs either side, USB series resistors under the data pins
   U2: [19.3, 12.5, 0], C1: [16.6, 12.5, 90], C2: [22.0, 14.5, 90],                             // regulator by the connector
   U3: [8.2, 15, 0], C15: [8.2, 11.3, 0], R5: [6.5, 19.2, 0], R6: [9.9, 19.2, 0], SW1: [18.5, 19.5, 90],   // flash above the QSPI pins, a clear lane for USB beside it
   U1: [13, 31, 0],
@@ -266,7 +283,7 @@ await page.waitForTimeout(1500);
 const place = await propose({ title: 'Place the parts', rationale: 'Connectors where a Pico has them, the RP2040 in the middle, and each support part beside the pin it serves: decoupling at the supply pins, the crystal under XIN/XOUT, flash above the QSPI pins, the regulator by the USB connector, with a clear lane for the USB pair.',
   edits: [{ op: 'auto_place', outline: [X0, Y0, X0 + W, Y0 + H], parts: Object.entries(FLOOR).map(([ref, [x, y, rotation]]) => ({ ref, fixed: { x: r2(X0 + x), y: r2(Y0 + y), rotation } })) },
     // the header rows exactly 22.86 mm apart, off the placement grid
-    { op: 'move', ref: 'J2', x: X0 + 1.57, y: Y0 + 1.42, rotation: 0 }, { op: 'move', ref: 'J3', x: X0 + 1.57 + 22.86, y: Y0 + 1.42 + 48.26, rotation: 180 }] });   // pin 21 at the bottom right, as on a Pico
+    { op: 'move', ref: 'J2', x: X0 + 1.57, y: Y0 + 1.42, rotation: 0 }, { op: 'move', ref: 'J3', x: X0 + 1.57 + ROWS, y: Y0 + 1.42 + 48.26, rotation: 180 }] });   // pin 21 at the bottom right, as on a Pico
 const pl = place.details && place.details[0] && place.details[0].auto_place;
 console.log('place', JSON.stringify(pl && pl.score));
 check('no two courtyards clash', pl && pl.score.courtyardClashes === 0, JSON.stringify(pl && pl.score));
@@ -292,16 +309,19 @@ const route = async (title, rationale, edit) => {
 // FINE=0.15 forces that width on every net of the RP2040; left unset, the engine necks down at its 0.2 mm pads by itself.
 const u1 = (await tool('get_component', { ref: 'U1' })).pads || [];
 const fine = {}; if (process.env.FINE) for (const p of u1) if (p.net && p.net !== '(no net)') fine[p.net] = { width: +process.env.FINE };
-const T = +(process.env.TIME || 60);
-const critical = [...named(/USB_D-/), ...named(/USB_D\+/), ...named(/\(R3-|\(R4-/), ...named(/XIN|XOUT|Y1/), ...named(/QSPI/)];
-const usb = critical.filter((n) => /USB_D|\(R3-|\(R4-/.test(n)), tight = critical.filter((n) => !usb.includes(n));
-await route('Route USB', 'The USB pair before anything else, D- and D+ side by side from the connector through the series resistors to the RP2040.', { nets: usb, order: usb, net_options: fine, time_s: T });
-await route('Route crystal and flash', 'The crystal loop and the QSPI bus on the top layer with no vias, while the board is empty and they can run straight.', { nets: tight, order: tight, layers: ['F.Cu'], allow_vias: false, net_options: fine, time_s: T });
+const T = +(process.env.TIME || 200);
+const usb = [...named(/USB_D-/), ...named(/USB_D\+/), ...named(/\(R3-|\(R4-/)], tight = [...named(/XIN|XOUT|Y1/), ...named(/QSPI/)];
+const critical = [...usb, ...tight];
 const power = ['VBUS', '+3V3', '+1V1'];
 const rest = nets.filter((n) => n && n !== 'GND' && !critical.includes(n) && !power.includes(n));
 const stages = {
-  // the engine orders a fine-pitch fan-out itself; PINORDER=1 gives it the GPIOs in pin order instead
-  S: () => route('Route the signals', 'GPIO fan-out to the headers, buttons, LED and SWD.', { nets: rest, ...(process.env.PINORDER ? { order: [...Array.from({ length: 30 }, (_, n) => GP(n)).filter((n) => rest.includes(n)), ...rest.filter((n) => !/^GPIO/.test(n))] } : {}), net_options: fine, time_s: T }),
+  // One call for the whole board: tracks from an earlier call are fixed copper the engine cannot rip up, and it orders the
+  // RP2040's fan-out itself. Only the nets that must be shortest are named in order.
+  A: () => route('Route the board', 'Everything in one pass so the router can move its own tracks: the USB pair, crystal and flash bus first, VBUS wider, ground into the plane.', { order: critical, net_options: { ...fine, VBUS: { width: 0.4 } }, time_s: T }),
+  // The staged plan, kept for comparison (ORDER=UCPZGS): each stage is its own proposal.
+  U: () => route('Route USB', 'The USB pair before anything else.', { nets: usb, order: usb, net_options: fine, time_s: T }),
+  C: () => route('Route crystal and flash', 'The crystal loop and the QSPI bus on the top layer with no vias.', { nets: tight, order: tight, layers: ['F.Cu'], allow_vias: false, net_options: fine, time_s: T }),
+  S: () => route('Route the signals', 'GPIO fan-out to the headers, buttons, LED and SWD.', { nets: rest, net_options: fine, time_s: T }),
   P: () => route('Route power', 'VBUS and the 3.3 V and 1.1 V rails, VBUS wider for the regulator input.', { nets: power, order: power, net_options: { ...fine, VBUS: { width: 0.4 } }, time_s: T }),
   Z: () => propose({ title: 'Ground plane on the bottom layer', rationale: 'A solid ground pour under the whole board: every ground pad then needs only a short via, and every signal has an unbroken return path beneath it. The RP2040 exposed pad, its only ground, gets vias straight down into it, and TESTEN is tied to the pad beside it.', edits: [
     { op: 'add_via', net: 'GND', x: X0 + 13, y: Y0 + 31 },
@@ -310,18 +330,14 @@ const stages = {
     sexpr: `(zone (net "GND") (layer "B.Cu") (uuid "${crypto.randomUUID()}") (hatch edge 0.5) (connect_pads (clearance 0.3)) (min_thickness 0.25) (fill (thermal_gap 0.3) (thermal_bridge_width 0.4)) (polygon (pts (xy ${X0} ${Y0}) (xy ${X0 + W} ${Y0}) (xy ${X0 + W} ${Y0 + H}) (xy ${X0} ${Y0 + H}))))` }] }),
   G: () => route('Route ground', 'Ground pads down to the plane, and to each other where they are neighbours.', { nets: ['GND'], net_options: fine, time_s: T }),
 };
-for (const k of (process.env.ORDER || 'PZGS')) await stages[k]();
-await route('Route what is left', 'A second pass over the connections the earlier stages could not make, now that every other net is down.', { net_options: fine, time_s: T });
-const done = (t) => tally[t] && tally[t].of > 0 && tally[t].routed === tally[t].of;
-check('USB fully routed', done('Route USB'));
-check('crystal and flash fully routed', done('Route crystal and flash'));
-check('power fully routed', done('Route power'));
-check('ground fully routed onto the plane', done('Route ground'));
-const sig = tally['Route the signals'], extra = tally['Route what is left'];
-check('most signals routed', sig && sig.routed + (extra.routed || 0) >= 0.6 * sig.of, sig && `${sig.routed + (extra.routed || 0)} of ${sig.of}`);
+for (const k of (process.env.ORDER || 'ZA')) await stages[k]();
+const left = Object.values(tally).flatMap((t) => t.unrouted || []);
+if (left.length) await route('Route what is left', 'A second look at the connections the first pass could not make.', { net_options: fine, time_s: T });
+const total = Object.entries(tally).filter(([k]) => k !== 'Route what is left').reduce((a, [, t]) => a + t.of, 0), routed = Object.values(tally).reduce((a, t) => a + t.routed, 0);
+check('at least 95% of the connections routed', total > 0 && routed >= 0.95 * total, `${routed} of ${total}`);
 await page.evaluate(() => window.CollabEditor.api.fitView()); await page.waitForTimeout(600);
 await shot('rp2040-03-routed');
-await save('rp2040-devboard.kicad_pcb');
+await savePro('rp2040-devboard.kicad_pro'); await save('rp2040-devboard.kicad_pcb');
 const drc = await tool('run_checks', {});
 const byCode = {}; for (const v of drc.violations || []) byCode[v.code] = (byCode[v.code] || 0) + 1;
 console.log('DRC', JSON.stringify(byCode));

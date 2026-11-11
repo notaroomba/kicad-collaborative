@@ -151,11 +151,11 @@ const settled = (page, want) => page.waitForFunction((w) => { const out = {}; fo
 const undoDepth = (page) => page.evaluate(() => window.CollabApp.getState().undo.undo);
 const menu = async (page, name, ...subs) => {
   await page.click(`#kmenus [data-menu="${name}"] > button`);
-  for (const s of subs.slice(0, -1)) await page.locator(`#kmenus [data-menu="${name}"] .sub > button`, { hasText: s }).first().hover();
+  for (const s of subs.slice(0, -1)) await page.locator(`#kmenus [data-menu="${name}"] [data-sub="${s}"]`).first().click();
   const last = subs[subs.length - 1];
   await page.locator(`#kmenus [data-menu="${name}"] [data-uiact="${last}"]`).first().click();
 };
-const closeMenus = (page) => page.mouse.click(700, 500);
+const closeMenus = async (page) => { for (let i = 0; i < 3 && (await page.locator('#kmenus .menu.open').count()); i++) { await page.keyboard.press('Escape'); await page.waitForTimeout(120); } };
 const install = async (page, id) => {
   await page.click('#pluginManager [data-tab="catalog"]');
   await page.click(`#pluginCatalog [data-install="${id}"]`);
@@ -206,7 +206,11 @@ let csv = fs.readFileSync(await dl.path(), 'utf8');
 check('toolbar action saves a BOM', dl.suggestedFilename() === 'ecc83-pp-bom.csv' && /^Item,Qty,Reference\(s\),Value,Footprint\r\n/.test(csv) && /R1/.test(csv) && /ECC83/.test(csv), csv.slice(0, 200));
 [dl] = await Promise.all([a.waitForEvent('download'), menu(a, 'file', 'Export', `plugin-export:${ID('bom-export')}:bom-csv`)]);
 check('File → Export runs the exporter', dl.suggestedFilename() === 'ecc83-pp-bom.csv' && fs.readFileSync(await dl.path(), 'utf8') === csv);
-await a.click('#kmenus [data-menu="tools"] > button'); await a.locator('#kmenus [data-menu="tools"] .sub > button', { hasText: 'External Plugins' }).hover();
+await a.click('#kmenus [data-menu="file"] > button'); await a.waitForSelector('#kmenus [data-menu="file"] [data-sub="Export"]');
+check('plugin exporters join KiCad\'s own Export submenu', (await a.locator('#kmenus [data-menu="file"] [data-sub="Export"]').count()) === 1);
+await closeMenus(a);
+await a.click('#kmenus [data-menu="tools"] > button');
+await a.locator('#kmenus [data-menu="tools"] [data-sub="External Plugins"]').click();
 await shot(a, '04-menu-and-toolbar');
 await closeMenus(a);
 

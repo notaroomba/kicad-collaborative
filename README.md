@@ -36,9 +36,9 @@ The native C++ editors send property-level changes over WebSocket to a Rust serv
 
 This is a KiCad fork: collaboration overlays and edit hooks are built into the editors.
 
-## Current limits
+## What to know before relying on it
 
-Board group/generator additions and edits, schematic sheet hierarchy changes, and schematic group membership are not fully synchronized. Remote zone outlines synchronize, but fills are rebuilt locally. The server currently supports one replica. See [known limitations](COLLABORATION.md#limitations) before using it for shared production work.
+Everything in a board or schematic synchronizes, including groups, tuning patterns, hierarchical sheets and zone fills, and the server runs on as many replicas as you give it. Two behaviours are deliberate rather than missing: two people typing into the same text field at the same instant get the later value, not a merge, and undo restores your version of an item even if a collaborator changed it since. Zone fills are always computed by the desktop application, never approximated in the browser. See [how it behaves](COLLABORATION.md#how-it-behaves) for the details.
 
 ---
 

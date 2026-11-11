@@ -393,9 +393,6 @@ void SCH_COLLAB_TOOL::joinWithToken( const wxString& aToken, const wxString& aLi
 
 void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
 {
-    wxString url;
-    wxString error;
-
     // Same guard as the manager's Publish: a linked folder already IS an online project;
     // publishing it again made a duplicate that carried the sync folder along.
     if( COLLAB_PROJECT::IsLinked( m_frame->Prj().GetProjectPath(), m_frame->Prj().GetProjectName() ) )
@@ -405,11 +402,30 @@ void SCH_COLLAB_TOOL::startWithToken( const wxString& aToken )
         return;
     }
 
-    std::optional<nlohmann::json> project =
-            COLLAB_PROJECT::CreateAndShare( COLLAB_SESSION::ServerUrl(), aToken,
-                                            m_frame->Prj().GetProjectPath(),
-                                            m_frame->Prj().GetProjectName(), url, error );
+    if( m_publishing )
+        return;
 
+    m_publishing = true;
+    m_frame->ShowInfoBarMsg( _( "Publishing the project..." ) );
+
+    // Zipping and uploading happen off the UI thread, so the editor stays usable while a
+    // large project goes up or a server that is not there times out.
+    COLLAB_PROJECT::CreateAndShareAsync( m_frame, COLLAB_SESSION::ServerUrl(), aToken,
+                                         m_frame->Prj().GetProjectPath(),
+                                         m_frame->Prj().GetProjectName(),
+            [this, aToken]( std::optional<nlohmann::json> aProject, const wxString& aUrl,
+                            const wxString& aError )
+            {
+                m_publishing = false;
+                finishStart( aProject, aToken, aUrl, aError );
+            } );
+}
+
+
+void SCH_COLLAB_TOOL::finishStart( const std::optional<nlohmann::json>& project,
+                                   const wxString& aToken, const wxString& url,
+                                   const wxString& error )
+{
     if( !project )
     {
         m_frame->ShowInfoBarError( error );

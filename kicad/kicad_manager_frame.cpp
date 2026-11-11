@@ -1693,11 +1693,21 @@ void KICAD_MANAGER_FRAME::PublishProjectOnline()
 
     auto publish = [this, projectPath, projectName, proFile, server]( const wxString& aToken )
     {
-        wxString url;
-        wxString error;
+        if( m_collabPublishing )
+            return;
 
-        std::optional<nlohmann::json> project = COLLAB_PROJECT::CreateAndShare(
-                server, aToken, projectPath, projectName, url, error );
+        m_collabPublishing = true;
+        SetStatusText( wxString::Format( _( "Publishing '%s'..." ), projectName ) );
+
+        // Zipping and uploading happen off the UI thread: the window stays usable however
+        // big the project is and however slow (or absent) the server.
+        COLLAB_PROJECT::CreateAndShareAsync( this, server, aToken, projectPath, projectName,
+                [this, projectPath, projectName, proFile, server](
+                        std::optional<nlohmann::json> project, const wxString& url,
+                        const wxString& error )
+                {
+        m_collabPublishing = false;
+        SetStatusText( wxEmptyString );
 
         if( !project )
         {
@@ -1723,6 +1733,7 @@ void KICAD_MANAGER_FRAME::PublishProjectOnline()
                                            "editor to start the live session." ),
                                         url ),
                       _( "Publish Project Online" ), wxOK | wxICON_INFORMATION, this );
+                } );
     };
 
     wxString token = COLLAB_AUTH::StoredToken( server );

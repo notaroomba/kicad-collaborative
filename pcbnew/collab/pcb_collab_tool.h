@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <optional>
 #include <functional>
 #include <memory>
 
@@ -143,6 +144,8 @@ private:
     std::vector<BOARD_ITEM*>           m_ghostRatsItems;
     VECTOR2I                           m_ghostLastOffset;
     void OnSnapshotRequest( const wxString& aDocId ) override;
+    void OnRequest( const wxString& aDocId, const wxString& aAction,
+                    const wxString& aFromName ) override;
     void OnReset( const wxString& aDocId, long long aSeq ) override;
     void OnJoinRefused( const wxString& aDocId, const wxString& aCode ) override;
     void OnDocInfo( const nlohmann::json& aDocInfo ) override;
@@ -169,6 +172,10 @@ private:
 
     void joinWithToken( const wxString& aToken, const wxString& aLinkToken );
     void startWithToken( const wxString& aToken );
+
+    ///< The second half of startWithToken, once the background upload has finished.
+    void finishStart( const std::optional<nlohmann::json>& aProject, const wxString& aToken,
+                      const wxString& aUrl, const wxString& aError );
 
     ///< Connect and join the board doc of aProject (a server project json).
     void beginSession( const nlohmann::json& aProject, const wxString& aToken,
@@ -261,5 +268,6 @@ class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;
     bool           m_ownsSession; ///< this tool connected the session, rather than eeschema
     wxString       m_autoJoinProject;   ///< project path an auto-join was attempted for
     long long      m_projectOwnerId = 0; ///< owner of the joined online project (0 = unknown)
+    bool           m_publishing = false;  ///< the project is being uploaded in the background
     bool           m_startedHere = false; ///< this frame published the project / started the session
 };

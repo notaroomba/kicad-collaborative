@@ -26,6 +26,9 @@
 
 #include <chrono>
 #include <cstring>
+#include <random>
+
+#include <wx/base64.h>
 
 #include <wx/log.h>
 
@@ -48,6 +51,12 @@ COLLAB_WS_CLIENT::~COLLAB_WS_CLIENT()
 
 
 bool COLLAB_WS_CLIENT::IsSupported()
+{
+    return true;
+}
+
+
+bool COLLAB_WS_CLIENT::CurlHasWebSockets()
 {
     curl_version_info_data* info = curl_version_info( CURLVERSION_NOW );
 
@@ -112,7 +121,10 @@ void COLLAB_WS_CLIENT::threadMain()
         // run user code (JSON, wx event posting) so this is not hypothetical.
         try
         {
-            runConnection();
+            if( CurlHasWebSockets() )
+                runConnection();
+            else
+                runOwnFraming();
         }
         catch( const std::exception& e )
         {
@@ -336,6 +348,425 @@ void COLLAB_WS_CLIENT::runConnection()
             }
         }
     }
+
+    m_connected.store( false, std::memory_order_release );
+
+    if( m_cb.onDisconnected )
+        m_cb.onDisconnected();
+}
+
+
+// ---------------------------------------------------------------------------------------
+// RFC 6455 over a connection libcurl opened, for a libcurl built without WebSockets.
+
+namespace
+{
+enum WS_OPCODE
+{
+    WS_CONT = 0x0,
+    WS_TEXT = 0x1,
+    WS_BINARY = 0x2,
+    WS_CLOSE = 0x8,
+    WS_PING = 0x9,
+    WS_PONG = 0xA
+};
+
+
+/// A client frame: always final, always masked (the protocol requires it of clients).
+std::string buildFrame( int aOpcode, const char* aData, size_t aLen, std::mt19937& aRng )
+{
+    std::string frame;
+    frame.reserve( aLen + 14 );
+    frame.push_back( static_cast<char>( 0x80 | aOpcode ) );
+
+    if( aLen < 126 )
+    {
+        frame.push_back( static_cast<char>( 0x80 | aLen ) );
+    }
+    else if( aLen <= 0xFFFF )
+    {
+        frame.push_back( static_cast<char>( 0x80 | 126 ) );
+        frame.push_back( static_cast<char>( ( aLen >> 8 ) & 0xFF ) );
+        frame.push_back( static_cast<char>( aLen & 0xFF ) );
+    }
+    else
+    {
+        frame.push_back( static_cast<char>( 0x80 | 127 ) );
+
+        for( int shift = 56; shift >= 0; shift -= 8 )
+            frame.push_back( static_cast<char>( ( static_cast<uint64_t>( aLen ) >> shift ) & 0xFF ) );
+    }
+
+    uint32_t      word = aRng();
+    unsigned char mask[4] = { static_cast<unsigned char>( word ), static_cast<unsigned char>( word >> 8 ),
+                              static_cast<unsigned char>( word >> 16 ),
+                              static_cast<unsigned char>( word >> 24 ) };
+
+    frame.append( reinterpret_cast<const char*>( mask ), 4 );
+
+    size_t start = frame.size();
+    frame.append( aData, aLen );
+
+    for( size_t i = 0; i < aLen; ++i )
+        frame[start + i] = static_cast<char>( static_cast<unsigned char>( frame[start + i] ) ^ mask[i % 4] );
+
+    return frame;
+}
+
+
+std::string lowered( std::string aText )
+{
+    for( char& c : aText )
+        c = static_cast<char>( tolower( static_cast<unsigned char>( c ) ) );
+
+    return aText;
+}
+} // namespace
+
+
+void COLLAB_WS_CLIENT::runOwnFraming()
+{
+    // Host and path for the upgrade request, from the URL as libcurl reads it.
+    std::string url = m_url;
+
+    if( url.compare( 0, 6, "wss://" ) == 0 )
+        url = "https://" + url.substr( 6 );
+    else if( url.compare( 0, 5, "ws://" ) == 0 )
+        url = "http://" + url.substr( 5 );
+
+    std::string host, path = "/";
+
+    if( CURLU* parts = curl_url() )
+    {
+        if( curl_url_set( parts, CURLUPART_URL, url.c_str(), 0 ) == CURLUE_OK )
+        {
+            char* text = nullptr;
+
+            if( curl_url_get( parts, CURLUPART_HOST, &text, 0 ) == CURLUE_OK && text )
+            {
+                host = text;
+                curl_free( text );
+            }
+
+            text = nullptr;
+
+            if( curl_url_get( parts, CURLUPART_PORT, &text, 0 ) == CURLUE_OK && text )
+            {
+                host += std::string( ":" ) + text;
+                curl_free( text );
+            }
+
+            text = nullptr;
+
+            if( curl_url_get( parts, CURLUPART_PATH, &text, 0 ) == CURLUE_OK && text )
+            {
+                path = text;
+                curl_free( text );
+            }
+
+            text = nullptr;
+
+            if( curl_url_get( parts, CURLUPART_QUERY, &text, 0 ) == CURLUE_OK && text )
+            {
+                path += std::string( "?" ) + text;
+                curl_free( text );
+            }
+        }
+
+        curl_url_cleanup( parts );
+    }
+
+    if( host.empty() )
+        return;
+
+    KICAD_CURL_EASY easy;
+    CURL*           curl = easy.GetCurl();
+
+    easy.SetURL( url );
+    curl_easy_setopt( curl, CURLOPT_CONNECT_ONLY, 1L );
+    curl_easy_setopt( curl, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT_SECS );
+    // The upgrade is an HTTP/1.1 exchange; keep TLS from negotiating HTTP/2.
+    curl_easy_setopt( curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1 );
+
+    easy.SetTransferCallback(
+            [this]( size_t, size_t, size_t, size_t ) -> int
+            {
+                return m_running.load( std::memory_order_acquire ) ? 0 : 1;
+            },
+            0 );
+
+    if( easy.Perform() != CURLE_OK )
+        return;
+
+    auto socketOf = [curl]() -> curl_socket_t
+    {
+        curl_socket_t sock = CURL_SOCKET_BAD;
+        curl_easy_getinfo( curl, CURLINFO_ACTIVESOCKET, &sock );
+        return sock;
+    };
+
+    // Everything goes out through here; false when the connection is gone or we are stopping.
+    auto sendAll = [&]( const std::string& aBytes ) -> bool
+    {
+        size_t offset = 0;
+
+        while( offset < aBytes.size() )
+        {
+            size_t   sent = 0;
+            CURLcode rc = curl_easy_send( curl, aBytes.data() + offset, aBytes.size() - offset, &sent );
+            offset += sent;
+
+            if( rc == CURLE_AGAIN )
+            {
+                if( !m_running.load( std::memory_order_acquire ) )
+                    return false;
+
+                waitOnSocket( socketOf(), POLL_MS, WAIT_FOR::WRITE );
+                continue;
+            }
+
+            if( rc != CURLE_OK )
+                return false;
+        }
+
+        return true;
+    };
+
+    std::random_device seed;
+    std::mt19937       rng( seed() );
+
+    unsigned char nonce[16];
+
+    for( unsigned char& b : nonce )
+        b = static_cast<unsigned char>( rng() );
+
+    std::string key = wxBase64Encode( nonce, sizeof( nonce ) ).ToStdString();
+
+    std::string request = "GET " + path + " HTTP/1.1\r\n"
+                          "Host: " + host + "\r\n"
+                          "Upgrade: websocket\r\n"
+                          "Connection: Upgrade\r\n"
+                          "Sec-WebSocket-Key: " + key + "\r\n"
+                          "Sec-WebSocket-Version: 13\r\n"
+                          "\r\n";
+
+    if( !sendAll( request ) )
+        return;
+
+    // The response headers, then whatever frames arrived on their heels.
+    std::string inbox;
+    char        buf[65536];
+    auto        deadline = std::chrono::steady_clock::now() + std::chrono::seconds( CONNECT_TIMEOUT_SECS );
+    size_t      headerEnd = std::string::npos;
+
+    while( headerEnd == std::string::npos )
+    {
+        if( !m_running.load( std::memory_order_acquire ) || std::chrono::steady_clock::now() > deadline
+            || inbox.size() > 65536 )
+        {
+            return;
+        }
+
+        size_t   got = 0;
+        CURLcode rc = curl_easy_recv( curl, buf, sizeof( buf ), &got );
+
+        if( rc == CURLE_AGAIN )
+        {
+            waitOnSocket( socketOf(), POLL_MS, WAIT_FOR::READ );
+            continue;
+        }
+
+        if( rc != CURLE_OK || got == 0 )
+            return;
+
+        inbox.append( buf, got );
+        headerEnd = inbox.find( "\r\n\r\n" );
+    }
+
+    std::string headers = lowered( inbox.substr( 0, headerEnd ) );
+    inbox.erase( 0, headerEnd + 4 );
+
+    if( headers.compare( 0, 12, "http/1.1 101" ) != 0 || headers.find( "upgrade: websocket" ) == std::string::npos )
+    {
+        wxLogTrace( wxT( "COLLAB" ), wxS( "ws upgrade refused: %s" ),
+                    wxString::FromUTF8( headers.substr( 0, headers.find( "\r\n" ) ) ) );
+        return;
+    }
+
+    m_connected.store( true, std::memory_order_release );
+
+    if( m_cb.onConnected )
+        m_cb.onConnected();
+
+    std::string message;        // a text message being assembled from fragments
+    bool        inMessage = false;
+    bool        alive = true;
+
+    while( alive && m_running.load( std::memory_order_acquire ) )
+    {
+        std::deque<std::string> toSend;
+        {
+            std::lock_guard<std::mutex> lock( m_outMutex );
+            toSend.swap( m_outbox );
+        }
+
+        for( const std::string& text : toSend )
+        {
+            if( !sendAll( buildFrame( WS_TEXT, text.data(), text.size(), rng ) ) )
+            {
+                alive = false;
+                break;
+            }
+        }
+
+        if( !alive )
+            break;
+
+        bool sawData = false;
+
+        while( alive )
+        {
+            size_t   got = 0;
+            CURLcode rc = curl_easy_recv( curl, buf, sizeof( buf ), &got );
+
+            if( rc == CURLE_AGAIN )
+                break;
+
+            if( rc != CURLE_OK || got == 0 )
+            {
+                alive = false;
+                break;
+            }
+
+            sawData = true;
+            inbox.append( buf, got );
+        }
+
+        // Take every whole frame out of what has arrived.
+        size_t at = 0;
+
+        while( alive )
+        {
+            size_t have = inbox.size() - at;
+
+            if( have < 2 )
+                break;
+
+            const unsigned char* p = reinterpret_cast<const unsigned char*>( inbox.data() ) + at;
+            bool                 fin = p[0] & 0x80;
+            int                  opcode = p[0] & 0x0F;
+            bool                 masked = p[1] & 0x80;
+            uint64_t             len = p[1] & 0x7F;
+            size_t               head = 2;
+
+            if( len == 126 )
+            {
+                if( have < 4 )
+                    break;
+
+                len = ( static_cast<uint64_t>( p[2] ) << 8 ) | p[3];
+                head = 4;
+            }
+            else if( len == 127 )
+            {
+                if( have < 10 )
+                    break;
+
+                len = 0;
+
+                for( int i = 0; i < 8; ++i )
+                    len = ( len << 8 ) | p[2 + i];
+
+                head = 10;
+            }
+
+            // A server never masks, and nothing we expect is anywhere near this large.
+            if( masked || len > ( 256u << 20 ) )
+            {
+                alive = false;
+                break;
+            }
+
+            if( have < head + len )
+                break;
+
+            const char* payload = inbox.data() + at + head;
+            at += head + static_cast<size_t>( len );
+
+            switch( opcode )
+            {
+            case WS_TEXT:
+            case WS_BINARY:
+                message.assign( payload, static_cast<size_t>( len ) );
+                inMessage = !fin;
+
+                if( fin && opcode == WS_TEXT && m_cb.onMessage )
+                    m_cb.onMessage( std::move( message ) );
+
+                if( fin )
+                    message.clear();
+
+                break;
+
+            case WS_CONT:
+                if( inMessage )
+                {
+                    message.append( payload, static_cast<size_t>( len ) );
+
+                    if( fin )
+                    {
+                        inMessage = false;
+
+                        if( m_cb.onMessage )
+                            m_cb.onMessage( std::move( message ) );
+
+                        message.clear();
+                    }
+                }
+
+                break;
+
+            case WS_PING:
+                if( !sendAll( buildFrame( WS_PONG, payload, static_cast<size_t>( len ), rng ) ) )
+                    alive = false;
+
+                break;
+
+            case WS_PONG:
+                break;
+
+            case WS_CLOSE:
+                sendAll( buildFrame( WS_CLOSE, payload, std::min<size_t>( static_cast<size_t>( len ), 2 ), rng ) );
+                alive = false;
+                break;
+
+            default:
+                alive = false;
+                break;
+            }
+        }
+
+        if( at > 0 )
+            inbox.erase( 0, at );
+
+        if( !alive )
+            break;
+
+        if( !sawData )
+        {
+            bool outboxEmpty;
+            {
+                std::lock_guard<std::mutex> lock( m_outMutex );
+                outboxEmpty = m_outbox.empty();
+            }
+
+            if( outboxEmpty )
+                waitOnSocket( socketOf(), POLL_MS, WAIT_FOR::READ );
+        }
+    }
+
+    if( m_running.load( std::memory_order_acquire ) == false && alive )
+        sendAll( buildFrame( WS_CLOSE, "\x03\xe8", 2, rng ) );
 
     m_connected.store( false, std::memory_order_release );
 
