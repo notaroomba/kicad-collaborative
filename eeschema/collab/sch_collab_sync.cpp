@@ -569,8 +569,8 @@ bool SCH_COLLAB::ApplyItemChange( SCHEMATIC& aSchematic, SCH_SCREEN* aScreen,
                         SCH_SYMBOL* freshSymbol = static_cast<SCH_SYMBOL*>( fresh );
                         graph->RemoveItem( freshSymbol );
 
-                        for( SCH_PIN* pin : freshSymbol->GetPins() )
-                            graph->RemoveItem( pin );
+                        for( const std::unique_ptr<SCH_PIN>& pin : freshSymbol->GetRawPins() )
+                            graph->RemoveItem( pin.get() );
                     }
 
                     static_cast<SCH_SYMBOL*>( item )->UpdatePins();
@@ -2379,9 +2379,9 @@ void SCH_COLLAB_SYNC::saveMissingLibraries( const nlohmann::json& aChanges )
             SCH_IO_KICAD_SEXPR io;
 
             // The plugin takes ownership of the copy.
-            LIB_SYMBOL* copy = new LIB_SYMBOL( *symbol->GetLibSymbolRef() );
+            auto copy = std::make_unique<LIB_SYMBOL>( *symbol->GetLibSymbolRef() );
             copy->SetName( symbol->GetLibId().GetLibItemName() );
-            io.SaveSymbol( libFile.GetFullPath(), copy );
+            io.SaveSymbol( libFile.GetFullPath(), std::move( copy ) );
         }
         catch( const IO_ERROR& ioe )
         {
