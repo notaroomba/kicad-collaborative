@@ -92,8 +92,20 @@ export function parseDoc(text, docType) {
 // addItem() returns null, so a peer's op for it is dropped without a trace and the two
 // views diverge silently.  The trailing kinds have no geometry builder yet — they are
 // carried so ops for them still match, and so a document round-trip does not lose them.
+/**
+ * Document-level settings carried by a collab change ({ docProps: { paper: "(paper …)", titleBlock: "(title_block …)" } },
+ * the Page Settings dialog): the same fields parseDoc reads from the file header.  An empty titleBlock clears it.
+ */
+export function applyDocProps(doc, props) {
+  if (!doc || !props) return false;
+  let any = false;
+  if (typeof props.paper === "string" && props.paper) { const node = parse(props.paper); if (node && node[0] === "paper") { doc.page = paperSize(node); doc.paper = str(node[1]) || "A4"; doc.portrait = doc.page[1] > doc.page[0]; any = true; } }
+  if (typeof props.titleBlock === "string") { const node = props.titleBlock ? parse(props.titleBlock) : null; doc.titleBlock = node && node[0] === "title_block" ? titleBlockOf(node) : {}; any = true; }
+  return any;
+}
+
 export const SCH_KINDS = new Set(["symbol", "wire", "bus", "junction", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "no_connect", "sheet", "text", "text_box", "polyline", "rectangle", "circle", "arc", "bezier", "bus_entry", "image", "table", "rule_area",
-  "ellipse", "ellipse_arc", "net_chain"]);
+  "ellipse", "ellipse_arc", "net_chain", "group"]);
 
 export const PCB_KINDS = new Set(["footprint", "segment", "arc", "via", "zone", "gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_text", "gr_text_box", "gr_curve", "gr_bbox", "dimension", "target", "image", "group", "table", "generated",
   "gr_ellipse", "gr_ellipse_arc", "barcode", "point", "grid_item"]);

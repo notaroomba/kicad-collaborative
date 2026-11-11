@@ -10,7 +10,7 @@ import { activeModule, deleteSelected, moveOp, rotateSelected, toolCtx } from ".
 import { esc } from "./util";
 import { dragG, isSch, pxPerMm, requestRender, selG, svgText } from "./view";
 /** Board groups: a member drags/deletes with its whole group (KiCad's default). */
-export function groupExpand(ids) { const m = CollabTools.pcb; if (isSch() || !E.kdoc || !m || !m.expandGroups) return new Set(ids); try { return new Set(m.expandGroups(E.kdoc, [...ids])); } catch (e) { return new Set(ids); } }
+export function groupExpand(ids) { const m = isSch() ? CollabTools.sch : CollabTools.pcb; if (!E.kdoc || !m || !m.expandGroups) return new Set(ids); try { return new Set(m.expandGroups(E.kdoc, [...ids])); } catch (e) { return new Set(ids); } }
 
 
 

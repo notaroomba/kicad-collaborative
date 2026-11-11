@@ -202,8 +202,9 @@ export function trackNameColor(copper) {
 }
 
 /** STROKE_PARAMS::Stroke dash pattern (mm) for a drawn line width: dash 11 w, gap 4 w, dot 0.2 w (ISO 128-2 ratios 12 / 3, correction 1). */
+export const DASH_RATIOS = { dash: 12, gap: 3 };   // the schematic's dashed_lines_dash_length_ratio / gap_length_ratio (Schematic Setup > Formatting)
 export function dashPattern(type, w) {
-  const dash = 11 * w, gap = 4 * w, dot = 0.2 * w;
+  const dash = Math.max(DASH_RATIOS.dash - 1, 1) * w, gap = Math.max(DASH_RATIOS.gap + 1, 1) * w, dot = 0.2 * w;
   if (type === "dot") return [dot, gap];
   if (type === "dash_dot") return [dash, gap, dot, gap];
   if (type === "dash_dot_dot") return [dash, gap, dot, gap, dot, gap];

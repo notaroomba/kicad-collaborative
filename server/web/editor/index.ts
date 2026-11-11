@@ -1,5 +1,6 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { installDialogs } from "../dialogs/index";
 import "./dom";
 import "./appstore";
 import "./util";
@@ -77,6 +78,11 @@ function moduleGhost(mod) {
 // wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
 // Installed before every other stage listener so it sees each event first.
 installGestures(openContextMenu);
+stage.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomBy(Math.pow(E.zoomStep || 1.0018, -ev.deltaY), ev.clientX - r.left, ev.clientY - r.top);   // Preferences > Mouse and Touchpad > Zoom speed
+}, { passive: false });
 
    // until the user pans/zooms, resizes just refit
 new ResizeObserver(() => {
@@ -124,7 +130,7 @@ stage.addEventListener("pointerdown", (ev) => {
 
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay")) return;
-  if (ev.button === 2 || ev.button === 1 || (ev.button === 0 && E.tool === "pan")) {
+  if ((ev.button === 2 && E.rightDragPan !== false) || (ev.button === 1 && E.middleDragPan !== false) || (ev.button === 0 && E.tool === "pan")) {
     E.pan = { x: ev.clientX - E.panX, y: ev.clientY - E.panY };
     stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
   }
@@ -157,6 +163,7 @@ stage.addEventListener("pointerdown", (ev) => {
     return;
   }
   if (ev.shiftKey) {                                   // KiCad: Shift+click adds to / removes from the selection
+    if (E.selected) E.selection.add(E.selected.id);   // the single selection joins the set it is being extended to
     if (E.selection.has(best.id)) E.selection.delete(best.id); else E.selection.add(best.id);
     E.selected = E.selection.has(best.id) ? best : (E.selected && E.selected.id === best.id ? null : E.selected);
     drawSelection(); renderProps(); renderObjects(); return;
@@ -164,7 +171,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!E.selection.has(best.id)) E.selection.clear();
   E.selected = best; drawSelection(); renderProps(); renderObjects();
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
-  if (!isSch()) { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
+  { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
   E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
   // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
@@ -324,6 +331,7 @@ document.addEventListener("keydown", (ev) => {
   if (k === "Delete" || k === "Backspace") deleteSelected();
 });
 
+installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();
 installLibrary();   // window.KiCadLibrary + the placeFootprint / library browser actions (editor/library.ts)

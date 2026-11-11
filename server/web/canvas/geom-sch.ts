@@ -92,7 +92,8 @@ export function buildSchGeom(doc, item) {
     const [x, y] = atOf(n); const s = kid(n, "size"); const dx = s ? num(s[1]) : 2.54, dy = s ? num(s[2]) : 2.54;
     G(item, Object.assign({ t: "line", x1: x, y1: y, x2: x + dx, y2: y + dy, w: widthOf(n, 0) || 0.1524, color: strokeColorOf(n) || SCH.busEntry, layer: "Wires", z: SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "junction") {
-    const [x, y] = atOf(n); const d = kid(n, "diameter"); const r = (d && num(d[1]) > 0 ? num(d[1]) : 0.9144) / 2;
+    const [x, y] = atOf(n); const d = kid(n, "diameter"); const dflt = doc && doc.schSettings && typeof doc.schSettings.junctionDiameter === "number" ? doc.schSettings.junctionDiameter : 0.9144;   // Schematic Setup > Formatting > Junction dot size
+    const r = (d && num(d[1]) > 0 ? num(d[1]) : dflt) / 2;
     G(item, { t: "circle", x, y, r, w: 0, color: colorOf(n) || SCH.junction, fill: colorOf(n) || SCH.junction, layer: "Junctions", z: SCH_Z.junction });
   } else if (k === "no_connect") {
     const [x, y] = atOf(n); const s = Math.max(1.2192, SCH_PEN * 3) / 2;   // DEFAULT_NOCONNECT_SIZE 48 mil

@@ -2244,7 +2244,7 @@ function ercCheck(doc, opts) {
       if (DRIVEN.has(a.pin.type) && (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in"))) needs = a;
       for (let j = i + 1; j < visible.length; j++) {
         const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
-        const e = PIN_MATRIX[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];
+        const e = (opts.pinMap || PIN_MATRIX)[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];   // the project's Pin Conflicts Map when given
         if (e && (!worst || e > worst.e)) worst = { e, a, b };
       }
     }
