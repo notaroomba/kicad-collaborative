@@ -1,7 +1,8 @@
 // Home.tsx — the projects window: everything stored online that you own or were given, with
 // search, sort, upload, rename, share, visibility, download, leave and delete; plus Explore
 // (public projects) and joining by link.  One layout from a phone to a wide desktop.
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as RDragEvent, type KeyboardEvent as RKeyboardEvent, type MouseEvent as RMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as RDragEvent, type KeyboardEvent as RKeyboardEvent, type CSSProperties, type MouseEvent as RMouseEvent } from "react";
+import { flushSync } from "react-dom";
 import { useApp, type User } from "../store";
 import * as API from "./api";
 import type { Project } from "./api";
@@ -29,6 +30,25 @@ function pref<T extends string>(key: string, fallback: T, allowed: readonly T[])
   try { const v = localStorage.getItem(key) as T | null; return v && allowed.includes(v) ? v : fallback; } catch { return fallback; }
 }
 function savePref(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* private mode */ } }
+
+/** Apply a list change as a view transition where the browser has them: cards glide to their new
+ *  places and removed ones fade, instead of the grid jumping.  Elsewhere the change just happens. */
+function smooth(change: () => void) {
+  const d = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+  const many = document.querySelectorAll(".hp-items > .hp-item").length > 80;   // every card is a snapshot layer
+  if (!d.startViewTransition || many || document.hidden || matchMedia("(prefers-reduced-motion: reduce)").matches) { change(); return; }
+  let done = false;
+  const run = () => { if (!done) { done = true; flushSync(change); } };
+  try {
+    const t = d.startViewTransition(run) as { finished?: Promise<unknown>; ready?: Promise<unknown>; updateCallbackDone?: Promise<unknown> };
+    // A newer transition skips this one: that is fine, the change itself still ran.
+    for (const pr of [t.finished, t.ready, t.updateCallbackDone]) pr?.catch(() => { run(); });
+  } catch { run(); }
+}
+
+/** Deletes still on their way to the server: the Trash page waits for them, so a project trashed a moment ago is listed. */
+const trashing = new Set<Promise<unknown>>();
+function track<T>(p: Promise<T>): Promise<T> { trashing.add(p); const done = () => { trashing.delete(p); }; p.then(done, done); return p; }
 
 /** The project just uploaded or copied: its card is highlighted once. */
 let freshId: string | null = null;
@@ -66,7 +86,7 @@ function useProjects(kind: "mine" | "gallery", enabled: boolean, userId: number 
   const settle = useRef<number | undefined>(undefined);
   const mutate = useCallback((fn: (l: Project[]) => Project[]) => {
     seq.current++; setLoading(false);
-    setList((l) => { const next = l ? fn(l) : l; if (next) cache[kind] = next; return next; });
+    smooth(() => setList((l) => { const next = l ? fn(l) : l; if (next) cache[kind] = next; return next; }));
     window.clearTimeout(settle.current);
     settle.current = window.setTimeout(() => { load(); }, 2500);
   }, [kind, load]);
@@ -105,10 +125,12 @@ interface ItemProps {
   onMenu: (p: Project, at: { x: number; y: number; right?: number }) => void;
   onRename: (p: Project, name: string | null) => void; onStartRename: (p: Project) => void; onShare: (p: Project) => void;
   onStar: (p: Project) => void; onDelete: (p: Project) => void;
+  /** Position in the list: staggers the entrance. */
+  index: number;
   /** Selection mode: undefined when off, else whether this one is picked. */
   picked?: boolean; onPick: (p: Project, range: boolean) => void;
 }
-function ProjectItem({ p, me, layout, renaming, fresh, onMenu, onRename, onStartRename, onShare, onStar, onDelete, picked, onPick }: ItemProps) {
+function ProjectItem({ p, me, layout, renaming, fresh, onMenu, onRename, onStartRename, onShare, onStar, onDelete, picked, onPick, index }: ItemProps) {
   const owned = !!me && p.ownerId === me.id;
   const role = owned ? "owner" : p.role || "";
   const open = (ev: RMouseEvent) => {
@@ -131,7 +153,8 @@ function ProjectItem({ p, me, layout, renaming, fresh, onMenu, onRename, onStart
   const more = (ev: RMouseEvent) => { ev.preventDefault(); ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); onMenu(p, { x: r.left, y: r.bottom + 4, right: r.right }); };
   const people = (p.memberCount || 0) + 1;
   return (
-    <li className={"hp-item " + layout + (fresh ? " fresh" : "") + (picked !== undefined ? " picking" : "") + (picked ? " picked" : "")}>
+    <li className={"hp-item " + layout + (fresh ? " fresh" : "") + (picked !== undefined ? " picking" : "") + (picked ? " picked" : "")}
+      style={{ viewTransitionName: "hp-" + p.projectId.replace(/[^a-zA-Z0-9_-]/g, ""), "--i": Math.min(index, 14) } as CSSProperties}>
       {picked !== undefined ? <span className="hp-pick" aria-hidden="true">{picked ? <Ic name="check" size={14} /> : null}</span> : null}
       <a className="hp-item-link" ref={link} aria-selected={picked} href={editUrl(p.projectId)} onClick={open} onKeyDown={key} draggable={false}
         onContextMenu={(ev) => { ev.preventDefault(); onMenu(p, { x: ev.clientX, y: ev.clientY }); }} aria-label={`Open ${p.name}`}>
@@ -312,7 +335,7 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
     const ids = new Set(picked.map((p) => p.projectId));
     mutate((l) => l.filter((x) => !ids.has(x.projectId)));
     setSel(null);
-    const res = await Promise.allSettled([...mine.map((p) => API.deleteProject(p.projectId)), ...theirs.map((p) => API.leaveProject(p.projectId))]);
+    const res = await Promise.allSettled([...mine.map((p) => track(API.deleteProject(p.projectId))), ...theirs.map((p) => API.leaveProject(p.projectId))]);
     const failed = res.filter((r) => r.status === "rejected").length;
     const done = mine.filter((_, i) => res[i].status === "fulfilled");
     if (failed) toast(`${failed} of ${picked.length} could not be removed`, { kind: "err" });
@@ -344,7 +367,7 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
     const before = list;
     mutate((l) => l.filter((x) => x.projectId !== p.projectId));
     try {
-      await API.deleteProject(p.projectId);
+      await track(API.deleteProject(p.projectId));
       toast(`Moved “${p.name}” to Trash`, { action: { label: "Undo", run: async () => { try { await API.undeleteProject(p.projectId); reload(); } catch (e) { toastError(e); } } } });
     } catch (e) { if (before) mutate(() => before); toastError(e); }
   };
@@ -397,12 +420,12 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
               onKeyDown={(ev) => { if (ev.key === "Escape" && q) { ev.preventDefault(); setQ(""); } }} /><kbd>/</kbd></label>
           <div className="hp-seg" role="tablist" aria-label="Which projects">
             {(["all", "owned", "shared", "starred"] as Scope[]).map((s) => (
-              <button type="button" role="tab" key={s} aria-selected={scope === s} className={scope === s ? "on" : undefined} onClick={() => { setScope(s); savePref("kc.home.scope", s); }}>
+              <button type="button" role="tab" key={s} aria-selected={scope === s} className={scope === s ? "on" : undefined} onClick={() => { smooth(() => setScope(s)); savePref("kc.home.scope", s); }}>
                 {s === "all" ? "All" : s === "owned" ? (phone ? "Mine" : "Owned by me") : s === "shared" ? (phone ? "Shared" : "Shared with me") : "Starred"}<span>{counts[s]}</span></button>
             ))}
           </div>
           <div className="hp-tools-end">
-            <select className="hp-select" aria-label="Sort by" value={sort} onChange={(ev) => { setSort(ev.target.value as Sort); savePref("kc.home.sort", ev.target.value); }}>
+            <select className="hp-select" aria-label="Sort by" value={sort} onChange={(ev) => { const v = ev.target.value as Sort; smooth(() => setSort(v)); savePref("kc.home.sort", ev.target.value); }}>
               <option value="updated">Last edited</option><option value="name">Name</option><option value="created">Date created</option>
             </select>
             <button type="button" className={"btn hp-selbtn" + (sel ? " on" : "")} aria-pressed={!!sel} title="Select several projects (Space on a project)" onClick={() => { anchor.current = null; setSel(sel ? null : new Set()); }}><Ic name="check" />Select</button>
@@ -451,7 +474,7 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
 
       {shown.length ? (
         <ul className={"hp-items " + layout}>
-          {shown.map((p) => <ProjectItem key={p.projectId} p={p} me={me} layout={layout} renaming={renaming === p.projectId} fresh={fresh === p.projectId}
+          {shown.map((p, index) => <ProjectItem key={p.projectId} p={p} index={index} me={me} layout={layout} renaming={renaming === p.projectId} fresh={fresh === p.projectId}
             onMenu={(pp, at) => setMenu({ p: pp, at })} onRename={rename} onStartRename={(pp) => setRenaming(pp.projectId)}
             onShare={(pp) => onShare({ projectId: pp.projectId, name: pp.name, isPublic: pp.public })} onStar={star}
             picked={sel ? sel.has(p.projectId) : undefined} onPick={pick}
@@ -519,8 +542,8 @@ function Explore({ me, tick }: { me: User | null; tick: number }) {
       {list && list.length && !shown.length ? <div className="hp-empty small"><p>Nothing matches “{q.trim()}”.</p></div> : null}
       {shown.length ? (
         <ul className={"hp-items " + layout}>
-          {shown.map((p) => (
-            <li className={"hp-item pub " + layout} key={p.projectId}>
+          {shown.map((p, index) => (
+            <li className={"hp-item pub " + layout} key={p.projectId} style={{ "--i": Math.min(index, 14) } as CSSProperties}>
               <a className="hp-item-link" href={editUrl(p.projectId)} aria-label={`Open ${p.name}`}
                 onClick={(ev) => { if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); go(editUrl(p.projectId)); }}>
                 <Thumb id={p.projectId} stamp={p.updatedAt} />
@@ -544,7 +567,7 @@ function Trash({ tick }: { tick: number }) {
   const [list, setList] = useState<API.Trashed[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { all?: boolean; p?: API.Trashed }>(null);
-  const load = useCallback(async () => { try { setList(await API.listTrash()); setError(null); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }, []);
+  const load = useCallback(async () => { try { await Promise.allSettled([...trashing]); setList(await API.listTrash()); setError(null); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } }, []);
   useEffect(() => { load(); }, [load, tick]);
   const restore = async (p: API.Trashed) => {
     setList((l) => l && l.filter((x) => x.projectId !== p.projectId));

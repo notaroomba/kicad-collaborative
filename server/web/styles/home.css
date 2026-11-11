@@ -256,8 +256,47 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 .hp-toast.err { background: var(--err); color: #fff; }
 .hp-toast button { background: none; border: 0; color: inherit; font-weight: 600; text-decoration: underline; padding: 0; white-space: nowrap; }
 
+/* ---------------------------------------------------------------- motion
+   Short and functional: things arrive from where they come from and settle fast. */
+:root { --hp-ease: cubic-bezier(.2, .8, .2, 1); }
+.hp-items > .hp-item { animation: hp-in .32s var(--hp-ease) backwards; animation-delay: calc(var(--i, 0) * 22ms); }
+@keyframes hp-in { from { opacity: 0; transform: translateY(8px); } }
+.hp-item.fresh { animation: hp-in .32s var(--hp-ease) backwards, hp-fresh 2.4s ease-out 1; }
+.hp-item.grid { transition: border-color .14s, box-shadow .18s var(--hp-ease), transform .18s var(--hp-ease); }
+@media (hover: hover) {
+  .hp-item.grid:hover { transform: translateY(-2px); box-shadow: 0 0 0 1px var(--blue), 0 10px 24px -12px rgba(0, 0, 0, .45); }
+  .hp-item.grid:hover .hp-thumb img { transform: scale(1.03); }
+}
+.hp-thumb img { transition: opacity .25s, transform .35s var(--hp-ease); }
+.hp-item.grid.picked, .hp-item.grid.picking:hover { transform: none; }
+.hp-item.list { transition: background-color .12s; }
+.hp-star svg { transition: transform .18s var(--hp-ease); }
+.hp-star.on svg { animation: hp-star .32s var(--hp-ease); }
+@keyframes hp-star { 0% { transform: scale(.5); } 60% { transform: scale(1.25); } }
+.hp-pick { transition: background-color .12s, border-color .12s; }
+.hp-pick svg { animation: hp-star .22s var(--hp-ease); }
+.hp-bulk { animation: hp-drop .2s var(--hp-ease); }
+@keyframes hp-drop { from { opacity: 0; transform: translateY(-6px); } }
+.hp-modal { animation: hp-pop .2s var(--hp-ease); }
+@keyframes hp-pop { from { transform: translateY(10px) scale(.985); opacity: 0; } }
+.hp-scrim { animation: hp-fade .16s ease-out; }
+.hp-menu-scrim:not(.sheet) .hp-menu { animation: hp-menu .12s var(--hp-ease); transform-origin: top left; }
+@keyframes hp-menu { from { transform: scale(.96); opacity: 0; } }
+.hp-toast { animation: hp-toast .24s var(--hp-ease); }
+@keyframes hp-toast { from { transform: translateY(12px); opacity: 0; } }
+.hp-nav a, .hp-side-btn, .hp-seg button, .hp-iconbtn, .hp-chip, .hp-account, .hp-tabbar a, .hp-tabbar button { transition: background-color .12s, color .12s, box-shadow .12s; }
+.hp .btn, .hp-modal .btn { transition: background-color .12s, border-color .12s, transform .08s; }
+.hp .btn:active:not(:disabled), .hp-modal .btn:active:not(:disabled) { transform: translateY(1px); }
+.hp-head, .hp-lead, .hp-tools, .hp-empty, .hp-error { animation: hp-fade .22s ease-out; }
+.hp-suggest { animation: hp-drop .12s var(--hp-ease); }
+.hp-dropveil { animation: hp-fade .12s ease-out; }
+/* list changes run as view transitions (Home.tsx smooth()): only the cards move, the page does not cross-fade */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-group(*) { animation-duration: .28s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+
 @media (prefers-reduced-motion: reduce) {
-  .hp-thumb.load::before, .hp-item.skel i, .hp-skel-rows i, .hp-iconbtn.spin svg, .hp-modal, .hp-scrim, .hp-toast, .hp-item.fresh { animation: none; }
+  .hp *, .hp-scrim, .hp-scrim *, .hp-menu-scrim, .hp-menu-scrim *, .hp-toasts * { animation: none !important; transition: none !important; }
+  .hp-iconbtn.spin svg { animation: hp-spin 1.6s linear infinite !important; }
 }
 
 /* ---- phone ---- */
