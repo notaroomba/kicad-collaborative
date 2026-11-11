@@ -3,6 +3,7 @@
 import { KICAD_LAYERS, SCH_LAYERS, setStatusBar, setToggle, state, store } from "./appstore";
 import { centerOn, drawComments, loadComments, renderThreads } from "./comments";
 import { $ } from "./dom";
+import { pruneSelection, resetInteraction } from "./gestures";
 import { loadHistory } from "./history";
 import { navigate, showView } from "./home";
 import { connect, requestResync, setConn } from "./net";
@@ -168,7 +169,7 @@ export function applyChanges(changes) {
     if (c.sexpr || c.itemSexpr || String(c.kind).toUpperCase() === "ADDED") dropped = c;
   }
   if (dropped) noteDroppedChange(dropped);
-  if (any) { if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); syncItemsFromDoc(); drawSelection(); renderProps(); bumpDoc(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
+  if (any) { if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); syncItemsFromDoc(); pruneSelection(); drawSelection(); renderProps(); bumpDoc(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
 }
 
 /**
@@ -274,6 +275,7 @@ export function setDocNotice(text) { store.slice("document", { notice: text || n
 
 
 export function leaveDoc() {
+  resetInteraction();   // no drag, menu, hover or tool survives into the next document
   E.connectGen++;   // any connect() still waiting for its ticket must give up
   if (E.ws) { E.ws.onclose = null; E.ws.close(); E.ws = null; }
   stopPresenceKeepalive();
@@ -301,8 +303,8 @@ export async function openDoc(doc) {
   const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
   setStatusBar({ message: isSch()
-    ? "scroll to zoom · right-drag to pan · click a symbol to select · drag to move · Del deletes · double-click a sheet to enter it"
-    : "scroll to zoom · right-drag to pan · click a part to select · drag to move · R rotates · Del deletes" });
+    ? "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag to move · double-click a sheet to enter it"
+    : "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag to move · R rotates" });
   world.style.width = stage.clientWidth + "px";
   E.viewTouched = false;
   renderProps(); renderPeers(); renderThreads();

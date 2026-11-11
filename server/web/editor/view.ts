@@ -4,6 +4,7 @@ import { state, store } from "./appstore";
 import { drawComments } from "./comments";
 import { loadBase } from "./doc";
 import { $, NS } from "./dom";
+import { drawHover } from "./gestures";
 import { breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
@@ -44,8 +45,12 @@ export const canvas = $("#canvas"), cctx = canvas.getContext("2d");
 export function requestRender() { if (E.renderReq || !E.kdoc) return; E.renderReq = requestAnimationFrame(() => { E.renderReq = 0; drawCanvas(); }); }
    // bitmaps decode asynchronously; repaint once they are ready
 export function sizeCanvas() {
-  const dpr = window.devicePixelRatio || 1, w = stage.clientWidth, h = stage.clientHeight;
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+  // the backing store is the stage in device pixels exactly (E.canvasPx, from the device-pixel-content-box
+  // observer in gestures.ts, where the browser has one): anything else is resampled and blurs every stroke
+  const dpr = window.devicePixelRatio || 1, px = E.canvasPx, w0 = Math.round(stage.clientWidth * dpr), h0 = Math.round(stage.clientHeight * dpr);
+  const exact = px && Math.abs(px[0] - w0) <= 2 && Math.abs(px[1] - h0) <= 2;   // a stale or unscaled report is not trusted
+  const w = exact ? px[0] : w0, h = exact ? px[1] : h0;
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
 
 export function drawCanvas() {
@@ -55,6 +60,7 @@ export function drawCanvas() {
   KiCadCanvas.render(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds }, E.renderOpts));
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
+  drawHover(cctx, view);
   if (E.selField) {
     const it = E.kdoc.items.get(E.selField.id); if (!it) { E.selField = null; return; }
     cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
@@ -102,17 +108,27 @@ export function fitBox(box, margin) {
   world.style.width = sw + "px";
   const ppm = sw / mmW();                       // px per mm at zoom 1
   const [bx, by, bw, bh] = box;
-  E.zoom = Math.min(400, Math.max(0.2, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * (margin || 1)));
+  // a fit may go below the manual zoom-out limit (a very large board still has to fit), never above the zoom-in one
+  E.zoom = Math.min(zoomLimits()[1], Math.max(1e-4, Math.min(sw / (bw * ppm), sh / (bh * ppm)) * (margin || 1)));
   E.panX = sw / 2 - ((bx - mmX0()) + bw / 2) * ppm * E.zoom;
   E.panY = sh / 2 - ((by - mmY0()) + bh / 2) * ppm * E.zoom;
-  E.lastStageW = sw;   // the resize observer must not rescale pans computed at this width
+  E.lastStageW = sw; E.lastStageH = sh;   // the resize observer must not rescale pans computed at this size
   applyView();
+}
+
+/** The zoom range as E.zoom values: KiCad's zoom-factor range for the editor (include/zoom_defines.h, 0.05–100 / 0.13–300). */
+export function zoomLimits() {
+  const ppm = stage.clientWidth / mmW(); if (!(ppm > 0)) return [0.2, 400];
+  const z1 = Number(KiCadCanvas.PX_PER_MM_ZOOM1) || 3.58;   // css px per mm at KiCad zoom factor 1
+  const [lo, hi] = isSch() ? [0.05, 100] : [0.13, 300];
+  return [(lo * z1) / ppm, (hi * z1) / ppm];
 }
 
 export function zoomBy(factor, cx, cy) {
   E.viewTouched = true;
   if (cx === undefined) { cx = stage.clientWidth / 2; cy = stage.clientHeight / 2; }
-  const next = Math.min(40, Math.max(0.2, E.zoom * factor));
+  const [lo, hi] = zoomLimits();
+  const next = Math.min(Math.max(hi, E.zoom), Math.max(Math.min(lo, E.zoom), E.zoom * factor));   // a view outside the range (a fit) can still zoom back in
   E.panX = cx - (cx - E.panX) * (next / E.zoom);
   E.panY = cy - (cy - E.panY) * (next / E.zoom);
   E.zoom = next; breakFollow(); applyView();

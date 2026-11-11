@@ -60,6 +60,28 @@ export interface PopoverState {
   hits?: number | null; query?: string;  // find
 }
 
+/**
+ * One row of the right-click menu.  The editor (web/editor/contextmenu.ts) decides which rows KiCad would show
+ * and whether each runs here; the chrome (components/ContextMenu.tsx) takes label, icon and hotkey from the
+ * generated spec by the action's C++ name unless the row carries its own.
+ */
+export interface CtxItem {
+  sep?: boolean;
+  /** TOOL_ACTION name as in the C++ ("SCH_ACTIONS::rotateCCW") */
+  act?: string;
+  label?: string; icon?: string; key?: string;
+  /** a check item, and whether it is ticked */
+  check?: boolean; checked?: boolean;
+  /** why the row is dimmed; absent when it runs here */
+  why?: string;
+  /** dispatch({ type: "contextMenu", run }) runs the row */
+  run?: number;
+  /** document item the row stands for: hovering the row brightens it (Clarify Selection) */
+  hover?: string;
+  sub?: CtxItem[];
+}
+export interface ContextMenuState { id: number; x: number; y: number; title?: string; items: CtxItem[] }
+
 export interface AppState {
   view: "home" | "editor";
   /** which page of the home view is showing, and a counter bumped on every visit (web/home) */
@@ -102,6 +124,7 @@ export interface AppState {
   status: { message: string; mode: string };
   toast: { id: number; text: string; ms: number } | null;
   popover: PopoverState | null;
+  contextMenu: ContextMenuState | null;
 }
 
 // ---------------------------------------------------------------- actions (chrome → app.js)
@@ -123,6 +146,8 @@ export type AppAction =
   | { type: "restore"; name: string }
   | { type: "find"; query: string }
   | { type: "popover"; popover: PopoverState | null }
+  /** the right-click menu: run a row (then it closes), brighten a row's item, or just close */
+  | { type: "contextMenu"; run?: number; hover?: string | null }
   | { type: "toastDone"; id: number };
 
 export interface CollabAppApi {
@@ -147,7 +172,7 @@ const EMPTY: AppState = {
   selection: { ids: [], primary: null, field: null, version: 0 },
   peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
-  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null,
+  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
 };
 
 function app(): CollabAppApi | undefined { return window.CollabApp; }

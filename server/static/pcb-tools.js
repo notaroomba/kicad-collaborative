@@ -2556,6 +2556,7 @@ const pcb = {
   deleteChanges,
   setPrompt(fn) { promptImpl = fn; },
   setImagePicker(fn) { pickerImpl = fn; },
+  cancel() { cancelOps(); },              // drop whatever is in flight and put a moved item back (a lost button release, Escape)
   // ---- the parity pass: commands, queries and dialogs app.js can call
   actions: ACTIONS,                       // { id: { label, key, run(ctx) -> handled } }, KiCad's ids and default hotkeys
   runAction,                              // runAction(id, ctx): run with error reporting

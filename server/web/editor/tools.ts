@@ -2,6 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setStatusBar, state, store } from "./appstore";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
+import { toolChanging } from "./gestures";
 import { sendOp } from "./net";
 import { cycleFollow } from "./peers";
 import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, selFilter } from "./selection";
@@ -103,7 +104,8 @@ export function moduleTool(id) { const m = activeModule(); return m && m.tools ?
 // ---- tools ----
 export function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
-  const prev = E.tool; E.tool = t;
+  const prev = E.tool; if (t !== prev) toolChanging(t);   // a drag in flight is put back; a drawing tool starts with nothing selected
+  E.tool = t;
   store.slice("tool", { current: t });
   const mt = moduleTool(t);
   stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : t === "zoomtool" ? "zoomtool" : t === "measure" ? "measure" : "";

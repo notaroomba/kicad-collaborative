@@ -118,7 +118,8 @@
   #canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
   #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; pointer-events: none; }
   #world svg#base { display: block; width: 100%; height: auto; }
-  #overlay { position: absolute; inset: 0; pointer-events: none; }
+  #overlay { position: absolute; inset: 0; pointer-events: none; overflow: visible; }   /* cursors, selection boxes and comments off the sheet are not clipped */
+  #stage.panning, #stage.panning * { cursor: grabbing !important; } #stage.over-sel { cursor: move !important; }
   #crosshair { position: absolute; inset: 0; pointer-events: none; display: none; }
   #crosshair.on { display: block; }
   #cmtPanel { position: absolute; display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 260px; max-width: 340px;

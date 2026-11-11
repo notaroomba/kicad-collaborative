@@ -20,6 +20,8 @@ import { state, store } from "./appstore";
 import { placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus } from "./doc";
 import { $ } from "./dom";
+import { openContextMenu } from "./contextmenu";
+import { cancelInteraction, clearAllSelection, installGestures, registerPointerUp, selectionChanged } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -70,21 +72,21 @@ function moduleGhost(mod) {
   return segs.map((g) => [Math.round(g[0] * E.IU), Math.round(g[1] * E.IU), Math.round(g[2] * E.IU), Math.round(g[3] * E.IU), Math.round((g[4] || 0.1) * E.IU)]);
 }
 
-stage.addEventListener("wheel", (ev) => {
-  ev.preventDefault();
-  const r = stage.getBoundingClientRect();
-  zoomBy(Math.pow(1.0018, -ev.deltaY), ev.clientX - r.left, ev.clientY - r.top);
-}, { passive: false });
+// wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
+// Installed before every other stage listener so it sees each event first.
+installGestures(openContextMenu);
 
    // until the user pans/zooms, resizes just refit
 new ResizeObserver(() => {
   if (state.view !== "editor") return;
-  const sw = stage.clientWidth;
-  if (sw && E.lastStageW && sw !== E.lastStageW) {
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (sw && sh && E.lastStageW && (sw !== E.lastStageW || sh !== E.lastStageH)) {
+    const w0 = E.lastStageW, h0 = E.lastStageH || sh; E.lastStageH = sh;
     if (!E.viewTouched && (E.kdoc || Object.keys(E.layers).length)) { fitView(); return; }
-    const r = sw / E.lastStageW; E.panX *= r; E.panY *= r; world.style.width = sw + "px";
+    // zoom 1 is "the sheet as wide as the stage": keep the scale on screen and the point at the centre where they were
+    E.zoom *= w0 / sw; E.panX += (sw - w0) / 2; E.panY += (sh - h0) / 2; world.style.width = sw + "px";
   }
-  if (sw) E.lastStageW = sw;
+  if (sw) { E.lastStageW = sw; E.lastStageH = sh; }
   applyView();
 }).observe(stage);
 
@@ -229,7 +231,7 @@ stage.addEventListener("pointermove", (ev) => {
   sendPresence(mm, g);
 });
 
-stage.addEventListener("pointerup", (ev) => {
+const onPointerUp = (ev) => {
   if (E.pan) { E.pan = null; return; }
   if (E.fdrag) {
     const fd = E.fdrag; E.fdrag = null;
@@ -277,7 +279,9 @@ stage.addEventListener("pointerup", (ev) => {
     undoStack.push({ label: "move", changes, inverse }); redoStack.length = 0; publishUndo();
   }
   fp.x = nx; fp.y = ny; if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
-});
+};
+stage.addEventListener("pointerup", onPointerUp);
+registerPointerUp(onPointerUp);   // a click drops an item that follows the cursor after Move
 
 
 document.addEventListener("keydown", (ev) => {
@@ -287,9 +291,12 @@ document.addEventListener("keydown", (ev) => {
   const k = ev.key;
   if (window.KDialogs && KDialogs.isOpen()) return;                     // the dialog owns the keyboard
   if (k === "Escape") { if (store.get().popover) { closePopover(); return; }
-    if (E.selField || E.fdrag) { E.selField = null; E.fdrag = null; requestRender(); }
-    if (E.drag && E.drag.engine && CollabTools.sch && CollabTools.sch.cancelDrag) { try { CollabTools.sch.cancelDrag(toolCtx()); } catch (e) { console.warn(e); } }
-    E.drag = null; E.boxSel = null; clearSelection(); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); drawSelection(); renderProps(); cmtPanel.style.display = "none"; setTool("select"); return; }
+    // KiCad's order: Esc first cancels what is in flight (the item goes back, the selection stays),
+    // then leaves the tool, and only then clears the selection.
+    if (cancelInteraction()) return;
+    cmtPanel.style.display = "none";
+    if (E.tool !== "select") { setTool("select"); return; }
+    clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
   if (k === "f" || k === "F") { fitView(); return; }

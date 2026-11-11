@@ -6,6 +6,7 @@ import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, se
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
 import { setCrosshair, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
+import { contextMenuAction } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
 import { drawSelection, renderProps, setFilter } from "./selection";
 import { E } from "./state";
@@ -175,6 +176,7 @@ export function dispatchAction(a) {
       case "restore": restoreCheckpoint(a.name); return;
       case "find": findAction(a.query); return;
       case "popover": store.set({ popover: a.popover || null }); return;
+      case "contextMenu": contextMenuAction(a); return;
       case "toastDone": return;
       default: console.warn("unknown chrome action", a);
     }

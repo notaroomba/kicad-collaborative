@@ -44,7 +44,7 @@ export const store = (() => {
     selection: { ids: [], primary: null, field: null, version: 0 },
     peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
     tool: { current: "select", appTools: APP_TOOLS, moduleTools: [], moduleActions: [], handled: [] },
-    toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null,
+    toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
   };
   const subs = new Set();
   const notify = () => { for (const fn of Array.from(subs)) { try { fn(S); } catch (e) { console.warn(e); } } };
