@@ -117,7 +117,8 @@ function open(spec) {
     ev.stopPropagation();
     if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
     else if (ev.key === "Enter" && ev.target && ev.target.closest && ev.target.closest(".kd-grid")) { ev.preventDefault(); ev.target.blur(); }   // Enter in a grid cell commits the cell, as in a wxGrid
-    else if (ev.key === "Enter" && !(ev.target && ev.target.tagName === "TEXTAREA") && !(ev.target && ev.target.tagName === "BUTTON")) { ev.preventDefault(); if (spec.buttons) { if (defaultBtn && !defaultBtn.disabled) defaultBtn.click(); } else finish(true); }
+    // multi-line text: Enter is a new line, Shift/Ctrl+Enter is OK (SCINTILLA_TRICKS, DIALOG_SHIM)
+    else if (ev.key === "Enter" && !(ev.target && ev.target.tagName === "TEXTAREA" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) && !(ev.target && ev.target.tagName === "BUTTON")) { ev.preventDefault(); if (spec.buttons) { if (defaultBtn && !defaultBtn.disabled) defaultBtn.click(); } else finish(true); }
   });
   // the title bar drags the dialog around, like a desktop window
   let dragFrom = null;
@@ -150,7 +151,7 @@ function openItem(ctx, item, opts) {
   const render = (focusKey) => {
     api.body.innerHTML = "";
     const host = el("div"); api.body.appendChild(host);
-    P.renderInto(host, sctx, work(), { quiet: true, stage(label, fn) { const a = document.activeElement; const key = a && a.dataset ? a.dataset.k : undefined; if (fn(staged) !== false) dirty = true; render(key); } });
+    P.renderInto(host, sctx, work(), { quiet: true, creating: !!(opts && opts.onCreate), stage(label, fn) { const a = document.activeElement; const key = a && a.dataset ? a.dataset.k : undefined; if (fn(staged) !== false) dirty = true; render(key); } });
     if (fieldNames.length) {
       const row = el("div", "kd-note"); row.style.marginTop = "10px"; row.textContent = "Field properties: ";
       for (const n of fieldNames) { const b = el("button", "btn sm", esc(n) + "…"); b.style.marginRight = "4px"; b.addEventListener("click", () => { commitStaged(); openField(ctx, doc.items.get(item.id) || item, n); }); row.appendChild(b); }
@@ -159,13 +160,20 @@ function openItem(ctx, item, opts) {
     if (focusKey !== undefined) api.refocus(focusKey);
   };
   const commitStaged = () => {
+    if (opts && opts.onCreate) return opts.onCreate(staged);   // a new item: the caller places it (false keeps the dialog open)
     if (!dirty || ctx.viewOnly) return;
     const change = Kc.replaceChange(doc, Object.assign({}, item, { node: staged, geom: [], bbox: null }));
     ctx.commit([change], (opts && opts.label) || "properties"); dirty = false;
     if (ctx.setSelected) ctx.setSelected((ctx.items || []).find((f) => f.id === item.id) || { id: item.id });
   };
-  api = open({ title, width: opts && opts.width, extra, readOnly: !!ctx.viewOnly, build(body, a) { api = a; render(); }, ok() { commitStaged(); } });   // build runs inside open(): take the api from it
+  api = open({ title, width: opts && opts.width, extra, readOnly: !!ctx.viewOnly, build(body, a) { api = a; render(); }, ok() { return commitStaged(); } });   // build runs inside open(): take the api from it
   return api;
+}
+
+/** The properties dialog of an item that is not on the sheet yet (KiCad's label tools open their dialog first):
+ *  OK hands the edited node to onCreate, Cancel drops it. */
+function openNew(ctx, kind, node, onCreate) {
+  return openItem(ctx, { id: "", kind, node, geom: [], bbox: null }, { generic: true, onCreate });
 }
 
 // ---------------------------------------------------------------- field properties ("Edit Text and Field Properties")
@@ -341,7 +349,7 @@ function grid(host, columns, rows, opts) {
 /** wxStaticBoxSizer: a titled frame; returns the element to fill. */
 function staticBox(host, title) { ensureCss(); const b = el("div", "kd-sb"); b.appendChild(el("span", "kd-sb-t", esc(title))); host.appendChild(b); return b; }
 
-root.KDialogs = { open, close, openItem, openField, isOpen: () => !!current, TITLES, notebook, treebook, grid, staticBox, ensureCss,
+root.KDialogs = { open, close, openItem, openNew, openField, isOpen: () => !!current, TITLES, notebook, treebook, grid, staticBox, ensureCss,
   _: { fieldNode, fieldEffects, setFieldEffects, fieldAt, setFieldAt, fieldHidden, setFieldHidden, fieldUnlocked, setFieldUnlocked, fieldLayer, setFieldLayer, fieldText, setFieldText } };
 if (typeof module !== "undefined" && module.exports) module.exports = root.KDialogs;
 })(typeof window !== "undefined" ? window : globalThis);

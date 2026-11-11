@@ -426,7 +426,7 @@ function panel(el, ctx, item, appSelected, opts) {
     close() { parts.push("</div>"); },
     raw(h) { parts.push(h); },
     row(label, html) { parts.push(`<label title="${esc(label)}">${esc(label)}</label>${html}`); },
-    ro(label, value) { P.row(label, `<div class="ro" title="${esc(value)}">${esc(value) || "—"}</div>`); },
+    ro(label, value) { if (opts.creating && label === "UUID") return; P.row(label, `<div class="ro" title="${esc(value)}">${esc(value) || "—"}</div>`); },
     text(label, value, on, multi) {
       if (ro) return P.ro(label, value);
       if (multi) P.row(label, `<textarea data-k="${key(on)}" rows="3" style="${CTRL};resize:vertical">${esc(value)}</textarea>`);
@@ -453,7 +453,7 @@ function panel(el, ctx, item, appSelected, opts) {
       P.row(name, `<div style="display:flex;gap:6px;align-items:center"><input data-k="${key(onText)}" type="text" value="${esc(value)}" style="flex:1;min-width:0">${box}</div>`);
     },
     actions(list) {   // [[label, fn, cls]]
-      if (ro) return;
+      if (ro || opts.creating) return;   // an item still being created (the label dialog before placement) has nothing to delete
       parts.push(`<div class="actions">${list.map(([label, fn, cls]) => `<button class="btn sm${cls ? " " + cls : ""}" data-k="${key(fn)}">${esc(label)}</button>`).join("")}</div>`);
     },
     /** Apply fn to a clone of the node and commit the whole item; fn may return false for "nothing to do". */

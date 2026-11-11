@@ -96,6 +96,14 @@ test("module registers tools with KiCad-style hotkeys", () => {
   assert.ok(sch.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "the delete tool carries KiCad's delete cursor");
 });
 
+test("a click on the start point of a wire in progress is ignored (the segment is still null)", () => {
+  sch.onActivate("wire", ctx); const n0 = ctx.log.length;
+  sch.onPointerDown(ev(), [177.8, 177.8], ctx); assert.ok(sch.state.wire, "first click starts the wire");
+  sch.onPointerDown(ev(), [177.8, 177.8], ctx); assert.ok(sch.state.wire, "a second click on the same point keeps drawing");
+  assert.strictEqual(ctx.log.length, n0, "nothing committed");
+  sch.onActivate("select", ctx); assert.strictEqual(sch.state.wire, null, "leaving the tool drops the wire");
+});
+
 test("wire ending on the middle of another wire gets a junction (T)", () => {
   sch.onActivate("wire", ctx);
   assert.ok(sch.onPointerDown(ev(), [88.9, 63.5], ctx));

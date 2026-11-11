@@ -512,6 +512,7 @@ function simplify(pts) {
 function startWire(ctx, kind, p) { S.wire = { kind, pts: [p], cur: p, flip: false, legs: [] }; ctx.requestRender(); }
 function wireClick(ctx, p) {
   const w = S.wire, last = w.pts[w.pts.length - 1];
+  if (same(last, p) && !w.legs.length) return;             // a click on the start point: the segment is still null, KiCad ignores it
   if (same(last, p)) { finishWire(ctx); return; }          // click on the last point (or a double click) ends it
   w.cur = p; const leg = legPoints(last, p, posture(w), w.flip); w.pts.push(...leg); w.legs.push(leg.length);
   if (connectsAt(ctx.doc, p, w.kind)) finishWire(ctx);     // KiCad ends a wire on reaching a pin or another line
@@ -1107,8 +1108,22 @@ function onKeyCapture(ev) {
     if (S.cursor) promptFor(ctx, "hierarchical_label", S.cursor, S.cursorClient);
   }
 }
+// KiCad's label and text tools (SCH_DRAWING_TOOLS::createNewLabel / createNewText) open the properties dialog
+// of the new item first; OK puts it on the cursor and the next click places it.  The shape picked for a
+// global / hierarchical label is remembered for the next one (m_lastGlobalLabelShape).
 function promptFor(ctx, kind, mm, client) {
   const p = ctx.snap([mm[0], mm[1]]).map(r4);
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+  if (KD && KD.openNew && !ctx.viewOnly) {
+    const node = labelNode(kind, "", p, 0);
+    if ((kind === "global_label" || kind === "hierarchical_label") && S.lastLabelShape) { const sh = kid(node, "shape"); if (sh) sh[1] = S.lastLabelShape; }
+    KD.openNew(ctx, kind, node, (staged) => {
+      if (!str(staged[1]).trim()) { ctx.toast(kind === "text" ? "Text can not be empty." : "Label can not be empty."); return false; }
+      const sh = kid(staged, "shape"); if (sh && (kind === "global_label" || kind === "hierarchical_label")) S.lastLabelShape = str(sh[1]);
+      startCarry(ctx, kind, staged, S.cursor || p);
+    });
+    return;
+  }
   const title = kind === "text" ? "Text" : kind === "label" ? "Net label" : kind === "global_label" ? "Global label" : "Hierarchical label";
   promptImpl(title, "", client, (text) => { if (text) placeText(ctx, kind, text, p, 0); });
 }
