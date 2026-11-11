@@ -44,7 +44,7 @@ const copperLayers = (doc: KDoc): [string, string][] => doc.copper.map((n): [str
 const withCurrent = (opts: [string, string][], cur: string): [string, string][] => (cur && !opts.some((o) => o[0] === cur) ? [[cur, cur], ...opts] : opts);
 
 /** The net of a track, via or zone, written in the form the board uses (a name, or the legacy code). */
-function setNet(doc: KDoc, node: SNode, name: string): void {
+export function setNet(doc: KDoc, node: SNode, name: string): void {
   const cur = kid(node, "net"), coded = cur ? typeof cur[1] === "number" : Array.from(doc.items.values()).some((it) => { const n = kid(it.node, "net"); return !!n && typeof n[1] === "number"; });
   const before = ["uuid", "tstamp", "name", "locked", "hatch"];
   if (!coded) { if (name) put(node, "net", `(net ${quote(name)})`, before); else put(node, "net", null); if (kid(node, "net_name")) put(node, "net_name", null); return; }

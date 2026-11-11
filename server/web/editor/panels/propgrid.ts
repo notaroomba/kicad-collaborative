@@ -7,6 +7,7 @@
 // Multi-selection shows the properties the items share; values that differ show as mixed.
 import type { PropGrid, PropGroup, PropRow, PropType } from "../../panels-api";
 import { E } from "../state";
+import { setNet } from "../pcbdialogs/item-props";
 import { layerDisplayName, netClassOf } from "./appearance";
 import { KC, isSchDoc, kdoc, panelStore, pcbTools, tctx } from "./core";
 
@@ -210,7 +211,10 @@ function layerProp(doc: KDoc, copperOnly: boolean, def: string): PropDef {
   return { group: BASIC, name: "Layer", type: "enum", choices: layerChoices(doc, copperOnly), get: (it) => H().str((H().kid(it.node, "layer") || [])[1] || def), set: (n, v) => { H().setLayer(n, String(v)); } };
 }
 function netProps(doc: KDoc): PropDef[] {
-  return [{ group: "Net", name: "Net", type: "text", get: (it) => H().netNameOf(doc, it.node) || "<no net>" },
+  // BOARD_CONNECTED_ITEM's "Net" is a net selector: the board's nets, <no net> first
+  const nets: [string, string][] = [["", "<no net>"], ...H().boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, n])];
+  return [{ group: "Net", name: "Net", type: "enum", choices: nets, get: (it) => H().netNameOf(doc, it.node) || "",
+    set: (n, v) => { if (H().netNameOf(doc, n) === String(v || "")) return false; setNet(doc, n, String(v || "")); } },
     { group: "Net", name: "Net Class", type: "text", get: (it) => { const n = H().netNameOf(doc, it.node); return n ? netClassOf(n) : "Default"; } }];
 }
 const FP_TYPES: [string, string][] = [["through_hole", "Through hole"], ["smd", "SMD"], ["", "Unspecified"]];
