@@ -172,15 +172,46 @@ test("magnetic snapping finds pads on the active layer and their nets", () => {
   assert.equal(P.netUnder(doc, 100, 50.9, "F.Cu").name, "/SIG");
 });
 
-test("dragging a segment moves it along its normal and carries the attached ends", () => {
-  const doc = fixture(); const plan = P.dragPlan(doc, doc.items.get("s-1"));
-  assert.deepEqual(plan.n, [0, 1]); assert.deepEqual(plan.nb.map((n) => n.item.id + ":" + n.key), ["s-2:start"]);
-  const nodes = P.dragNodes(plan, 2);
-  assert.deepEqual(K.kid(nodes[0].node, "start").slice(1), [110, 52]); assert.deepEqual(K.kid(nodes[0].node, "end").slice(1), [115, 52]);
-  assert.deepEqual(K.kid(nodes[1].node, "start").slice(1), [115, 52]); assert.deepEqual(K.kid(nodes[1].node, "end").slice(1), [118, 53]);
-  const viaPlan = P.dragPlan(doc, doc.items.get("s-3"));   // a via at the joint drags the front-side track too
-  assert.deepEqual(viaPlan.nb.map((n) => n.item.id).sort(), ["s-2", "v-1"]);
-  assert.deepEqual([P.nextWidth(0.25), P.nextWidth(1.0), P.nextWidth(0.15)], [0.3, 0.2, 0.2]);
+test("PNS drag geometry: AssembleLine, dragSegment45 keeps the ends and re-angles at 45°, dragCorner45 / free angle", () => {
+  const doc = fixture();
+  const ln = P.assembleLine(doc, doc.items.get("s-1"));   // s-1 and s-2 meet at a trivial joint; the via ends the line
+  assert.deepEqual(ln.ids, ["s-1", "s-2"]); assert.deepEqual(ln.pts, [[110, 50], [115, 50], [118, 53]]); assert.equal(ln.index, 0);
+  // the first segment pulled down 2 mm: its free end stays, a 45° segment grows from it, the neighbour keeps its 45° into the via
+  assert.deepEqual(P.dragSegment45(ln.pts, 0, [112, 52], 0), [[110, 50], [112, 52], [117, 52], [118, 53]]);
+  // a straight pad-to-pad run breaks into a dog-leg (the colinear ends get 45° knees)
+  assert.deepEqual(P.dragSegment45([[0, 0], [10, 0]], 0, [5, 2], 0), [[0, 0], [2, 2], [8, 2], [10, 0]]);
+  // a middle segment: the neighbours keep their direction and change length
+  assert.deepEqual(P.dragSegment45([[0, 0], [0, 5], [10, 5], [10, 10]], 1, [5, 7], 0), [[0, 0], [0, 7], [10, 7], [10, 10]]);
+  // a segment between two parallel neighbours two away snaps onto them inside the threshold (snapToNeighbourSegments)
+  assert.deepEqual(P.dragSegment45([[0, 0], [5, 0], [8, 3], [12, 3], [15, 0], [20, 0]], 2, [10, 0.05], 0.1), [[0, 0], [20, 0]]);
+  // corner drag: both legs rebuilt straight + 45°
+  assert.deepEqual(P.dragCorner45(ln.pts, 1, [115, 51], 0), [[110, 50], [114, 50], [115, 51], [116, 51], [118, 53]]);
+  // the end vertex: only its leg follows
+  assert.deepEqual(P.dragCorner45([[0, 0], [10, 0]], 1, [12, 3], 0), [[0, 0], [9, 0], [12, 3]]);
+  assert.deepEqual(P.dragCornerFree(ln.pts, 1, [116, 49]), [[110, 50], [116, 49], [118, 53]]);
+  for (const [a, b] of [[[0, 0], [5, 2]], [[0, 0], [2, 5]], [[0, 0], [3, 3]]]) { const t = P.initialTrace(a, b, -1, false); for (let i = 0; i + 1 < t.length; i++) assert.ok(P.dir8(t[i], t[i + 1]) >= 0); }
+});
+
+test("PNS drag modes: a grab near an end is a corner drag, Free Angle takes the nearer vertex, a via drags its fanout", () => {
+  const doc = fixture(); const { ctx } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let d = P.dragStart(ctx, doc.items.get("s-1"), [112.3, 50.1], false);
+  assert.equal(d.mode, "segment"); assert.deepEqual(d.start, [112.25, 50], "the grab is snapped onto the track, on the grid");
+  d = P.dragStart(ctx, doc.items.get("s-2"), [115.05, 50.05], false);
+  assert.equal(d.mode, "corner"); assert.equal(d.lines[0].vertex, 1); assert.deepEqual(d.start, [115, 50]);
+  d = P.dragStart(ctx, doc.items.get("s-1"), [111, 50], true);
+  assert.equal(d.mode, "corner"); assert.equal(d.lines[0].vertex, 0);
+  d = P.dragStart(ctx, doc.items.get("s-1"), [114, 50], true);
+  assert.equal(d.lines[0].vertex, 1, "free angle on the far half drags the inner vertex");
+  // DM_VIA: the front line and the back track follow the via with 45° corners
+  d = P.dragStart(ctx, doc.items.get("v-1"), [118, 53], false);
+  assert.equal(d.mode, "via"); assert.equal(d.lines.length, 2);
+  assert.equal(P.dragTo(ctx, d, [118, 55]), true);
+  const byLayer = Object.fromEntries(d.sol.lines.map(({ l, pts }) => [l.layer, pts]));
+  assert.deepEqual(byLayer["F.Cu"], [[118, 55], [118, 53], [115, 50], [110, 50]]);
+  assert.deepEqual(byLayer["B.Cu"], [[118, 55], [118, 60]]);
+  const ch = P.dragChanges(ctx, d);
+  assert.deepEqual(ch.map((c) => c.kind).sort(), ["ADDED", "ADDED", "MODIFIED", "REMOVED"], "s-1 and s-2 are kept, s-3 replaced, the via moved");
+  assert.ok(ch.some((c) => c.kind === "MODIFIED" && c.id === "v-1"));
 });
 
 // ---- the module driven through fake hooks (no DOM: stage/document are absent under node)
@@ -246,17 +277,67 @@ test("module: selection keys — U expands the run, W changes width, Delete remo
   assert.equal(log.commits.at(-1).label, "rectangle"); assert.equal(doc.items.get(log.commits.at(-1).changes[0].id).kind, "gr_rect");
 });
 
-test("module: D drags the selected segment, click commits the moved run", () => {
+test("module: D drags the selected segment with the router, a click commits the rebuilt line", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc);
   pcb.onDocChanged(ctx);
-  P.state.sel = new Set(["s-1"]);
+  P.state.sel = new Set(["s-1"]); ctx.cursor = [112, 50];
   assert.equal(pcb.onKey("d", ev(), ctx), true); assert.equal(log.tool, "drag"); assert.ok(P.state.drag);
-  pcb.onPointerMove(ev(), [112, 50], ctx); pcb.onPointerMove(ev(), [112, 52], ctx);
-  assert.equal(P.state.drag.off, 2);
+  assert.equal(pcb.hiddenIds(), null, "nothing is hidden before the first move");
+  pcb.onPointerMove(ev(), [112, 52], ctx);
+  assert.deepEqual([...pcb.hiddenIds()].sort(), ["s-1", "s-2"]);
   pcb.onPointerDown(ev(), [112, 52], ctx);
-  assert.equal(log.tool, "select"); assert.equal(log.commits.at(-1).label, "drag track"); assert.equal(log.commits.at(-1).changes.length, 2);
-  assert.deepEqual(K.kid(doc.items.get("s-1").node, "start").slice(1), [110, 52]);
-  assert.deepEqual(K.kid(doc.items.get("s-2").node, "start").slice(1), [115, 52]);
+  assert.equal(log.tool, "select"); assert.equal(P.state.drag, null);
+  const c = log.commits.at(-1); assert.equal(c.label, "drag track");
+  assert.deepEqual(c.changes.map((x) => x.kind).sort(), ["ADDED", "ADDED", "ADDED", "REMOVED", "REMOVED"]);
+  const segs = [...doc.items.values()].filter((it) => it.kind === "segment" && K.kid(it.node, "layer")[1] === "F.Cu").map((it) => [P.pt(it.node, "start"), P.pt(it.node, "end")]);
+  for (const want of [[[110, 50], [112, 52]], [[112, 52], [117, 52]], [[117, 52], [118, 53]]]) assert.ok(segs.some((g) => JSON.stringify(g) === JSON.stringify(want)), JSON.stringify(want) + " in " + JSON.stringify(segs));
+  for (const ch of c.changes.filter((x) => x.kind === "ADDED")) { assert.match(ch.sexpr, /\(width 0\.25\)/); assert.match(ch.sexpr, /\(net "GND"\)/); assert.match(ch.sexpr, /\(uuid /); }
+  // G (Drag Free Angle) on the via: its tracks stretch straight; Escape puts everything back
+  P.state.sel = new Set(["v-1"]); ctx.cursor = [118, 53];
+  assert.equal(pcb.onKey("g", ev(), ctx), true); assert.equal(P.state.drag.subs[0].free, true); assert.equal(P.state.drag.subs[0].mode, "via");
+  pcb.onPointerMove(ev(), [119, 55], ctx);
+  assert.deepEqual(P.state.drag.subs[0].sol.lines.find(({ l }) => l.layer === "B.Cu").pts, [[119, 55], [118, 60]]);
+  pcb.cancel(); assert.equal(P.state.drag, null); assert.equal(log.commits.at(-1), c);
+});
+
+test("module: a press on an unselected track draws a box (DRAG_SELECTED); on the selection it arms the router drag", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx); pcb.onActivate("select", ctx);
+  P.state.sel = new Set();
+  assert.equal(pcb.onSelectDown(ev(), [112, 50], ctx), "box"); assert.deepEqual([...P.state.sel], ["s-1"]); assert.equal(P.state.pending, null);
+  assert.equal(pcb.onSelectDown(ev({ clientX: 10, clientY: 10 }), [112, 50], ctx), true); assert.ok(P.state.pending);
+  assert.equal(P.startPendingDrag(ctx, P.state.pending), true); P.state.pending = null;
+  assert.equal(P.state.drag.bySelect, true); assert.equal(P.state.drag.subs[0].mode, "segment");
+  P.dragMove(ctx, [112, 52]); P.finishDrag(ctx, true, false);
+  assert.equal(log.commits.at(-1).label, "drag track"); assert.equal(log.tool, "select");
+});
+
+test("drag collisions: walk around keeps the last valid step, a first step in violation needs Ctrl, free angle never commits a short", () => {
+  const doc = K.parseDoc(FIXTURE.replace(/\)\s*$/, `  (segment (start 108 54) (end 121 54) (width 0.25) (layer "F.Cu") (net "/SIG") (uuid "o-1"))\n)`), "kicad_pcb");
+  const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  // a valid step, then one onto the other net's track: the line stays at the last valid place and that is what commits
+  P.state.sel = new Set(["s-1"]); ctx.cursor = [112, 50]; pcb.onKey("d", ev(), ctx);
+  pcb.onPointerMove(ev(), [112, 51], ctx); const d = P.state.drag.subs[0]; assert.equal(d.status, true);
+  const valid = JSON.stringify(d.sol.lines[0].pts);
+  pcb.onPointerMove(ev(), [112, 54], ctx); assert.equal(d.forceMark, false); assert.equal(JSON.stringify(d.sol.lines[0].pts), valid, "the refused step keeps the last valid line");
+  pcb.onPointerDown(ev(), [112, 54], ctx);
+  assert.equal(log.commits.at(-1).label, "drag track");
+  const ids = new Set(log.commits.at(-1).changes.filter((c) => c.kind === "ADDED").map((c) => c.id));
+  assert.ok(minGapTo(doc, ids, "GND") >= 0.2 - 1e-4, "no short: " + minGapTo(doc, ids, "GND"));
+  // the very first step collides: forced mark-obstacles mode, the obstacle shown, no commit without Ctrl
+  const n = log.commits.length; const seg = [...doc.items.values()].find((it) => it.kind === "segment" && P.pt(it.node, "start")[1] === 51 && P.pt(it.node, "end")[1] === 51);
+  assert.ok(seg, "the dragged run's straight part");
+  P.state.sel = new Set([seg.id]); ctx.cursor = [114, 51]; pcb.onKey("d", ev(), ctx);
+  pcb.onPointerMove(ev(), [114, 54], ctx); let dd = P.state.drag.subs[0];
+  assert.equal(dd.forceMark, true); assert.equal(dd.status, false); assert.ok(dd.hits.some((o) => o.id === "o-1"));
+  pcb.onPointerDown(ev(), [114, 54], ctx); assert.equal(log.commits.length, n, "refused without Ctrl");
+  P.state.sel = new Set([seg.id]); pcb.onKey("d", ev(), ctx); pcb.onPointerMove(ev(), [114, 54], ctx);
+  pcb.onPointerDown(ev({ ctrlKey: true }), [114, 54], ctx); assert.equal(log.commits.length, n + 1, "Ctrl+click commits anyway");
+  // free angle in violation: nothing is committed
+  const doc2 = K.parseDoc(FIXTURE.replace(/\)\s*$/, `  (segment (start 108 54) (end 121 54) (width 0.25) (layer "F.Cu") (net "/SIG") (uuid "o-1"))\n)`), "kicad_pcb");
+  const f2 = fakeCtx(doc2); pcb.onDocChanged(f2.ctx);
+  P.state.sel = new Set(["s-1"]); f2.ctx.cursor = [114, 50]; pcb.onKey("g", ev(), f2.ctx);
+  pcb.onPointerMove(ev(), [115, 54], f2.ctx); dd = P.state.drag.subs[0]; assert.equal(dd.status, false);
+  pcb.onPointerDown(ev(), [115, 54], f2.ctx); assert.equal(f2.log.commits.length, 0);
 });
 
 test("module: graphic arc (Ctrl+Shift+A) takes the start, the end, then a point on the arc", () => {

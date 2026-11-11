@@ -146,6 +146,9 @@ stage.addEventListener("pointerdown", (ev) => {
   const mm = worldMm(ev); const hit = hitAny(mm);
   if (!hit || !E.selection.has(hit.id)) return;
   ev.stopImmediatePropagation(); ev.preventDefault();
+  // a selection of tracks (or one via) is dragged by the router (PCB_SELECTION_TOOL: routable -> drag45Degree), not moved
+  const pm = CollabTools.pcb as unknown as { routableDown?: (e: PointerEvent, p: number[], c: unknown, ids: string[]) => boolean } | undefined;
+  if (!isSch() && pm && pm.routableDown) { try { if (pm.routableDown(ev, mm, toolCtx(), [...E.selection])) { stage.setPointerCapture(ev.pointerId); return; } } catch (e) { console.warn(e); } }
   startGroupDrag(hit, mm, ev);
 }, true);
 
@@ -177,9 +180,9 @@ stage.addEventListener("pointerdown", (ev) => {
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
   if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
-    try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { E.selection.clear(); E.selected = null; E.selField = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); }
+    try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { E.selection.clear(); E.selected = null; E.selField = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); }
   }
-  if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
+  if (!best && mod && mod.onSelectDown) { try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); } }
   if (!best) {
     if (!ev.shiftKey) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
     if (E.tool === "select" && E.kdoc) { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: ev.shiftKey, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
@@ -211,6 +214,13 @@ stage.addEventListener("pointerdown", (ev) => {
   }
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
+
+/** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
+function startModuleBox(ev: PointerEvent, x: number, y: number): void {
+  if (E.tool !== "select" || !E.kdoc) return;
+  E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] };
+  stage.setPointerCapture(ev.pointerId); ev.preventDefault();
+}
 
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);

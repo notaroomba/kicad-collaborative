@@ -111,17 +111,18 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "SCH_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
   "SCH_ACTIONS::drag": () => (selectionItems().length ? () => { startMove("drag"); } : NOT_YET),
   "PCB_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
-  "PCB_ACTIONS::drag45Degree": dragTrack, "PCB_ACTIONS::dragFreeAngle": dragTrack,
+  "PCB_ACTIONS::drag45Degree": () => dragTrack(false), "PCB_ACTIONS::dragFreeAngle": () => dragTrack(true),
   "SCH_ACTIONS::enterSheet": () => { const it = selectionItems()[0]; const file = it && it.file; return file ? () => enterSheet(file) : NOT_YET; },
   "SCH_ACTIONS::leaveSheet": () => () => HANDLERS.navigateUp(),
   "SCH_ACTIONS::clearHighlight": () => clearHighlight, "PCB_ACTIONS::clearHighlight": () => clearHighlight,
 };
 function clearHighlight(): void { if (!runModuleAction("clearHighlight")) { E.highlightIds = null; } requestRender(); }
-function dragTrack(): Run | string {
+function dragTrack(free: boolean): Run | string {
   const it = selectionItems()[0]; if (!it) return NOT_YET;
   if (it.kind === "footprint") return () => { const m = CollabTools.pcb as unknown as { dragSelection?: (c: unknown) => boolean }; if (!(m.dragSelection && m.dragSelection(toolCtx()))) startMove("move"); };   // attached tracks follow
-  if (it.kind !== "segment" || !moduleTool("drag")) return NOT_YET;
-  return () => { const p = pcbState(); clearAllSelection(false); if (p) p.sel = new Set([it.id]); setTool("drag"); selectionChanged(); };
+  if ((it.kind !== "segment" && it.kind !== "via") || !moduleTool("drag")) return NOT_YET;
+  // EDIT_TOOL::Drag -> ROUTER_TOOL::InlineDrag: the selection is dragged by the router, 45° or free angle
+  return () => { const m = CollabTools.pcb as unknown as { inlineDrag?: (c: unknown, f: boolean) => boolean }; if (m.inlineDrag) m.inlineDrag(toolCtx(), free); selectionChanged(); };
 }
 
 /** KiCad action → module action id, where the web's id differs. */

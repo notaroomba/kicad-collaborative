@@ -64,7 +64,9 @@ export function drawCanvas() {
   const ppm = stage.clientWidth / mmW();
   const view = { ppm, zoom: E.zoom, panX: E.panX, panY: E.panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
   const ghosts = E.peerGhosts || [];
-  const skip = ghosts.length ? new Set(ghosts.flatMap((g) => [...g.ids])) : null;
+  const m0 = activeModule() as { hiddenIds?: () => Set<string> | null } | null;
+  const own = m0 && m0.hiddenIds ? m0.hiddenIds() : null;   // the board module's items drawn elsewhere (a router drag's lines)
+  const skip = ghosts.length || own ? new Set([...ghosts.flatMap((g) => [...g.ids]), ...(own || [])]) : null;
   const force = E.renderFull !== false; E.renderFull = false;
   // pinned comment threads sit on their part or net: a full render means items may have moved (a local move
   // updates the item's box only when it lands, after the document version was bumped)

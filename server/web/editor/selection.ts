@@ -189,7 +189,7 @@ export function finishBoxSel(ev) {
       if (touches && !inside && board && it.kind !== "footprint" && it.geom && it.geom.length) touches = KiCadCanvas.itemTouchesRect(it, x0, y0, x1, y1, E.hiddenLayers);
       if (enclose ? inside : touches) picked.push(it); }
   }
-  if (!b.add) E.selection.clear();
+  if (!b.add) { E.selection.clear(); const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear(); }   // a box replaces the board module's own pick too
   for (const it of picked) E.selection.add(it.id);
   const prim = picked.find((it) => it.kind === "symbol" || it.kind === "footprint");
   E.selected = prim ? (E.items.find((f) => f.id === prim.id) || E.selected) : (b.add ? E.selected : null);

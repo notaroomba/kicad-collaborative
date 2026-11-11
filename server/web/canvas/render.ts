@@ -547,7 +547,7 @@ export function render(doc, ctx, view, opts) {
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
-  if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
+  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });   // skipped items (drawn elsewhere) get none
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
   if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
   // selection: eeschema draws a selection shadow (a translucent halo around the item's own geometry);
