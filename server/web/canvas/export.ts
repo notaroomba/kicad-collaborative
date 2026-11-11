@@ -214,6 +214,29 @@ function stringSlot(node, j) {
   return n < 0 ? j === -n : j <= n;
 }
 
+/**
+ * Board side of the same rule. Where KiCad's writers print a string with Quotew() whatever it looks like — (layer "F.Cu"), (net "VCC"),
+ * (property "Reference" "R1") — so a node built by hand (no quote mask from the reader) comes out exactly as
+ * PCB_IO_KICAD_SEXPR / SCH_IO_KICAD_SEXPR would write it rather than as a bare token.  head -> the slots that
+ * are strings (0 = every slot after the head).
+ */
+const PCB_STRING_SLOTS: Record<string, readonly number[] | 0> = {
+  layer: [1], layers: 0, net: 0, net_name: 0, uuid: 0, tstamp: 0, name: 0, descr: 0, tags: 0, path: 0, sheetname: 0, sheetfile: 0,
+  model: 0, pinfunction: 0, pintype: 0, prefix: 0, suffix: 0, override_value: 0, generator: 0, generator_version: 0,
+  title: 0, date: 0, rev: 0, company: 0, comment: 0, members: 0, face: 0, lib_id: 0, lib_name: 0, reference: 0, page: 0,
+  property: [1, 2], group: [1], gr_text: [1], gr_text_box: [1], fp_text_box: [1], fp_text: [2], footprint: [1], pad: [1],
+  label: [1], global_label: [1], hierarchical_label: [1], text: [1], text_box: [1], component_class: 0, class: 0,
+};
+/** Boards older than the quoted-names format (KiCad 5) keep bare layer names: see serializeItem. */
+let legacyBare = false;
+function isStringSlot(node, j) {
+  if (legacyBare || j === 0 || typeof node[0] !== "string") return false;
+  const slots = PCB_STRING_SLOTS[node[0]];
+  if (slots === undefined) return false;
+  if (node[0] === "property" && (node[1] === "private" || typeof node[2] !== "string" || j > 2)) return false;   // not a pad's (property pad_prop_bga)
+  return slots === 0 || slots.indexOf(j) >= 0;
+}
+
 export function serialize(node) {
   if (!isList(node)) return atomText(node, false);
   // The reader records which slots were quoted (sexpr.ts QUOTED): reproduce them
@@ -224,7 +247,7 @@ export function serialize(node) {
   for (let j = 0; j < node.length; j++) {
     if (j) out += " ";
     const c = node[j];
-    out += isList(c) ? serialize(c) : atomText(c, (j < 30 && ((q >> j) & 1) === 1) || stringSlot(node, j));
+    out += isList(c) ? serialize(c) : atomText(c, (j < 30 && ((q >> j) & 1) === 1) || stringSlot(node, j) || (!q && typeof c === "string" && isStringSlot(node, j)));
   }
   return out + ")";
 }
@@ -248,5 +271,6 @@ export function serializeItem(doc, item) {
     const lib = item.kind === "symbol" ? doc.lib.get(str((kid(item.node, "lib_id") || [])[1])) : null;
     return (lib ? "(lib_symbols " + serialize(lib) + ") " : "") + serialize(item.node);
   }
-  return wrapFragment(doc, serialize(item.node));
+  legacyBare = Number(doc.version) > 0 && Number(doc.version) < 20200000;
+  try { return wrapFragment(doc, serialize(item.node)); } finally { legacyBare = false; }
 }
