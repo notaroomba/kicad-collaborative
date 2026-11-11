@@ -246,11 +246,23 @@ const usync = sync.details && sync.details[0] && sync.details[0].update_from_sch
 check('all 37 parts reached the board', usync && usync.added.length === 37 && !usync.problems.length, usync ? `${usync.added.length} added, ${usync.nets} nets, problems: ${JSON.stringify(usync.problems)}` : '');
 
 // A long two-layer board with the headers down the long edges in Pico order, 22.86 mm apart, USB at the top.
-const X0 = 100, Y0 = 50, W = 26, H = 51.1;
-await propose({ title: `Board outline ${W} x ${H} mm`, rationale: 'Pico length with the header rows 22.86 mm (0.9 in) apart: breadboard friendly, and wide enough to keep every part on the top side of a two-layer board.', edits: [{ op: 'add_item',
+const NARROW = process.env.NARROW === '1', ROWS = NARROW ? 17.78 : 22.86;   // NARROW=1: the Pico's own 21 mm width and row spacing
+const X0 = 100, Y0 = 50, W = NARROW ? 21 : 26, H = 51.1;
+await propose({ title: `Board outline ${W} x ${H} mm`, rationale: `Pico length with the header rows ${ROWS} mm apart: breadboard friendly, and wide enough to keep every part on the top side of a two-layer board.`, edits: [{ op: 'add_item',
   sexpr: `(gr_rect (start ${X0} ${Y0}) (end ${X0 + W} ${Y0 + H}) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "${crypto.randomUUID()}"))` }] });
 // The floorplan, in mm from the board's top left corner: [x, y, rotation].
-const FLOOR = {
+const FLOOR = NARROW ? {
+  J1: [10.46, 2.5, 180], J4: [10.46, H - 1.61, 90],
+  R2: [6.96, 9.0, 0], R1: [13.96, 9.0, 0], R3: [9.86, 9.2, 90], R4: [11.06, 9.2, 90],
+  U2: [14.5, 12.2, 0], C1: [11.5, 12.2, 90], C2: [17.1, 12.2, 90],
+  U3: [6.4, 15.6, 90], C15: [10.2, 15.5, 90], R5: [10.2, 17.6, 90], R6: [10.2, 19.7, 90], SW1: [15.3, 17.6, 90],   // flash turned on end to fit between the header rows
+  U1: [10.46, 31, 0],
+  C3: [5.26, 25.9, 0], C10: [13.4, 24.9, 90], C11: [14.6, 24.9, 90], C14: [15.8, 24.9, 90], C9: [17.0, 24.9, 90],
+  C4: [5.26, 27.2, 0], C5: [5.26, 35.4, 0], C7: [15.66, 27.2, 0], C8: [15.66, 35.4, 0],
+  C6: [13.86, 37.1, 90], C13: [15.06, 37.1, 90], C12: [16.26, 37.1, 90],
+  Y1: [7.96, 40.5, 0], R7: [9.06, 37.3, 0], C16: [4.86, 40.0, 90], C17: [11.06, 41.0, 90],
+  D1: [15.9, 41.5, 0], R9: [15.9, 39.8, 0], SW2: [14.6, 45.5, 0], R8: [10.9, 43.6, 90],
+} : {
   J1: [13, 2.5, 180], J4: [10.46, H - 1.61, 90],
   R2: [9.5, 9.2, 0], R1: [16.5, 9.2, 0], R3: [12.4, 9.4, 90], R4: [13.6, 9.4, 90],              // CC pull-downs either side, USB series resistors under the data pins
   U2: [19.3, 12.5, 0], C1: [16.6, 12.5, 90], C2: [22.0, 14.5, 90],                             // regulator by the connector
@@ -270,7 +282,7 @@ await page.waitForTimeout(1500);
 const place = await propose({ title: 'Place the parts', rationale: 'Connectors where a Pico has them, the RP2040 in the middle, and each support part beside the pin it serves: decoupling at the supply pins, the crystal under XIN/XOUT, flash above the QSPI pins, the regulator by the USB connector, with a clear lane for the USB pair.',
   edits: [{ op: 'auto_place', outline: [X0, Y0, X0 + W, Y0 + H], parts: Object.entries(FLOOR).map(([ref, [x, y, rotation]]) => ({ ref, fixed: { x: r2(X0 + x), y: r2(Y0 + y), rotation } })) },
     // the header rows exactly 22.86 mm apart, off the placement grid
-    { op: 'move', ref: 'J2', x: X0 + 1.57, y: Y0 + 1.42, rotation: 0 }, { op: 'move', ref: 'J3', x: X0 + 1.57 + 22.86, y: Y0 + 1.42 + 48.26, rotation: 180 }] });   // pin 21 at the bottom right, as on a Pico
+    { op: 'move', ref: 'J2', x: X0 + 1.57, y: Y0 + 1.42, rotation: 0 }, { op: 'move', ref: 'J3', x: X0 + 1.57 + ROWS, y: Y0 + 1.42 + 48.26, rotation: 180 }] });   // pin 21 at the bottom right, as on a Pico
 const pl = place.details && place.details[0] && place.details[0].auto_place;
 console.log('place', JSON.stringify(pl && pl.score));
 check('no two courtyards clash', pl && pl.score.courtyardClashes === 0, JSON.stringify(pl && pl.score));

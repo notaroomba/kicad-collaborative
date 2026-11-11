@@ -93,7 +93,7 @@ export function findByRef(doc: any, ref: string): any[] {
 
 // ---------------------------------------------------------------- nets
 
-interface SchNet { name: string; named: boolean; pins: { ref: string; number: string; name: string; type: string }[]; labels: string[]; ids: string[] }
+interface SchNet { name: string; /** the name KiCad gives it on the board: a local or hierarchical label carries its sheet path */ board: string; named: boolean; pins: { ref: string; number: string; name: string; type: string }[]; labels: string[]; ids: string[] }
 
 /** The sheet's nets with a name for each, the way KiCad names them: a label wins, else Net-(REF-Pad). */
 export function schNets(doc: any): SchNet[] {
@@ -110,7 +110,8 @@ export function schNets(doc: any): SchNet[] {
     if (!pins.length && !labels.size) continue;   // a stray wire with nothing on it
     pins.sort((a, b) => byRef(a, b) || a.number.localeCompare(b.number, undefined, { numeric: true }));
     const first = pins[0];
-    out.push({ name: best || (first ? `Net-(${first.ref}-${first.name || "Pad" + first.number})` : "(unnamed)"), named: !!best, pins, labels: Array.from(labels), ids: Array.from(n.ids) });
+    const name = best || (first ? `Net-(${first.ref}-${first.name || "Pad" + first.number})` : "(unnamed)");
+    out.push({ name, board: best && rank < 3 ? "/" + best : name, named: !!best, pins, labels: Array.from(labels), ids: Array.from(n.ids) });
   }
   return out.sort((a, b) => Number(b.named) - Number(a.named) || a.name.localeCompare(b.name));
 }

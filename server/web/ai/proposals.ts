@@ -192,7 +192,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
   for (const sh of sheets) {
     const { doc } = await resolveDoc(sh.path);
     const multi = sheets.length > 1; const nets = schNets(doc);
-    const local = (n: { name: string; named: boolean }) => (n.named || !multi ? n.name : n.name);   // unnamed nets are named from a pin, which is unique across sheets
+    const local = (n: { board: string }) => n.board;   // as desktop KiCad names it, so its schematic parity check agrees; unnamed nets are named from a pin, unique across sheets
     const pinNet = new Map<string, string>();
     for (const n of nets) { if (n.pins.length < 1) continue; const name = local(n); for (const p of n.pins) pinNet.set(`${p.ref}\u0000${p.number}`, name); if (n.pins.length > 1 || n.named) netNames.add(name); }
     for (const it of doc.items.values() as Iterable<any>) {
@@ -200,7 +200,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
       const ob = k.kid(it.node, "on_board"); if (ob && k.str(ob[1]) === "no") continue;
       const f = fieldsOf(it.node); let part = parts.get(it.ref);
       if (!part) { part = { ref: it.ref, value: f.Value || "", fpid: f.Footprint || "", fields: f, pins: new Map() }; parts.set(it.ref, part); }
-      for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && (nets.find((n) => n.name === net)!.pins.length > 1 || nets.find((n) => n.name === net)!.named)) part.pins.set(String(p.number), net); }
+      for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && netNames.has(net)) part.pins.set(String(p.number), net); }
     }
   }
   if (/\?$/.test(Array.from(parts.keys()).join(" ")) || Array.from(parts.keys()).some((r) => /\?$/.test(r))) problems.push("some symbols are not annotated (their reference ends in ?); annotate the schematic first");
@@ -237,7 +237,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
       if (fpid) { try { sexpr = await kicadFootprint(fpid); } catch (err) { if (!vend) throw err; } }
       if (!sexpr && vend) { const vp = await vendorPart(vend[1], part.fields[vend[0]]); const fp = vp.cad && vp.cad.footprint; if (fp) { sexpr = fp.sexpr; fpid = fpid || fp.fpid; } }
       if (!sexpr) throw new ToolError(fpid ? `footprint ${fpid} was not found` : "no Footprint field");
-      const extra: Record<string, string> = {}; for (const [name, v] of Object.entries(part.fields)) if (!["Reference", "Value", "Footprint", "Description"].includes(name) && !name.startsWith("ki_") && v && v !== "~") extra[name] = v;
+      const extra: Record<string, string> = {}; for (const [name, v] of Object.entries(part.fields)) if (!["Reference", "Value", "Footprint"].includes(name) && !name.startsWith("ki_") && v && v !== "~") extra[name] = v;
       const padNets: Record<string, string> = {};
       const node = footprintNode(fpid, sexpr, ref, part.value, extra, (pad) => { const n = part.pins.get(pad); if (!n) return null; padNets[pad] = n; return netOf(n); });
       // its extent, to park it without overlapping its neighbours
