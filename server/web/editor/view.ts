@@ -66,6 +66,9 @@ export function drawCanvas() {
   const ghosts = E.peerGhosts || [];
   const skip = ghosts.length ? new Set(ghosts.flatMap((g) => [...g.ids])) : null;
   const force = E.renderFull !== false; E.renderFull = false;
+  // pinned comment threads sit on their part or net: a full render means items may have moved (a local move
+  // updates the item's box only when it lands, after the document version was bumped)
+  if (force && E.comments && E.comments.length) drawComments();
   paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {

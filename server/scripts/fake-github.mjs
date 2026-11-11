@@ -236,13 +236,13 @@ const server = http.createServer(async (req, res) => {
     let sha = repo.refs.get(q.get('sha') || repo.defaultBranch);
     if (!sha) return send(res, 409, { message: 'Git Repository is empty.' });
     const out = [];
-    const prefix = q.get('path') ? q.get('path') + '/' : '';
+    const only = q.get('path') || '', prefix = only ? only + '/' : '';
     while (sha && out.length < +(q.get('per_page') || 30)) {
       const c = commits.get(sha);
       const parentTree = c.parents[0] ? trees.get(commits.get(c.parents[0]).tree) : new Map();
       const tree = trees.get(c.tree);
       const touched = [...new Set([...tree.keys(), ...parentTree.keys()])]
-        .some((p) => p.startsWith(prefix) && tree.get(p) !== parentTree.get(p));
+        .some((p) => (p === only || p.startsWith(prefix)) && tree.get(p) !== parentTree.get(p));   // a file or a folder, as GitHub
       if (touched) out.push({ sha, html_url: `${ORIGIN}/${repo.fullName}/commit/${sha}`, author: { login: c.author },
                               commit: { message: c.message, author: { name: c.author, date: c.date } } });
       sha = c.parents[0];

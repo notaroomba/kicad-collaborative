@@ -1,3 +1,4 @@
+import { netLabel } from "../review/names";
 // contextmenu.ts — the right-click menu: KiCad's selection rule, the menu for the active tool
 // (ctxmenus.ts), and what each entry does here.
 //
@@ -8,6 +9,7 @@ import { actions as CTX_ACTIONS } from "../generated/kicad-context-spec.json";
 import type { AppAction, CtxItem, Editor } from "../store";
 import { toolFor } from "../tables";
 import { HANDLERS } from "./actions";
+import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startThread, threadsOnItem } from "./comments";
 import { APP_TOOLS, state, store } from "./appstore";
 import { enterSheet, rootSchematic, setGridPitch } from "./doc";
 import { evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
@@ -218,11 +220,36 @@ export function openClarifyMenu(ev: { clientX: number; clientY: number }): boole
   requestRender(); return true;
 }
 
+/**
+ * Design review rows, after KiCad's own: start a comment thread on the item under the menu (a part, a
+ * track, a label …), on its net, or on the spot; and open the threads already pinned to it.
+ */
+function reviewRows(mm: Mm, c: MenuCtx): CtxItem[] {
+  if (c.busy || (E.tool !== "select" && E.tool !== "highlight")) return [];
+  const out: CtxItem[] = [], sel = selectionItems(), it = sel.length === 1 ? sel[0] : null;
+  if (it) for (const t of threadsOnItem(it.id).slice(0, 4)) out.push({ label: `Show Comment: ${t.body.replace(/\s+/g, " ").slice(0, 32)}${t.body.length > 32 ? "…" : ""}`, run: runRow(() => showThread(t.id)) });
+  if (canComment()) {
+    if (it) {
+      const what = it.ref || it.name || describe(it);
+      out.push({ label: `Add Comment on ${what}…`, hover: it.id, run: runRow(() => commentOnItem(it.id, it.ref || it.name ? undefined : mm)) });
+      const net = netOfItem(it, mm);
+      if (net) out.push({ label: `Add Comment on Net ${netLabel(net.name)}…`, run: runRow(() => commentOnNet(it.id, mm)) });
+    } else if (!sel.length) out.push({ label: "Add Comment Here…", run: runRow(() => startThread(mm, null)) });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- open / close
 function show(x: number, y: number, mm: Mm, clarify: boolean): void {
   runners = new Map(); anchor = { x, y, mm };
   const c = menuCtx();
   const items = rows(evaluate(menuFor(c, activeModuleTool()), c), c);
+  const review = reviewRows(mm, c);
+  if (review.length) {
+    // before the Zoom / Grid sub-menus that close every KiCad menu
+    let at = items.length; while (at > 0 && (items[at - 1].sub || items[at - 1].sep)) at--;
+    items.splice(at, 0, ...(at > 0 && !items[at - 1].sep ? [{ sep: true } as CtxItem] : []), ...review);
+  }
   if (clarify && (E.tool === "select" || E.tool === "highlight")) { const cl = clarifyRows(mm); if (cl) items.unshift(cl, { sep: true }); }
   E.contextMenuOpen = true; E.hoverId = null; stage.classList.remove("over-sel");
   store.set({ contextMenu: { id: ++menuId, x, y, items } });

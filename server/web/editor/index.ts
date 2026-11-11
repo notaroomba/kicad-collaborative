@@ -19,7 +19,7 @@ import "./panes";
 import "./pcbdialogs";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
-import { placeComment } from "./comments";
+import { closeThread, placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { openClarifyMenu, openContextMenu } from "./contextmenu";
@@ -347,7 +347,7 @@ document.addEventListener("keydown", (ev) => {
     // KiCad's order: Esc first cancels what is in flight (the item goes back, the selection stays),
     // then leaves the tool, and only then clears the selection.
     if (cancelInteraction()) return;
-    cmtPanel.style.display = "none";
+    if (cmtPanel.classList.contains("open")) { closeThread(); return; }
     if (E.tool !== "select") { setTool("select"); return; }
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField) CollabTools.sch.exitGroup();

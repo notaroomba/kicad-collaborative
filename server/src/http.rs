@@ -849,6 +849,35 @@ pub async fn board_items(
     Ok(Json(json!({ "docId": doc.id, "seq": seq, "footprints": items })).into_response())
 }
 
+/// What a thread is pinned to, as the clients send it.
+#[derive(Deserialize)]
+pub struct AnchorRequest {
+    /// "item" (a part, a track … by uuid) or "net".
+    pub kind: String,
+    /// The item's uuid, or the net's name.
+    pub id: String,
+    /// What a person calls it: "R1", "GND".
+    #[serde(default)]
+    pub label: String,
+    /// For a net: the uuid of the item the thread was started on.
+    pub item: Option<String>,
+}
+
+impl AnchorRequest {
+    fn checked(self) -> AppResult<persist::CommentAnchor> {
+        let id = self.id.trim().to_string();
+        let label = self.label.trim().to_string();
+        let item = self.item.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        if self.kind != "item" && self.kind != "net" {
+            return Err(AppError::BadRequest("anchor kind must be item or net".into()));
+        }
+        if id.is_empty() || id.len() > 300 || label.len() > 300 || item.as_ref().is_some_and(|s| s.len() > 100) {
+            return Err(AppError::BadRequest("bad anchor".into()));
+        }
+        Ok(persist::CommentAnchor { kind: self.kind, id, label, item })
+    }
+}
+
 #[derive(Deserialize)]
 pub struct NewCommentRequest {
     pub body: String,
@@ -858,11 +887,22 @@ pub struct NewCommentRequest {
     pub y: i64,
     #[serde(rename = "parentId")]
     pub parent_id: Option<i64>,
+    /// The part or net a new thread is about; replies have none.
+    pub anchor: Option<AnchorRequest>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateCommentRequest {
     pub resolved: Option<bool>,
+    /// New text (the author only).
+    pub body: Option<String>,
+    /// Move the thread's pin: a new position, and optionally a new anchor.
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+    pub anchor: Option<AnchorRequest>,
+    /// true drops the anchor, leaving the thread pinned to its position.
+    #[serde(default)]
+    pub unpin: bool,
 }
 
 /// Comment access (access.rs): anyone who can see the project reads its comments;
@@ -908,6 +948,30 @@ pub async fn list_comments(
     Ok(Json(json!({ "comments": comments })).into_response())
 }
 
+/// Every thread of a project, document by document: the review list.
+pub async fn list_project_comments(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(project_id): Path<Uuid>,
+) -> AppResult<Response> {
+    // The same rule as one document's comments: whoever can see the project reads them.
+    persist::get_project(&state.pool, project_id).await?.ok_or(AppError::NotFound)?;
+    access::resolve(&state.pool, &viewer, project_id).await?.ok_or(AppError::Forbidden)?;
+    let docs = persist::project_documents(&state.pool, project_id).await?;
+
+    let comments: Vec<_> = persist::list_project_comments(&state.pool, project_id)
+        .await?
+        .iter()
+        .map(persist::Comment::to_json)
+        .collect();
+    let docs: Vec<_> = docs
+        .iter()
+        .map(|d| json!({ "docId": d.id, "path": d.path, "docType": d.doc_type }))
+        .collect();
+
+    Ok(Json(json!({ "comments": comments, "docs": docs })).into_response())
+}
+
 pub async fn create_comment(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -933,8 +997,14 @@ pub async fn create_comment(
         }
     }
 
+    // Only a thread's root is pinned to something.
+    let anchor = match (req.anchor, req.parent_id) {
+        (Some(a), None) => Some(a.checked()?),
+        _ => None,
+    };
+
     let comment = persist::insert_comment(&state.pool, doc_id, req.parent_id, user.id, req.x,
-                                          req.y, body)
+                                          req.y, body, anchor.as_ref())
         .await?;
 
     state
@@ -956,14 +1026,52 @@ pub async fn update_comment(
     let (doc, user) = comment_access(&state, &viewer, comment.doc_id, true).await?;
     let user = user.ok_or(AppError::Forbidden)?;
 
-    // Anyone who can comment may resolve/unresolve (the Figma model); only
-    // the author or the project owner may do anything else later.
-    let Some(resolved) = req.resolved else {
-        return Err(AppError::BadRequest("nothing to update".into()));
-    };
+    let _ = doc;
+    let mut any = false;
 
-    let _ = (doc, user);
-    persist::set_comment_resolved(&state.pool, id, resolved).await?;
+    // Anyone who can comment may resolve/unresolve (the Figma model).
+    if let Some(resolved) = req.resolved {
+        persist::set_comment_resolved(&state.pool, id, resolved).await?;
+        any = true;
+    }
+
+    // The text belongs to its author.
+    if let Some(body) = &req.body {
+        if comment.author_id != user.id {
+            return Err(AppError::Forbidden);
+        }
+        let body = body.trim();
+        if body.is_empty() || body.len() > 4000 {
+            return Err(AppError::BadRequest("comment must be 1-4000 characters".into()));
+        }
+        persist::update_comment_body(&state.pool, id, body).await?;
+        any = true;
+    }
+
+    // Anyone who can comment may move a thread's pin (to another part, a net, or a bare spot).
+    if req.anchor.is_some() || req.unpin || req.x.is_some() || req.y.is_some() {
+        if comment.parent_id.is_some() {
+            return Err(AppError::BadRequest("only a thread's first comment is pinned".into()));
+        }
+        let anchor = match req.anchor {
+            Some(a) => Some(a.checked()?),
+            None if req.unpin => None,
+            None => comment.anchor_kind.clone().map(|kind| persist::CommentAnchor {
+                kind,
+                id: comment.anchor_id.clone().unwrap_or_default(),
+                label: comment.anchor_label.clone().unwrap_or_default(),
+                item: comment.anchor_item.clone(),
+            }),
+        };
+        persist::set_comment_anchor(&state.pool, id, req.x.unwrap_or(comment.x_nm),
+                                    req.y.unwrap_or(comment.y_nm), anchor.as_ref())
+            .await?;
+        any = true;
+    }
+
+    if !any {
+        return Err(AppError::BadRequest("nothing to update".into()));
+    }
 
     let updated = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
 

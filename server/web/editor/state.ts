@@ -43,6 +43,7 @@ export const E: any = {
   peerState: {},
   comments: [],
   openThread: null,
+  pendingThread: null,   // a thread to open once its document has loaded (comments.ts)
   layers: {},
   renderTimer: 0,
   renderDirtySince: 0,

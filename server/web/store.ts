@@ -36,10 +36,14 @@ export interface LayerRow { key: string; name: string; color: string; count: num
 
 export interface Peer { cid: string; name: string; color: string }
 
+/** What a comment thread is pinned to: a part or other item (by uuid) or a net (by name). */
+export interface CommentAnchor { kind: "item" | "net"; id: string; label: string; item?: string | null }
 export interface Comment {
-  id: number; parentId?: number | null; body: string; authorLogin: string; createdAt: string;
-  resolved?: boolean; x: number; y: number;
+  id: number; docId?: string; parentId?: number | null; body: string; authorId?: number; authorLogin: string; createdAt: string; editedAt?: string | null;
+  resolved?: boolean; x: number; y: number; anchor?: CommentAnchor | null;
 }
+/** The threads of another document of the project (the Comments pane lists them under the open document's). */
+export interface DocComments { docId: string; path: string; comments: Comment[] }
 
 export interface CheckpointGroup { name: string; at: string; docs: number }
 
@@ -191,6 +195,9 @@ export interface AppState {
   selection: { ids: string[]; primary: ItemSummary | null; field: { id: string; name: string } | null; version: number };
   peers: { list: Peer[]; follow: string | null };
   comments: Comment[];
+  /** the comments on the project's other documents, and the thread whose card is open on the canvas */
+  otherComments?: DocComments[];
+  openThread?: number | null;
   history: { groups: CheckpointGroup[]; loading: boolean; error: string | null };
   versions: VersionsState;
   tool: { current: string; appTools: string[]; moduleTools: ModuleTool[]; moduleActions: ModuleAction[]; handled: string[] };
@@ -225,7 +232,11 @@ export type AppAction =
   | { type: "setZoom"; zoom: number | "auto" }
   | { type: "setFilter"; key: string; on: boolean }
   | { type: "follow"; cid: string | null }
-  | { type: "openThread"; id: number }
+  | { type: "openThread"; id: number; docId?: string }
+  /** start a comment thread on an item of the open document, or at a place (mm) */
+  | { type: "commentOn"; itemId?: string; at?: [number, number]; body?: string }
+  /** open the Compare window (web/review); a and b are VersionRefs, see web/review/sources.ts */
+  | { type: "compare"; a?: unknown; b?: unknown; docId?: string }
   | { type: "selectItem"; id: string }
   | { type: "restore"; name: string }
   | ({ type: "versions" } & VersionsCmd)

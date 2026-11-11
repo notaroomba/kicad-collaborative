@@ -1,7 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setGroupCurrent, setToggle, setToggles, state, store } from "./appstore";
-import { centerOn, openThreadAction } from "./comments";
+import { centerOn, commentOnAction, openThreadAction, openThreadOnDoc } from "./comments";
 import { saveVersionDialog, versionsCommand } from "./versions";
 import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
 import { loadHistory, restoreCheckpoint } from "./history";
@@ -220,6 +220,9 @@ export const HANDLERS = {
   showSearch: () => showPane("search"), showNetNavigator: () => showPane("netnav"),
   showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
   collabCopyLink: (a) => runAction("share", a), collabComments: () => showPane("comments", true), collabFollow: () => cycleFollow(), collabHistory: () => showPane("history", true),
+  // design review (web/review): KiCad's File > Compare … entries open the Compare window
+  compareSchematicWithHistory: () => openCompare(), compareBoardWithHistory: () => openCompare(), collabCompare: () => openCompare(),
+  compareSchematicWithFile: () => openCompare({ pickFile: true }), compareBoardWithFile: () => openCompare({ pickFile: true }),
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   // the Assistant dock (web/ai) owns its own state; the menu entry just asks it to toggle
   showAssistant: () => window.dispatchEvent(new Event("kc-assistant-toggle")),
@@ -235,6 +238,9 @@ export const HANDLERS = {
   "tab-appearance": () => showPane("appearance", true), "tab-props": () => showPane("props", true), "tab-peers": () => showPane("peers", true), "tab-comments": () => showPane("comments", true), "tab-history": () => showPane("history", true),
 };
 
+
+/** The Compare window lives in the chrome bundle; it listens for this event (web/review/store.ts). */
+function openCompare(detail = {}) { window.dispatchEvent(new CustomEvent("kc-compare", { detail })); }
 
 /** window.CollabApp.dispatch: the chrome's intents (typed as AppAction in server/web/store.ts). */
 export function dispatchAction(a) {
@@ -259,7 +265,9 @@ export function dispatchAction(a) {
       case "setZoom": if (a.zoom === "auto") fitView(); else { E.viewTouched = true; E.zoom = Math.min(400, Math.max(0.2, Number(a.zoom) / 100)); applyView(); } return;
       case "setFilter": setFilter(a.key, a.on); return;
       case "follow": followAction(a.cid); return;
-      case "openThread": openThreadAction(a.id); return;
+      case "openThread": if (a.docId) openThreadOnDoc(a.docId, a.id); else openThreadAction(a.id); return;
+      case "commentOn": commentOnAction(a); return;
+      case "compare": openCompare({ a: a.a, b: a.b, docId: a.docId }); return;
       case "selectItem": selectItemAction(a.id); return;
       case "restore": restoreCheckpoint(a.name); return;
       case "versions": versionsCommand(a); return;

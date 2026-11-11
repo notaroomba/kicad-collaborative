@@ -286,8 +286,10 @@ async function listComments(req: Request): Promise<Reply> {
   const p = needProject(req); const entry = findDocument(p, req.args.document); const IU = entry.docType === "kicad_sch" ? 1e4 : 1e6;
   const all: any[] = (await api(`/api/docs/${entry.docId}/comments`)).comments || [];
   const row = (c: any) => ({ id: c.id, author: c.authorLogin, text: c.body, at: c.createdAt });
+  // what the thread is pinned to: a component (or other item) or a net; absent for a thread pinned to a place
+  const pinned = (c: any) => (c.anchor ? (c.anchor.kind === "net" ? { net: c.anchor.label || c.anchor.id } : { on: c.anchor.label || "item" }) : {});
   const threads = all.filter((c) => !c.parentId).filter((c) => req.args.include_resolved || !c.resolved)
-    .map((c) => Object.assign(row(c), { x: r3(c.x / IU), y: r3(c.y / IU), resolved: !!c.resolved, replies: all.filter((r) => r.parentId === c.id).map(row) }));
+    .map((c) => Object.assign(row(c), pinned(c), { x: r3(c.x / IU), y: r3(c.y / IU), resolved: !!c.resolved, replies: all.filter((r) => r.parentId === c.id).map(row) }));
   return { result: { document: entry.path, count: threads.length, comments: threads } };
 }
 
@@ -300,12 +302,35 @@ async function addComment(req: Request): Promise<Reply> {
     return { result: { id: c.id, reply_to: c.parentId, document: findDocument(p, a.document).path } };
   }
   return withDocument(req, a.document, async (sess, doc) => {
-    let x = a.x, y = a.y;
-    if (typeof a.ref === "string" && a.ref) { const hit = design.findByRef(doc, a.ref)[0]; if (!hit) throw new ToolError(`There is no ${a.ref} on ${sess.entry.path}.`); const b = hit.bbox; x = b ? (b[0] + b[2]) / 2 : hit.x; y = b ? (b[1] + b[3]) / 2 : hit.y; }
-    if (typeof x !== "number" || typeof y !== "number" || !isFinite(x) || !isFinite(y)) throw new ToolError("Say where the comment goes: ref, or x and y in millimetres.");
-    const c = await post(`/api/docs/${sess.entry.docId}/comments`, { body: a.text, x: Math.round(x * sess.IU), y: Math.round(y * sess.IU) });
-    return { result: { id: c.id, document: sess.entry.path, x: r3(x), y: r3(y) } };
+    let x = a.x, y = a.y; let anchor: { kind: "item" | "net"; id: string; label: string; item?: string } | undefined;
+    const mid = (it: any) => { const b = it.bbox; return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [it.x || 0, it.y || 0]; };
+    if (typeof a.ref === "string" && a.ref) {
+      const hit = design.findByRef(doc, a.ref)[0]; if (!hit) throw new ToolError(`There is no ${a.ref} on ${sess.entry.path}.`);
+      [x, y] = mid(hit); anchor = { kind: "item", id: hit.id, label: hit.ref || a.ref };
+    } else if (typeof a.net === "string" && a.net) {
+      const on = netAnchorItem(doc, a.net); if (!on) throw new ToolError(`There is no net ${a.net} on ${sess.entry.path}. list_nets gives the names.`);
+      if (typeof x !== "number" || typeof y !== "number") [x, y] = mid(on.item);
+      anchor = { kind: "net", id: on.name, label: on.name, item: on.item.kind === "footprint" || on.item.kind === "symbol" ? undefined : on.item.id };
+    }
+    if (typeof x !== "number" || typeof y !== "number" || !isFinite(x) || !isFinite(y)) throw new ToolError("Say what the comment is about: ref, net, or x and y in millimetres.");
+    const c = await post(`/api/docs/${sess.entry.docId}/comments`, { body: a.text, x: Math.round(x * sess.IU), y: Math.round(y * sess.IU), anchor });
+    return { result: { id: c.id, document: sess.entry.path, x: r3(x), y: r3(y), on: anchor && anchor.kind === "item" ? anchor.label : undefined, net: anchor && anchor.kind === "net" ? anchor.label : undefined } };
   });
+}
+
+/** An item of the document that is on the named net, with the net's name as the document spells it. */
+function netAnchorItem(doc: any, name: string): { name: string; item: any } | null {
+  const q = name.trim().toLowerCase().replace(/^\//, ""); const same = (n: string) => n.toLowerCase().replace(/^\//, "") === q;
+  if (doc.type === "sch") {
+    const net = design.schNets(doc).find((n) => same(n.name) || same(n.board) || n.labels.some(same)); if (!net) return null;
+    const items = net.ids.map((id: string) => doc.items.get(id)).filter(Boolean);
+    const item = items.find((it: any) => /label$/.test(it.kind)) || items.find((it: any) => it.kind === "wire") || items[0];
+    return item ? { name: net.name, item } : null;
+  }
+  const k = design.K();
+  for (const it of doc.items.values()) if ((it.kind === "segment" || it.kind === "arc" || it.kind === "via" || it.kind === "zone") && same(k.netNameOf(doc, it.node) || "")) return { name: k.netNameOf(doc, it.node), item: it };
+  for (const it of doc.items.values()) if (it.kind === "footprint") for (const p of k.kids(it.node, "pad")) { const n = k.netNameOf(doc, p) || ""; if (n && same(n)) return { name: n, item: it }; }
+  return null;
 }
 
 async function resolveComment(req: Request): Promise<Reply> {

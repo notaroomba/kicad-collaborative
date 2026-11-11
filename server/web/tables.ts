@@ -57,7 +57,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&File", ["save", "saveCurrSheetCopyAs", "revert", "-",
       ["Import", ["importNonKicadSchematic|Non-KiCad Schematic...", "importFPAssignments|Footprint Assignments...", "importGraphics|Graphics..."]],
       ["Export", ["drawSheetOnClipboard|Drawing to Clipboard", "exportNetlist|Netlist...", "exportSymbolsToLibrary|Symbols..."]],
-      "-", ...COLLAB_FILE, "-", "compareSchematicWithFile", "compareSchematicWithHistory", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
+      "-", ...COLLAB_FILE, "-", "compareSchematicWithFile", "compareSchematicWithHistory|Compare Schematic with History...", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
     ["&Edit", ["undo", "redo", "-", "cut", "copy", "copyAsText", "paste", "pasteSpecial", "doDelete", "-",
       "selectAll", "unselectAll", ["&Select", ["selectConnection", "selectNode", "-", "nextNetItem", "previousNetItem"]], "-",
       "find", "findAndReplace", "-", "deleteTool", "editTextAndGraphics", "changeSymbols", "editPageNumber",
@@ -87,7 +87,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&Help", HELP_MENU],
   ],
   pcb: [
-    ["&File", ["appendBoard", "compareBoardWithFile", "compareBoardWithHistory", "-", "save", "saveCopy", "revert", "-", "rescueAutosave", "-",
+    ["&File", ["appendBoard", "compareBoardWithFile", "compareBoardWithHistory|Compare Board with History...", "-", "save", "saveCopy", "revert", "-", "rescueAutosave", "-",
       ["Import", ["importNetlist|Netlist...", "importSpecctraSession|Specctra Session...", "placeImportedGraphics|Graphics...", "openNonKicadBoard"]],
       ["Export", ["exportSpecctraDSN|Specctra DSN...", "exportGenCAD|GenCAD...", "exportVRML|VRML...", "exportIDF|IDFv3...", "exportSTEP|STEP/GLB/BREP/XAO/PLY/STL...", "exportCmpFile|Footprint Association (.cmp) File...", "exportHyperlynx|Hyperlynx...",
         "-", "exportFootprints|Footprints..."]],
@@ -171,7 +171,7 @@ export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete",
   "toggleLock", "lock", "unlock", "convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks", "zoneDuplicate", "zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower",
   "zonePriorityMoveToBottom", "toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "module:toggleDNP", "leftJustify", "centerJustify", "rightJustify", "hideNetInRatsnest", "showNetInRatsnest"]);
 /** Entries that never change the document: everything else is greyed out for a view-only visitor, as in a read-only frame. */
-export const READ_ONLY_OK = new Set(["saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
+export const READ_ONLY_OK = new Set(["compareSchematicWithFile", "compareSchematicWithHistory", "compareBoardWithFile", "compareBoardWithHistory", "saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
   "selectNet", "deselectNet", "selectSameSheet", "module:selectAllOnLayer", "selectUnconnected", "filterSelection", "runERC", "runDRC", "clearMarkers", "boardStatistics", "measureTool", "inspectClearance",
   "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "themeLight", "themeDark", "themeSystem", "languageEnglish",

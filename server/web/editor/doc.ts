@@ -1,7 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { KICAD_LAYERS, SCH_LAYERS, setStatusBar, setToggle, state, store } from "./appstore";
-import { centerOn, drawComments, loadComments, renderThreads } from "./comments";
+import { centerOn, closeThread, drawComments, loadComments, renderThreads } from "./comments";
 import { $ } from "./dom";
 import { pruneSelection, resetInteraction } from "./gestures";
 import { loadHistory } from "./history";
@@ -155,7 +155,7 @@ export function setLayerVisible(key, visible) {
 }
 
 /** Every applied change bumps the document version (the Properties island re-reads on it). */
-export function bumpDoc() { store.slice("document", { version: store.get().document.version + 1 }); }
+export function bumpDoc() { store.slice("document", { version: store.get().document.version + 1 }); if (E.comments.length) drawComments(); }   // pins follow the items they are on
 
 export function applyChanges(changes) {
   if (!E.kdoc) return;
@@ -298,9 +298,9 @@ export function leaveDoc() {
   E.items = []; E.sheets = []; E.selected = null; E.drag = null; E.boxSel = null; E.selection = new Set(); E.highlightIds = null; E.peerState = {}; E.comments = []; E.followPeer = null; E.layers = {};
   E.kdoc = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
-  cmtPanel.style.display = "none";
+  closeThread();
   store.slice("document", { layers: [], hiddenLayers: [], copperLayers: [], items: [], sheets: [], hasDoc: false, notice: null });
-  store.set({ comments: [], peers: { list: [], follow: null } });
+  store.set({ comments: [], otherComments: [], openThread: null, peers: { list: [], follow: null } });
   renderProps();
 }
 

@@ -301,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/docs/{id}/comments",
             get(http::list_comments).post(http::create_comment),
         )
+        .route("/api/projects/{id}/comments", get(http::list_project_comments))
         .route(
             "/api/comments/{id}",
             axum::routing::patch(http::update_comment).delete(http::delete_comment),
@@ -351,6 +352,8 @@ async fn main() -> anyhow::Result<()> {
             get(github::project_status).put(github::link_project).delete(github::unlink_project),
         )
         .route("/api/projects/{id}/github/diff", get(github::file_diff))
+        .route("/api/projects/{id}/github/commits", get(github::file_commits))
+        .route("/api/projects/{id}/github/file", get(github::file_at_commit))
         .route("/api/projects/{id}/github/push", post(github::push))
         .route("/api/projects/{id}/github/settings", post(github::settings))
         .route("/api/projects/{id}/github/pull", post(github::pull))

@@ -1221,6 +1221,115 @@ pub async fn file_diff(
     Ok(Json(out).into_response())
 }
 
+// ------------------------------------------------------------------ history (design review)
+
+#[derive(Deserialize)]
+pub struct CommitsQuery {
+    /// Project-relative path of the file whose history is wanted.
+    pub path: String,
+    pub limit: Option<u32>,
+}
+
+/// The commits on the linked branch that changed one project file, newest first:
+/// the versions the visual diff can compare with.
+pub async fn file_commits(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<CommitsQuery>,
+) -> AppResult<Response> {
+    access(&state, &user, id).await?;
+    let link = load_link(&state, id).await?.ok_or_else(|| AppError::BadRequest("This project is not linked to a repository.".into()))?;
+    let gh = Gh::for_user(&state, &user).await?;
+    let path = safe_zip_name(&q.path).ok_or_else(|| AppError::BadRequest("bad path".into()))?;
+    let limit = q.limit.unwrap_or(30).clamp(1, 100);
+
+    let list = match gh
+        .get(&format!(
+            "/repos/{}/commits?sha={}&path={}&per_page={limit}",
+            link.repo.slug(),
+            enc(&link.branch),
+            enc(&link.repo_path(&path)),
+        ))
+        .await
+    {
+        Ok(v) => v,
+        // 404: no such branch.  409: the repository has no commits at all.
+        Err(e) if e.status == 404 || e.status == 409 => Value::Array(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+
+    let commits: Vec<Value> = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let sha = c["sha"].as_str()?;
+            let message = c["commit"]["message"].as_str().unwrap_or("");
+            Some(json!({
+                "sha": sha,
+                "message": message.lines().next().unwrap_or(""),
+                "author": c["author"]["login"].as_str().or_else(|| c["commit"]["author"]["name"].as_str()),
+                "date": c["commit"]["author"]["date"],
+                "url": c["html_url"],
+            }))
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "path": path,
+        "repo": link.repo.slug(),
+        "branch": link.branch,
+        "commits": commits,
+    }))
+    .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct FileAtQuery {
+    pub path: String,
+    /// The commit to read the file from.
+    pub sha: String,
+}
+
+/// One project file as it was at a commit of the linked repository.
+pub async fn file_at_commit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<FileAtQuery>,
+) -> AppResult<Response> {
+    access(&state, &user, id).await?;
+    let link = load_link(&state, id).await?.ok_or_else(|| AppError::BadRequest("This project is not linked to a repository.".into()))?;
+    let gh = Gh::for_user(&state, &user).await?;
+    let path = safe_zip_name(&q.path).ok_or_else(|| AppError::BadRequest("bad path".into()))?;
+    if q.sha.len() < 7 || q.sha.len() > 64 || !q.sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::BadRequest("bad commit id".into()));
+    }
+
+    let tree = gh.commit_tree(&link.repo, &q.sha).await?;
+    let repo_path = link.repo_path(&path);
+    let (dir, name) = match repo_path.rsplit_once('/') {
+        Some((d, n)) => (d, n),
+        None => ("", repo_path.as_str()),
+    };
+    let folder = gh.subtree(&link.repo, &tree, dir).await?.ok_or(AppError::NotFound)?;
+    let listing = gh.get(&format!("/repos/{}/git/trees/{folder}", link.repo.slug())).await?;
+    let entry = listing["tree"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["type"] == "blob" && e["path"] == name)
+        .ok_or(AppError::NotFound)?;
+    if entry["size"].as_u64().unwrap_or(0) > MAX_FILE_BYTES {
+        return Err(AppError::BadRequest("That file is too large to compare.".into()));
+    }
+    let sha = entry["sha"].as_str().ok_or(AppError::NotFound)?;
+    let content = gh.blob(&link.repo, sha).await?;
+
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], content).into_response())
+}
+
 // ------------------------------------------------------------------ push
 
 #[derive(Deserialize, Default)]

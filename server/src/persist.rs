@@ -665,6 +665,23 @@ pub struct Comment {
     pub body: String,
     pub resolved: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// What the thread is pinned to (root comments only): 'item' or 'net'.
+    pub anchor_kind: Option<String>,
+    /// The item's uuid, or the net's name.
+    pub anchor_id: Option<String>,
+    pub anchor_label: Option<String>,
+    /// For a net: the item the thread was started on.
+    pub anchor_item: Option<String>,
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// What a new thread is pinned to.
+#[derive(Debug, Clone, Default)]
+pub struct CommentAnchor {
+    pub kind: String,
+    pub id: String,
+    pub label: String,
+    pub item: Option<String>,
 }
 
 impl Comment {
@@ -680,12 +697,20 @@ impl Comment {
             "body": self.body,
             "resolved": self.resolved,
             "createdAt": self.created_at.to_rfc3339(),
+            "editedAt": self.edited_at.map(|t| t.to_rfc3339()),
+            "anchor": self.anchor_kind.as_ref().map(|kind| serde_json::json!({
+                "kind": kind,
+                "id": self.anchor_id,
+                "label": self.anchor_label,
+                "item": self.anchor_item,
+            })),
         })
     }
 }
 
 const COMMENT_COLS: &str = "c.id, c.doc_id, c.parent_id, c.author_id, u.login AS author_login,
-                            c.x_nm, c.y_nm, c.body, c.resolved, c.created_at";
+                            c.x_nm, c.y_nm, c.body, c.resolved, c.created_at,
+                            c.anchor_kind, c.anchor_id, c.anchor_label, c.anchor_item, c.edited_at";
 
 pub async fn list_comments(pool: &PgPool, doc_id: Uuid) -> DbResult<Vec<Comment>> {
     sqlx::query_as::<_, Comment>(&format!(
@@ -705,11 +730,13 @@ pub async fn insert_comment(
     x_nm: i64,
     y_nm: i64,
     body: &str,
+    anchor: Option<&CommentAnchor>,
 ) -> DbResult<Comment> {
     sqlx::query_as::<_, Comment>(&format!(
         "WITH ins AS (
-            INSERT INTO comments (doc_id, parent_id, author_id, x_nm, y_nm, body)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+            INSERT INTO comments (doc_id, parent_id, author_id, x_nm, y_nm, body,
+                                  anchor_kind, anchor_id, anchor_label, anchor_item)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *
          )
          SELECT {} FROM ins c JOIN users u ON u.id = c.author_id",
         COMMENT_COLS
@@ -720,8 +747,59 @@ pub async fn insert_comment(
     .bind(x_nm)
     .bind(y_nm)
     .bind(body)
+    .bind(anchor.map(|a| a.kind.as_str()))
+    .bind(anchor.map(|a| a.id.as_str()))
+    .bind(anchor.map(|a| a.label.as_str()))
+    .bind(anchor.and_then(|a| a.item.as_deref()))
     .fetch_one(pool)
     .await
+}
+
+/// Every comment of every document in a project, oldest first.
+pub async fn list_project_comments(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<Comment>> {
+    sqlx::query_as::<_, Comment>(&format!(
+        "SELECT {COMMENT_COLS} FROM comments c JOIN users u ON u.id = c.author_id
+         JOIN documents d ON d.id = c.doc_id
+         WHERE d.project_id = $1 ORDER BY c.id"
+    ))
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Rewrite a comment's text (its author only; the caller checks).
+pub async fn update_comment_body(pool: &PgPool, id: i64, body: &str) -> DbResult<bool> {
+    let res = sqlx::query("UPDATE comments SET body = $2, edited_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(body)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Move a thread's pin: the position, and what it is pinned to (None unpins it).
+pub async fn set_comment_anchor(
+    pool: &PgPool,
+    id: i64,
+    x_nm: i64,
+    y_nm: i64,
+    anchor: Option<&CommentAnchor>,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        "UPDATE comments SET x_nm = $2, y_nm = $3, anchor_kind = $4, anchor_id = $5,
+                             anchor_label = $6, anchor_item = $7
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(x_nm)
+    .bind(y_nm)
+    .bind(anchor.map(|a| a.kind.as_str()))
+    .bind(anchor.map(|a| a.id.as_str()))
+    .bind(anchor.map(|a| a.label.as_str()))
+    .bind(anchor.and_then(|a| a.item.as_deref()))
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn get_comment(pool: &PgPool, id: i64) -> DbResult<Option<Comment>> {
