@@ -810,6 +810,32 @@ function finishSelectMove(ctx, commit) {
   ctx.commit(moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node)), "move");
   ctx.requestRender();
 }
+/**
+ * Move (M, EDIT_TOOL::Move): everything selected — tracks, vias, graphics, text, zones, footprints, the members of a
+ * selected group — follows the cursor from where it is; a click drops it, Escape puts it back.  Unlike a drag,
+ * nothing attached follows.  Locked items stay put unless "Override locks" is on.
+ */
+function beginCarryMove(ctx) {
+  const doc = ctx.doc; if (!doc) return false;
+  const override = appGlobal(() => editorState().overrideLocks, false);
+  const ids = Array.from(expandGroups(doc, selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
+  if (!ids.length) return false;
+  const free = ids.filter((id) => override || !isLocked(doc.items.get(id).node));
+  if (!free.length) { ctx.toast("The selection is locked"); return true; }
+  cancelOps();
+  const at = cursorPoint(ctx);
+  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: true };
+  for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
+  S.move = m; ctx.requestRender(); return true;
+}
+/** A press while the selection follows the cursor: the left button drops it there (and the click goes no further). */
+function onStickyPointerDown(ev) {
+  const ctx = lastCtx; const m = S.move; if (!m || !m.sticky || !ctx || !isPcbDoc()) return;
+  if (ev.target.closest && (ev.target.closest("#pcbChip") || ev.target.closest("#cmtPanel"))) return;
+  ev.stopImmediatePropagation(); ev.preventDefault();
+  if (ev.button !== 0) return;
+  selectMoveTo(ctx, ctx.worldMm(ev)); S.stickyUp = true; finishSelectMove(ctx, true);
+}
 function onStagePointerMove(ev) {
   const ctx = lastCtx; if (!ctx || !isPcbDoc()) return;
   if (S.pending) {
@@ -820,10 +846,11 @@ function onStagePointerMove(ev) {
   if (S.drag && S.drag.bySelect) { dragMove(ctx, ctx.worldMm(ev)); ctx.requestRender(); }
   else if (S.move) selectMoveTo(ctx, ctx.worldMm(ev));
 }
-function onStagePointerUp() {
+function onStagePointerUp(ev) {
   const ctx = lastCtx; S.pending = null; if (!ctx) return;
+  if (S.stickyUp) { S.stickyUp = false; if (ev) { ev.stopImmediatePropagation(); ev.preventDefault(); } return; }   // the release of the click that dropped a Move
   if (S.drag && S.drag.bySelect) finishDrag(ctx, true);
-  else if (S.move) finishSelectMove(ctx, true);
+  else if (S.move && !S.move.sticky) finishSelectMove(ctx, true);
 }
 // S.draw = { shape, start, cur, pts, … }: line/rect/circle take two clicks, an arc its start, end and
 // then a point on the arc, a bezier its start, two control points and end, a polygon / zone / rule area
@@ -2062,6 +2089,12 @@ act("filterSelection", "Filter Selected Items…", "", (ctx) => {
 act("unselectAll", "Unselect All", "", (ctx) => { applySelection(ctx, []); return true; });
 // placement
 function selectionOrToast(ctx, what) { const ids = needSel(ctx, what); return ids && canEdit(ctx) ? Array.from(expandGroups(ctx.doc, ids)) : null; }
+act("move", "Move", "M", (ctx) => {
+  const items = selectedItems(ctx); if (!items.length) return false;
+  if (items.every((it) => it.kind === "footprint")) return false;   // footprints alone: the app's own move, which also shows peers each step
+  if (!canEdit(ctx)) return true;
+  return beginCarryMove(ctx);
+});
 act("moveExactly", "Move Exactly…", "Shift+M", (ctx) => {
   const ids = selectionOrToast(ctx, "Select items to move"); if (!ids) return true;
   return openForm({ title: "Move Item Exactly", fields: [{ k: "dx", label: "Move X (mm)", type: "num", value: 0 }, { k: "dy", label: "Move Y (mm)", type: "num", value: 0 }, { k: "rotation", label: "Rotate (°)", type: "num", value: 0 }, { k: "about", label: "Rotate around", type: "select", value: "center", options: [["center", "Selection center"], ["anchor", "Item anchor"]] }],
@@ -2248,6 +2281,7 @@ function ensureDom(ctx) {
   // The module's pointer hooks only run while one of its tools is active; picking tracks in the app's own
   // select tool listens on the stage after app.js has had its turn with the footprints.
   ctx.stage.addEventListener("pointerdown", onStagePointerDown);
+  window.addEventListener("pointerdown", onStickyPointerDown, true);   // before every stage listener: the click that drops a Move is nobody else's
   ctx.stage.addEventListener("pointermove", onStagePointerMove, true);
   ctx.stage.addEventListener("pointerup", onStagePointerUp, true);
   ctx.stage.addEventListener("pointercancel", onStagePointerUp, true);
@@ -2318,7 +2352,7 @@ function onCaptureKey(ev) {
     return;
   }
   if (k === "Escape") {
-    if (S.route || S.draw || S.drag || S.text || S.image) {   // first Escape only cancels the operation, KiCad style; the next one leaves the tool
+    if (S.route || S.draw || S.drag || S.text || S.image || (S.move && S.move.sticky)) {   // first Escape only cancels the operation, KiCad style; the next one leaves the tool
       cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
       if (lastCtx) { lastCtx.toast("Cancelled"); refreshChip(lastCtx); lastCtx.requestRender(); }
     } else if (S.sel.size) { S.sel.clear(); if (lastCtx) lastCtx.requestRender(); }

@@ -2,7 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { SCH_LAYERS, pcbColor, pcbZ } from "./colors";
 import { boxUnion } from "./geom";
-import { kids, pointInPoly } from "./sexpr";
+import { kids, pointInPoly, rotator } from "./sexpr";
 import { textWidth } from "./text";
 // ---------------------------------------------------------------- queries
 export function movableItems(doc) {
@@ -38,7 +38,14 @@ export function geomHit(g, x, y, tol) {
   case "line": return segDistance(x, y, g.x1, g.y1, g.x2, g.y2) <= w;
   case "poly": { const n = g.pts.length; if (n < 2) return false; if (g.fill && pointInPoly(g.pts, x, y)) return true; for (let i = 0; i < (g.close ? n : n - 1); i++) { const a = g.pts[i], b = g.pts[(i + 1) % n]; if (segDistance(x, y, a[0], a[1], b[0], b[1]) <= w) return true; } return false; }
   case "circle": { const d = Math.hypot(x - g.x, y - g.y); return g.fill ? d <= g.r + tol : Math.abs(d - g.r) <= w; }
-  case "arc": { const d = Math.hypot(x - g.x, y - g.y); return Math.abs(d - g.r) <= w; }
+  case "arc": {   // on the stroke and inside the sweep (or within reach of one of its ends) — not anywhere on the full circle
+    const d = Math.hypot(x - g.x, y - g.y); if (Math.abs(d - g.r) > w) return false;
+    if (g.pie || g.a0 === undefined || g.a1 === undefined) return true;
+    const TWO = Math.PI * 2, nrm = (v) => ((v % TWO) + TWO) % TWO;
+    const from = g.anticlockwise ? g.a1 : g.a0, sweep = nrm((g.anticlockwise ? g.a0 : g.a1) - from) || TWO;
+    if (nrm(Math.atan2(y - g.y, x - g.x) - from) <= sweep) return true;
+    return Math.hypot(x - (g.x + g.r * Math.cos(g.a0)), y - (g.y + g.r * Math.sin(g.a0))) <= w || Math.hypot(x - (g.x + g.r * Math.cos(g.a1)), y - (g.y + g.r * Math.sin(g.a1))) <= w;
+  }
   case "rect": return x >= g.x - w && x <= g.x + g.w + w && y >= g.y - w && y <= g.y + g.h + w;
   case "pad": {   // the pad's own outline in its rotated frame (circles / ovals by radius, everything else by the box)
     const a = (g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), dx = x - g.x, dy = y - g.y;
@@ -47,7 +54,13 @@ export function geomHit(g, x, y, tol) {
     if (g.shape === "oval") { const rr = Math.min(g.w, g.h) / 2; const ex = Math.max(0, Math.abs(lx) - (g.w / 2 - rr)), ey = Math.max(0, Math.abs(ly) - (g.h / 2 - rr)); return Math.hypot(ex, ey) <= rr + tol; }
     return Math.abs(lx) <= g.w / 2 + tol && Math.abs(ly) <= g.h / 2 + tol;
   }
-  case "image": case "text": { const b = geomBox(g); return !!b && x >= b[0] - tol && x <= b[2] + tol && y >= b[1] - tol && y <= b[3] + tol; }
+  case "text": {   // the text's own box — its width along the reading direction, placed by the justification and turned with it (EDA_TEXT::TextHitTest)
+    const tw = textWidth(g.text || "", g.sizeX || g.size || 1, g.w || 0), th = g.size || 1;
+    const x0 = g.h === "left" ? 0 : g.h === "right" ? -tw : -tw / 2, y0 = g.v === "top" ? 0 : g.v === "bottom" ? -th : -th / 2;
+    let [lx, ly] = rotator(-(g.rot || 0))(x - g.x, y - g.y); if (g.mirror) lx = -lx;
+    return lx >= x0 - tol && lx <= x0 + tw + tol && ly >= y0 - tol && ly <= y0 + th + tol;
+  }
+  case "image": { const b = geomBox(g); return !!b && x >= b[0] - tol && x <= b[2] + tol && y >= b[1] - tol && y <= b[3] + tol; }
   default: return false;
   }
 }
@@ -87,7 +100,7 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
     const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
     const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
     const score = hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;
-    if (!best || score < best.score) best = { id: it.id, onGeom, layer: hitLayer, box: vis, score };
+    if (!best || score < best.score) best = { id: it.id, onGeom, cls: hitClass, layer: hitLayer, box: vis, score };
   }
   return best;
 }

@@ -20,7 +20,7 @@ import { sendOp } from "./net";
 import { breakFollow, sendPresence } from "./peers";
 import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps } from "./selection";
 import { E } from "./state";
-import { activeModule, moveOp as moveOpRaw, setTool, toolCtx as toolCtxRaw } from "./tools";
+import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw } from "./view";
 
 // typed faces of the untyped editor modules this file leans on
@@ -36,7 +36,7 @@ const canvas = canvasRaw as HTMLCanvasElement, dragG = dragGRaw as SVGGElement;
 /** Right-button travel (CSS px) before a press becomes a pan instead of a context-menu click. */
 export const DRAG_THRESHOLD_PX = 5;
 
-interface PcbState { sel: Set<string>; move?: unknown; drag?: { bySelect?: boolean } | null; pending?: unknown; route?: unknown; draw?: { shape: string; pts?: unknown[] } | null }
+interface PcbState { sel: Set<string>; move?: { sticky?: boolean } | null; drag?: { bySelect?: boolean } | null; pending?: unknown; route?: unknown; draw?: { shape: string; pts?: unknown[] } | null }
 interface SchState { sel: string | null; hover?: string | null; drag?: { byPointer?: boolean; moved?: boolean } | null; pending?: unknown; wire?: unknown; draw?: { shape: string; pts: unknown[]; await?: boolean } | null; carry?: unknown; highlight?: unknown }
 interface PcbToolsApi { hitTestItem(doc: KDoc, x: number, y: number, slop: number): KItem | null; HIT_MM?: number }
 
@@ -76,6 +76,16 @@ function pcbPick(mm: Mm): KItem | null {
   const it = t.hitTestItem(d, mm[0], mm[1], 0.15 + 2 / Math.max(1, pxPerMm()));
   return it && filterAllows(it.kind, it) ? it : null;
 }
+/**
+ * A footprint was hit on its silkscreen, courtyard or text — not on a pad — while the cursor is inside a track,
+ * via or graphic: KiCad's GuessSelectionCandidates drops the (much larger) footprint and takes the item.
+ */
+export function copperUnderBeatsFootprint(mm: Mm): boolean {
+  const d = doc(), t = pcbTools(), h = E.lastFpHit as { onGeom?: boolean; cls?: number } | null;
+  if (!d || !t || isSch() || !h || !h.onGeom || !(Number(h.cls) > 0)) return false;
+  const it = t.hitTestItem(d, mm[0], mm[1], 0);
+  return !!it && filterAllows(it.kind, it);
+}
 function schPick(mm: Mm): KItem | null {
   const m = CollabTools.sch; if (!m || E.viewOnly) return null;
   const pick = m._ && (m._.pickNonSymbol as ((ctx: ToolCtx, mm: Mm) => KItem | null) | undefined);
@@ -96,7 +106,7 @@ export function pickAt(mm: Mm): { field?: { id: string; name: string }; movable?
   const best = nearestFootprint(x, y, clickSlop()) as { id: string } | null;
   if (isSch()) return best ? { movable: best } : null;
   // board: a track / via / graphic under the cursor beats a footprint whose only claim is its bounding box
-  if (best && E.lastFpHit && E.lastFpHit.onGeom) return { movable: best };
+  if (best && E.lastFpHit && E.lastFpHit.onGeom && !copperUnderBeatsFootprint(mm)) return { movable: best };
   const it = pcbPick(mm);
   if (it) return { item: it };
   return best ? { movable: best } : null;
@@ -222,7 +232,7 @@ function buttonLost(ev: PointerEvent): boolean {
   if (E.pan || E.rdown || E.boxSel || E.zoomRect || E.fdrag) return true;
   if (E.drag && !E.drag.sticky) return true;
   if (isSch()) { const s = schState(); return !!(s && (s.pending || (s.drag && s.drag.byPointer))); }
-  const p = pcbState(); return !!(p && (p.pending || p.move || (p.drag && p.drag.bySelect)));
+  const p = pcbState(); return !!(p && (p.pending || (p.move && !p.move.sticky) || (p.drag && p.drag.bySelect)));   // a Move that follows the cursor needs no button
 }
 
 // ---------------------------------------------------------------- "Move" from the menu / M: the item follows the cursor until a click
@@ -244,6 +254,8 @@ export function startMove(mode: "move" | "drag"): boolean {
     const items = selectionItems(); if (!items.length) return false;
     try { m.setDragMode(toolCtx(), mode); return !!m.beginDrag(toolCtx(), items.length === 1 ? items[0] : items, mm, false); } catch (e) { console.warn(e); return false; }
   }
+  // anything but footprints alone (tracks, vias, graphics, text, zones, a mixed selection): the board module carries it
+  if (selectionItems().some((it) => it.kind !== "footprint")) return runModuleAction("move");
   const fps = selectionIds().map((id) => (E.items as { id: string; x: number; y: number }[]).find((f) => f.id === id)).filter(Boolean) as { id: string; x: number; y: number }[];
   if (!fps.length) return false;
   const fp = fps[0];

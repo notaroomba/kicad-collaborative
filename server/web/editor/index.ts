@@ -23,7 +23,7 @@ import { placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus } from "./doc";
 import { $ } from "./dom";
 import { openContextMenu } from "./contextmenu";
-import { cancelInteraction, clearAllSelection, installGestures, registerPointerUp, selectionChanged } from "./gestures";
+import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, registerPointerUp, selectionChanged, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -171,7 +171,7 @@ stage.addEventListener("pointerdown", (ev) => {
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
-  if (!isSch() && best && E.lastFpHit && !E.lastFpHit.onGeom && mod && mod.onSelectDown && E.tool === "select") {
+  if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
     try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { clearSelection(); drawSelection(); renderProps(); renderObjects(); stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); }
   }
   if (!best && mod && mod.onSelectDown) { try { if (mod.onSelectDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
@@ -253,13 +253,9 @@ stage.addEventListener("pointermove", (ev) => {
   }
   const now = Date.now();
   if (now - E.lastLiveMove > 150) { E.lastLiveMove = now; sendOp([moveOp(E.drag.fp, Math.round(target[0] * E.IU), Math.round(target[1] * E.IU))], true); }
-  const s = 4;
-  const g = [[mm[0]-s, mm[1]-s, mm[0]+s, mm[1]-s], [mm[0]+s, mm[1]-s, mm[0]+s, mm[1]+s],
-             [mm[0]+s, mm[1]+s, mm[0]-s, mm[1]+s], [mm[0]-s, mm[1]+s, mm[0]-s, mm[1]-s]]
-    // the 5th element is a GAL line width in the *receiver's* internal units, so it has to be
-    // scaled like every other number here: a bare 100000 is 0.1 mm on a board but 10 mm on a sheet
-    .map((sg) => [...sg.map((v) => Math.round(v * E.IU)), Math.round(0.1 * E.IU)]);
-  sendPresence(mm, g);
+  // peers see the move itself: the live op above moves their copy, and the presence boxes (peers.ts) carry the
+  // footprint's own outline at its position right now — in the units and box definition the desktop draws from
+  sendPresence(mm);
 });
 
 const onPointerUp = (ev) => {
@@ -342,6 +338,8 @@ document.addEventListener("keydown", (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && (k === "y" || k === "Y")) { ev.preventDefault(); redoLast(); return; }
   // The module's menu actions ({id: {label, key, run(ctx) -> handled}}) bind KiCad's default hotkeys after the
   // editor's own fixed keys (undo / redo, select all); an action that reports "not handled" lets the key fall through.
+  // M on a board (PCB_ACTIONS::move): footprints alone go through the app's move (each step shows on peers), anything else through the module
+  if (!isSch() && (k === "m" || k === "M") && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey && E.tool === "select" && startMove("move")) { ev.preventDefault(); return; }
   if (runModuleHotkey(ev)) { ev.preventDefault(); return; }
   const modK = activeModule();
   if (modK && modK.onKey && !ev.metaKey && !ev.ctrlKey) { try { if (modK.onKey(k, ev, toolCtx())) { ev.preventDefault(); syncSchModes(); return; } } catch (e) { console.warn(e); } }
