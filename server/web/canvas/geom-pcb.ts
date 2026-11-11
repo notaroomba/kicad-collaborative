@@ -420,7 +420,8 @@ export function buildFootprintGeom(doc, item) {
     if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve" || gk === "fp_ellipse" || gk === "fp_ellipse_arc") {
       graphicGeom(item, g, gk.replace("fp_", ""), tf, layerOf(g, "F.SilkS"));
     } else if (gk === "point") {
-      pointGeom(item, g, tf);
+      // files before FIRST_FP_AFFINE_TRANSFORM (20260616) kept a footprint's points in the board frame
+      pointGeom(item, g, doc && doc.version > 0 && doc.version < 20260616 ? (x, y) => [x, y] : tf);
     } else if (gk === "barcode") {
       barcodeGeom(item, g, tf, frot);
     } else if (gk === "fp_text") {

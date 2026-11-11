@@ -37,6 +37,18 @@ test("point: a marker at its position", () => {
   const it = only(doc); assert(it && it.geom.length > 0, "point has geometry");
   assert(it.bbox[0] <= 5 && it.bbox[2] >= 5 && it.bbox[1] <= 6 && it.bbox[3] >= 6, "bbox holds the point: " + it.bbox);
 });
+test("footprint point: board frame before 20260616, footprint frame from it (FIRST_FP_AFFINE_TRANSFORM)", () => {
+  const fp = (ver, at) => K.parseDoc(`(kicad_pcb (version ${ver}) (generator "pcbnew") (general (thickness 1.6)) (paper "A4")
+    (layers (0 "F.Cu" signal) (37 "F.SilkS" user "F.Silkscreen") (48 "F.Fab" user))
+    (footprint "X" (layer "F.Cu") (uuid "f") (at 100 50 90)
+      (fp_line (start -1 0) (end 1 0) (stroke (width 0.1) (type solid)) (layer "F.Fab") (uuid "l"))
+      (point (at ${at}) (size 1) (layer "F.Fab") (uuid "p"))))`, "kicad_pcb");
+  const legacy = only(fp(20260206, "101 50")), cur = only(fp(20260616, "1 0"));
+  const circ = (it) => it.geom.find((g) => g.t === "circle");
+  near(circ(legacy).x, 101, 1e-6, "legacy x"); near(circ(legacy).y, 50, 1e-6, "legacy y");
+  assert(legacy.bbox[2] - legacy.bbox[0] < 5 && legacy.bbox[3] - legacy.bbox[1] < 5, "legacy footprint box stays at the part: " + legacy.bbox);
+  near(circ(cur).x, 100, 1e-6, "local x"); near(circ(cur).y, 49, 1e-6, "local y (turned 90 deg)");
+});
 test("barcode (Code 39): bars inside its box", () => {
   const doc = pcb(`(barcode (at 10 10 0) (layer "F.SilkS") (size 20 5) (text "AB1") (type code39) (uuid "b"))`);
   const it = only(doc); assert(it, "barcode parsed");
