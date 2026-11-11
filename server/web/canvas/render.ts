@@ -288,23 +288,24 @@ export function render(doc, ctx, view, opts) {
     const minSpacing = (opts.gridMinSpacing > 0 ? opts.gridMinSpacing : GRID_MIN_SPACING) * (style === "crosses" ? 2 : 1) / sCss;
     let pitch = opts.grid; let guard = 0;
     while (pitch <= minSpacing && guard++ < 12) pitch *= GRID_TICK;
-    const i0 = Math.floor(vx0 / pitch), i1 = Math.ceil(vx1 / pitch), j0 = Math.floor(vy0 / pitch), j1 = Math.ceil(vy1 / pitch);
+    const go = opts.gridOrigin || [0, 0], gx = go[0], gy = go[1];   // BOARD_DESIGN_SETTINGS::m_GridOrigin: the grid is laid out from it
+    const i0 = Math.floor((vx0 - gx) / pitch), i1 = Math.ceil((vx1 - gx) / pitch), j0 = Math.floor((vy0 - gy) / pitch), j1 = Math.ceil((vy1 - gy) / pitch);
     const px1 = Math.max(1, dpr) / s;   // one device pixel (grid.line_width 1.0)
     const gridColor = isPcb ? PCB_GRID : SCH.grid;
     if ((i1 - i0) * (j1 - j0) < 400000) {
       if (style === "dots") {
         ctx.fillStyle = gridColor; ctx.beginPath();
         for (let i = i0; i <= i1; i++) {
-          const wdt = i % GRID_TICK === 0 ? 2 * px1 : px1, x = i * pitch - wdt / 2;
-          for (let j = j0; j <= j1; j++) { const hgt = j % GRID_TICK === 0 ? 2 * px1 : px1; ctx.rect(x, j * pitch - hgt / 2, wdt, hgt); }
+          const wdt = i % GRID_TICK === 0 ? 2 * px1 : px1, x = (i * pitch + gx) - wdt / 2;
+          for (let j = j0; j <= j1; j++) { const hgt = j % GRID_TICK === 0 ? 2 * px1 : px1; ctx.rect(x, (j * pitch + gy) - hgt / 2, wdt, hgt); }
         }
         ctx.fill();
       } else if (style === "lines") {
         ctx.strokeStyle = gridColor; ctx.lineCap = "butt";
         for (const major of [false, true]) {
           ctx.lineWidth = major ? 2 * px1 : px1; ctx.beginPath();
-          for (let i = i0; i <= i1; i++) if ((i % GRID_TICK === 0) === major) { ctx.moveTo(i * pitch, vy0); ctx.lineTo(i * pitch, vy1); }
-          for (let j = j0; j <= j1; j++) if ((j % GRID_TICK === 0) === major) { ctx.moveTo(vx0, j * pitch); ctx.lineTo(vx1, j * pitch); }
+          for (let i = i0; i <= i1; i++) if ((i % GRID_TICK === 0) === major) { ctx.moveTo((i * pitch + gx), vy0); ctx.lineTo((i * pitch + gx), vy1); }
+          for (let j = j0; j <= j1; j++) if ((j % GRID_TICK === 0) === major) { ctx.moveTo(vx0, (j * pitch + gy)); ctx.lineTo(vx1, (j * pitch + gy)); }
           ctx.stroke();
         }
       } else {
@@ -313,7 +314,7 @@ export function render(doc, ctx, view, opts) {
           const wdt = major ? 2 * px1 : px1, len = 2 * wdt; ctx.lineWidth = wdt; ctx.beginPath();
           for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
             if ((i % GRID_TICK === 0 && j % GRID_TICK === 0) !== major) continue;
-            const x = i * pitch, y = j * pitch; ctx.moveTo(x - len, y); ctx.lineTo(x + len, y); ctx.moveTo(x, y - len); ctx.lineTo(x, y + len);
+            const x = (i * pitch + gx), y = (j * pitch + gy); ctx.moveTo(x - len, y); ctx.lineTo(x + len, y); ctx.moveTo(x, y - len); ctx.lineTo(x, y + len);
           }
           ctx.stroke();
         }

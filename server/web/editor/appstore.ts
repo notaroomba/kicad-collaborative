@@ -45,6 +45,7 @@ export const store = (() => {
     peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
     tool: { current: "select", appTools: APP_TOOLS, moduleTools: [], moduleActions: [], handled: [] },
     toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
+    routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },   // the board's size selectors (editor/pcbrouting.ts)
   };
   const subs = new Set();
   const notify = () => { for (const fn of Array.from(subs)) { try { fn(S); } catch (e) { console.warn(e); } } };

@@ -1,6 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { buildGeom } from "./geom";
+import { setupOrigins } from "./pcb-sizes";
 import { has, isList, kid, kids, num, parse, str, uuidOf } from "./sexpr";
 import { KICAD_BASE_VERSION } from "./version";
 // ---------------------------------------------------------------- documents
@@ -77,6 +78,7 @@ export function parseDoc(text, docType) {
       for (const l of node.slice(1)) if (isList(l)) { const name = str(l[1]), ltype = str(l[2]); doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== undefined ? str(l[3]) : "" }); if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name); }
     }
     else if (k === "net") { if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2])); continue; }   // (net 3 "GND"): the board's net table
+    else if (type === "pcb" && k === "setup") { const o = setupOrigins(node); doc.auxOrigin = o.aux; doc.gridOrigin = o.grid; continue; }   // the drill / place and grid origins
     else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
     else addItem(doc, node);
   }

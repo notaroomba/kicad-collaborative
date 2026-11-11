@@ -34,13 +34,13 @@ const SNAP_MM = 0.5, HIT_MM = 0.2, DBL_MS = 400;
 const BOARD_VERSION = 20260728;
 
 const S = {
-  layer: "F.Cu", gfxLayer: "F.SilkS", widths: {}, via: { size: 0.8, drill: 0.4 },
+  layer: "F.Cu", gfxLayer: "F.SilkS",
   sel: new Set(), route: null, drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
   markers: [],                            // the last DRC run's markers [{ x, y, severity, text, ids, code }]
   showRatsnest: true, localRatsnest: false, hiddenNets: new Set(), rats: null, ratsDirty: true,   // ratsnest display (KiCad shows it by default)
-  autoWidth: false, settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
+  settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
 };
 let lastCtx = null, chip = null, chipSel = null, domReady = false;
 
@@ -560,7 +560,27 @@ const liveZoom = () => appGlobal(() => editorState().zoom, lastCtx ? lastCtx.zoo
 const liveSelected = () => appGlobal(() => editorState().selected, lastCtx && lastCtx.selected);
 
 function bind(ctx) { lastCtx = ctx; if (ctx && ctx.K) K = ctx.K; if (ctx) ensureDom(ctx); }
-const widthFor = (layer) => S.widths[layer] || 0.25;
+// The track / via sizes in force live in KiCadCanvas.pcbSizes.state (web/canvas/pcb-sizes.ts) — BOARD_DESIGN_SETTINGS'
+// pre-defined lists, the selected entries, "use netclass", the connected-width option and the routing layer pair.
+// The toolbar's selectors, W / ' / \ and the router all read and step that one object.
+let seenDesign;
+/** The board's sizes; a context carrying a project file this module has not seen yet (re)loads the lists from it. */
+function sizesOf(ctx) { const R = K.pcbSizes.state; if (ctx && ctx.designSettings !== seenDesign) { seenDesign = ctx.designSettings; R.load(seenDesign); } return R; }
+const widthFor = () => sizesOf(lastCtx).currentTrackWidth();
+const netNameOf = (ctx, net) => (net && net.name) || (net && net.code > 0 && ctx.doc && ctx.doc.nets && ctx.doc.nets.get(net.code)) || "";
+/** The width of the track a route would continue at p: the segment under it, or one ending on the pad / via there (inheritTrackWidth). */
+function connectedWidth(doc, p, layer, towards) {
+  let best = null, bd = Infinity;
+  for (const it of doc.items.values()) {
+    if ((it.kind !== "segment" && it.kind !== "arc") || layerOf(it.node) !== layer) continue;
+    const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) continue; const w = widthOf(it.node, 0);
+    const ends = samePt(a, p) ? b : samePt(b, p) ? a : null;
+    if (!ends && !(it.kind === "segment" && distSeg(p[0], p[1], a[0], a[1], b[0], b[1]) <= w / 2 + 1e-6)) continue;
+    const d = ends && towards ? Math.hypot(ends[0] - towards[0], ends[1] - towards[1]) : 0;   // several stubs on a pad: the one pointing at the cursor
+    if (d < bd) { bd = d; best = w; }
+  }
+  return best;
+}
 function nextWidth(w, dir) { const i = WIDTHS.findIndex((v) => Math.abs(v - w) < 1e-6); return WIDTHS[(i + (dir === -1 ? -1 : 1) + WIDTHS.length) % WIDTHS.length]; }
 /** Layer names of the board.  kicad-canvas keys doc.layers by the layer *type* for (n "F.Cu" signal) entries, so fall back to what the items use. */
 function layerNames(doc) {
@@ -588,22 +608,40 @@ function currentLeg(rt) { return routeLeg(rt.last, rt.target, rt.diagFirst); }
 function fixLeg(ctx, target) {
   const rt = S.route; const segs = routeLeg(rt.last, target, rt.diagFirst); if (!segs.length) return false;
   const changes = segs.map(([a, b]) => addedChange(ctx.doc, segmentNode(ctx.doc, a, b, rt.width, rt.layer, rt.net), rt.net));
-  S.widths[rt.layer] = rt.width;
-  ctx.commit(changes, "route"); rt.last = target.slice(); rt.target = target.slice();
+  ctx.commit(changes, "route"); rt.legs.push({ ids: changes.map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
+  rt.last = target.slice(); rt.target = target.slice();
   return true;
 }
 function endRoute(ctx, fixCurrent) {
   const rt = S.route; if (!rt) return;
   if (fixCurrent && !samePt(rt.target, rt.last)) fixLeg(ctx, rt.target);
-  S.route = null; refreshChip(ctx); ctx.requestRender();
+  S.route = null; sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
 }
-function routeClick(ctx, hv) {
-  const now = Date.now(); const p = [hv.x, hv.y];
+/** Backspace while routing (the router's UndoLastSegment): take back the last fixed leg — and its via — and carry on from where it began. */
+function undoRouteLeg(ctx) {
+  const rt = S.route; const leg = rt && rt.legs.pop(); if (!leg) return false;
+  const changes = leg.ids.map((id) => ctx.doc.items.get(id)).filter(Boolean).map(removedChange);
+  if (changes.length) ctx.commit(changes, "undo segment");
+  rt.last = leg.from.slice(); if (leg.layer !== rt.layer) { rt.layer = leg.layer; S.layer = leg.layer; sizesOf(ctx).setActiveLayer(leg.layer); }
+  refreshChip(ctx); ctx.requestRender(); return true;
+}
+/** The segment on `layer` under (x, y) with the point projected onto its centre line: where a route started on a track begins. */
+function trackUnder(doc, x, y, layer) {
+  const it = hitTestItem(doc, x, y, HIT_MM); if (!it || it.kind !== "segment" || layerOf(it.node) !== layer) return null;
+  const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) return null;
+  const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
+  return { item: it, point: [r6(a[0] + k * dx), r6(a[1] + k * dy)] };
+}
+function routeClick(ctx, hv, mm) {
+  const now = Date.now(); let p = [hv.x, hv.y];
   if (!S.route) {
-    const net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer);
-    const width = S.autoWidth ? netclassOf(settingsOf(ctx), netTable(ctx.doc).key(net)).track_width : widthFor(S.layer);   // autoTrackWidth: the net's class decides
-    S.route = { last: p, target: p.slice(), net, layer: S.layer, width, diagFirst: true, clickT: now, clickAt: p.slice() };
-    ctx.toast(`Routing ${net.name ? net.name + " " : ""}on ${S.layer} · ${fmt(S.route.width)} mm — click corners, / posture, V via, Enter or double-click to end`, 3500);
+    let net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer);
+    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); } }   // started on a track: its centre line and its net
+    const R = sizesOf(ctx); const connected = connectedWidth(ctx.doc, p, S.layer, mm || p);
+    const width = R.routeWidth(netNameOf(ctx, net), connected);   // ImportSizes: the connected track, the net's class, or the selected width
+    S.route = { last: p, target: p.slice(), net, layer: S.layer, width, connected, diagFirst: true, clickT: now, clickAt: p.slice(), legs: [] };
+    if (R.activeLayer !== S.layer) R.setActiveLayer(S.layer);
+    ctx.toast(`Routing ${net.name ? net.name + " " : ""}on ${S.layer} · ${fmtSize(S.route.width)} — click corners, / posture, V via, Backspace undoes a segment, End or double-click to finish`, 3500);
     refreshChip(ctx); ctx.requestRender(); return;
   }
   const rt = S.route;
@@ -611,26 +649,36 @@ function routeClick(ctx, hv) {
   rt.clickT = now; rt.clickAt = p.slice();
   if (dbl) { endRoute(ctx, true); return; }
   fixLeg(ctx, p);
-  if (hv.snap && hv.snap.kind === "pad") { S.route = null; ctx.toast("Route finished at pad"); refreshChip(ctx); }   // landing on a pad ends the trace, as in KiCad
+  // landing on a pad — or on a via / track end of the routed net — ends the trace, as in KiCad
+  if (hv.snap && (hv.snap.kind === "pad" || sameNet(hv.snap.net, rt.net))) { S.route = null; sizesOf(ctx).endRoute(); ctx.toast(hv.snap.kind === "pad" ? "Route finished at pad" : "Route finished"); refreshChip(ctx); }
   ctx.requestRender();
 }
-/** V while routing: fix the leg to the cursor, drop a via there and continue on the other side. */
+/** The through via's layer span: the outer copper layers of the board. */
+function viaSpan(doc) { const cu = K.pcbSizes.copperStack(copperOf(doc)); return [cu[0], cu[cu.length - 1]]; }
+/** V while routing: fix the leg to the cursor, drop a via there and continue on the other layer of the routing pair. */
 function routeVia(ctx, toLayer) {
-  const rt = S.route; const p = rt.target.slice(); const doc = ctx.doc;
+  const rt = S.route; const p = rt.target.slice(); const doc = ctx.doc; const R = sizesOf(ctx);
+  const via = R.routeVia(netNameOf(ctx, rt.net));
   const changes = routeLeg(rt.last, p, rt.diagFirst).map(([a, b]) => addedChange(doc, segmentNode(doc, a, b, rt.width, rt.layer, rt.net), rt.net));
-  changes.push(addedChange(doc, viaNode(doc, p[0], p[1], S.via.size, S.via.drill, rt.net), rt.net));
-  S.widths[rt.layer] = rt.width;
-  ctx.commit(changes, "route via");
-  rt.last = p; rt.target = p.slice(); rt.layer = toLayer || otherSide(rt.layer); S.layer = rt.layer; rt.width = widthFor(rt.layer);
+  changes.push(addedChange(doc, viaNode(doc, p[0], p[1], via.diameter, via.drill, rt.net, viaSpan(doc)), rt.net));
+  ctx.commit(changes, "route via"); rt.legs.push({ ids: changes.map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
+  rt.last = p; rt.target = p.slice(); rt.layer = toLayer || R.pairedLayer(rt.layer); S.layer = rt.layer; R.setActiveLayer(rt.layer);
   ctx.toast(`Via placed — now routing on ${rt.layer}`); refreshChip(ctx); ctx.requestRender();
 }
 function placeVia(ctx, hv) {
   const net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, null);
-  ctx.commit([addedChange(ctx.doc, viaNode(ctx.doc, hv.x, hv.y, S.via.size, S.via.drill, net), net)], "via");
+  const via = sizesOf(ctx).routeVia(netNameOf(ctx, net));
+  ctx.commit([addedChange(ctx.doc, viaNode(ctx.doc, hv.x, hv.y, via.diameter, via.drill, net, viaSpan(ctx.doc)), net)], "via");
 }
 function setLayer(ctx, layer) {
   if (S.route) { if (layer !== S.route.layer) routeVia(ctx, layer); return; }   // layer change mid-route goes through a via
-  S.layer = layer; ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+  S.layer = layer; sizesOf(ctx).setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+}
+/** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
+function stepLayer(ctx, forward) {
+  const R = sizesOf(ctx); const hidden = appGlobal(() => editorState().hiddenLayers, null);
+  const to = K.pcbSizes.stepCopperLayer(copperOf(ctx.doc), S.route ? S.route.layer : (R.activeLayer || S.layer), forward, hidden);
+  if (to) setLayer(ctx, to); return true;
 }
 // R / F: a lone footprint turns or flips about its own anchor; anything more goes through the selection actions
 // (about the selection centre).  Nothing of ours selected lets app.js's orientation-only fallback run.
@@ -641,15 +689,55 @@ function deleteSelection(ctx) {
   S.sel.clear(); if (!changes.length) return;
   ctx.commit(changes, "delete"); ctx.toast(`Deleted ${changes.length} item${changes.length > 1 ? "s" : ""}`);
 }
+const sizeUnits = () => appGlobal(() => editorState().units, "mm") || "mm";
+/** A size in the editor's units, trailing zeros trimmed: "0.25 mm", "9.84 mils". */
+function fmtSize(v, bare) { const u = sizeUnits(); const x = u === "mil" ? +(v / 0.0254).toFixed(2) : u === "in" ? +(v / 25.4).toFixed(5) : +v.toFixed(4); return bare ? String(x) : x + (u === "mil" ? " mils" : u === "in" ? " in" : " mm"); }
+/** Tracks, arcs and vias only, with the select tool: W and ' then edit the selection instead of the current size. */
+function sizeSelection(ctx) {
+  if (S.modTool) return null;
+  const items = selectedItems(ctx); if (!items.length || !items.every((it) => it.kind === "segment" || it.kind === "arc" || it.kind === "via")) return null;
+  return items;
+}
+/** W / Shift+W (BOARD_EDITOR_CONTROL::TrackWidthInc / Dec). */
 function cycleWidth(ctx, dir) {
-  if (S.route) { S.route.width = nextWidth(S.route.width, dir); ctx.toast(`Track width ${fmt(S.route.width)} mm`); refreshChip(ctx); ctx.requestRender(); return; }
-  const segs = Array.from(selectionIds(ctx), (id) => ctx.doc.items.get(id)).filter((it) => it && (it.kind === "segment" || it.kind === "arc"));
-  if (segs.length) {
-    const w = nextWidth(widthOf(segs[0].node, 0.25), dir);
-    const changes = segs.map((it) => { const node = clone(it.node); const wn = K.kid(node, "width"); if (wn) wn[1] = w; else node.push(["width", w]); return replacedChange(it, node); });
-    ctx.commit(changes, "track width"); S.widths[layerOf(segs[0].node)] = w; ctx.toast(`Track width ${fmt(w)} mm`); refreshChip(ctx); return;
+  const R = sizesOf(ctx), fwd = dir !== -1, PS = K.pcbSizes;
+  if (S.route) {
+    R.stepTrackWidth(fwd, true); S.route.width = R.routeWidth(netNameOf(ctx, S.route.net), S.route.connected);
+    ctx.toast(PS.trackWidthLabels(R.sizes, sizeUnits())[R.trackIndex]); refreshChip(ctx); ctx.requestRender(); return;
   }
-  S.widths[S.layer] = nextWidth(widthFor(S.layer), dir); ctx.toast(`Track width ${fmt(S.widths[S.layer])} mm on ${S.layer}`); refreshChip(ctx);
+  const sel = sizeSelection(ctx);
+  if (sel) {   // each selected track goes to the next larger (smaller) of the netclass width and the pre-defined widths
+    const changes = [];
+    for (const it of sel) {
+      if (it.kind === "via") continue; const w = R.steppedWidth(widthOf(it.node, 0), fwd); if (w === null) continue;
+      const node = clone(it.node); const wn = K.kid(node, "width"); if (wn) wn[1] = r6(w); else node.splice(node.indexOf(K.kid(node, "layer")), 0, ["width", r6(w)]); changes.push(replacedChange(it, node));
+    }
+    if (changes.length) { ctx.commit(changes, fwd ? "Increase Track Width" : "Decrease Track Width"); ctx.toast(`Track width ${fmtSize(widthOf(ctx.doc.items.get(changes[0].id).node, 0))}`); }
+    else ctx.toast(fwd ? "No larger pre-defined track width" : "No smaller pre-defined track width");
+    return;
+  }
+  R.stepTrackWidth(fwd, false); ctx.toast(PS.trackWidthLabels(R.sizes, sizeUnits())[R.trackIndex]); refreshChip(ctx);
+}
+/** ' / \ (ViaSizeInc / Dec). */
+function cycleVia(ctx, dir) {
+  const R = sizesOf(ctx), fwd = dir !== -1, PS = K.pcbSizes;
+  const sel = S.route ? null : sizeSelection(ctx);
+  if (sel) {
+    const changes = [];
+    for (const it of sel) {
+      if (it.kind !== "via") continue; const sn = K.kid(it.node, "size"); const v = R.steppedVia(sn ? K.num(sn[1]) : 0, fwd); if (!v) continue;
+      const node = clone(it.node); const s2 = K.kid(node, "size"), d2 = K.kid(node, "drill"); if (s2) s2[1] = r6(v.diameter); if (d2 && v.drill > 0) d2[1] = r6(v.drill); changes.push(replacedChange(it, node));
+    }
+    if (changes.length) { ctx.commit(changes, fwd ? "Increase Via Size" : "Decrease Via Size"); const v = viaNow(ctx.doc.items.get(changes[0].id).node); ctx.toast(`Via ${fmtSize(v.size, true)} / ${fmtSize(v.drill)}`); }
+    else ctx.toast(fwd ? "No larger pre-defined via size" : "No smaller pre-defined via size");
+    return true;
+  }
+  R.stepViaSize(fwd); ctx.toast(PS.viaSizeLabels(R.sizes, sizeUnits())[R.viaIndex]); refreshChip(ctx); if (ctx.requestRender) ctx.requestRender(); return true;
+}
+/** { size, drill } of a via node, or of the via the tools would place now. */
+function viaNow(node) {
+  if (node) { const s = K.kid(node, "size"), d = K.kid(node, "drill"); return { size: s ? K.num(s[1]) : 0, drill: d ? K.num(d[1]) : 0 }; }
+  const R = sizesOf(lastCtx); const v = S.route ? R.routeVia(netNameOf(lastCtx || {}, S.route.net)) : R.currentVia(); return { size: v.diameter, drill: v.drill };
 }
 function expandSelection(ctx) {
   if (!S.sel.size) return false;
@@ -859,7 +947,7 @@ function deleteAt(ctx, mm) {
   return it;
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
-function cancelOps() { S.route = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; closeTextPrompt(); }
+function cancelOps() { if (S.route) K.pcbSizes.state.endRoute(); S.route = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; closeTextPrompt(); }
 
 // ================================================================ parity pass: the non-tool commands of pcbnew
 // Everything below is DOM-free geometry and node editing (the dialogs at the end are swappable) so the node
@@ -1334,6 +1422,7 @@ function connectedCopperIds(nl, seedIds) {
 const DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
 function designSettings(src) {
   const s = DEFAULT_SETTINGS(); if (!src) return s;
+  if (typeof src === "string" && /^\s*\{/.test(src)) { try { src = JSON.parse(src); } catch (e) { return s; } }   // the .kicad_pro as text (the editor's ctx.designSettings)
   if (typeof src === "string") {   // a legacy board's (setup … (net_class …)) block
     let tree = null; try { tree = K.parse(src); } catch (e) { return s; }
     const setup = tree && K.kid(tree, "setup"); if (setup) { for (const [key, prop] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) { const c = K.kid(setup, key); if (c) s[prop] = K.num(c[1], s[prop]); } }
@@ -2041,12 +2130,22 @@ alias("editTracksAndVias", "changeTrackWidth");
 act("setTrackWidthFromNetclass", "Set Track / Via Sizes from Netclass", "", (ctx) => { const ids = selectionOrToast(ctx, "Select tracks or vias first"); if (!ids) return true; return commitSel(ctx, trackEditChanges(ctx.doc, ids, { netclass: true }, settingsOf(ctx)), "netclass sizes"); });
 act("trackWidthInc", "Increase Track Width", "W", (ctx) => { if (canEdit(ctx)) cycleWidth(ctx, 1); return true; });
 act("trackWidthDec", "Decrease Track Width", "Shift+W", (ctx) => { if (canEdit(ctx)) cycleWidth(ctx, -1); return true; });
-function cycleVia(ctx, dir) {
-  let i = VIA_SIZES.findIndex(([s, d]) => Math.abs(s - S.via.size) < 1e-6 && Math.abs(d - S.via.drill) < 1e-6); i = i < 0 ? 0 : (i + dir + VIA_SIZES.length) % VIA_SIZES.length;
-  S.via = { size: VIA_SIZES[i][0], drill: VIA_SIZES[i][1] }; ctx.toast(`Via ${fmt(S.via.size)} / ${fmt(S.via.drill)} mm`); refreshChip(ctx); return true;
-}
-act("viaSizeInc", "Increase Via Size", "\\", (ctx) => cycleVia(ctx, 1)); act("viaSizeDec", "Decrease Via Size", "|", (ctx) => cycleVia(ctx, -1));
-act("autoTrackWidth", "Auto Track Width (from netclass)", "", (ctx) => { S.autoWidth = !S.autoWidth; ctx.toast(S.autoWidth ? "New tracks take their netclass width" : "New tracks take the chip's width"); return true; }, { toggle: () => !!S.autoWidth });
+act("viaSizeInc", "Increase Via Size", "'", (ctx) => { if (canEdit(ctx)) cycleVia(ctx, 1); return true; }); act("viaSizeDec", "Decrease Via Size", "\\", (ctx) => { if (canEdit(ctx)) cycleVia(ctx, -1); return true; });
+act("autoTrackWidth", "Automatically select track width", "", (ctx) => { const on = sizesOf(ctx).toggleConnectedWidth(); ctx.toast(on ? "Routing from an existing track uses its width" : "New tracks take the current width setting"); return true; }, { toggle: () => !!K.pcbSizes.state.useConnectedWidth, menu: "-" });
+// the active layer (PCB_CONTROL): PgUp / PgDn, + / -, and V with nothing being routed toggles within the routing pair
+act("layerTop", "Switch to Component (F.Cu) layer", "PgUp", (ctx) => { setLayer(ctx, viaSpan(ctx.doc)[0]); return true; }, { menu: "-" });
+act("layerBottom", "Switch to Copper (B.Cu) Layer", "PgDn", (ctx) => { setLayer(ctx, viaSpan(ctx.doc)[1]); return true; }, { menu: "-" });
+act("layerNext", "Switch to Next Layer", "+", (ctx) => stepLayer(ctx, true), { menu: "-" });
+act("layerPrev", "Switch to Previous Layer", "-", (ctx) => stepLayer(ctx, false), { menu: "-" });
+act("layerToggle", "Toggle Layer", "", (ctx) => { setLayer(ctx, sizesOf(ctx).pairedLayer(S.route ? S.route.layer : S.layer)); return true; }, { menu: "-" });
+act("ratsnestLineMode", "Curved Ratsnest Lines", "", (ctx) => { const R = sizesOf(ctx); R.setCurvedRatsnest(!R.curvedRatsnest); ctx.requestRender(); return true; }, { toggle: () => !!K.pcbSizes.state.curvedRatsnest, menu: "-" });
+// the two routing dialogs are built by the editor bundle (web/editor/pcbrouting.ts) and handed over through pcb.setRoutingDialogs
+let routingDialogs = {};
+act("selectLayerPair", "Set Layer Pair...", "", (ctx) => { if (routingDialogs.layerPair) routingDialogs.layerPair(ctx); else ctx.toast("Set Layer Pair: dialogs are unavailable here"); return true; }, { menu: "-" });
+act("editPredefinedSizes", "Edit Pre-defined Sizes...", "", (ctx) => { if (routingDialogs.sizes) routingDialogs.sizes(ctx); else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here"); return true; }, { menu: "-" });
+// the grid origin and the drill / place file origin: picked with a one-shot tool, reset to the page origin
+act("gridResetOrigin", "Reset Grid Origin", "", (ctx) => { sizesOf(ctx).setGridOrigin([0, 0]); ctx.toast("Grid origin reset"); ctx.requestRender(); return true; }, { menu: "-" });
+act("drillResetOrigin", "Reset Drill Origin", "", (ctx) => { if (canEdit(ctx)) { sizesOf(ctx).setAuxOrigin([0, 0]); ctx.toast("Drill/place file origin reset"); ctx.requestRender(); } return true; }, { menu: "-" });
 act("changeTrackLayerNext", "Move Track to Next Layer", "", (ctx) => { const ids = selectionOrToast(ctx, "Select tracks first"); if (!ids) return true; return commitSel(ctx, trackLayerChanges(ctx.doc, ids, 1), "track layer"); });
 act("changeTrackLayerPrev", "Move Track to Previous Layer", "", (ctx) => { const ids = selectionOrToast(ctx, "Select tracks first"); if (!ids) return true; return commitSel(ctx, trackLayerChanges(ctx.doc, ids, -1), "track layer"); });
 act("cleanupTracks", "Cleanup Tracks & Vias…", "", (ctx) => {
@@ -2143,13 +2242,14 @@ function ensureDom(ctx) {
     + '<span data-k="w" title="Track width (W cycles)"></span><span data-k="v" title="Via size / drill"></span>'
     + '<label data-k="gfx" style="display:none;align-items:center;gap:4px">on <select data-k="gsel" style="font:inherit;background:#0A1421;color:inherit;border:1px solid #24374E;border-radius:2px"></select></label>';
   chip.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-  chip.querySelector('[data-k="layer"]').addEventListener("click", () => { if (lastCtx) setLayer(lastCtx, otherSide(S.layer)); });
+  chip.querySelector('[data-k="layer"]').addEventListener("click", () => { if (lastCtx) setLayer(lastCtx, sizesOf(lastCtx).pairedLayer(S.layer)); });
   chipSel = chip.querySelector('[data-k="gsel"]');
-  chipSel.addEventListener("change", () => { S.gfxLayer = chipSel.value; chipSel.blur(); if (lastCtx) lastCtx.toast("Drawing on " + S.gfxLayer); });   // blur hands the hotkeys back
+  chipSel.addEventListener("change", () => { S.gfxLayer = chipSel.value; chipSel.blur(); if (lastCtx) { sizesOf(lastCtx).setActiveLayer(S.gfxLayer); lastCtx.toast("Drawing on " + S.gfxLayer); } });   // blur hands the hotkeys back
   ctx.stage.appendChild(chip);
   // the layer list is rebuilt whenever a document opens: that is the cue to show or hide the chip
   const layersEl = document.getElementById("layers");
   if (layersEl && typeof MutationObserver !== "undefined") new MutationObserver(() => refreshChip(lastCtx)).observe(layersEl, { childList: true });
+  K.pcbSizes.state.subscribe(() => { refreshChip(lastCtx); if (lastCtx && lastCtx.requestRender) lastCtx.requestRender(); });   // the toolbar's selectors and the size hotkeys land here
   refreshChip(ctx);
 }
 function refreshChip(ctx) {
@@ -2157,8 +2257,8 @@ function refreshChip(ctx) {
   const show = isPcbDoc(); chip.style.display = show ? "flex" : "none"; if (!show) return;
   chip.querySelector('[data-k="sw"]').style.background = color(S.layer);
   chip.querySelector('[data-k="name"]').textContent = S.layer;
-  chip.querySelector('[data-k="w"]').textContent = fmt(S.route ? S.route.width : widthFor(S.layer)) + " mm";
-  chip.querySelector('[data-k="v"]').textContent = "via " + fmt(S.via.size) + "/" + fmt(S.via.drill);
+  chip.querySelector('[data-k="w"]').textContent = fmtSize(S.route ? S.route.width : widthFor());
+  const cv = viaNow(); chip.querySelector('[data-k="v"]').textContent = "via " + fmtSize(cv.size, true) + "/" + fmtSize(cv.drill, true);
   const drawing = gfxTool(S.modTool);
   chip.querySelector('[data-k="gfx"]').style.display = drawing ? "inline-flex" : "none";
   if (drawing) {
@@ -2297,9 +2397,19 @@ function drawOverlay(c, view, ctx) {
   if (S.showRatsnest) {
     const lines = ratsnestLines(doc); const sel = S.localRatsnest ? selectionIds(ctx) : null;
     c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.lineWidth = 1 * px; c.beginPath();
-    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; c.moveTo(l.a[0], l.a[1]); c.lineTo(l.b[0], l.b[1]); }
+    const curved = K.pcbSizes.state.curvedRatsnest;   // RATSNEST_VIEW_ITEM: a Bezier whose two control points sit 10% off the midpoint
+    for (const l of lines) {
+      if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; c.moveTo(l.a[0], l.a[1]);
+      if (curved) { const dx = l.b[0] - l.a[0], dy = l.b[1] - l.a[1], mx = l.a[0] + 0.5 * dx - 0.1 * dy, my = l.a[1] + 0.5 * dy + 0.1 * dx; c.bezierCurveTo(mx, my, mx, my, l.b[0], l.b[1]); }
+      else c.lineTo(l.b[0], l.b[1]);
+    }
     c.stroke();
   }
+  // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
+  { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
+    const g = S.modTool === "gridorigin" && S.hover ? [S.hover.x, S.hover.y] : R.gridOrigin, d = S.modTool === "drillorigin" && S.hover ? [S.hover.x, S.hover.y] : R.auxOrigin;
+    if (g[0] || g[1]) { c.strokeStyle = "#C2C2C2"; ring(c, g, r); line(c, [g[0] - r, g[1] - r], [g[0] + r, g[1] + r]); line(c, [g[0] - r, g[1] + r], [g[0] + r, g[1] - r]); }
+    if (d[0] || d[1]) { c.strokeStyle = "#CC0000"; ring(c, d, r); line(c, [d[0] - r, d[1]], [d[0] + r, d[1]]); line(c, [d[0], d[1] - r], [d[0], d[1] + r]); } }
   // DRC markers: KiCad's red pins, an X in a ring
   if (S.markers.length) {
     const r = 6 * px; c.lineWidth = 1.5 * px;
@@ -2363,7 +2473,7 @@ function drawOverlay(c, view, ctx) {
   // cursor: the via about to be placed, and the magnetic snap marker
   const hv = S.hover;
   if (hv && S.modTool) {
-    if (S.modTool === "via" && !S.route) { c.globalAlpha = 0.6; c.strokeStyle = VIA; c.lineWidth = (S.via.size - S.via.drill) / 2; ring(c, [hv.x, hv.y], (S.via.size + S.via.drill) / 4); }
+    if (S.modTool === "via" && !S.route) { const v = sizesOf(ctx).routeVia(netNameOf(ctx, hv.snap ? hv.snap.net : null)); c.globalAlpha = 0.6; c.strokeStyle = VIA; c.lineWidth = (v.diameter - v.drill) / 2; ring(c, [hv.x, hv.y], (v.diameter + v.drill) / 4); }
     if (hv.snap) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, [hv.x, hv.y], 5 * px); }
   }
   c.globalAlpha = 1;
@@ -2393,6 +2503,9 @@ const TOOLS = [
   { id: "dimradial", label: "Draw radial dimension", key: "", cursor: "crosshair", icon: '<circle cx="9" cy="15" r="6"/><path d="M9 15l10-10h2"/><path d="M15 9l-1 3 3-1z"/>' },
   { id: "leader", label: "Draw leader", key: "", cursor: "crosshair", icon: '<path d="M4 18l8-8h8"/><path d="M4 18l4-1-3-3z"/>' },
   { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
+  // KiCad's one-shot pickers (ACTIONS::gridSetOrigin, PCB_ACTIONS::drillOrigin)
+  { id: "gridorigin", label: "Grid Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M7 7l10 10M17 7L7 17"/>' },
+  { id: "drillorigin", label: "Drill/Place File Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M12 3v18M3 12h18"/>' },
 ];
 const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V via, W width, PgUp/PgDn layer, Enter or double-click to end",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
@@ -2408,7 +2521,8 @@ const TOOL_HINT = { route: "Route — click to start (pads snap), / posture, V v
   dimcenter: "Center dimension — click the centre, then the size of the cross",
   dimradial: "Radial dimension — click the centre, a point on the circle, then the leader's end",
   leader: "Leader — click the arrow point and the elbow, then type the text",
-  delete: "Delete — click an item to remove it; Esc to leave the tool" };
+  delete: "Delete — click an item to remove it; Esc to leave the tool",
+  gridorigin: "Grid origin — click where the grid starts", drillorigin: "Drill/place file origin — click the origin point for drill and placement files" };
 
 /**
  * The in-flight route leg, in mm, as [x1, y1, x2, y2, widthMm] segments — what a peer should see
@@ -2440,8 +2554,10 @@ const pcb = {
   onPointerDown(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || ev.button !== 0 || !ctx.doc) return false;
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via"); S.hover = hv;
-    if (t === "route") routeClick(ctx, hv);
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
+    if (t === "route") routeClick(ctx, hv, mm);
+    else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
+    else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
     else if (t === "via") placeVia(ctx, hv);
     else if (t === "drag") finishDrag(ctx);
     else if (t === "gtext") { const at = [hv.x, hv.y]; askText(ctx, "Text", "", (v) => { if (v) placeText(ctx, at, v); }); }
@@ -2471,7 +2587,7 @@ const pcb = {
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via"); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
     if (t === "delete") hv.del = ctx.viewOnly ? null : itemAt(ctx, mm);
     if (S.route) S.route.target = [hv.x, hv.y];
     if (S.drag) dragMove(ctx, mm);
@@ -2501,8 +2617,11 @@ const pcb = {
     case "RuleArea": ctx.setTool("rulearea"); return true;
     case "Flip": return editing() && flipSelected(ctx);
     case "/": if (S.route) { S.route.diagFirst = !S.route.diagFirst; ctx.requestRender(); return true; } return false;
-    case "PageUp": setLayer(ctx, "F.Cu"); return true;
-    case "PageDown": setLayer(ctx, "B.Cu"); return true;
+    case "PageUp": return runAction("layerTop", ctx);
+    case "PageDown": return runAction("layerBottom", ctx);
+    case "+": return runAction("layerNext", ctx);
+    case "-": return runAction("layerPrev", ctx);
+    case "End": if (S.route) { if (editing()) endRoute(ctx, true); return true; } return false;
     case "u": case "U": return expandSelection(ctx) || (selectionIds(ctx).size ? runAction("selectConnection", ctx) : false);   // app.js's selection goes through the action
     case "w": case "W": if (editing()) cycleWidth(ctx, shift ? -1 : 1); return true;
     // the non-tool commands on KiCad's hotkeys (Ctrl / Alt chords arrive re-posted from the capture handler)
@@ -2520,14 +2639,15 @@ const pcb = {
     case "O": return shift ? runAction("grabUnconnected", ctx) : runAction("selectUnconnected", ctx);
     case "`": return runAction("highlightNet", ctx);
     case "~": return runAction("clearHighlight", ctx);
-    case "\\": return runAction("viaSizeInc", ctx);
-    case "|": return runAction("viaSizeDec", ctx);
+    case "'": return runAction("viaSizeInc", ctx);
+    case "\\": return runAction("viaSizeDec", ctx);
     case "Enter":
       if (S.route) { if (editing()) endRoute(ctx, true); return true; }
       if (S.draw) { if (POLY_TOOLS.has(S.draw.shape)) { if (editing()) finishPoly(ctx); } else { S.draw = null; ctx.requestRender(); } return true; }
       if (S.drag) { if (editing()) finishDrag(ctx); return true; }
       return false;
     case "Backspace":
+      if (S.route) { if (editing() && !undoRouteLeg(ctx)) ctx.toast("No routed segment to undo"); return true; }
       if (S.draw && (POLY_TOOLS.has(S.draw.shape) || S.draw.shape === "gcurve")) { if (S.draw.pts.length > 1) S.draw.pts.pop(); else S.draw = null; ctx.requestRender(); return true; }
       // fall through: with nothing being drawn Backspace deletes like Delete
     case "Delete":
@@ -2560,7 +2680,15 @@ const pcb = {
   // ---- the parity pass: commands, queries and dialogs app.js can call
   actions: ACTIONS,                       // { id: { label, key, run(ctx) -> handled } }, KiCad's ids and default hotkeys
   runAction,                              // runAction(id, ctx): run with error reporting
-  setLayer(ctx, layer) { bind(ctx); if (/\.Cu$/.test(layer || "")) setLayer(ctx, layer); },   // the toolbar's layer selector
+  // the toolbar's layer selector: a copper layer is the routing layer, any other the one the graphic tools draw on
+  setLayer(ctx, layer) {
+    bind(ctx); if (!layer) return; const R = sizesOf(ctx);
+    if (/\.Cu$/.test(layer)) { if (layer !== (S.route ? S.route.layer : S.layer) || R.activeLayer !== layer) setLayer(ctx, layer); return; }
+    if (R.activeLayer === layer && S.gfxLayer === layer) return;
+    S.gfxLayer = layer; R.setActiveLayer(layer); ctx.toast(`Active layer: ${layer}`); refreshChip(ctx); ctx.requestRender();
+  },
+  sizes: () => K.pcbSizes.state,
+  setRoutingDialogs(d) { routingDialogs = d || {}; },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
   clipboardText, pasteChanges, cursorPoint, selectionIds,

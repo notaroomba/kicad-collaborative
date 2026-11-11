@@ -5,6 +5,7 @@ import { centerOn, openThreadAction } from "./comments";
 import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
+import { chooseTrackWidth, chooseViaSize } from "./pcbrouting";
 import { setCrosshair, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
 import { contextMenuAction } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
@@ -167,6 +168,8 @@ export function dispatchAction(a) {
       case "enterSheet": enterSheet(a.file); return;
       case "setLayerVisible": setLayerVisible(a.key, a.visible); return;
       case "setActiveLayer": setActiveLayer(a.layer); return;
+      case "setTrackWidth": chooseTrackWidth(a.index); return;
+      case "setViaSize": chooseViaSize(a.index); return;
       case "setGrid": setGridPitch(a.pitch); return;
       case "setZoom": if (a.zoom === "auto") fitView(); else { E.viewTouched = true; E.zoom = Math.min(400, Math.max(0.2, Number(a.zoom) / 100)); applyView(); } return;
       case "setFilter": setFilter(a.key, a.on); return;

@@ -7,11 +7,12 @@ import { usePluginBarEntries } from "../plugins/PluginUi";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
-import { EXTRA_TOOLS, TRACK_WIDTHS, VIA_SIZES, ZOOM_PRESETS, toolFor } from "../tables";
+import { EXTRA_TOOLS, ZOOM_PRESETS, toolFor } from "../tables";
 import { dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
 import { Glyph, KIcon } from "./Icon";
+import { LayerSelect, TrackWidthSelect, ViaSizeSelect } from "./PcbControls";
 
 function useEditor(): Editor | null { return useApp((s) => s.document.editor); }
 
@@ -128,21 +129,14 @@ function Control({ item }: { item: ControlItem }) {
   const gridPitch = useApp((s) => s.viewport.gridPitch);
   const gridChoices = useApp((s) => s.viewport.gridChoices);
   const zoom = useApp((s) => s.viewport.zoom);
-  const copper = useApp((s) => s.document.copperLayers);
-  const activeLayer = useApp((s) => s.viewport.activeLayer);
-  const [trackW, setTrackW] = useState(String(TRACK_WIDTHS[0]));
-  const [viaD, setViaD] = useState(String(VIA_SIZES[0]));
   if (c === "ipcScripting") return null;
   let inner: ReactElement | null = null;
   if (c === "currentVariant") inner = <select className={KSEL} title="Select the current variant to display and edit." defaultValue="default"><option value="default">&lt; Default &gt;</option></select>;
   else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" /> Override locks</label>;
-  else if (c === "trackWidth") inner = <select id="trackWidthSel" className={KSEL} title="Select the track width" value={trackW} onChange={(ev) => setTrackW(ev.target.value)}>{TRACK_WIDTHS.map((v) => <option key={v} value={v}>{v} mm</option>)}</select>;
-  else if (c === "viaDiameter") inner = <select id="viaSizeSel" className={KSEL} title="Select the via size" value={viaD} onChange={(ev) => setViaD(ev.target.value)}>{VIA_SIZES.map((v) => <option key={v} value={v}>{v} mm</option>)}</select>;
+  else if (c === "trackWidth") inner = <TrackWidthSelect />;
+  else if (c === "viaDiameter") inner = <ViaSizeSelect />;
   else if (c === "viaStack") inner = <select className={KSEL} title="Via stack" defaultValue="Through"><option>Through</option></select>;
-  else if (c === "layerSelector") inner = (
-    <select id="layerSel" className={KSEL + " klayer"} title="Active layer" value={activeLayer} onChange={(ev) => dispatch({ type: "setActiveLayer", layer: ev.target.value })}>
-      {copper.map((l) => <option key={l.name} value={l.name} style={{ color: l.color }}>{l.name}</option>)}
-    </select>);
+  else if (c === "layerSelector") inner = <LayerSelect />;
   else if (c === "gridSelect") inner = (
     <select id="gridSel" className={KSEL} title="Grid" value={String(gridPitch)} onChange={(ev) => dispatch({ type: "setGrid", pitch: Number(ev.target.value) })}>
       {gridChoices.map(([v, label]) => <option key={v} value={String(v)}>{label}</option>)}

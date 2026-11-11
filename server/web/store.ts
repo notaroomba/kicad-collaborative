@@ -51,6 +51,16 @@ export interface RenderOpts {
   outlineTracks?: boolean; zoneOutline?: boolean; activeLayer?: string;
 }
 
+/** One enabled board layer for the active-layer selector: KiCad's name, the board's own label and the theme colour. */
+export interface RoutingLayer { name: string; label: string; color: string; copper: boolean }
+/** The board editor's routing controls (pcbnew's aux toolbar): the size choices, what is selected and the layer pair. */
+export interface RoutingState {
+  /** "Track: use netclass width", then one entry per pre-defined width — index = BOARD_DESIGN_SETTINGS::m_trackWidthIndex */
+  trackLabels: string[]; trackIndex: number;
+  viaLabels: string[]; viaIndex: number;
+  layers: RoutingLayer[]; layerPair: [string, string];
+}
+
 export type PopoverKind = "desktop" | "about" | "share" | "kicad" | "find" | "grid";
 export interface Anchor { left: number; top: number; right: number; bottom: number }
 export interface PopoverState {
@@ -125,6 +135,7 @@ export interface AppState {
   toast: { id: number; text: string; ms: number } | null;
   popover: PopoverState | null;
   contextMenu: ContextMenuState | null;
+  routing: RoutingState;
 }
 
 // ---------------------------------------------------------------- actions (chrome → app.js)
@@ -137,6 +148,8 @@ export type AppAction =
   | { type: "enterSheet"; file: string }
   | { type: "setLayerVisible"; key: string; visible: boolean }
   | { type: "setActiveLayer"; layer: string }
+  | { type: "setTrackWidth"; index: number | "edit" }
+  | { type: "setViaSize"; index: number | "edit" }
   | { type: "setGrid"; pitch: number }
   | { type: "setZoom"; zoom: number | "auto" }
   | { type: "setFilter"; key: string; on: boolean }
@@ -173,6 +186,7 @@ const EMPTY: AppState = {
   peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
   toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, toast: null, popover: null, contextMenu: null,
+  routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },
 };
 
 function app(): CollabAppApi | undefined { return window.CollabApp; }

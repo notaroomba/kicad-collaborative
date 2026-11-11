@@ -135,7 +135,7 @@ export const layerRow = (l) => ({ key: l.key, name: l.name, color: l.color, coun
 export function renderLayersFromDoc() {
   const list = KiCadCanvas.layerList(E.kdoc);
   const cu = isSch() ? [] : list.filter((l) => /\.Cu$/.test(l.name));
-  if (!isSch()) { if (!cu.some((l) => l.name === E.activeLayer)) E.activeLayer = cu[0] ? cu[0].name : ""; E.renderOpts.activeLayer = E.activeLayer; }
+  if (!isSch()) { if (!cu.some((l) => l.name === E.activeLayer) && !(E.kdoc.layers && E.kdoc.layers.has(E.activeLayer))) E.activeLayer = cu[0] ? cu[0].name : ""; E.renderOpts.activeLayer = E.activeLayer; }   // any enabled layer can be the active one
   store.slice("document", { layers: list.map(layerRow), hiddenLayers: Array.from(E.hiddenLayers), copperLayers: cu.map(layerRow), notice: null, hasDoc: true });
   store.slice("viewport", { activeLayer: E.activeLayer });
 }
@@ -195,7 +195,11 @@ export function updateGridStatus() { setToggle("toggleGrid", E.gridOn); store.sl
 
 export function setGridPitch(v) { E.gridPitch = Number(v) || E.gridPitch; updateGridStatus(); requestRender(); }
 
-export function snapMm(mm) { return E.snapOn ? [KiCadCanvas.snap(mm[0], E.gridPitch), KiCadCanvas.snap(mm[1], E.gridPitch)] : mm; }
+export function snapMm(mm) {
+  if (!E.snapOn) return mm;
+  if (!isSch()) return KiCadCanvas.pcbSizes.state.snapToGrid(mm, E.gridPitch);   // the board's grid starts at its grid origin
+  return [KiCadCanvas.snap(mm[0], E.gridPitch), KiCadCanvas.snap(mm[1], E.gridPitch)];
+}
 
 
 export function leaveEditor() {

@@ -92,6 +92,8 @@ interface KiCadCanvasApi {
   SCH: Record<string, string>;
   ORIENT: unknown;
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;
+  /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
+  pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
   [extra: string]: unknown;
 }
 

@@ -25,6 +25,7 @@ import { cancelInteraction, clearAllSelection, installGestures, registerPointerU
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
+import { installPcbRouting, pcbLayerKey } from "./pcbrouting";
 import { breakFollow, sendPresence } from "./peers";
 import { drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
 import { clearSelection, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto } from "./selection";
@@ -300,6 +301,7 @@ document.addEventListener("keydown", (ev) => {
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
   if (k === "f" || k === "F") { fitView(); return; }
+  if (pcbLayerKey(ev)) { ev.preventDefault(); return; }               // the board editor's + / - step the active copper layer, as in pcbnew
   if (k === "+" || k === "=") { zoomBy(1.25); return; }
   if (k === "-" || k === "_") { zoomBy(0.8); return; }
   if (k === "s" || k === "S") { setTool("select"); return; }
@@ -322,6 +324,7 @@ document.addEventListener("keydown", (ev) => {
 });
 
 store.slice("tool", { handled: Object.keys(HANDLERS) });
+installPcbRouting();
 
 
 // ---------- boot ----------

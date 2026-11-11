@@ -227,7 +227,7 @@ test("module: route from a pad, add a via with V, finish with Enter", () => {
 
 test("module: selection keys — U expands the run, W changes width, Delete removes, R rotates the app's footprint", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc);
-  pcb.onDocChanged(ctx);
+  pcb.onDocChanged(ctx); pcb.onActivate("select", ctx);   // W edits the selection only with the select tool (ToolStackIsEmpty)
   P.state.sel = new Set(["s-1"]);
   assert.equal(pcb.onKey("u", ev(), ctx), true); assert.equal(P.state.sel.size, 4);
   P.state.sel = new Set(["s-1"]);
@@ -958,7 +958,7 @@ test("pads: padAt hit-tests pads in board space; the pad dialog commits a MODIFI
 test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / duplicate / group / align / rotate / DRC / net inspector run through ctx", () => {
   const keys = Object.fromEntries(Object.values(A).map((a) => [a.id, a.key]));
   assert.deepEqual(["copy", "cut", "paste", "pasteSpecial", "duplicate", "selectConnection", "selectUnconnected", "grabUnconnected", "moveExactly", "positionRelative", "rotateSelection", "flipSelection", "toggleLock", "highlightNet", "clearHighlight", "swap", "pack", "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "deleteFull"].map((id) => keys[id]),
-    ["Ctrl+C", "Ctrl+X", "Ctrl+V", "Ctrl+Shift+V", "Ctrl+D", "U", "O", "Shift+O", "Shift+M", "Shift+P", "R", "F", "L", "`", "~", "Alt+S", "P", "W", "Shift+W", "\\", "|", "Shift+Delete"]);
+    ["Ctrl+C", "Ctrl+X", "Ctrl+V", "Ctrl+Shift+V", "Ctrl+D", "U", "O", "Shift+O", "Shift+M", "Shift+P", "R", "F", "L", "`", "~", "Alt+S", "P", "W", "Shift+W", "'", "\\", "Shift+Delete"]);
   for (const id of ["selectNet", "alignLeft", "alignRight", "alignTop", "alignBottom", "alignCenterX", "alignCenterY", "distributeH", "distributeV", "swapLayers", "changeTrackWidth", "cleanupTracks", "runDRC", "netInspector", "showRatsnest", "group", "ungroup", "mirrorH", "mirrorV", "convertToPoly", "convertToTracks", "boardStatistics", "unrouteSelected", "breakTrack", "createArray", "filterSelection", "selectAllOnLayer", "lock", "unlock", "showNetInspector", "rotateCcw", "rotateCw", "flip", "moveExact", "localRatsnestTool"])
     assert.ok(A[id] && A[id].label && typeof A[id].run === "function" && typeof A[id].key === "string", id);
   assert.ok(Object.isFrozen(A));

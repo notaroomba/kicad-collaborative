@@ -14,7 +14,7 @@ export const TOOL_MAP: Record<Editor, Record<string, string>> = {
   pcb: { selectSetRect: "select", selectSetLasso: "select", routeSingleTrack: "route", drawVia: "via", drawZone: "zone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawRectangle: "grect",
     drawCircle: "gcircle", drawPolygon: "gpoly", drawBezier: "gcurve", placeReferenceImage: "image", placeText: "gtext", drawTextBox: "gtextbox", drawTable: "table",
     drawAlignedDimension: "dimaligned", drawOrthogonalDimension: "dimortho", drawCenterDimension: "dimcenter", drawRadialDimension: "dimradial", drawLeader: "leader",
-    deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool" },
+    deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool", gridSetOrigin: "gridorigin", drillOrigin: "drillorigin" },
 };
 /** The collab tools app.js keeps at the foot of the draw toolbar. */
 export const EXTRA_TOOLS: { id: string; tool: string; name: string; key: string; glyph: string }[] = [
@@ -51,8 +51,8 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["File", ["save", "-", "share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "-", "deleteTool"]],
     ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
-    ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "gridSetOrigin", "drillOrigin"]],
-    ["Route", ["routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew"]],
+    ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin"]],
+    ["Route", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew"]],
     ["Inspect", ["runDRC", "clearMarkers", "-", "netInspector", "boardStatistics", "inspectClearance", "-", "measureTool"]],
     ["Tools", ["updatePcbFromSchematic", "showEeschema", "-", "showFootprintEditor", "-", "editFootprintFields"]],
     ["Preferences", ["theme", "-", "openPreferences"]],
@@ -74,6 +74,7 @@ export const LOCAL_LABELS: Record<string, string> = {
   collabLeave: "Leave Session", archive: "Download Project (.zip)", github: "GitHub Sync…", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative…", home: "Back to Projects",
   showAssistant: "Assistant", showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
+  drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
   theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App ↗", sourceCode: "Source on GitHub ↗", about: "About KiCad Collaborative", help: "Help ↗", gettingStarted: "Getting Started with KiCad ↗",
   // home-view menu entries
   share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Sign Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
@@ -103,5 +104,3 @@ export const FILTERS: Record<Editor, [string, string][]> = {
 };
 
 export const ZOOM_PRESETS = [10, 25, 50, 75, 100, 150, 200, 300, 500, 1000];
-export const TRACK_WIDTHS = [0.2, 0.25, 0.3, 0.4, 0.5, 0.8, 1, 1.5, 2];
-export const VIA_SIZES = [0.6, 0.8, 1, 1.2, 1.6];
