@@ -49,7 +49,7 @@ async function rawSymbol(lib: string, name: string, depth = 0): Promise<any> {
   parent[1] = name;
   for (const c of parent) if (Array.isArray(c) && c[0] === "symbol" && typeof c[1] === "string" && c[1].startsWith(parentName + "_")) c[1] = name + c[1].slice(parentName.length);
   for (const p of k.kids(node, "property")) {   // the child's fields replace the parent's of the same name
-    const at = parent.findIndex((c: any) => Array.isArray(c) && c[0] === "property" && k.str(c[1]) === k.str(p[1]));
+    const at = parent.findIndex((c: any) => Array.isArray(c) && c[0] === "property" && k.str(c[1]) === k.str(p[1]) && (k.str(p[1]) !== "private" || k.str(c[2]) === k.str(p[2])));   // private notes are told apart by their own name
     if (at >= 0) parent[at] = p;
     else { const last = parent.map((c: any, i: number) => (Array.isArray(c) && c[0] === "property" ? i : -1)).filter((i: number) => i >= 0).pop(); parent.splice((last === undefined ? 1 : last) + 1, 0, p); }
   }

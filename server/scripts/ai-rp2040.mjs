@@ -64,6 +64,10 @@ const save = async (file) => { if (!OUT) return; const text = await page.evaluat
   return K.serialize(out);
 }, doc(file.endsWith('sch') ? 'kicad_sch' : 'kicad_pcb')); fs.writeFileSync(path.join(OUT, file), text + '\n'); };
 
+// The project file holds the board rules; desktop KiCad checks against its own defaults without it.
+const savePro = async (file) => { if (!OUT) return; const id = (made.docs.find((d) => d.docType === 'kicad_pro') || {}).docId; if (!id) return;
+  fs.writeFileSync(path.join(OUT, file), await page.evaluate((i) => fetch(`/api/docs/${i}/content?v=${Date.now()}`).then((r) => r.text()), id)); };
+
 // ------------------------------------------------------------------ the plan: schematic
 await open('kicad_sch');
 const LIBS = ['MCU_RaspberryPi:RP2040', 'Memory_Flash:W25Q16JVSS', 'Connector:USB_C_Receptacle_USB2.0_16P', 'Regulator_Linear:AP2112K-3.3', 'Device:Crystal_GND24',
@@ -320,7 +324,7 @@ const total = Object.entries(tally).filter(([k]) => k !== 'Route what is left').
 check('at least 95% of the connections routed', total > 0 && routed >= 0.95 * total, `${routed} of ${total}`);
 await page.evaluate(() => window.CollabEditor.api.fitView()); await page.waitForTimeout(600);
 await shot('rp2040-03-routed');
-await save('rp2040-devboard.kicad_pcb');
+await savePro('rp2040-devboard.kicad_pro'); await save('rp2040-devboard.kicad_pcb');
 const drc = await tool('run_checks', {});
 const byCode = {}; for (const v of drc.violations || []) byCode[v.code] = (byCode[v.code] || 0) + 1;
 console.log('DRC', JSON.stringify(byCode));

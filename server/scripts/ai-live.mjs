@@ -128,6 +128,8 @@ report.board = { info, unrouted_connections: open_, nets_with_open_connections: 
   drc: tally(drc), violations: (drc.violations || []).slice(0, 60) };
 await page.evaluate(() => window.CollabEditor.api.fitView()).catch(() => {});
 await shot(`${NAME}-board`); await save(`${NAME}.kicad_pcb`);
+if (OUT) { const id = (made.docs.find((d) => d.docType === 'kicad_pro') || {}).docId;   // the board rules live in the project file
+  if (id) fs.writeFileSync(path.join(OUT, `${NAME}.kicad_pro`), await page.evaluate((i) => fetch(`/api/docs/${i}/content?v=${Date.now()}`).then((r) => r.text()), id)); }
 if (OUT) fs.writeFileSync(path.join(OUT, `${NAME}.report.json`), JSON.stringify(report, null, 1));
 log(`stopped: ${stopped}; ${rounds.length} rounds, ${report.requests} model requests`);
 log('schematic:', JSON.stringify(report.schematic).slice(0, 300));
