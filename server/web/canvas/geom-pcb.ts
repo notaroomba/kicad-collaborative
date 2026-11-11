@@ -3,7 +3,7 @@
 import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { expandDocVars } from "./geom-sch";
-import { arcFrom3, atOf, bezierPts, dashOf, ellipsePts, effectsOf, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
+import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, faceOf, ellipsePts, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
@@ -66,7 +66,7 @@ export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
   const color = pcbColor(layer); const z = pcbZ(layer) + Z_TEXT;
   const thick = ef.thick > 0 ? ef.thick : (ef.bold ? ef.size / 5 : ef.size / 8);
   const ln = kid(n, "layer"); const knockout = (ln && has(ln, "knockout")) || yesNo(n, "knockout");
-  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, sizeX: ef.sizeX }, knockout ? { knockout: true } : null, extra || {});
+  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true } : null, extra || {});
   if (ef.hide) {
     const shadow = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
     for (const g of shadow.geom) g.hiddenText = true;

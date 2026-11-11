@@ -773,6 +773,32 @@ export function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
   ctx.restore();
 }
 
+/** A face name as a CSS font-family entry. */
+export const cssFamily = (face) => '"' + String(face).replace(/["'\\<>&;]/g, "") + '"';
+
+const FACES = new Map();
+let faceCtx = null;
+/**
+ * Whether the browser can draw text in the named face.  KiCad falls back to its stroke font when fontconfig
+ * has no such face; here a face is taken to exist when text set in it measures differently from both generic
+ * fallbacks it would otherwise land on.  No canvas (Node) → false.  "KiCad Font" is the stroke font itself.
+ */
+export function faceAvailable(face) {
+  let ok = FACES.get(face);
+  if (ok !== undefined) return ok;
+  ok = false;
+  if (face && !/^kicad font$/i.test(face) && typeof document !== "undefined") {
+    try {
+      if (!faceCtx) faceCtx = document.createElement("canvas").getContext("2d");
+      const probe = "mmmmmmmmmmlliWW0123@#", fam = cssFamily(face);
+      const w = (f) => { faceCtx.font = "40px " + f; return faceCtx.measureText(probe).width; };
+      ok = w(fam + ", monospace") !== w("monospace") || w(fam + ", serif") !== w("serif");
+    } catch (e) { ok = false; }
+  }
+  FACES.set(face, ok);
+  return ok;
+}
+
 /** Text shorter than this on screen (device px of glyph height) is not drawn. */
 export const MIN_TEXT_PX = 2;
 
@@ -826,7 +852,8 @@ export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
 export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bgColor) {
   const px = g.size * s; if (px < (g.minPx || MIN_TEXT_PX)) return;
   const color = colorOverride || g.color;
-  if (textMode() === "stroke") {
+  const outline = !!g.face && faceAvailable(g.face);
+  if (!outline && textMode() === "stroke") {
     let b = base;
     if (!b && typeof ctx.getTransform === "function") { const m = ctx.getTransform(); b = [m.a, m.b, m.c, m.d, m.e, m.f]; }
     if (b) { drawTextStroke(ctx, g, minW, color, b, flip, bgColor); return; }
@@ -838,9 +865,10 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   else { ctx.save(); ctx.translate(g.x, g.y); if (a) ctx.rotate(a); if (mx < 0) ctx.scale(-1, 1); }
   // KiCad's bold/italic are a thicker and a sheared stroke font; with a real face the equivalent is
   // the face's own weight and slant.  Only geometry that asks for them (the drawing sheet) is affected.
-  const key = g.bold || g.italic ? `${g.size}|${g.bold ? "b" : ""}${g.italic ? "i" : ""}` : g.size;
+  // An outline font (effects (font (face "…"))) is drawn in that face: KiCad's FONT::GetFont by name.
+  const key = outline ? `${g.size}|${g.bold ? "b" : ""}${g.italic ? "i" : ""}|${g.face}` : g.bold || g.italic ? `${g.size}|${g.bold ? "b" : ""}${g.italic ? "i" : ""}` : g.size;
   let font = FONT_CACHE.get(key);
-  if (!font) { font = `${g.italic ? "italic " : ""}${g.bold ? "600 " : ""}${g.size * FONT_EM}px ${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(key, font); }
+  if (!font) { font = `${g.italic ? "italic " : ""}${g.bold ? (outline ? "bold " : "600 ") : ""}${g.size * FONT_EM}px ${outline ? cssFamily(g.face) + ", " : ""}${FONT_FAMILY}`; if (FONT_CACHE.size < 512) FONT_CACHE.set(key, font); }
   ctx.font = font;
   ctx.textAlign = h; ctx.textBaseline = "alphabetic";
   const base0 = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
@@ -857,7 +885,7 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   if (g.padText) { ctx.fillText(g.text, 0, base0); if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore(); return; }
   // stroke-font thickness beyond a filled face's own stem (~0.13·size) reads as bold; text that
   // already carries the bold flag gets its weight from the face instead of a second stroke pass
-  const extra = g.bold ? 0 : g.w - 0.13 * g.size;
+  const extra = g.bold || outline ? 0 : g.w - 0.13 * g.size;
   const boldPass = extra > 0.01 && docType === "pcb";
   if (boldPass) { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; }
   // A drawing-sheet field carrying a \n is a multiline run: KiCad lays the lines out an interline

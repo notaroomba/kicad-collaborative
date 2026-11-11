@@ -183,6 +183,7 @@ export function effectsOf(node) {
       const s = kid(f, "size"); if (s) { r.size = num(s[1], 1.27); r.sizeX = num(s[2], r.size); }   // (size HEIGHT WIDTH): the parser reads "text height" first
       const t = kid(f, "thickness"); if (t) r.thick = num(t[1]);
       r.bold = yesNo(f, "bold"); r.italic = yesNo(f, "italic");
+      const fc = kid(f, "face"); if (fc && str(fc[1])) r.face = str(fc[1]);   // an outline (TrueType) font by name
     }
     const j = kid(e, "justify"); if (j) { r.just = j.slice(1).map(str); if (r.just.includes("mirror")) r.mirror = true; }
     if (has(e, "hide")) r.hide = true; const h = kid(e, "hide"); if (h && str(h[1]) === "yes") r.hide = true;
@@ -190,6 +191,9 @@ export function effectsOf(node) {
   if (has(node, "hide")) r.hide = true; const h2 = kid(node, "hide"); if (h2 && str(h2[1]) === "yes") r.hide = true;
   return r;
 }
+
+/** The text-geometry fields of an outline font: { face, bold } when the effects name a face, else null. */
+export function faceOf(ef) { return ef && ef.face ? { face: ef.face, bold: !!ef.bold } : null; }
 
 export function justOf(just, defH, defV) {
   const h = just.includes("left") ? "left" : just.includes("right") ? "right" : (defH || "center");

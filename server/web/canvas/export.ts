@@ -2,7 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH } from "./colors";
 import { bboxOf } from "./hit";
-import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, dashPattern, makeCanvas, render, textMode, tracePath } from "./render";
+import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
 import { isList, kid, quotedMask, str } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
@@ -50,7 +50,8 @@ export function svgGeom(g, hairline, isPcb, bg) {
   const stroke = (w, color) => { const lw = sw(w); return ` stroke="${color || g.color}" stroke-width="${fmt(lw)}" stroke-linecap="${cap}"${dash(lw)}`; };
   if (t === "text") {
     if (!g.text) return "";
-    if (textMode() === "stroke") return svgStrokeText(g, hairline, bg, op);
+    const outline = !!g.face && faceAvailable(g.face);
+    if (!outline && textMode() === "stroke") return svgStrokeText(g, hairline, bg, op);
     const size = g.size, base0 = g.v === "top" ? size : g.v === "bottom" ? 0 : size / 2;
     const tr = `translate(${fmt(g.x)} ${fmt(g.y)})` + (g.rot ? ` rotate(${fmt(-g.rot)})` : "") + (g.mirror ? " scale(-1 1)" : "");
     const anchor = g.h === "left" ? "start" : g.h === "right" ? "end" : "middle";
@@ -68,7 +69,7 @@ export function svgGeom(g, hairline, isPcb, bg) {
       bars = `<path d="${d}" fill="none" stroke="${color}" stroke-width="${fmt(Math.max(pen || size / 8, hairline))}"/>`;
     }
     const face = (g.bold ? ' font-weight="600"' : "") + (g.italic ? ' font-style="italic"' : "");
-    const attrs = `font-family='${FONT_FAMILY}' font-size="${fmt(size * FONT_EM)}" text-anchor="${anchor}" fill="${color}"${face}${bold}`;
+    const attrs = `font-family='${outline ? cssFamily(g.face) + ", " : ""}${FONT_FAMILY}' font-size="${fmt(size * FONT_EM)}" text-anchor="${anchor}" fill="${color}"${face}${bold}`;
     // A multiline drawing-sheet field becomes one <text> per line, an interline apart, with the block
     // centred on the anchor — EDA_TEXT::GetLinePositions.  SVG would swallow the newline otherwise.
     let body;

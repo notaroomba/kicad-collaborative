@@ -54,6 +54,15 @@ test("SVG export draws board text in the stroke font when the stroke font is on"
   } finally { K.textMode = prev; }
 });
 
+test("outline fonts: the face is read, and without that face the text stays in the stroke font", () => {
+  const doc = pcb(`(gr_text "Hi" (at 1 1 0) (layer "F.SilkS") (effects (font (face "Arial") (size 1 1) (bold yes))) (uuid "t"))`);
+  const g = only(doc).geom.find((x) => x.t === "text");
+  assert.strictEqual(g.face, "Arial"); assert.strictEqual(g.bold, true);
+  const plain = pcb(`(gr_text "Hi" (at 1 1 0) (layer "F.SilkS") (effects (font (size 1 1))) (uuid "t"))`);
+  assert(!("face" in only(plain).geom.find((x) => x.t === "text")), "no face key on stroke-font text");
+  const prev = K.textMode;
+  try { K.textMode = "stroke"; assert(!/<text/.test(K.renderSvg(doc, {})), "no canvas here, so no face: stroke paths"); } finally { K.textMode = prev; }
+});
 test("grid axes: two lines through the origin, drawn with the grid off too", () => {
   const doc = pcb(`(gr_line (start -10 -10) (end 10 10) (stroke (width 0.2) (type solid)) (layer "F.SilkS") (uuid "l"))`);
   const lines = [], ctx = { canvas: { width: 400, height: 400 }, lineWidth: 1, globalAlpha: 1 };
