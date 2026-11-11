@@ -163,3 +163,15 @@ test("align uses a footprint's box without its texts (FOOTPRINT::GetBoundingBox(
   assert.ok(Math.abs(b[1] - (12 - 1.05)) < 1e-6, String(b));
   assert.ok(doc.items.get("A").bbox[1] < a[1] - 4, "the drawn box does include the text");
 });
+
+test("a route started mid-track splits that track there (PNS splitAdjacentSegments)", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (net 1 "N")
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1) (uuid "s1")))`, "kicad_pcb");
+  const s = doc.items.get("s1");
+  const ch = P.splitChanges(doc, { id: "s1", point: [4, 0], node: K.cloneNode(s.node) });
+  assert.equal(ch.length, 2);
+  assert.equal(ch[0].id, "s1"); assert.match(ch[0].sexpr, /\(start 0 0\) \(end 4 0\) \(width 0\.25\)/);
+  assert.match(ch[1].sexpr, /\(start 4 0\) \(end 10 0\) \(width 0\.25\) \(layer "F\.Cu"\) \(net 1\) \(uuid "/);
+  assert.notEqual(ch[1].id, "s1");
+  assert.equal(P.splitChanges(doc, { id: "s1", point: [10, 0], node: K.cloneNode(s.node) }).length, 0, "an end is not split");
+});

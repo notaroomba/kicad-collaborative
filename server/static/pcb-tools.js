@@ -618,7 +618,9 @@ function currentLeg(rt) { return routeLeg(rt.last, rt.target, rt.diagFirst); }
 function fixLeg(ctx, target) {
   const rt = S.route; const segs = routeLeg(rt.last, target, rt.diagFirst); if (!segs.length) return false;
   const changes = segs.map(([a, b]) => addedChange(ctx.doc, segmentNode(ctx.doc, a, b, rt.width, rt.layer, rt.net), rt.net));
-  ctx.commit(changes, "route"); rt.legs.push({ ids: changes.map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
+  const ids = changes.map((c) => c.id);
+  if (rt.split) { changes.push(...splitChanges(ctx.doc, rt.split)); rt.split = null; }
+  ctx.commit(changes, "route"); rt.legs.push({ ids, from: rt.last.slice(), layer: rt.layer });
   rt.last = target.slice(); rt.target = target.slice();
   return true;
 }
@@ -635,6 +637,19 @@ function undoRouteLeg(ctx) {
   rt.last = leg.from.slice(); if (leg.layer !== rt.layer) { rt.layer = leg.layer; S.layer = leg.layer; sizesOf(ctx).setActiveLayer(leg.layer); }
   refreshChip(ctx); ctx.requestRender(); return true;
 }
+/**
+ * PNS LINE_PLACER::splitAdjacentSegments: a route that starts in the middle of a track breaks that track there — the
+ * track keeps its start and uuid and ends at the point, a new track of the same width, layer and net carries on to
+ * the old end.  Nothing when the track has changed since the route began or the point is one of its ends.
+ */
+function splitChanges(doc, split) {
+  const it = doc.items.get(split.id); if (!it || it.kind !== "segment" || K.serialize(it.node) !== K.serialize(split.node)) return [];
+  const a = pt(it.node, "start"), b = pt(it.node, "end"), p = split.point; if (!a || !b || samePt(a, p) || samePt(b, p)) return [];
+  const head = clone(it.node); K.kid(head, "end").splice(1, 2, r6(p[0]), r6(p[1]));
+  const tail = clone(it.node); const u = K.kid(tail, "uuid"); if (u) tail.splice(tail.indexOf(u), 1);
+  K.kid(tail, "start").splice(1, 2, r6(p[0]), r6(p[1]));
+  return [replacedChange(it, head), addedChange(doc, tail, netOf(tail))];
+}
 /** The segment on `layer` under (x, y) with the point projected onto its centre line: where a route started on a track begins. */
 function trackUnder(doc, x, y, layer) {
   const it = hitTestItem(doc, x, y, HIT_MM); if (!it || it.kind !== "segment" || layerOf(it.node) !== layer) return null;
@@ -646,10 +661,11 @@ function routeClick(ctx, hv, mm) {
   const now = Date.now(); let p = [hv.x, hv.y];
   if (!S.route) {
     let net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer);
-    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); } }   // started on a track: its centre line and its net
+    let split = null;
+    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; } }   // started on a track: its centre line and its net
     const R = sizesOf(ctx); const connected = connectedWidth(ctx.doc, p, S.layer, mm || p);
     const width = R.routeWidth(netNameOf(ctx, net), connected);   // ImportSizes: the connected track, the net's class, or the selected width
-    S.route = { last: p, target: p.slice(), net, layer: S.layer, width, connected, diagFirst: true, clickT: now, clickAt: p.slice(), legs: [] };
+    S.route = { last: p, target: p.slice(), net, layer: S.layer, width, connected, diagFirst: true, clickT: now, clickAt: p.slice(), legs: [], split };
     if (R.activeLayer !== S.layer) R.setActiveLayer(S.layer);
     ctx.toast(`Routing ${net.name ? net.name + " " : ""}on ${S.layer} · ${fmtSize(S.route.width)} — click corners, / posture, V via, Backspace undoes a segment, End or double-click to finish`, 3500);
     refreshChip(ctx); ctx.requestRender(); return;
@@ -2835,7 +2851,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, unfillChanges, alignBox, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the new board tools

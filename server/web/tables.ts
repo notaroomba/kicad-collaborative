@@ -153,10 +153,10 @@ export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
   pcb: { flip: "flipSelection", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", moveExact: "moveExactly", editTracksAndVias: "changeTrackWidth", showNetInspector: "netInspector",
     distributeHorizontallyGaps: "distributeH", distributeVerticallyGaps: "distributeV", distributeHorizontallyCenters: "distributeHCenters", distributeVerticallyCenters: "distributeVCenters" },
 };
-/** Module action ids that only repeat another one (the same command under a second name): never listed on their own. */
+/** Module action ids that only repeat another one (the same command under a second name), or that KiCad offers only in a context menu: never listed on their own. */
 export const MODULE_DUPLICATES: Record<Editor, string[]> = {
   sch: ["highlightNet"],
-  pcb: ["highlightNetSelection", "cleanupTracks", "pack"],
+  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneUnfill"],
 };
 /** What an entry needs before it can run (KiCad's SELECTION_CONDITIONS / the read-only frame): greyed out otherwise. */
 export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete", "duplicate", "increment", "decrement", "move", "drag", "drag45Degree", "dragFreeAngle", "rotateCCW", "rotateCW", "rotateCcw", "rotateCw",
