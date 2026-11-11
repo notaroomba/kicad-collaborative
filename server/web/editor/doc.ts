@@ -34,7 +34,7 @@ export function syncItemsFromDoc() {
     if (sh.name) sheetNames.set(path, sh.name);
     if (sh.page) sheetPages.set(path, sh.page);
   }
-  if (E.selected) E.selected = E.items.find((f) => f.id === E.selected.id) || null;
+  if (E.selected) E.selected = E.items.find((f) => f.id === E.selected.id) || E.sheets.find((sh) => sh.id === E.selected.id) || null;   // a selected sheet stays selected
   renderObjects();
 }
 

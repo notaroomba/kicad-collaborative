@@ -52,7 +52,7 @@ export function hitOpts() { return { hidden: E.hiddenLayers, side: !isSch() && E
 
    // {id, onGeom} of the latest nearestFootprint() call
 export function nearestFootprint(x, y, radiusMm) {
-  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; const hitIt = id ? E.kdoc.items.get(id) : null; if (hitIt && !filterAllows(hitIt.kind, hitIt)) return null; return id ? E.items.find((f2) => f2.id === id) || null : null; }
+  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; const hitIt = id ? E.kdoc.items.get(id) : null; if (hitIt && !filterAllows(hitIt.kind, hitIt)) return null; return id ? E.items.find((f2) => f2.id === id) || E.sheets.find((sh) => sh.id === id) /* a hierarchical sheet is picked like a symbol */ || null : null; }
   let best = null, bestD = radiusMm;
   for (const fp of E.items) { const d = Math.hypot(fp.x / E.IU - x, fp.y / E.IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
