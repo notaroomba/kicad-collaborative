@@ -134,8 +134,12 @@ check('a presence state too large for one notification still crosses', !!pBig);
 A2.send({ type: 'join_doc', docId: doc.docId }); await A2.wait((m) => m.type === 'snapshot');
 B2.send({ type: 'join_doc', docId: doc.docId });
 const b2Info = await B2.wait((m) => m.type === 'doc_info'); await B2.wait((m) => m.type === 'snapshot');
-check('doc_info on replica B lists the people on replica A',
-  [A1, A2, B1].every((c) => b2Info.peers.some((p) => p.clientId === idOf.get(c))), JSON.stringify(b2Info.peers.map((p) => p.clientId)));
+// Someone who joined on the other replica a moment ago may arrive as a join right after instead.
+const b2Knows = [];
+for (const c of [A1, A2, B1]) b2Knows.push(b2Info.peers.some((p) => p.clientId === idOf.get(c))
+  || !!(await B2.wait((m) => m.type === 'peer_joined' && m.peer?.clientId === idOf.get(c), 5000).catch(() => null)));
+check('a joiner on replica B learns of everyone on replica A', b2Knows.every(Boolean) && b2Info.peers.some((p) => p.clientId === idOf.get(A1)),
+  JSON.stringify(b2Info.peers.map((p) => p.clientId)));
 const inherited = await B2.wait((m) => m.type === 'presence' && m.peers?.[idOf.get(A1)]?.state, 5000).catch(() => null);
 check('a late joiner on replica B is shown the cursor of someone on replica A', !!inherited);
 
@@ -220,6 +224,29 @@ else {
   check('…and its token is issued by replica B and accepted by replica A', token.status === 200 && who.login === 'rep-alice', `status ${token.status} ${JSON.stringify(who).slice(0, 80)}`);
   const again = await tokenReq();
   check('…and the one-time code works once', again.status === 400, `got ${again.status}`);
+}
+
+// --- the browser asks a desktop editor to refill zones, wherever that desktop is connected ---
+{
+  B1.send({ type: 'request', docId: doc.docId, action: 'fill_zones' });
+  const asked = await A1.wait((m) => m.type === 'request' && m.action === 'fill_zones', 8000).catch(() => null);
+  check('a fill request from a browser on replica B reaches the desktop editor on replica A', asked?.from?.login === 'rep-alice', JSON.stringify(asked));
+  B1.send({ type: 'request', docId: doc.docId, action: 'format_disk' });
+  const no = await B1.wait((m) => m.type === 'error' && m.code === 'request_refused', 8000).catch(() => null);
+  check('an action that is not on the list is refused', !!no);
+
+  const form2 = new FormData();
+  form2.append('archive', new Blob([await makeZip([['solo.kicad_sch', sch], ['solo.kicad_pro', '{}']])], { type: 'application/zip' }), 'project.zip');
+  form2.append('name', 'replicas-e2e-solo');
+  const solo = await (await fetch(`${BASE_A}/api/projects`, { method: 'POST', headers: authA, body: form2 })).json();
+  const soloDoc = solo.docs?.find((d) => d.docType === 'kicad_sch');
+  const W = connect(BASE_B, alice, 'w1', 'alice-web@B', 'web');
+  await W.wait((m) => m.type === 'hello_ok');
+  W.send({ type: 'join_doc', docId: soloDoc.docId }); await W.wait((m) => m.type === 'snapshot');
+  W.send({ type: 'request', docId: soloDoc.docId, action: 'fill_zones' });
+  const nobody = await W.wait((m) => m.type === 'error' && m.code === 'no_desktop', 8000).catch(() => null);
+  check('with no desktop editor anywhere, the browser is told so', !!nobody);
+  W.close();
 }
 
 // --- leaving, and a replica dying ---

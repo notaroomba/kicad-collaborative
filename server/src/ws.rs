@@ -21,7 +21,9 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often an idle socket looks whether anyone's access changed.
 const ACCESS_RECHECK: Duration = Duration::from_secs(1);
 const PING_INTERVAL: Duration = Duration::from_secs(20);
-const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// One op is one message.  A zone travels with its fill, and the fill of a large pour
+/// alone can pass a megabyte.
+const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 /// Presence is fanned out to every peer every 50ms, so an unbounded blob is a
 /// broadcast amplifier any viewer can point at the doc.
 const MAX_PRESENCE_BYTES: usize = 8 * 1024;
@@ -461,6 +463,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                         })
                         .await;
                 }
+            }
+            ClientMsg::request { doc_id, action } => {
+                // Only an editor may set someone else's application to work, and only on
+                // the short list of things there is a reason to ask for.
+                let Some(d) = joined.get_mut(&doc_id) else { continue };
+                let role = current_role(&state, user.id, d, true).await;
+                if role.as_deref() != Some("editor") || action != "fill_zones" {
+                    let _ = out_tx.try_send(
+                        json!({ "type": "error", "code": "request_refused", "docId": doc_id,
+                                "action": action }).to_string(),
+                    );
+                    continue;
+                }
+                let Some(d) = joined.get(&doc_id) else { continue };
+                let _ = d.tx.send(DocMsg::Request { client_id: client_id.clone(), action }).await;
             }
             ClientMsg::resync { doc_id } => {
                 // A resync hands over the whole file: never to someone whose access went.

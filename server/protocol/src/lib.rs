@@ -56,6 +56,14 @@ pub enum ClientMsg {
         #[serde(rename = "docId")]
         doc_id: Uuid,
     },
+    /// Ask a desktop editor in the document to do something only the desktop
+    /// application can.  `action` is "fill_zones": the browser editor has no zone
+    /// filler, so it asks a desktop collaborator to refill and share the result.
+    request {
+        #[serde(rename = "docId")]
+        doc_id: Uuid,
+        action: String,
+    },
 }
 
 /// A peer as described in `doc_info`, `peer_joined` and presence updates.

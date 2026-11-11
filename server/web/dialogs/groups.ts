@@ -1,9 +1,8 @@
 // dialogs/groups.ts — schematic groups (KiCad 10's SCH_GROUP): Group Items / Ungroup Items, Enter Group / Leave Group /
 // Remove from Group.  A group is its own item — (group "name" (uuid …) (members …)) — so grouping adds one, ungrouping
 // removes it; a click on a member selects the whole group unless that group has been entered.
-// The desktop's collab layer does not transfer SCH_GROUP fragments yet (sch_collab_sync.cpp typeSupportsSexprTransfer),
-// so groups made here reach other web clients live but a desktop session only sees them once it reloads a snapshot
-// that contains them.
+// Groups travel like every other item: the desktop's collab layer (sch_collab_sync.cpp) reads the member ids off the
+// change and resolves them on its own sheet, so a group made here appears in a desktop session at once and vice versa.
 import { E, requestRender, setStatusBar } from "./editor";
 import { promptText } from "./dom";
 import { expandGroups, groupMembers, groupOf, groupSexpr, topGroupOf } from "./logic";

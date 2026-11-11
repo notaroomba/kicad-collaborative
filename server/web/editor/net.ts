@@ -95,6 +95,8 @@ export async function connect() {
     if (msg.type === "ack" && msg.clientOpId) { E.pendingOps.delete(msg.clientOpId); E.lastSeq = Math.max(E.lastSeq, Number(msg.seq) || 0); }
     if (msg.type === "error" && (msg.code === "permission_denied" || msg.code === "bad_op" || msg.code === "internal" || msg.code === "not_found")) onOpRejected(sock, msg);
     if (msg.type === "error" && msg.code === "desynced") requestResync(sock, true);
+    if (msg.type === "error" && msg.code === "no_desktop") toast("Nobody has this board open in the desktop app, so zones keep their last fill. They refill as soon as someone opens it there.", 5000);
+    if (msg.type === "error" && msg.code === "request_refused") toast("Only editors can ask for a refill");
     if (msg.type === "comment") noteCommentMsg(msg);
     if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
       if (setDocFromText(msg.file)) {

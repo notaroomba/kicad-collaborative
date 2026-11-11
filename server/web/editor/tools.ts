@@ -30,6 +30,8 @@ export function toolCtx(extra) {
     commit(changes, label) { commitChanges(changes, label); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender, toast, enterSheet, setTool,
+    // Ask a desktop editor in this document to do what the browser cannot (fill zones).
+    requestDesktop(action) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },
     setStatus(text) { setStatusBar({ mode: text || "" }); },
   }, extra || {});
 }

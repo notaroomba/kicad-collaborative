@@ -94,6 +94,11 @@ pub enum DocMsg {
     /// Something is about to read the document's file (a GitHub push or pull): ask a
     /// client that can write one for a snapshot now, whatever the cooldown says.
     SnapshotNow,
+    /// A client asks a desktop editor in the document to do something (fill zones).
+    Request {
+        client_id: String,
+        action: String,
+    },
     /// Something another replica published about this document (relay.rs).
     Relay(Value),
     /// A replica stopped answering: its clients are no longer in the document.
@@ -103,10 +108,26 @@ pub enum DocMsg {
 }
 
 /// Somebody in the document through another replica.
+/// Whether the user may still edit the document's project, asked of the database.
+async fn still_editor(pool: &PgPool, user_id: i64, doc_id: Uuid) -> bool {
+    let project: Option<Uuid> = sqlx::query_scalar("SELECT project_id FROM documents WHERE id = $1")
+        .bind(doc_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    match project {
+        Some(p) => matches!(persist::effective_role(pool, user_id, p).await, Ok(Some(r)) if r == "editor"),
+        None => false,
+    }
+}
+
 struct RemotePeer {
     peer: PeerInfo,
     replica: String,
     presence: Option<Value>,
+    /// Whether it can be asked to do desktop work: an editor that is a desktop client.
+    capable: bool,
 }
 
 struct ClientState {
@@ -208,8 +229,31 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                         // they missed and try the next one.
                         let mut attempt = 0;
                         let outcome = loop {
+                            // With other replicas writing, queue for the document's
+                            // sequencing lock and bring ourselves up to the head first.
+                            let mut locked = None;
+                            if relay.others_alive() {
+                                match persist::lock_sequence(&pool, doc_id).await {
+                                    Ok((tx, db_head)) => {
+                                        if db_head > head_seq {
+                                            catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
+                                        }
+                                        locked = Some(tx);
+                                    }
+                                    Err(e) => tracing::warn!("doc {doc_id}: sequencing lock failed, writing without it: {e}"),
+                                }
+                            }
                             let next = head_seq + 1;
-                            match persist::insert_op(&pool, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await {
+                            let inserted = match locked {
+                                Some(mut tx) => {
+                                    match persist::insert_op_on(&mut tx, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await {
+                                        Ok(dup) => tx.commit().await.map(|_| dup),
+                                        Err(e) => Err(e),
+                                    }
+                                }
+                                None => persist::insert_op(&pool, doc_id, next, user_id, &client_id, &client_op_id, base_seq, &changes).await,
+                            };
+                            match inserted {
                                 Err(e) if persist::is_seq_taken(&e) && attempt < SEQ_RETRIES => {
                                     attempt += 1;
                                     let before = head_seq;
@@ -282,8 +326,49 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                     DocMsg::SnapshotNow => {
                         request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
                     }
+                    DocMsg::Request { client_id, action } => {
+                        touch(&mut clients, &client_id);
+                        let from = clients.get(&client_id).map(|c| c.peer.clone());
+                        let out = json!({ "type": "request", "docId": doc_id, "action": action, "from": from }).to_string();
+                        // A desktop editor here, else one on another replica, else nobody.
+                        // The role an actor holds for a client is the one it joined with, so
+                        // the choice is checked against the database: a desktop whose owner
+                        // was demoted since would have its fill refused.
+                        let mut desktops: Vec<_> = clients.iter()
+                            .filter(|(id, c)| **id != client_id && c.role == "editor" && c.can_snapshot)
+                            .collect();
+                        desktops.sort_by(|a, b| a.0.cmp(b.0));
+                        let mut local = None;
+                        for (_, c) in desktops {
+                            if still_editor(&pool, c.peer.user_id, doc_id).await {
+                                local = Some(c);
+                                break;
+                            }
+                        }
+                        if let Some(c) = local {
+                            let _ = c.tx.try_send(out);
+                        } else if let Some(id) = remote.iter().filter(|(_, r)| r.capable).map(|(id, _)| id).min() {
+                            relay.publish(json!({ "t": "request", "d": doc_id, "to": id, "action": action, "from": from }));
+                        } else if let Some(c) = clients.get(&client_id) {
+                            let _ = c.tx.try_send(json!({
+                                "type": "error", "code": "no_desktop", "docId": doc_id, "action": action,
+                            }).to_string());
+                        }
+                    }
                     DocMsg::Relay(msg) => {
                         match msg.get("t").and_then(Value::as_str).unwrap_or("") {
+                            "request" => {
+                                let to = msg["to"].as_str().and_then(|id| clients.get(id));
+                                let ok = match to {
+                                    Some(c) => still_editor(&pool, c.peer.user_id, doc_id).await,
+                                    None => false,
+                                };
+                                if let Some(c) = to.filter(|_| ok) {
+                                    let _ = c.tx.try_send(json!({
+                                        "type": "request", "docId": doc_id, "action": msg["action"], "from": msg["from"],
+                                    }).to_string());
+                                }
+                            }
                             "op" => {
                                 catch_up(&pool, doc_id, &mut head_seq, &mut clients, &mut presence_dirty).await;
                             }
@@ -302,7 +387,7 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                                                     // A join we never heard of (we started later).
                                                     let joined = json!({ "type": "peer_joined", "docId": doc_id, "peer": peer }).to_string();
                                                     broadcast_all(&mut clients, &mut presence_dirty, doc_id, &joined);
-                                                    remote.insert(id.clone(), RemotePeer { peer, replica: from.clone(), presence: Some(state.clone()) });
+                                                    remote.insert(id.clone(), RemotePeer { peer, replica: from.clone(), presence: Some(state.clone()), capable: false });
                                                 }
                                             }
                                             _ => {
@@ -323,6 +408,7 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                                         broadcast_all(&mut clients, &mut presence_dirty, doc_id, &joined);
                                         remote.insert(peer.client_id.clone(), RemotePeer {
                                             peer, replica: msg["r"].as_str().unwrap_or("").to_string(), presence: None,
+                                            capable: msg["capable"].as_bool().unwrap_or(false),
                                         });
                                     }
                                 }
@@ -342,7 +428,8 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                             "who" => {
                                 if !clients.is_empty() {
                                     let roster: Vec<Value> = clients.values()
-                                        .map(|c| json!({ "peer": c.peer, "presence": c.presence }))
+                                        .map(|c| json!({ "peer": c.peer, "presence": c.presence,
+                                                         "capable": c.role == "editor" && c.can_snapshot }))
                                         .collect();
                                     relay.publish(json!({ "t": "roster", "d": doc_id, "to": msg["r"], "peers": roster }));
                                 }
@@ -365,7 +452,8 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                                                               "peers": { peer.client_id.clone(): { "user": peer, "state": state } } }).to_string();
                                             broadcast_all(&mut clients, &mut presence_dirty, doc_id, &out);
                                         }
-                                        remote.insert(peer.client_id.clone(), RemotePeer { peer, replica: from.clone(), presence });
+                                        let capable = entry["capable"].as_bool().unwrap_or(false);
+                                        remote.insert(peer.client_id.clone(), RemotePeer { peer, replica: from.clone(), presence, capable });
                                     }
                                 }
                             }
@@ -484,7 +572,8 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
         // client came or went (a join, a leave, a closed socket found while broadcasting).
         for (id, c) in clients.iter() {
             if announced.insert(id.clone()) {
-                relay.publish(json!({ "t": "joined", "d": doc_id, "peer": c.peer }));
+                relay.publish(json!({ "t": "joined", "d": doc_id, "peer": c.peer,
+                                      "capable": c.role == "editor" && c.can_snapshot }));
             }
         }
         if announced.len() != clients.len() {
