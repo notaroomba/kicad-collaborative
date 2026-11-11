@@ -1647,7 +1647,8 @@
     } else if (k === "junction") {
       const [x, y] = atOf(n);
       const d = kid(n, "diameter");
-      const r = (d && num(d[1]) > 0 ? num(d[1]) : 0.9144) / 2;
+      const dflt = doc && doc.schSettings && typeof doc.schSettings.junctionDiameter === "number" ? doc.schSettings.junctionDiameter : 0.9144;
+      const r = (d && num(d[1]) > 0 ? num(d[1]) : dflt) / 2;
       G(item, { t: "circle", x, y, r, w: 0, color: colorOf(n) || SCH.junction, fill: colorOf(n) || SCH.junction, layer: "Junctions", z: SCH_Z.junction });
     } else if (k === "no_connect") {
       const [x, y] = atOf(n);
@@ -3605,6 +3606,25 @@
     computeBBox(doc);
     return doc;
   }
+  function applyDocProps(doc, props) {
+    if (!doc || !props) return false;
+    let any = false;
+    if (typeof props.paper === "string" && props.paper) {
+      const node = parse(props.paper);
+      if (node && node[0] === "paper") {
+        doc.page = paperSize(node);
+        doc.paper = str(node[1]) || "A4";
+        doc.portrait = doc.page[1] > doc.page[0];
+        any = true;
+      }
+    }
+    if (typeof props.titleBlock === "string") {
+      const node = props.titleBlock ? parse(props.titleBlock) : null;
+      doc.titleBlock = node && node[0] === "title_block" ? titleBlockOf(node) : {};
+      any = true;
+    }
+    return any;
+  }
   var SCH_KINDS = /* @__PURE__ */ new Set([
     "symbol",
     "wire",
@@ -3630,7 +3650,8 @@
     "rule_area",
     "ellipse",
     "ellipse_arc",
-    "net_chain"
+    "net_chain",
+    "group"
   ]);
   var PCB_KINDS = /* @__PURE__ */ new Set([
     "footprint",
@@ -4025,8 +4046,9 @@
     }
     return v;
   }
+  var DASH_RATIOS = { dash: 12, gap: 3 };
   function dashPattern(type, w) {
-    const dash = 11 * w, gap = 4 * w, dot = 0.2 * w;
+    const dash = Math.max(DASH_RATIOS.dash - 1, 1) * w, gap = Math.max(DASH_RATIOS.gap + 1, 1) * w, dot = 0.2 * w;
     if (type === "dot") return [dot, gap];
     if (type === "dash_dot") return [dash, gap, dot, gap];
     if (type === "dash_dot_dot") return [dash, gap, dot, gap, dot, gap];
@@ -5552,6 +5574,10 @@
     serialize,
     serializeItem,
     parseDoc,
+    applyDocProps,
+    paperSize,
+    titleBlockOf,
+    DASH_RATIOS,
     setViewTransform,
     drawSelectionHalo,
     selectedColor,
