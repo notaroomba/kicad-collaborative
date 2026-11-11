@@ -71,7 +71,7 @@ for (const board of boards) {
   const [x0, y0, x1, y1] = doc.bbox, m = 8, o = AUX ? F.model(ctx).settings.auxOrigin : [0, 0];
   const ox = (x0 - m - o[0]) / 25.4, oy = (-(y1 + m) + o[1]) / 25.4, w = (x1 - x0 + 2 * m) / 25.4, h = (y1 - y0 + 2 * m) / 25.4;
   const render = (src, dst) => {
-    spawnSync('gerbv', ['-x', 'png', '-D', String(DPI), `--origin=${ox.toFixed(5)};${oy.toFixed(5)}`, `--window_inch=${w.toFixed(5)}x${h.toFixed(5)}`, '-b', '#000000', '-f', '#FFFFFF', '-B', '0', '-o', dst, src], { encoding: 'utf8' });
+    spawnSync('gerbv', ['-x', 'png', '-D', String(DPI), `--origin=${ox.toFixed(5)};${oy.toFixed(5)}`, `--window_inch=${w.toFixed(5)}x${h.toFixed(5)}`, '-b', '#000000', '-f', '#FFFFFF', '-B', '0', '-o', dst, src], { stdio: 'ignore' });   // gerbv prints a line per X2 attribute: a large copper layer would overflow a captured buffer
     if (!fs.existsSync(dst)) return null;
     const img = readPng(fs.readFileSync(dst)); fs.rmSync(dst); return img;
   };

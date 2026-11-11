@@ -554,15 +554,18 @@ drill and placement files as text:
 KICAD_CLI=/path/to/build/kicad/kicad-cli node scripts/fab-verify.mjs ../demos/pic_programmer/pic_programmer.kicad_pcb
 ```
 
-Against this tree's kicad-cli, on the boards in `demos/` (two to six copper layers, through-hole
-and fine-pitch, custom pads, zones, dimensions, slots, back-side parts): every layer, the drill
-files and the placement file match on pic_programmer, complex_hierarchy, interf_u, both ecc83
-boards, sonde xilinx, microwave, constraints, StickHub, kit-dev-coldfire, video, One-Air-Max,
-CM5_MINIMA_3 and multichannel_mixer, with and without the drill/place origin and mask
-subtraction. The one difference left is text set in a TrueType font (RoyalBlue54L-Feather and
-tinytapeout-demo use one on their silkscreen): a browser cannot read an installed font's
-outlines, so that text is plotted in KiCad's stroke font at the same place and size, and the
-dialog says so.
+Against this tree's kicad-cli, every layer, the drill files and the placement file match on all
+twenty boards in `demos/` (two to ten copper layers, through-hole and fine-pitch, custom pads,
+zones, dimensions, slots, back-side parts, knockout text, TrueType text; the Jetson AGX Thor
+baseboard is the largest, with 3,348 holes and 1,003 placed parts), with and without the
+drill/place origin and mask subtraction.
+
+Text set in a TrueType font is plotted from the outlines KiCad stores with it in the board file,
+which is what pcbnew itself plots. The outlines follow a text that is moved in the browser; a
+text whose wording, size or angle is changed here loses them, and is plotted in KiCad's stroke
+font with a warning in the dialog until the board is next saved from KiCad. For the comparison
+the fonts a board names must be installed for kicad-cli (`fonts-ubuntu`, `fonts-lato`,
+`fonts-freefont-ttf`, `fonts-liberation` cover the demos), or it substitutes another face.
 
 `static/tests/fab.test.js` (part of `npm test`) covers the writers on a small board, and
 `scripts/fab-ui.mjs` drives the dialog in a browser and checks the downloaded archives.
