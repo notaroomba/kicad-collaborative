@@ -25,6 +25,17 @@ let K = root.KiCadCanvas;                 // re-bound from ctx.K on every hook
 const WIDTHS = [0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
 const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
 const RATSNEST = "rgba(0, 248, 255, 0.55)", MARKER = "#FF3C3C", MARKER_WARN = "#FFB43A";   // KiCad's ratsnest and marker colours
+// the router's preview colours: the ratsnest Brightened(0.8) with alpha + 0.4 for the routed net, Brightened(0.5) for
+// the leading line from the head (DisplayRatline), and DARKDARKGRAY clearance halos
+const RATSNEST_BRIGHT = "rgba(204, 250, 255, 0.95)", RATSNEST_LEAD = "rgba(128, 252, 255, 0.95)", HALO_COLOR = "rgb(72, 72, 72)";
+/** COLOR4D::Saturate(1.0): the same hue and value at full saturation (the head trace colour). */
+function saturated(col) {
+  let r, g, b; const m = /^#([0-9a-f]{6})/i.exec(col), q = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(col);
+  if (m) { const v = parseInt(m[1], 16); r = v >> 16; g = (v >> 8) & 255; b = v & 255; } else if (q) { r = +q[1]; g = +q[2]; b = +q[3]; } else return col;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b); if (max === min) return `rgb(${r}, ${g}, ${b})`;
+  const f = (x) => Math.round(max * (x - min) / (max - min));
+  return `rgb(${f(r)}, ${f(g)}, ${f(b)})`;
+}
 // KiCad's delete cursor: a small bin with a crosshair hotspot
 const DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
 const SNAP_MM = 0.5, HIT_MM = 0.2, DBL_MS = 400;
@@ -41,6 +52,7 @@ const S = {
   markers: [],                            // the last DRC run's markers [{ x, y, severity, text, ids, code }]
   showRatsnest: true, localRatsnest: false, hiddenNets: new Set(), rats: null, ratsDirty: true,   // ratsnest display (KiCad shows it by default)
   settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
+  docVer: 0, rworld: null, nlc: null, violations: null,   // the router's caches (per document change) and the obstacles shown in violation
 };
 let lastCtx = null, chip = null, chipSel = null, domReady = false;
 
@@ -384,12 +396,13 @@ function padsOf(fp) {
 const padOnLayer = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu");
 function padCovers(p, x, y) { const [lx, ly] = rotator(-p.rot)(x - p.x, y - p.y); return Math.abs(lx) <= p.w / 2 && Math.abs(ly) <= p.h / 2; }
 
-/** Magnetic target near (x, y): a pad (centre within tol, or the cursor over it), via or track end on the layer. */
-function snapTarget(doc, x, y, tol, layer, net) {
+/** Magnetic target near (x, y): a pad (centre within tol, or the cursor over it), via or track end on the layer (strict: of `net` only). */
+function snapTarget(doc, x, y, tol, layer, net, strict) {
   let best = null, bd = Infinity;
   const take = (px, py, n, kind, inside) => {
     const d = Math.hypot(px - x, py - y); if (!inside && d > tol) return;
     if (hasNet(net) && hasNet(n) && !sameNet(n, net)) return;   // never pull a routed net onto another net
+    if (strict && !sameNet(n, net) && !(kind === "pad" && inside)) return;   // pickSingleItem: the routed net only; a free pad when the cursor is inside it
     if (d < bd) { bd = d; best = { x: px, y: py, net: n, kind }; }
   };
   for (const it of doc.items.values()) {
@@ -609,25 +622,78 @@ function gfxLayers(doc) {
 function hoverPoint(ctx, mm, magnetic) {
   const g = ctx.snap(mm); const out = { x: g[0], y: g[1], snap: null };
   if (magnetic && ctx.doc) {
-    const s = snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.route ? S.route.layer : S.layer, S.route ? S.route.net : null);
+    const rt = S.route;
+    // TOOL_BASE::updateEndItem: while routing only the routed net's items are end candidates (a route without a net has none)
+    const s = rt ? (rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
     if (s) { out.x = s.x; out.y = s.y; out.snap = s; }
   }
   return out;
 }
-function currentLeg(rt) { return routeLeg(rt.last, rt.target, rt.diagFirst); }
-function fixLeg(ctx, target) {
-  const rt = S.route; const segs = routeLeg(rt.last, target, rt.diagFirst); if (!segs.length) return false;
-  const changes = segs.map(([a, b]) => addedChange(ctx.doc, segmentNode(ctx.doc, a, b, rt.width, rt.layer, rt.net), rt.net));
+/** The board's netlist, rebuilt after a document change and kept until the next one. */
+function netlistCached(doc) {
+  if (!S.nlc || S.nlc.doc !== doc || S.nlc.ver !== S.docVer) S.nlc = { doc, ver: S.docVer, nl: netlist(doc) };
+  return S.nlc.nl;
+}
+/** The route's own net-less items (its start item and fixed segments): a route without a net does not collide with itself. */
+function routeOwn(rt) { const s = new Set(rt.startIds || []); for (const l of rt.legs) for (const id of l.ids) s.add(id); return s; }
+function routeObs(ctx, rt, layer) {
+  layer = layer || rt.layer; const key = S.docVer + "|" + layer + "|" + rt.width + "|" + rt.legs.length;
+  if (!rt.obs || rt.obs.key !== key) { rt.obs = routeObstacles(ctx.doc, settingsOf(ctx), rt.netKey, layer, rt.netKey ? null : routeOwn(rt)); rt.obs.key = key; }
+  return rt.obs;
+}
+/** ROUTING_SETTINGS' displayed clearance (ImportSizes): the routed net's class clearance, never below the board minimum. */
+function routeHaloClearance(ctx, rt) { const s = settingsOf(ctx); return Math.max(netClearance(s, rt.netKey), s.minClearance || 0); }
+/** LINE_PLACER::Move: the posture from the mouse trail, then the head walked around the obstacles to the cursor. */
+function updateHead(ctx) {
+  const rt = S.route; if (!rt || !ctx.doc) return;
+  const O = routeObs(ctx, rt); const r = rt.width / 2;
+  trailAdd(rt.tracer, rt.cursor);
+  rt.diagFirst = isDiagDir(tracerPosture(rt.tracer, rt.cursor));
+  const res = walkHead(O, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir);
+  rt.head = res.pts; rt.reached = res.reached; rt.target = rt.head[rt.head.length - 1].slice();
+  rt.ratline = leadingRatline(ctx, rt);
+}
+/**
+ * TOPOLOGY::LeadingRatLine: from the head's end to the nearest anchor of the routed net that is not already connected
+ * to the line (its start's copper, or what its end lands on).  None for a route without a net.
+ */
+function leadingRatline(ctx, rt) {
+  if (!rt.netKey) return null;
+  const nl = netlistCached(ctx.doc); const net = nl.nets.get(rt.netKey); if (!net) return null;
+  const end = rt.target; const probe = (p) => ({ t: "circle", x: p[0], y: p[1], r: 0 });
+  const touches = (cl, p, layer) => cl.items.some((c) => c.kind !== "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, probe(p)) <= EPS);
+  let best = null, bd = Infinity;
+  for (const cl of net.clusters) {
+    if (touches(cl, rt.last, rt.layer) || touches(cl, end, rt.layer)) continue;
+    for (const a of cl.anchors) { const d = Math.hypot(a.p[0] - end[0], a.p[1] - end[1]); if (d < bd) { bd = d; best = a.p; } }
+  }
+  return best ? [end.slice(), best.slice()] : null;
+}
+/** highlightNets( true, { net } ): the routed net brightened, the rest dimmed; a highlight the user had on that net is kept for afterwards. */
+function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netItemIds(ctx.doc, rt.netKey, netlistCached(ctx.doc))); }
+function routeUnhighlight(ctx, rt) {
+  if (!ctx || !rt || !rt.netKey) return;
+  if (rt.keepHighlight && S.highlightNet === rt.netKey) highlightIds(ctx, netItemIds(ctx.doc, rt.netKey, netlistCached(ctx.doc)));
+  else { S.highlightNet = null; highlightIds(ctx, null); }
+}
+/** LINE_PLACER::FixRoute: commit the head (the walked line since the last click); refused while it violates clearance. */
+function fixHead(ctx) {
+  const rt = S.route; const pts = rt.head; if (!pts || pts.length < 2) return false;
+  if (!pathClear(routeObs(ctx, rt), pts, rt.width / 2)) return false;   // AllowDRCViolations() is false outside Highlight collisions
+  const changes = []; for (let i = 0; i + 1 < pts.length; i++) changes.push(addedChange(ctx.doc, segmentNode(ctx.doc, pts[i], pts[i + 1], rt.width, rt.layer, rt.net), rt.net));
   const ids = changes.map((c) => c.id);
   if (rt.split) { changes.push(...splitChanges(ctx.doc, rt.split)); rt.split = null; }
-  ctx.commit(changes, "route"); rt.legs.push({ ids, from: rt.last.slice(), layer: rt.layer });
-  rt.last = target.slice(); rt.target = target.slice();
+  const end = pts[pts.length - 1].slice(), lastDir = dir8(pts[pts.length - 2], end);
+  rt.legs.push({ ids, from: rt.last.slice(), layer: rt.layer });
+  ctx.commit(changes, "route");
+  rt.last = end; rt.head = [end.slice()]; rt.target = end.slice(); rt.cursor = end.slice(); rt.ratline = null;
+  rt.tracer = newTracer(rt.width, lastDir); trailAdd(rt.tracer, rt.last);   // the next leg prefers to carry on the last segment's direction
   return true;
 }
 function endRoute(ctx, fixCurrent) {
   const rt = S.route; if (!rt) return;
-  if (fixCurrent && !samePt(rt.target, rt.last)) fixLeg(ctx, rt.target);
-  S.route = null; sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
+  if (fixCurrent && rt.head && rt.head.length > 1) fixHead(ctx);
+  S.route = null; routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
 }
 /** Backspace while routing (the router's UndoLastSegment): take back the last fixed leg — and its via — and carry on from where it began. */
 function undoRouteLeg(ctx) {
@@ -635,6 +701,8 @@ function undoRouteLeg(ctx) {
   const changes = leg.ids.map((id) => ctx.doc.items.get(id)).filter(Boolean).map(removedChange);
   if (changes.length) ctx.commit(changes, "undo segment");
   rt.last = leg.from.slice(); if (leg.layer !== rt.layer) { rt.layer = leg.layer; S.layer = leg.layer; sizesOf(ctx).setActiveLayer(leg.layer); }
+  rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, rt.last); rt.head = [rt.last.slice()]; rt.target = rt.last.slice();
+  if (rt.cursor) updateHead(ctx);
   refreshChip(ctx); ctx.requestRender(); return true;
 }
 /**
@@ -657,39 +725,78 @@ function trackUnder(doc, x, y, layer) {
   const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
   return { item: it, point: [r6(a[0] + k * dx), r6(a[1] + k * dy)] };
 }
+/** The obstacles in violation, shown as KiCad's router does (pure green over a clearance halo) until the cursor moves on. */
+function showViolations(obs, at) { S.violations = obs.length ? { obs, at: at.slice() } : null; }
+/**
+ * ROUTER::isStartingPointRoutable and ROUTER_TOOL's start checks: no route from a non-plated hole, inside a rule area
+ * that keeps tracks out, from copper text, or where a zero-length track (at the route width, then the board minimum)
+ * already violates clearance.  Returns the refusal message or null.
+ */
+function startRefusal(ctx, p, mm, net, width, layer, own, snapped) {
+  const doc = ctx.doc; const q = mm || p;
+  const pad = padAt(doc, q[0], q[1], layer) || padAt(doc, q[0], q[1], null);
+  if (pad && pad.pad.type === "np_thru_hole") return "Cannot start routing from a non-plated hole.";
+  const W = routerWorld(doc);
+  if (W.keepouts.some((k) => k.layers.has(layer) && pointInPoly(k.shape.pts, p[0], p[1]))) return "Rule area disallows tracks.";
+  if (!snapped && !pad) { const t = hitTestItem(doc, q[0], q[1], HIT_MM); if (t && (t.kind === "gr_text" || t.kind === "gr_text_box") && /\.Cu$/.test(layerOf(t.node, ""))) return "Cannot start routing from a text item."; }
+  if (!/\.Cu$/.test(layer)) return "Tracks on Copper layers only.";
+  const s = settingsOf(ctx); const key = netTable(doc).key(net);
+  const O = routeObstacles(doc, s, key, layer, key ? null : own);
+  let hits = pathHits(O, [p], width / 2);
+  if (hits.length && s.minTrackWidth > 0) hits = pathHits(O, [p], s.minTrackWidth / 2);
+  if (hits.length) { showViolations(hits, p); return "The routing start point violates DRC."; }
+  return null;
+}
 function routeClick(ctx, hv, mm) {
   const now = Date.now(); let p = [hv.x, hv.y];
+  S.violations = null;
   if (!S.route) {
     let net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer);
-    let split = null;
-    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; } }   // started on a track: its centre line and its net
+    let split = null, startIds = [];
+    if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; startIds.push(on.item.id); } }   // started on a track: its centre line and its net
+    else if (hv.snap.kind !== "pad") { const it = hitTestItem(ctx.doc, hv.x, hv.y, HIT_MM); if (it) startIds.push(it.id); }
     const R = sizesOf(ctx); const connected = connectedWidth(ctx.doc, p, S.layer, mm || p);
     const width = R.routeWidth(netNameOf(ctx, net), connected);   // ImportSizes: the connected track, the net's class, or the selected width
-    S.route = { last: p, target: p.slice(), net, layer: S.layer, width, connected, diagFirst: true, clickT: now, clickAt: p.slice(), legs: [], split };
+    const refusal = startRefusal(ctx, p, mm, net, width, S.layer, new Set(startIds), !!hv.snap);
+    if (refusal) { ctx.toast(refusal); ctx.requestRender(); return; }
+    const netKey = netTable(ctx.doc).key(net);
+    S.route = { last: p, target: p.slice(), cursor: p.slice(), head: [p.slice()], reached: true, net, netKey, layer: S.layer, width, connected, diagFirst: false, clickT: now, clickAt: p.slice(), legs: [], split, startIds, ratline: null,
+      tracer: newTracer(width, -1), keepHighlight: !!netKey && S.highlightNet === netKey };
+    trailAdd(S.route.tracer, p);
     if (R.activeLayer !== S.layer) R.setActiveLayer(S.layer);
-    ctx.toast(`Routing ${net.name ? net.name + " " : ""}on ${S.layer} · ${fmtSize(S.route.width)} — click corners, / posture, V via, Backspace undoes a segment, End or double-click to finish`, 3500);
+    routeHighlight(ctx, S.route); S.route.ratline = leadingRatline(ctx, S.route);
     refreshChip(ctx); ctx.requestRender(); return;
   }
   const rt = S.route;
   const dbl = now - rt.clickT < DBL_MS && Math.hypot(p[0] - rt.clickAt[0], p[1] - rt.clickAt[1]) < 0.3;
   rt.clickT = now; rt.clickAt = p.slice();
   if (dbl) { endRoute(ctx, true); return; }
-  fixLeg(ctx, p);
-  // landing on a pad — or on a via / track end of the routed net — ends the trace, as in KiCad
-  if (hv.snap && (hv.snap.kind === "pad" || sameNet(hv.snap.net, rt.net))) { S.route = null; sizesOf(ctx).endRoute(); ctx.toast(hv.snap.kind === "pad" ? "Route finished at pad" : "Route finished"); refreshChip(ctx); }
+  if (!samePt(p, rt.cursor || rt.last)) { rt.cursor = p.slice(); updateHead(ctx); }
+  // landing on the routed net (a pad, via or track end) ends the trace once the walk reaches it, as in KiCad
+  const lands = hv.snap && rt.netKey && sameNet(hv.snap.net, rt.net) && rt.reached && samePt(rt.target, [hv.x, hv.y]);
+  if (!fixHead(ctx)) { ctx.requestRender(); return; }
+  if (lands) { const done = S.route; S.route = null; routeUnhighlight(ctx, done); sizesOf(ctx).endRoute(); refreshChip(ctx); }
   ctx.requestRender();
 }
 /** The through via's layer span: the outer copper layers of the board. */
 function viaSpan(doc) { const cu = K.pcbSizes.copperStack(copperOf(doc)); return [cu[0], cu[cu.length - 1]]; }
-/** V while routing: fix the leg to the cursor, drop a via there and continue on the other layer of the routing pair. */
+/** V while routing: fix the head, drop a via at its end and continue on the other layer of the routing pair — only where the via keeps its clearance. */
 function routeVia(ctx, toLayer) {
-  const rt = S.route; const p = rt.target.slice(); const doc = ctx.doc; const R = sizesOf(ctx);
-  const via = R.routeVia(netNameOf(ctx, rt.net));
-  const changes = routeLeg(rt.last, p, rt.diagFirst).map(([a, b]) => addedChange(doc, segmentNode(doc, a, b, rt.width, rt.layer, rt.net), rt.net));
+  const rt = S.route; const doc = ctx.doc; const R = sizesOf(ctx); const s = settingsOf(ctx);
+  const via = R.routeVia(netNameOf(ctx, rt.net)); const p = rt.target.slice(); const pts = rt.head && rt.head.length > 1 ? rt.head : [p];
+  if (pts.length > 1 && !pathClear(routeObs(ctx, rt), pts, rt.width / 2)) return false;
+  const own = rt.netKey ? null : routeOwn(rt); const hits = [];
+  for (const l of copperOf(doc)) hits.push(...pathHits(routeObstacles(doc, s, rt.netKey, l, own), [p], via.diameter / 2));
+  if (hits.length) { showViolations(hits, p); ctx.requestRender(); return false; }
+  const changes = []; for (let i = 0; i + 1 < pts.length; i++) changes.push(addedChange(doc, segmentNode(doc, pts[i], pts[i + 1], rt.width, rt.layer, rt.net), rt.net));
+  if (rt.split && changes.length) { changes.push(...splitChanges(doc, rt.split)); rt.split = null; }
   changes.push(addedChange(doc, viaNode(doc, p[0], p[1], via.diameter, via.drill, rt.net, viaSpan(doc)), rt.net));
-  ctx.commit(changes, "route via"); rt.legs.push({ ids: changes.map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
-  rt.last = p; rt.target = p.slice(); rt.layer = toLayer || R.pairedLayer(rt.layer); S.layer = rt.layer; R.setActiveLayer(rt.layer);
-  ctx.toast(`Via placed — now routing on ${rt.layer}`); refreshChip(ctx); ctx.requestRender();
+  rt.legs.push({ ids: changes.filter((c) => c.kind === "ADDED").map((c) => c.id), from: rt.last.slice(), layer: rt.layer });
+  ctx.commit(changes, "route via");
+  rt.last = p; rt.target = p.slice(); rt.head = [p.slice()]; rt.layer = toLayer || R.pairedLayer(rt.layer); S.layer = rt.layer; R.setActiveLayer(rt.layer);
+  rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, p);   // a line ending in a via has no last direction
+  if (rt.cursor) updateHead(ctx);
+  refreshChip(ctx); ctx.requestRender(); return true;
 }
 function placeVia(ctx, hv) {
   const net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, null);
@@ -1029,7 +1136,7 @@ function deleteAt(ctx, mm) {
   return it;
 }
 function placeText(ctx, mm, text) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
-function cancelOps() { if (S.route) K.pcbSizes.state.endRoute(); S.route = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; closeTextPrompt(); }
+function cancelOps() { if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; closeTextPrompt(); }
 
 // ================================================================ parity pass: the non-tool commands of pcbnew
 // Everything below is DOM-free geometry and node editing (the dialogs at the end are swappable) so the node
@@ -1672,6 +1779,304 @@ function drc(doc, settings, opts) {
   }
   // the project's rule severities: ignored rules drop out, the rest take the severity the project gives them
   return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => { const sev = s.severities[m.code]; if (sev === "warning" || sev === "error") m.severity = sev; return m; });
+}
+
+// ---------------------------------------------------------------- interactive router: KiCad's default Walk around mode
+// ROUTING_SETTINGS' defaults (pns_routing_settings.cpp): mode RM_Walkaround, start_diagonal false, auto_posture true,
+// no DRC violations allowed.  Every pointer move walks the head line from the last fixed point to the cursor around
+// other nets' copper (pads, tracks, arcs, vias), NPTH holes, Edge.Cuts and rule areas that keep tracks out, each
+// inflated by the clearance the design rules give the pair plus half the track width.  Zone fills are not obstacles
+// (PNS does not model them).  When the cursor cannot be reached the head stops at the reachable point closest to it.
+const ROUTE_EPS = 1e-4;      // a gap this much short of the rule still passes (the router's clearance epsilon)
+const HULL_EPS = 2e-3;       // hull corners sit this far outside the clearance boundary
+const DIRS8 = [[1, 0], [Math.SQRT1_2, Math.SQRT1_2], [0, 1], [-Math.SQRT1_2, Math.SQRT1_2], [-1, 0], [-Math.SQRT1_2, -Math.SQRT1_2], [0, -1], [Math.SQRT1_2, -Math.SQRT1_2]];
+const octile = (a, b) => { const dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]); return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy); };
+function shapeCorePts(s) { return s.t === "circle" ? [[s.x, s.y]] : s.t === "seg" ? [s.a, s.b] : s.t === "rect" ? rectCore(s) : s.pts; }
+
+/** The board's copper and other routing obstacles, rebuilt when the document changes. */
+function routerWorld(doc) {
+  if (S.rworld && S.rworld.doc === doc && S.rworld.ver === S.docVer) return S.rworld;
+  const copper = copperOf(doc); const conds = conductors(doc).filter((c) => c.kind !== "zone");
+  const holes = [], keepouts = [];
+  for (const it of doc.items.values()) {
+    if (it.kind === "footprint") {
+      for (const p of padsOf(it)) {
+        if (p.type !== "np_thru_hole") continue;
+        const d = K.kid(p.node, "drill"); let w = p.w, h = p.h;
+        if (d) { if (K.str(d[1]) === "oval") { w = K.num(d[2], w); h = K.num(d[3], w); } else { w = h = K.num(d[1], w); } }
+        const shape = padShape(Object.assign({}, p, { w, h, shape: Math.abs(w - h) < 1e-9 ? "circle" : "oval" }));
+        holes.push({ id: it.id, kind: "hole", pad: p, layers: new Set(copper), shape, bbox: shapeBBox(shape) });
+      }
+    } else if (it.kind === "zone" && K.kid(it.node, "keepout")) {
+      const ko = K.kid(it.node, "keepout"); const tr = K.kid(ko, "tracks"); if (!tr || K.str(tr[1]) !== "not_allowed") continue;
+      const layers = new Set(); for (const l of zoneLayers(it.node)) { if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c)); else layers.add(l); }
+      const poly = K.kid(it.node, "polygon"); const pts = poly ? K.ptsOf(poly) : []; if (pts.length < 3) continue;
+      const shape = { t: "poly", pts }; keepouts.push({ id: it.id, kind: "keepout", layers, shape, bbox: shapeBBox(shape) });
+    }
+  }
+  const edges = edgeShapes(doc).shapes.map((shape) => ({ id: null, kind: "edge", shape, bbox: shapeBBox(shape) }));
+  S.rworld = { doc, ver: S.docVer, conds, holes, keepouts, edges, copper };
+  return S.rworld;
+}
+/** PNS_PCBNEW_RULE_RESOLVER::Clearance for the routed net against an obstacle (the larger netclass clearance, floored at the board minimum). */
+function routeClearance(s, netKey, ob) {
+  const minC = s.minClearance || 0; const mine = Math.max(netClearance(s, netKey), minC);
+  if (ob.kind === "edge") return s.edgeClearance || 0;
+  if (ob.kind === "hole") return Math.max(s.holeClearance !== undefined ? s.holeClearance : 0.25, mine);
+  if (ob.kind === "keepout") return 0;
+  return Math.max(mine, netClearance(s, ob.net), minC);
+}
+/**
+ * The obstacles a route on `layer` meets: everything on the layer that is not the routed net's copper.  Pads without a
+ * net are free pads (they collide with nothing); other net-less copper collides with every route but the route's own
+ * items (`own`: the start item and the fixed segments of a route that has no net).
+ */
+function routeObstacles(doc, s, netKey, layer, own) {
+  const W = routerWorld(doc); const out = [];
+  const take = (o, net) => { const ob = { id: o.id, kind: o.kind, net: net || "", shape: o.shape, bbox: o.bbox, src: o }; ob.clr = routeClearance(s, netKey, ob); out.push(ob); };
+  for (const c of W.conds) {
+    if (!c.layers.has(layer)) continue;
+    if (netKey && c.net === netKey) continue;
+    if (c.kind === "pad" && !c.net) continue;
+    if (own && own.has(c.id) && c.kind !== "pad") continue;
+    take(c, c.net);
+  }
+  for (const h of W.holes) take(h, "");
+  for (const k of W.keepouts) if (k.layers.has(layer)) take(k, "");
+  for (const e of W.edges) take(e, "");
+  // a coarse grid so a leg only meets the obstacles near it
+  const CELL = 2.5, grid = new Map(); let maxClr = 0;
+  out.forEach((ob, i) => {
+    maxClr = Math.max(maxClr, ob.clr); const b = ob.bbox;
+    for (let gx = Math.floor((b[0] - ob.clr) / CELL); gx <= Math.floor((b[2] + ob.clr) / CELL); gx++) for (let gy = Math.floor((b[1] - ob.clr) / CELL); gy <= Math.floor((b[3] + ob.clr) / CELL); gy++) {
+      const key = gx + "," + gy; let l = grid.get(key); if (!l) grid.set(key, l = []); l.push(i);
+    }
+  });
+  return { list: out, grid, CELL, maxClr, stamp: new Uint32Array(out.length), tick: 0 };
+}
+/** Obstacles whose clearance zone may reach the box [x0, y0, x1, y1] grown by r. */
+function obstaclesNear(O, box, r, fn) {
+  const C = O.CELL; O.tick++; if (O.tick > 4e9) { O.stamp.fill(0); O.tick = 1; }
+  for (let gx = Math.floor((box[0] - r) / C); gx <= Math.floor((box[2] + r) / C); gx++) for (let gy = Math.floor((box[1] - r) / C); gy <= Math.floor((box[3] + r) / C); gy++) {
+    const l = O.grid.get(gx + "," + gy); if (!l) continue;
+    for (const i of l) { if (O.stamp[i] === O.tick) continue; O.stamp[i] = O.tick; const ob = O.list[i]; if (!boxesTouch(box, ob.bbox, r + ob.clr)) continue; if (fn(ob)) return ob; }
+  }
+  return null;
+}
+/** Does a track of half width r along a..b (a point when a === b) violate an obstacle's clearance? */
+function obstacleHit(ob, a, b, r) {
+  const sh = samePt(a, b) ? { t: "circle", x: a[0], y: a[1], r } : { t: "seg", a, b, r };
+  if (ob.kind === "keepout") return pointInPoly(ob.shape.pts, a[0], a[1]) || pointInPoly(ob.shape.pts, b[0], b[1]) || polySegDist(ob.shape.pts, a, b) < r - ROUTE_EPS;
+  return shapeGap(sh, ob.shape) < ob.clr - ROUTE_EPS;
+}
+/** The first obstacle a segment hits (null when clear). */
+function segHit(O, a, b, r) {
+  const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+  return obstaclesNear(O, box, r, (ob) => obstacleHit(ob, a, b, r));
+}
+/** Every obstacle a polyline (or one point) at half width r violates. */
+function pathHits(O, pts, r) {
+  const out = new Set();
+  const segs = pts.length === 1 ? [[pts[0], pts[0]]] : pts.slice(0, -1).map((p, i) => [p, pts[i + 1]]);
+  for (const [a, b] of segs) { const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]; obstaclesNear(O, box, r, (ob) => { if (!out.has(ob) && obstacleHit(ob, a, b, r)) out.add(ob); return false; }); }
+  return Array.from(out);
+}
+const pathClear = (O, pts, r) => { if (pts.length === 1) return !segHit(O, pts[0], pts[0], r); for (let i = 0; i + 1 < pts.length; i++) if (segHit(O, pts[i], pts[i + 1], r)) return false; return true; };
+/** The 45° octagon around an obstacle's clearance zone for a track of half width r: where the walk turns. */
+function hullOf(ob, r) {
+  const key = r.toFixed(6); if (ob.hullKey === key) return ob.hull;
+  const core = shapeCorePts(ob.shape), off = (ob.kind === "keepout" ? 0 : shapeOffset(ob.shape) + ob.clr) + r + HULL_EPS;
+  const h = DIRS8.map((u) => { let m = -Infinity; for (const p of core) m = Math.max(m, p[0] * u[0] + p[1] * u[1]); return m + off; });
+  const out = [];
+  for (let k = 0; k < 8; k++) {
+    const u0 = DIRS8[k], u1 = DIRS8[(k + 1) % 8], h0 = h[k], h1 = h[(k + 1) % 8]; const det = u0[0] * u1[1] - u0[1] * u1[0];
+    out.push([(h0 * u1[1] - h1 * u0[1]) / det, (u0[0] * h1 - u1[0] * h0) / det]);
+  }
+  ob.hullKey = key; ob.hull = out; return out;
+}
+/** DIRECTION_45 of a vector: 0 = E, 1 = SE (y down), … 7 = NE; -1 for a null vector. */
+function dir8(a, b) { const dx = b[0] - a[0], dy = b[1] - a[1]; if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return -1; return (Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8; }
+/** DIRECTION_45::Angle: 0 straight, 1 obtuse, 2 right, 3 acute, 4 half full (a U-turn). */
+const dirAngle = (d1, d2) => { const d = Math.abs(d1 - d2) % 8; return d > 4 ? 8 - d : d; };
+const isDiagDir = (d) => d >= 0 && d % 2 === 1;
+/** A leg as a point list (routeLeg's segments joined). */
+function legPts(a, b, diagFirst) { const segs = routeLeg(a, b, diagFirst); return segs.length ? [segs[0][0]].concat(segs.map((s) => s[1])) : [a.slice()]; }
+/** SHAPE_LINE_CHAIN::Simplify: drop repeated points and merge colinear segments. */
+function simplifyPts(pts) {
+  const out = [];
+  for (const p of pts) {
+    if (out.length && samePt(out[out.length - 1], p)) continue;
+    if (out.length >= 2) { const a = out[out.length - 2], b = out[out.length - 1]; if (dir8(a, b) === dir8(b, p) && Math.abs((b[0] - a[0]) * (p[1] - b[1]) - (b[1] - a[1]) * (p[0] - b[0])) < 1e-9) { out[out.length - 1] = p.slice(); continue; } }
+    out.push(p.slice());
+  }
+  return out;
+}
+/** The point of a polyline at arc length t. */
+function alongPts(pts, t) {
+  for (let i = 0; i + 1 < pts.length; i++) { const a = pts[i], b = pts[i + 1]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (t <= L || i + 2 === pts.length) { const k = L > 0 ? Math.min(1, t / L) : 0; return { i, p: [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k] }; } t -= L; }
+  return { i: 0, p: pts[0].slice() };
+}
+const ptsLength = (pts) => { let L = 0; for (let i = 0; i + 1 < pts.length; i++) L += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]); return L; };
+/** A clear polyline cut where it first violates clearance (cursorDistMinimum's fallback: the head just stops short). */
+function clipPts(O, pts, r) {
+  if (segHit(O, pts[0], pts[0], r)) return [pts[0].slice()];
+  let lo = 0, hi = ptsLength(pts);
+  const clearTo = (t) => { const { i, p } = alongPts(pts, t); return pathClear(O, pts.slice(0, i + 1).concat([p]), r); };
+  if (clearTo(hi)) return pts.map((p) => p.slice());
+  for (let n = 0; n < 24; n++) { const m = (lo + hi) / 2; if (clearTo(m)) lo = m; else hi = m; }
+  const { i, p } = alongPts(pts, lo); return simplifyPts(pts.slice(0, i + 1).concat([[r6(p[0]), r6(p[1])]]));
+}
+/**
+ * WALKAROUND: a 45° line from `start` to `goal` that keeps clear of every obstacle.  The posture line comes first;
+ * when it is blocked the walk turns at the corners of the obstacles' octagonal hulls (both ways round, the shorter
+ * wins), growing the set of obstacles it walks around until the goal is reached.  Returns the points or null.
+ */
+const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+function walkTo(O, start, goal, r, diagFirst, lastDir, deadline) {
+  deadline = deadline || now() + 40;
+  const first = legPts(start, goal, diagFirst); if (pathClear(O, first, r)) return first;
+  const second = legPts(start, goal, !diagFirst); if (pathClear(O, second, r)) return second;
+  const active = new Set(pathHits(O, first, r).concat(pathHits(O, second, r)));
+  const legMemo = new Map();   // clear legs between two points (either posture), shared by the rounds
+  for (let round = 0; round < 8 && active.size; round++) {
+    const nodes = [start, goal];
+    for (const ob of active) for (const v of hullOf(ob, r)) if (!segHit(O, v, v, r)) nodes.push(v);
+    if (nodes.length > 400) break;
+    const blockers = new Set();
+    const leg = (i, j) => {   // the clear leg between two nodes (either posture), or null
+      const a = nodes[Math.min(i, j)], b = nodes[Math.max(i, j)]; const key = a[0] + "," + a[1] + ":" + b[0] + "," + b[1];
+      let m = legMemo.get(key);
+      if (!m) {
+        m = { pts: null, hits: [] };
+        for (const df of [false, true]) {
+          const pts = legPts(a, b, df); let hit = null;
+          for (let k = 0; k + 1 < pts.length && !hit; k++) hit = segHit(O, pts[k], pts[k + 1], r);
+          if (!hit) { m.pts = pts; break; } m.hits.push(hit);
+        }
+        legMemo.set(key, m);
+      }
+      for (const h of m.hits) blockers.add(h);
+      return m.pts && (i < j ? m.pts : m.pts.slice().reverse());
+    };
+    // lazy A* over the hull corners (octile lengths): a node's leg from its parent is only checked when it is taken
+    const n = nodes.length, g = new Float64Array(n).fill(Infinity), from = new Int32Array(n).fill(-1), done = new Uint8Array(n);
+    g[0] = 0; let found = false; const closed = [];
+    for (let iter = 0; iter < 4 * n; iter++) {
+      if (now() > deadline) return null;
+      let u = -1, bf = Infinity; for (let i = 0; i < n; i++) if (!done[i] && g[i] < Infinity) { const f = g[i] + octile(nodes[i], goal); if (f < bf) { bf = f; u = i; } }
+      if (u < 0) break;
+      if (u !== 0 && !leg(from[u], u)) {   // its optimistic parent cannot see it: the best closed node that can, if any
+        let bp = -1, bc = Infinity;
+        const order = closed.filter((c) => c !== from[u]).sort((x, y) => (g[x] + octile(nodes[x], nodes[u])) - (g[y] + octile(nodes[y], nodes[u])));
+        for (const c of order.slice(0, 12)) if (leg(c, u)) { bp = c; bc = g[c] + octile(nodes[c], nodes[u]) + 1e-3; break; }
+        if (bp < 0) { g[u] = Infinity; from[u] = -1; continue; }
+        from[u] = bp; g[u] = bc;
+      }
+      done[u] = 1; closed.push(u); if (u === 1) { found = true; break; }
+      for (let v = 1; v < n; v++) { if (done[v]) continue; const c = g[u] + octile(nodes[u], nodes[v]) + 1e-3; if (c < g[v]) { g[v] = c; from[v] = u; } }
+    }
+    if (found) {
+      let seq = []; for (let v = 1; v >= 0; v = from[v]) seq.unshift(v);
+      // pull the line tight (the optimizer's MERGE_SEGMENTS): skip corners a direct leg can do without
+      const tight = [seq[0]]; let i = 0;
+      while (i < seq.length - 1) { let j = seq.length - 1; while (j > i + 1 && !leg(seq[i], seq[j])) j--; tight.push(seq[j]); i = j; }
+      // each leg in the posture that continues the previous segment best
+      let pts = [start.slice()], prev = lastDir;
+      for (let k = 0; k + 1 < tight.length; k++) {
+        const a = nodes[tight[k]], b = nodes[tight[k + 1]]; const cands = [];
+        for (const df of (k === 0 ? [diagFirst, !diagFirst] : [false, true])) { const p = legPts(a, b, df); if (pathClear(O, p, r)) cands.push(p); }
+        if (!cands.length) { cands.push(leg(tight[k], tight[k + 1])); }
+        let best = cands[0];
+        if (prev >= 0 && cands.length > 1) { const score = (p) => dirAngle(prev, dir8(p[0], p[1])); if (score(cands[1]) < score(cands[0])) best = cands[1]; }
+        pts = pts.concat(best.slice(1)); prev = dir8(best[best.length - 2], best[best.length - 1]);
+      }
+      return simplifyPts(pts);
+    }
+    let grew = false; for (const b of blockers) if (!active.has(b)) { active.add(b); grew = true; }
+    if (!grew) break;
+  }
+  return null;
+}
+/**
+ * LINE_PLACER::routeHead in Walk around: the clear line towards the cursor.  An unreachable cursor (inside another
+ * net's clearance, or walled in) gives the reachable point nearest to it.  { pts, reached }.
+ */
+function walkHead(O, start, goal, r, diagFirst, lastDir) {
+  const deadline = now() + 35;   // a mouse move must stay interactive: past this the head just stops short
+  if (samePt(start, goal)) return { pts: [start.slice()], reached: true };
+  if (segHit(O, start, start, r)) return { pts: [start.slice()], reached: false };
+  if (!segHit(O, goal, goal, r)) { const p = walkTo(O, start, goal, r, diagFirst, lastDir, deadline); if (p) return { pts: p, reached: true }; }
+  // the cursor sits in a clearance zone (or no walk reaches it): try the hull edges nearest to it, then clip
+  const cands = [];
+  obstaclesNear(O, [goal[0], goal[1], goal[0], goal[1]], r, (ob) => {
+    if (!obstacleHit(ob, goal, goal, r)) return false; const H = hullOf(ob, r);
+    for (let i = 0; i < 8; i++) { const a = H[i], b = H[(i + 1) % 8]; const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 > 0 ? Math.max(0, Math.min(1, ((goal[0] - a[0]) * dx + (goal[1] - a[1]) * dy) / l2)) : 0; cands.push([a[0] + k * dx, a[1] + k * dy]); }
+    return false;
+  });
+  const options = [];
+  const clip = clipPts(O, legPts(start, goal, diagFirst), r); options.push(clip);
+  cands.sort((p, q) => Math.hypot(p[0] - goal[0], p[1] - goal[1]) - Math.hypot(q[0] - goal[0], q[1] - goal[1]));
+  let tried = 0;
+  for (const c of cands) { if (tried >= 2 || now() > deadline) break; if (segHit(O, c, c, r)) continue; tried++; const p = walkTo(O, start, [r6(c[0]), r6(c[1])], r, diagFirst, lastDir, deadline); if (p) options.push(p); }
+  const dist = (p) => { const e = p[p.length - 1]; return Math.hypot(e[0] - goal[0], e[1] - goal[1]); };
+  options.sort((a, b) => dist(a) - dist(b) || ptsLength(a) - ptsLength(b));
+  return { pts: options[0], reached: false };
+}
+
+// ---------------------------------------------------------------- MOUSE_TRAIL_TRACER: the posture follows the mouse
+function newTracer(tol, lastSegDir) {
+  const t = { trail: [], tol, direction: lastSegDir >= 0 ? lastSegDir : 0, lastSegDir: lastSegDir >= 0 ? lastSegDir : -1, forced: false, manuallyForced: false };
+  return t;
+}
+function trailAdd(t, p) {
+  const tr = t.trail;
+  if (tr.length >= 1) {
+    const last = tr[tr.length - 1];
+    if (tr.length - 1 > 2) {
+      const lim = t.tol;
+      for (let i = 0; i < tr.length - 1 - 2; i++) if (segSegDist(tr[i], tr[i + 1], last, p) <= lim) { tr.length = i + 1; break; }
+    }
+  }
+  tr.push(p.slice());
+  t.trail = simplifyPts(tr);
+}
+const polyAreaAbs = (pts) => Math.abs(polyArea(pts));
+/** MOUSE_TRAIL_TRACER::GetPosture: the direction the first segment from the trail's start takes towards p. */
+function tracerPosture(t, p) {
+  if (t.trail.length < 2 || t.manuallyForced) { if (!t.manuallyForced && t.lastSegDir >= 0) t.direction = t.lastSegDir; return t.direction; }
+  const p0 = t.trail[0]; const refLength = Math.hypot(p[0] - p0[0], p[1] - p0[1]);
+  const rev = t.trail.slice().reverse();
+  const straight = simplifyPts(legPts(p0, p, false).concat(rev)), diag = simplifyPts(legPts(p0, p, true).concat(rev));
+  const areaS = polyAreaAbs(straight), areaD = polyAreaAbs(diag);
+  const IU = 1e6;   // KiCad's areas are in nm² and the ratio's +1 is one nm²
+  const ratio = (areaS * IU * IU) / (areaD * IU * IU + 1);
+  if (t.forced && refLength < 10 * t.tol) { t.forced = false; t.trail = [p0.slice()]; }
+  let areaOk = false;
+  if (!t.forced && refLength > 6 * t.tol) { if (polyAreaAbs(t.trail) > t.tol * refLength) areaOk = true; }
+  const straightDir = dir8(straight[0], straight[1]), diagDir = dir8(diag[0], diag[1]);
+  let nd;
+  if (!t.forced && areaOk && ratio > 1.3 + 0.25) nd = diagDir;
+  else if (!t.forced && areaOk && ratio < 1 / 1.3 - 0.25) nd = straightDir;
+  else nd = isDiagDir(t.direction) ? diagDir : straightDir;
+  t.direction = nd;
+  if (!t.manuallyForced && t.lastSegDir >= 0) {
+    if (straightDir === t.lastSegDir) t.direction = straightDir;
+    else if (diagDir === t.lastSegDir) t.direction = diagDir;
+    else {
+      const ang = dirAngle(t.direction, t.lastSegDir); const cand = isDiagDir(t.direction) ? straightDir : diagDir;
+      if (ang === 4) t.direction = cand;
+      else if (ang === 3) { if (dirAngle(cand, t.lastSegDir) === 2) t.direction = cand; }
+      else if (ang === 2) { if (dirAngle(cand, t.lastSegDir) === 1) t.direction = cand; }
+    }
+  }
+  if (!t.forced && refLength > 30 * t.tol) t.forced = true;
+  return t.direction;
+}
+/** MOUSE_TRAIL_TRACER::FlipPosture ('/'): the other posture, held until the next fix. */
+function tracerFlip(t, currentFirstDir) {
+  if (!t.manuallyForced && currentFirstDir >= 0) { t.direction = currentFirstDir; t.lastSegDir = -1; }   // LINE_PLACER::FlipPosture: from the line as drawn
+  t.direction = (t.direction + 1) % 8;   // DIRECTION_45::Right(): one 45° step, so straight and diagonal swap
+  t.forced = true; t.manuallyForced = true;
 }
 
 // ---------------------------------------------------------------- track editing: widths, layers, cleanup, break, unroute
@@ -2503,6 +2908,16 @@ function strokeGeom(c, g) {
   else if (g.t === "rect" || g.t === "image") c.strokeRect(g.x, g.y, g.w, g.h);
 }
 function line(c, a, b) { c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); }
+/** A router shape grown by `grow` mm, filled (ROUTER_PREVIEW_ITEM's drawShape / drawClearanceHalo). */
+function drawShape(c, sh, grow, colour, alpha) {
+  c.globalAlpha = alpha; c.fillStyle = colour; c.strokeStyle = colour;
+  const off = shapeOffset(sh) + grow;
+  if (sh.t === "circle") { c.beginPath(); c.arc(sh.x, sh.y, Math.max(off, 1e-4), 0, Math.PI * 2); c.fill(); return; }
+  const pts = sh.t === "seg" ? [sh.a, sh.b] : sh.t === "rect" ? rectCore(sh).concat([rectCore(sh)[0]]) : sh.pts;
+  const closed = sh.t === "rect" || sh.t === "poly";
+  if (closed) { c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) c.lineTo(p[0], p[1]); c.closePath(); c.fill(); }
+  if (off > 0) { c.lineWidth = 2 * off; c.lineJoin = "round"; c.lineCap = "round"; polyline(c, pts, closed); }
+}
 function ring(c, p, r) { c.beginPath(); c.arc(p[0], p[1], r, 0, Math.PI * 2); c.stroke(); }
 function polyline(c, pts, close) { if (pts.length < 2) return; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); if (close) c.closePath(); c.stroke(); }
 /** A dimension in progress, drawn from the same geometry the node gets. */
@@ -2543,9 +2958,12 @@ function drawOverlay(c, view, ctx) {
       else c.lineTo(l.b[0], l.b[1]);
     };
     const tinted = S.ratsnestColors && S.ratsnestColors.size ? [] : null;   // net name -> colour, set by the Appearance pane's Nets tab
-    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
+    const hlNet = S.route && S.route.netKey ? S.route.netKey : null, bright = hlNet ? [] : null;   // while routing: the rest at half alpha, the routed net brightened 0.8, alpha + 0.4
+    if (hlNet) c.globalAlpha = 0.5;
+    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (bright && l.net === hlNet) { bright.push(l); continue; } if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
     c.stroke();
     if (tinted) for (const l of tinted) { c.strokeStyle = S.ratsnestColors.get(l.net); c.beginPath(); trace(l); c.stroke(); }
+    if (bright && bright.length) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_BRIGHT; c.beginPath(); for (const l of bright) trace(l); c.stroke(); }
   }
   // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
   { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
@@ -2567,10 +2985,16 @@ function drawOverlay(c, view, ctx) {
     }
   }
   // route in progress: fixed legs are already in the document, the current one lives here
+  // ROUTER::markViolations: obstacles in violation (a refused start or via) in pure green over their clearance halo
+  if (S.violations) for (const ob of S.violations.obs) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
+  // route in progress (ROUTER::movePlacing): the head since the last click over its clearance halo, then the leading ratsnest line
   if (S.route) {
-    const rt = S.route; c.globalAlpha = 0.75; c.strokeStyle = color(rt.layer); c.lineWidth = rt.width;
-    for (const [a, b] of currentLeg(rt)) line(c, a, b);
-    c.globalAlpha = 1; c.strokeStyle = "#FFFFFF"; c.lineWidth = 1.5 * px; ring(c, rt.last, 4 * px);
+    const rt = S.route; const pts = rt.head || [rt.last];
+    if (pts.length > 1) {
+      c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = rt.width + 2 * routeHaloClearance(ctx, rt); polyline(c, pts, false);   // track_clearance_mode SHOW_WITH_VIA_WHILE_ROUTING
+      c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt.layer)); c.lineWidth = rt.width; polyline(c, pts, false);                      // PNS_HEAD_TRACE: the layer colour saturated, alpha 0.8
+    }
+    if (rt.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; line(c, rt.ratline[0], rt.ratline[1]); }
   }
   // drawing preview
   if (S.draw) {
@@ -2676,7 +3100,8 @@ function ghostSegs() {
   if (!rt)
     return [];
 
-  return routeLeg(rt.last, rt.target, rt.diagFirst).map(([a, b]) => [a[0], a[1], b[0], b[1], rt.width]);
+  const pts = rt.head || [rt.last];
+  return pts.slice(0, -1).map((a, i) => [a[0], a[1], pts[i + 1][0], pts[i + 1][1], rt.width]);
 }
 
 const pcb = {
@@ -2686,7 +3111,8 @@ const pcb = {
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
-    if (S.route && t !== "route") S.route = null;   // leaving the tool drops the unfixed leg
+    if (S.route && t !== "route") { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
+    S.violations = null;
     if (S.drag && t !== "drag") S.drag = null;
     S.draw = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
@@ -2734,7 +3160,8 @@ const pcb = {
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
     if (t === "delete") hv.del = ctx.viewOnly ? null : itemAt(ctx, mm);
-    if (S.route) S.route.target = [hv.x, hv.y];
+    if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
+    if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
     if (S.drag) dragMove(ctx, mm);
     if (S.draw) { S.draw.cur = [hv.x, hv.y]; if (DIM_TYPE[S.draw.shape] && S.draw.end) dimTrack(S.draw, S.draw.cur); }
     ctx.requestRender();
@@ -2765,7 +3192,8 @@ const pcb = {
     case "Zone": ctx.setTool("zone"); return true;
     case "RuleArea": ctx.setTool("rulearea"); return true;
     case "Flip": return editing() && flipSelected(ctx);
-    case "/": if (S.route) { S.route.diagFirst = !S.route.diagFirst; ctx.requestRender(); return true; } return false;
+    case "/": if (S.route && (ev.ctrlKey || ev.metaKey)) return true;   // Ctrl+/ cycles the corner mode; only mitred 45° is drawn here
+      if (S.route) { const rt = S.route; tracerFlip(rt.tracer, rt.head && rt.head.length > 1 ? dir8(rt.head[0], rt.head[1]) : -1); updateHead(ctx); ctx.requestRender(); return true; } return false;   // ACT_SwitchPosture, until the next fix
     case "PageUp": return runAction("layerTop", ctx);
     case "PageDown": return runAction("layerBottom", ctx);
     case "+": return runAction("layerNext", ctx);
@@ -2811,7 +3239,8 @@ const pcb = {
   // Called when a document loads and again after every applied change (our own commits included):
   // only a new document object resets the tool state; an update just prunes what vanished.
   onDocChanged(ctx) {
-    bind(ctx); S.ratsDirty = true;
+    bind(ctx); S.ratsDirty = true; S.docVer++;
+    if (S.route && ctx.doc === S.doc) { routeHighlight(ctx, S.route); if (S.route.cursor) updateHead(ctx); }   // the routed net stays bright as legs are fixed (or a peer edits)
     if (ctx.doc !== S.doc) { S.doc = ctx.doc; cancelOps(); S.sel.clear(); S.hover = null; S.markers = []; S.hiddenNets.clear(); S.highlightNet = null; }
     else if (ctx.doc) {
       for (const id of Array.from(S.sel)) if (!ctx.doc.items.has(id)) S.sel.delete(id);
@@ -2854,6 +3283,8 @@ root.CollabTools.pcb = pcb;
 root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, dragPlan, dragNodes, nextWidth, norm180, norm360, DELETE_CURSOR,
+  // the interactive router (Walk around)
+  routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
   zoneNode, ruleAreaNode, zonePriority, boardNets, dimensionNode, dimGeometry, dimValueText, readableAngle, snap45, typeNameOf, deleteChanges,

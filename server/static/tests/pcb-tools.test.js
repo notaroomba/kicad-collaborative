@@ -205,7 +205,7 @@ test("module: route from a pad, add a via with V, finish with Enter", () => {
   assert.equal(pcb.onPointerDown(ev(), [100.2, 49.3], ctx), true);   // snaps onto pad 1 (GND)
   assert.deepEqual(P.state.route.last, [100, 49.1]); assert.equal(P.state.route.net.name, "GND");
   pcb.onPointerMove(ev(), [110.1, 52.1], ctx);
-  assert.equal(pcb.onKey("/", ev(), ctx), true); assert.equal(P.state.route.diagFirst, false);
+  assert.equal(pcb.onKey("/", ev(), ctx), true); assert.equal(P.state.route.diagFirst, true);   // straight-first by default (start_diagonal false), / forces the other posture
   pcb.onPointerDown(ev(), [110.1, 52.1], ctx);                          // fixes the leg (grid-snapped to 110, 52)
   assert.equal(log.commits.length, 1); assert.equal(log.commits[0].changes.length, 2);
   for (const c of log.commits[0].changes) { assert.equal(c.typeName, "PCB_TRACK"); assert.equal(c.netName, "GND"); assert.equal(doc.items.get(c.id).kind, "segment"); }
@@ -1057,4 +1057,118 @@ test("ghostSegs: the in-flight route leg is offered to peers as mm segments", ()
   pcb.onActivate("select", ctx);   // leaving the tool drops the unfixed leg
   assert.equal(P.state.route, null);
   assert.deepEqual(pcb.ghostSegs(ctx), [], "leaving the tool clears it, so peers stop drawing the stale leg");
+});
+
+// ---- the interactive router: KiCad's default Walk around mode, net highlight, leading ratsnest line, posture
+const ROUTER_BOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (footprint "T:A" (layer "F.Cu") (uuid "fa") (at 10 10)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pa1")))
+  (footprint "T:B" (layer "F.Cu") (uuid "fb") (at 30 10)
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "A") (uuid "pb1")))
+  (footprint "T:C" (layer "F.Cu") (uuid "fc") (at 20 10)
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net "B") (uuid "pc1")))
+  (footprint "T:H" (layer "F.Cu") (uuid "fh") (at 80 10)
+    (pad "" np_thru_hole circle (at 0 0) (size 2 2) (drill 2) (layers "*.Cu" "*.Mask") (uuid "ph1")))
+  (segment (start 65 10.35) (end 75 10.35) (width 0.2) (layer "F.Cu") (net "B") (uuid "sb1"))
+)`;
+const routerDoc = () => K.parseDoc(ROUTER_BOARD, "kicad_pcb");
+/** The smallest copper gap between the route's new segments and the other net's copper. */
+function minGapTo(doc, ids, netKey) {
+  const conds = P.conductors(doc); let gap = Infinity;
+  for (const c of conds) { if (!ids.has(c.id)) continue; for (const o of conds) { if (o.net === netKey || ids.has(o.id) || o.kind === "zone") continue; if (![...c.layers].some((l) => o.layers.has(l))) continue; gap = Math.min(gap, P.shapeGap(c.shape, o.shape)); } }
+  return gap;
+}
+function routerCtx(doc) { const f = fakeCtx(doc); f.log.highlight = []; f.ctx.setHighlight = (ids) => f.log.highlight.push(ids ? new Set(ids) : null); return f; }
+
+test("router: the head walks around another net's pad at clearance and the route ends on the same-net pad", () => {
+  const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
+  const rt = P.state.route; assert.ok(rt); assert.equal(rt.netKey, "A"); assert.equal(rt.diagFirst, false, "straight first (start_diagonal false)");
+  // the routed net is highlighted: its footprints, not the other net's
+  const hl = log.highlight.at(-1); assert.ok(hl.has("fa") && hl.has("fb") && !hl.has("fc"));
+  pcb.onPointerMove(ev(), [30, 10], ctx);
+  assert.equal(rt.reached, true); assert.deepEqual(rt.target, [30, 10]);
+  assert.ok(rt.head.length > 2, "a straight run through pad C would short: the head turns around it " + JSON.stringify(rt.head));
+  for (let i = 0; i + 1 < rt.head.length; i++) { const d = P.dir8(rt.head[i], rt.head[i + 1]); assert.ok(d >= 0); }   // every segment on a 45° direction
+  pcb.onPointerDown(ev(), [30, 10], ctx);
+  assert.equal(P.state.route, null, "landing on the same net's pad finishes the route");
+  const ids = new Set(log.commits[0].changes.map((c) => c.id));
+  assert.ok(minGapTo(doc, ids, "A") >= 0.2 - 1e-4, "keeps the netclass clearance from pad C: " + minGapTo(doc, ids, "A"));
+  assert.equal(log.highlight.at(-1), null, "the highlight goes when routing ends");
+});
+
+test("router: clicking on another net's pad never ends or shorts the route; a route without a net snaps to nothing", () => {
+  const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
+  pcb.onPointerMove(ev(), [20, 10], ctx);   // the centre of pad C (net B)
+  const rt = P.state.route; assert.equal(rt.reached, false); assert.equal(P.state.hover.snap, null, "other nets' pads are no end items");
+  assert.ok(rt.target[0] < 19, "the head stops short of pad C's clearance: " + rt.target);
+  pcb.onPointerDown(ev(), [20, 10], ctx);
+  assert.ok(P.state.route, "the route carries on");
+  const ids = new Set(log.commits[0].changes.map((c) => c.id)); assert.ok(minGapTo(doc, ids, "A") >= 0.2 - 1e-4);
+  pcb.onKey("Escape", ev(), ctx); pcb.cancel();
+  // started in empty space: no net, nothing to snap to, every netted item is an obstacle
+  pcb.onActivate("route", ctx); pcb.onPointerDown(ev(), [20, 20], ctx);
+  const orphan = P.state.route; assert.equal(orphan.netKey, "");
+  pcb.onPointerMove(ev(), [30, 10], ctx); assert.equal(P.state.hover.snap, null);
+  assert.equal(orphan.reached, false, "the orphan route cannot land on net A's pad");
+  pcb.cancel();
+});
+
+test("router: start point checks — DRC violation, non-plated hole", () => {
+  const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
+  pcb.onKey("x", ev(), ctx);
+  pcb.onPointerDown(ev(), [70, 10], ctx);   // 0.15 mm from net B's track: inside the 0.2 mm clearance
+  assert.equal(P.state.route, null); assert.equal(log.toasts.at(-1), "The routing start point violates DRC.");
+  assert.deepEqual(P.state.violations.obs.map((o) => o.id), ["sb1"], "the obstacle in violation is shown");
+  pcb.onPointerDown(ev(), [80, 10], ctx);
+  assert.equal(P.state.route, null); assert.equal(log.toasts.at(-1), "Cannot start routing from a non-plated hole.");
+  assert.equal(log.commits.length, 0);
+});
+
+test("router: the leading ratsnest line runs from the head to the nearest unconnected anchor of the net", () => {
+  const doc = routerDoc(); const { ctx } = routerCtx(doc); pcb.onDocChanged(ctx);
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
+  pcb.onPointerMove(ev(), [12, 14], ctx);
+  assert.deepEqual(P.state.route.ratline, [[12, 14], [30, 10]]);
+  pcb.cancel();
+  const unrouted = routerDoc(); const c2 = routerCtx(unrouted).ctx; pcb.onDocChanged(c2);
+  pcb.onActivate("route", c2); pcb.onPointerDown(ev(), [20, 20], c2); pcb.onPointerMove(ev(), [22, 22], c2);
+  assert.equal(P.state.route.ratline, null, "no ratsnest for a route without a net"); pcb.cancel();
+});
+
+test("router: the mouse trail picks the posture, / forces the other one until the next fix", () => {
+  const t1 = P.newTracer(0.2, -1); for (const p of [[0, 0], [2, 2], [5, 5], [10, 5], [15, 5]]) P.trailAdd(t1, p);
+  assert.equal(P.dir8([0, 0], [1, 1]), 1); assert.equal(P.tracerPosture(t1, [15, 5]) % 2, 1, "a trail that went diagonal first");
+  const t2 = P.newTracer(0.2, -1); for (const p of [[0, 0], [5, 0], [10, 0], [15, 5]]) P.trailAdd(t2, p);
+  assert.equal(P.tracerPosture(t2, [15, 5]) % 2, 0, "a trail that went straight first");
+  const t3 = P.newTracer(0.2, 0); P.trailAdd(t3, [0, 0]); assert.equal(P.tracerPosture(t3, [10, 3]), 0, "after a fix the next leg carries on the last direction");
+  P.tracerFlip(t3, 0); assert.equal(P.tracerPosture(t3, [10, 3]) % 2, 1);
+  assert.equal(P.saturated("#C83434"), "rgb(200, 0, 0)");
+});
+
+test("router: walkaround keeps every obstacle's clearance and stops at the nearest reachable point", () => {
+  const doc = routerDoc(); const s = P.designSettings(null);
+  const O = P.routeObstacles(doc, s, "A", "F.Cu", null);
+  assert.ok(O.list.some((o) => o.id === "fc") && !O.list.some((o) => o.id === "fa"), "other nets are obstacles, the routed net is not");
+  assert.ok(O.list.some((o) => o.kind === "hole"), "a non-plated hole is an obstacle");
+  const res = P.walkHead(O, [10, 10], [30, 10], 0.1, false, -1);
+  assert.equal(res.reached, true); assert.ok(P.pathClear(O, res.pts, 0.1));
+  const blocked = P.walkHead(O, [10, 10], [20, 10], 0.1, false, -1);
+  assert.equal(blocked.reached, false); assert.ok(P.pathClear(O, blocked.pts, 0.1));
+  const end = blocked.pts.at(-1); assert.ok(Math.hypot(end[0] - 20, end[1] - 10) < 1.4 + 0.1, "near pad C's clearance edge: " + end);
+});
+
+test("router: V drops no via where the via would break another net's clearance", () => {
+  const doc = routerDoc(); const { ctx, log } = routerCtx(doc); pcb.onDocChanged(ctx);
+  pcb.onKey("x", ev(), ctx); pcb.onPointerDown(ev(), [10, 10], ctx);
+  pcb.onPointerMove(ev(), [70, 10.75], ctx);   // 0.4 mm from net B's track centre: room for a 0.2 mm track, not for a 0.6 mm via
+  assert.equal(P.state.route.reached, true);
+  pcb.onKey("v", ev(), ctx);
+  assert.equal(log.commits.length, 0, "no via, no segments"); assert.equal(P.state.route.layer, "F.Cu");
+  assert.deepEqual(P.state.violations.obs.map((o) => o.id), ["sb1"]);
+  pcb.onPointerMove(ev(), [70, 12], ctx); pcb.onKey("v", ev(), ctx);
+  assert.equal(log.commits.length, 1); assert.ok(log.commits[0].changes.some((c) => c.typeName === "PCB_VIA")); assert.equal(P.state.route.layer, "B.Cu");
+  pcb.cancel();
 });
