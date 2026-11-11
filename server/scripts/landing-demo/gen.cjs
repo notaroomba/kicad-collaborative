@@ -13,12 +13,13 @@ const LIB = path.join(__dirname, "lib"), OUT = path.join(__dirname, "..", "..", 
 
 const uuid = (name) => { const h = crypto.createHash("sha1").update("blinker/" + name).digest("hex"); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`; };
 const r3 = (v) => Math.round(v * 1000) / 1000;
+const r6 = (v) => Math.round(v * 1e6) / 1e6;        // what KiCad itself keeps; library geometry must not be rounded further
 const q = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 
 /** KiCad's file layout: one token per line, tab indented, short lists inline. */
 function pretty(node, depth = 0) {
   const mask = K.quotedMask(node), ind = "\t".repeat(depth);
-  const atom = (c, j) => typeof c === "number" ? String(r3(c)) : (j < 30 && (mask >> j) & 1) ? q(c) : String(c);
+  const atom = (c, j) => typeof c === "number" ? String(r6(c)) : (j < 30 && (mask >> j) & 1) ? q(c) : String(c);
   const flat = node.every((c) => !Array.isArray(c));
   const inline = new Set(["xy", "at", "size", "start", "end", "mid", "center", "offset", "drill", "layers", "color", "font", "justify", "stroke", "width", "type", "net", "pts", "uuid", "layer", "thickness", "hide", "fill", "effects", "radius", "rect_delta", "tstamp", "page", "reference", "unit", "path"]);
   if (flat || (inline.has(node[0]) && JSON.stringify(node).length < 110)) return ind + flatText(node);
@@ -30,7 +31,7 @@ function pretty(node, depth = 0) {
 }
 function flatText(node) {
   const mask = K.quotedMask(node);
-  return "(" + node.map((c, j) => Array.isArray(c) ? flatText(c) : typeof c === "number" ? String(r3(c)) : (j < 30 && (mask >> j) & 1) ? q(c) : String(c)).join(" ") + ")";
+  return "(" + node.map((c, j) => Array.isArray(c) ? flatText(c) : typeof c === "number" ? String(r6(c)) : (j < 30 && (mask >> j) & 1) ? q(c) : String(c)).join(" ") + ")";
 }
 const P = (text) => K.parse(text);
 const kid = K.kid, kids = K.kids;
@@ -38,7 +39,7 @@ const kid = K.kid, kids = K.kids;
 // ================================================================== schematic
 
 const ROOT = uuid("sheet");
-const SYM_LIBS = { "Device:R": "R", "Device:C": "C", "Device:LED": "LED", "power:GND": "GND", "power:+5V": "+5V", "Timer:NE555D": "NE555D", "Connector:USB_C_Receptacle_PowerOnly_6P": "USB_C_Receptacle_PowerOnly_6P" };
+const SYM_LIBS = { "Device:R": "R", "Device:C": "C", "Device:LED": "LED", "power:GND": "GND", "power:+5V": "+5V", "power:PWR_FLAG": "PWR_FLAG", "Timer:NE555D": "NE555D", "Connector:USB_C_Receptacle_PowerOnly_6P": "USB_C_Receptacle_PowerOnly_6P" };
 const libSyms = {};
 for (const [id, file] of Object.entries(SYM_LIBS)) {
   const lib = P(fs.readFileSync(path.join(LIB, file + ".kicad_sym"), "utf8"));
@@ -68,6 +69,8 @@ const POWER = [   // id, lib, x, y
   ["P5a", "power:+5V", 50.8, 40.64], ["P5b", "power:+5V", 116.84, 53.34],
   ["G1", "power:GND", 30.48, 83.82], ["G2", "power:GND", 53.34, 81.28], ["G3", "power:GND", 60.96, 78.74], ["G4", "power:GND", 60.96, 55.88], ["G5", "power:GND", 71.12, 55.88],
   ["G6", "power:GND", 86.36, 82.55], ["G7", "power:GND", 114.3, 78.74], ["G8", "power:GND", 129.54, 55.88], ["G9", "power:GND", 147.32, 78.74],
+  // ERC wants every power net driven: the connector's pins are passive, so each rail gets a flag.
+  ["F1", "power:PWR_FLAG", 78.74, 43.18, 0], ["F2", "power:PWR_FLAG", 22.86, 81.28, 180],
 ];
 
 function field(name, value, x, y, angle, justify, hide) {
@@ -78,7 +81,8 @@ function symbolNode(key, lib, ref, value, fp, x, y, rot, rf, vf) {
   for (const sub of kids(libSyms[lib], "symbol")) for (const p of kids(sub, "pin")) pins.push(K.str(kid(p, "number")[1]));
   const power = lib.startsWith("power:");
   const refF = power ? field("Reference", ref, x, y + (value === "GND" ? 6.35 : -3.81), 0, "", true) : field("Reference", ref, x + rf[0], y + rf[1], rf[2], rf[3]);
-  const valF = power ? field("Value", value, x, y + (value === "GND" ? 3.81 : -3.556), 0, "") : field("Value", value, x + vf[0], y + vf[1], vf[2], vf[3]);
+  const flag = value === "PWR_FLAG";
+  const valF = power ? field("Value", value, x, y + (flag ? (rot ? 4.572 : -4.572) : value === "GND" ? 3.81 : -3.556), 0, "") : field("Value", value, x + vf[0], y + vf[1], vf[2], vf[3]);
   return P(`(symbol (lib_id ${q(lib)}) (at ${x} ${y} ${rot}) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (uuid ${q(uuid("sym/" + key))})
     ${refF} ${valF} ${field("Footprint", fp, x, y, 0, "", true)} ${field("Datasheet", "", x, y, 0, "", true)} ${field("Description", "", x, y, 0, "", true)}
     ${[...new Set(pins)].map((n) => `(pin ${q(n)} (uuid ${q(uuid(`pin/${key}/${n}`))}))`).join(" ")}
@@ -86,7 +90,10 @@ function symbolNode(key, lib, ref, value, fp, x, y, rot, rf, vf) {
 }
 const symNodes = [];
 for (const [ref, lib, value, fp, x, y, rot, rf, vf] of SYMS) symNodes.push({ key: ref, ref, node: symbolNode(ref, lib, ref, value, fp, x, y, rot, rf, vf) });
-POWER.forEach(([key, lib, x, y], i) => symNodes.push({ key, ref: "#PWR" + String(i + 1).padStart(2, "0"), power: true, node: symbolNode(key, lib, "#PWR" + String(i + 1).padStart(2, "0"), lib.split(":")[1], "", x, y, 0) }));
+POWER.forEach(([key, lib, x, y, rot], i) => {
+  const ref = (lib.endsWith("PWR_FLAG") ? "#FLG" : "#PWR") + String(i + 1).padStart(2, "0");
+  symNodes.push({ key, ref, power: true, node: symbolNode(key, lib, ref, lib.split(":")[1], "", x, y, rot || 0) });
+});
 
 // Pin positions come from the renderer's own symbol maths, so a wire end is exactly on its pin.
 const probe = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (lib_symbols ${Object.values(libSyms).map(flatText).join(" ")}) ${symNodes.map((s) => flatText(s.node)).join(" ")})`);
@@ -102,8 +109,8 @@ const WIRES = [
   [[60.96, RAIL], [71.12, RAIL]], [[71.12, RAIL], "C2.1"], ["C2.2", "G5.1"],
   ["J1.A5", [60.96, 66.04], "R1.1"], ["R1.2", "G3.1"],
   ["J1.B5", [53.34, 68.58], "R2.1"], ["R2.2", "G2.1"],
-  ["J1.SH", [22.86, 81.28], [30.48, 81.28]], ["J1.A12", [30.48, 81.28]], [[30.48, 81.28], "G1.1"],
-  [[71.12, RAIL], [86.36, RAIL]], [[86.36, RAIL], "R3.1"],
+  ["J1.SH", "F2.1"], ["F2.1", [30.48, 81.28]], ["J1.A12", [30.48, 81.28]], [[30.48, 81.28], "G1.1"],
+  [[71.12, RAIL], "F1.1"], ["F1.1", [86.36, RAIL]], [[86.36, RAIL], "R3.1"],
   ["R3.2", "R4.1"], ["R4.2", "C3.1"], ["C3.2", "G6.1"],
   [[86.36, RAIL], [99.06, RAIL], [99.06, 60.96], "U1.4"],
   [[86.36, 55.88], [93.98, 55.88], [93.98, 63.5], "U1.7"],
@@ -193,6 +200,8 @@ function footprintNode(ref, libId, value, x, y, rot, padNets, refAt, hole) {
     if (!Array.isArray(c)) continue;
     const k = c[0];
     if (k === "version" || k === "generator" || k === "generator_version" || k === "layer" || k === "embedded_fonts") continue;
+    // A mounting hole has no symbol: it belongs to the board alone.
+    if (hole && k === "attr") { body.push(P("(attr board_only exclude_from_pos_files exclude_from_bom)")); continue; }
     if (k === "property") {
       const name = K.str(c[1]);
       if (name === "Reference") { c[2] = ref; if (refAt) { const at = kid(c, "at"); at[1] = refAt[0]; at[2] = refAt[1]; } }
@@ -300,7 +309,18 @@ const pcbText = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_v
 // ================================================================== write
 
 fs.mkdirSync(OUT, { recursive: true });
-const schOut = pretty(P(schText)) + "\n", pcbOut = pretty(P(pcbText)) + "\n";
+const schOut = pretty(P(schText)) + "\n", bare = pretty(P(pcbText)) + "\n";
+// The ground pour is filled by KiCad itself (fill.cjs) and kept in lib/zone-fill.json, keyed to the
+// exact board it was filled for.  A board that has changed since is written unfilled, with a warning.
+const bareHash = crypto.createHash("sha1").update(bare).digest("hex"), fillFile = path.join(LIB, "zone-fill.json");
+if (process.env.BLINKER_UNFILLED) fs.writeFileSync(process.env.BLINKER_UNFILLED, bare);
+let pcbOut = bare;
+const fill = fs.existsSync(fillFile) ? JSON.parse(fs.readFileSync(fillFile, "utf8")) : null;
+if (fill && fill.hash === bareHash) {
+  const tree = P(bare), zone = kids(tree, "zone")[0];
+  for (const f of fill.polygons) zone.push(P(f));
+  pcbOut = pretty(tree) + "\n";
+} else console.warn("WARNING: the ground pour is not filled for this board; run `node server/scripts/landing-demo/fill.cjs` (needs docker)");
 fs.writeFileSync(path.join(OUT, "blinker.kicad_sch"), schOut);
 fs.writeFileSync(path.join(OUT, "blinker.kicad_pcb"), pcbOut);
 const meta = {

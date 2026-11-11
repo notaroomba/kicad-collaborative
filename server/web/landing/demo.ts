@@ -31,6 +31,12 @@ export const BOARD = meta.board;
 
 export const loadSch = (): KDoc => K.parseDoc(SCH_TEXT);
 export const loadPcb = (): KDoc => K.parseDoc(PCB_TEXT);
+/** The same board with its pour not yet filled, for the editor where copper moves under it. */
+export function loadPcbOpen(): KDoc {
+  const tree = K.parse(PCB_TEXT);
+  for (const z of K.kids(tree, "zone")) for (let i = z.length - 1; i >= 0; i--) if (Array.isArray(z[i]) && z[i][0] === "filled_polygon") z.splice(i, 1);
+  return K.parseDoc(K.serialize(tree));
+}
 
 /** Layers the page keeps off, as most people do: fabrication drawings and paste. */
 export const HIDDEN = new Set(["F.Fab", "B.Fab", "F.Paste", "B.Paste", "F.Adhes", "B.Adhes"]);

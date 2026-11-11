@@ -4,7 +4,7 @@
 // collaborators keep their pointers on the board, as teammates would in a real project.
 
 import {
-  BOARD, Box, HIDDEN, K, PEERS, Pt, Rat, View, clamp, copperAt, drawCursor, ease, fit, lerp, loadPcb, meta, ratsnest, span, toMm, toPx, trackAt,
+  BOARD, Box, HIDDEN, K, PEERS, Pt, Rat, View, clamp, copperAt, drawCursor, ease, fit, lerp, loadPcbOpen, meta, ratsnest, span, toMm, toPx, trackAt,
 } from "./demo";
 import { SANS, Stage, makeStage, reducedMotion } from "./stage";
 
@@ -37,7 +37,7 @@ export function startMini(root: HTMLElement): void {
   const xy = q("[data-xy]"), zoomOut = q("[data-z]"), counts = q("[data-counts]"), unrouted = q("[data-unrouted]"), toolName = q("[data-toolname]");
   const still = reducedMotion();
 
-  let doc = loadPcb();
+  let doc = loadPcbOpen();
   let tool: Tool = "select", layer: Layer = "F.Cu", box: Box = HOME.slice() as Box;
   let view: View | null = null, selected: string | null = null, hover: Pt | null = null;
   let rats: Rat[] = [], dirty = true, touched = false;
@@ -97,7 +97,7 @@ export function startMini(root: HTMLElement): void {
   }
   function endRoute(): void { if (route) { remember(route.made); route = null; change(); } }
   function reset(): void {
-    doc = loadPcb(); open(); undo.length = 0; route = null; drag = null; selected = null; box = HOME.slice() as Box; tool = "select"; layer = "F.Cu";
+    doc = loadPcbOpen(); open(); undo.length = 0; route = null; drag = null; selected = null; box = HOME.slice() as Box; tool = "select"; layer = "F.Cu";
     dirty = true; touched = false; sync(); stage.invalidate();
   }
   function zoom(k: number, about?: Pt): void {
