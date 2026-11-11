@@ -364,13 +364,13 @@ function onUpCapture(ev: PointerEvent): void {
 export function installGestures(open: OpenMenu): void {
   openMenu = open;
   stage.addEventListener("wheel", onWheel, { passive: false });
-  // A press on the canvas takes the keyboard back from a toolbar selector or checkbox that was just used
+  // A press on the canvas takes the keyboard back from whatever chrome control had it — a toolbar selector or
+  // checkbox, or a panel's text box such as the search panel Ctrl+G focuses — as clicking pcbnew's canvas does
   // (the press is default-prevented further down, so the focus would otherwise stay there and swallow the hotkeys).
   stage.addEventListener("pointerdown", () => {
     const ae = document.activeElement as HTMLElement | null;
     if (!ae || ae === document.body || stage.contains(ae) || ae.closest(".kd-overlay, [role='dialog']")) return;
-    const choice = ae.tagName === "INPUT" && /^(checkbox|radio|range)$/i.test((ae as HTMLInputElement).type || "");
-    if (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || choice) ae.blur();
+    if (/^(SELECT|BUTTON|INPUT|TEXTAREA)$/.test(ae.tagName) || ae.isContentEditable) ae.blur();
   }, true);
   stage.addEventListener("pointerdown", onDownCapture, true);
   stage.addEventListener("pointermove", onMoveCapture, true);
