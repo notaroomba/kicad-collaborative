@@ -1069,6 +1069,23 @@ test("paste modes (DIALOG_PASTE_SPECIAL): keep, remove, unique", () => {
   const u = paste("unique"); assert.ok(/^\D+\d+$/.test(u) && u !== orig, "next free number: " + u);
 });
 
+test("annotate: new units of a multi-unit symbol share one reference with distinct units, like GetNextRefDesForUnits", () => {
+  const { d, c } = fresh();
+  d.lib.set("T:DUAL", K.parse(`(symbol "T:DUAL" (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes) (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "DUAL" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "DUAL_1_1" (pin input line (at 0 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))))
+    (symbol "DUAL_2_1" (pin input line (at 0 0 0) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))))`));
+  const withUnit = (it, u) => { const n = it.node; const k = kid(n, "unit"); k[1] = u; return it; };
+  const a = withUnit(place(c, "T:DUAL", [20.32, 76.2], "U?"), 1), b = withUnit(place(c, "T:DUAL", [40.64, 76.2], "U?"), 2);
+  const e = withUnit(place(c, "T:DUAL", [60.96, 76.2], "U?"), 1), f = withUnit(place(c, "T:DUAL", [81.28, 76.2], "U?"), 1);
+  const changes = sch.annotateChanges(d, {});
+  const refOf = (it) => { const ch = changes.find((x) => x.id === it.id); return kids(fragItem(ch), "property")[0][2]; };
+  assert.deepStrictEqual([refOf(a), refOf(b), refOf(e), refOf(f)], ["U1", "U1", "U2", "U3"], "unit B joins U1; a second unit A needs U2");
+  // an annotated U5 unit A with another value leaves no room for this unit B: it takes a number of its own
+  const g = place(c, "T:DUAL", [10, 90], "U1"); kids(g.node, "property")[1][2] = "OTHER";
+  const h = withUnit(place(c, "T:DUAL", [30, 90], "U?"), 2);
+  const ch2 = sch.annotateChanges(d, {}).find((x) => x.id === h.id); assert.strictEqual(kids(fragItem(ch2), "property")[0][2], "U2", "a different value never shares U1");
+});
+
 test("ERC on the embedded sheet: unconnected pins, dangling wires, then the fixes and the other findings", () => {
   const { d, c } = fresh();
   assert.ok(sch.runAction("runERC", c));

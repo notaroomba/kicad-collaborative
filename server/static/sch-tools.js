@@ -2160,20 +2160,37 @@ function annotateChanges(doc, opts) {
     refs.push({ item: it, prefix: r.prefix, num: r.num, isNew: (r.isNew || !keep) && (!opts.only || opts.only.has(it.id)), old: str(p[2]), x, y, unit: unitN ? num(unitN[1], 1) : 1 });
   }
   refs.sort((a, b) => a.prefix.localeCompare(b.prefix) || (order === "x" ? (a.x - b.x || a.y - b.y) : (a.y - b.y || a.x - b.x)) || (a.item.id < b.item.id ? -1 : 1));
-  const used = new Map();       // prefix -> Set of numbers in use
-  const take = (prefix, n) => { if (!used.has(prefix)) used.set(prefix, new Set()); used.get(prefix).add(n); };
-  for (const r of refs) if (!r.isNew && r.num >= 0) take(r.prefix, r.num);
-  for (const ref of opts.reserved || []) { const r = splitRef(ref); if (!r.isNew) take(r.prefix, r.num); }
+  // prefix -> number -> the units holding it ({lib, value, unit}), like FindFirstUnusedReference's refNumberMap
+  const used = new Map();
+  const valueOf = (node) => { const p = kids(node, "property").find((q) => str(q[1]) === "Value"); return p ? str(p[2]) : ""; };
+  const holder = (r) => ({ lib: symbolLibId(r.item.node), value: valueOf(r.item.node), unit: r.unit });
+  const put = (prefix, n, h) => { if (!used.has(prefix)) used.set(prefix, new Map()); const m = used.get(prefix); if (!m.has(n)) m.set(n, []); m.get(n).push(h); };
+  const take = (r, n) => put(r.prefix, n, holder(r));
+  for (const r of refs) if (!r.isNew && r.num >= 0) take(r, r.num);
+  // references held on other sheets: taken outright (no library / value to share a package with)
+  for (const ref of opts.reserved || []) { const r = splitRef(ref); if (!r.isNew) put(r.prefix, r.num, { lib: null, value: null, unit: -1 }); }
   const minRef = interval ? sheetNum * interval + 1 : start + 1;
+  // REFDES_TRACKER::GetNextRefDesForUnits: a free number, or for a unit of a multi-unit symbol one whose holders
+  // are the same library symbol with the same value and leave this unit free
+  const firstFree = (r, multi) => {
+    const m = used.get(r.prefix), me = holder(r);
+    for (let n = minRef; ; n++) {
+      const hs = m && m.get(n);
+      if (!hs || !hs.length) return n;
+      if (multi && hs.every((h) => h.lib === me.lib && h.value === me.value && h.unit !== me.unit)) return n;
+    }
+  };
   const assigned = new Map();   // old full reference of a multi-unit package -> its new number
   const changes = [];
   for (const r of refs) {
     if (!r.isNew) continue;
     let n;
+    const multi = libUnits(doc, r.item.node).units > 1;
     // units of one multi-unit package (same old reference) stay together, like KiCad's locked-unit map
-    const packageKey = r.old && !/\?$/.test(r.old) && libUnits(doc, r.item.node).units > 1 ? r.prefix + ":" + r.old : null;
+    const packageKey = multi && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
     if (packageKey && assigned.has(packageKey)) n = assigned.get(packageKey);
-    else { n = minRef; const set = used.get(r.prefix); while (set && set.has(n)) n++; take(r.prefix, n); if (packageKey) assigned.set(packageKey, n); }
+    else { n = packageKey ? firstFree(r, false) : firstFree(r, multi); if (packageKey) assigned.set(packageKey, n); }
+    take(r, n);
     const ref = r.prefix + n; if (ref === r.old) continue;
     const node = deep(r.item.node); setReference(node, ref); changes.push(modChange(doc, r.item, node));
   }
