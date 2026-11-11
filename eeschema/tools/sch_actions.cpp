@@ -2075,6 +2075,13 @@ TOOL_ACTION SCH_ACTIONS::collabVendorParts( TOOL_ACTION_ARGS()
         .Tooltip( _( "Search LCSC, Mouser and DigiKey for parts and manage saved part libraries "
                      "(opens in the browser; in a session, placed parts arrive here)" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::collabCompare( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Collab.compare" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Versions..." ) )
+        .Tooltip( _( "See what changed between the shared sheet as it is now and a version, "
+                     "a checkpoint or a GitHub commit (opens in the browser)" ) ) );
+
 TOOL_ACTION SCH_ACTIONS::collabGithub( TOOL_ACTION_ARGS()
         .Name( "eeschema.Collab.github" )
         .Scope( AS_GLOBAL )

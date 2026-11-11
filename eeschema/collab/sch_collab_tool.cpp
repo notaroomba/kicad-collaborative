@@ -31,6 +31,9 @@
 #include <wx/utils.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
+#include <string_utils.h>
+#include <sch_symbol.h>
+#include <sch_connection.h>
 #include <math/util.h>
 #include <sch_screen.h>
 #include <sch_sheet_path.h>
@@ -705,7 +708,7 @@ long long SCH_COLLAB_TOOL::pinAt( const VECTOR2I& aPos ) const
         if( !c.is_object() || jsonNumber( c, "parentId", -1 ) >= 0 )
             continue;
 
-        VECTOR2I pos( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+        VECTOR2I pos = commentAnchor( jsonNumber( c, "id", -1 ) );
         double   dist = ( pos - aPos ).EuclideanNorm();
 
         if( dist <= bestDist )
@@ -774,6 +777,7 @@ void SCH_COLLAB_TOOL::openThread( long long aRootId )
 void SCH_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 {
     updateCommentCard();
+    followCommentAnchors();
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
     if( !sessionActive() || !m_frame )
@@ -1344,24 +1348,157 @@ int SCH_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
 }
 
 
+/// A string member of a JSON object, empty when it is missing or not a string.
+static std::string anchorString( const nlohmann::json& aObj, const char* aKey )
+{
+    return aObj.is_object() && aObj.contains( aKey ) && aObj[ aKey ].is_string()
+                   ? aObj[ aKey ].get<std::string>()
+                   : std::string();
+}
+
+
+/// The item of the open sheet a comment thread is pinned to: the item itself, or the wire or
+/// label a net thread was started on.  Null when the thread is not pinned or the item is gone.
+static SCH_ITEM* anchoredItem( SCH_SCREEN* aScreen, const nlohmann::json& aComment )
+{
+    if( !aScreen || !aComment.contains( "anchor" ) || !aComment[ "anchor" ].is_object() )
+        return nullptr;
+
+    const nlohmann::json& a = aComment[ "anchor" ];
+    std::string           id = anchorString( a, anchorString( a, "kind" ) == "item" ? "id" : "item" );
+
+    if( id.empty() )
+        return nullptr;
+
+    KIID uuid( id );
+
+    for( SCH_ITEM* item : aScreen->Items() )
+    {
+        if( item->m_Uuid == uuid )
+            return item;
+    }
+
+    return nullptr;
+}
+
+
+/// Where a thread's pin goes: on the corner of the symbol it is pinned to, on the item a net
+/// thread was started on (its middle once that moved away), or where it was placed.
+static VECTOR2I pinPosition( SCH_ITEM* aItem, const VECTOR2I& aStored )
+{
+    if( !aItem )
+        return aStored;
+
+    if( aItem->Type() == SCH_SYMBOL_T )
+    {
+        BOX2I body = static_cast<SCH_SYMBOL*>( aItem )->GetBodyBoundingBox();
+        return VECTOR2I( body.GetRight(), body.GetTop() );
+    }
+
+    BOX2I box = aItem->GetBoundingBox();
+
+    return box.Contains( aStored ) ? aStored : box.Centre();
+}
+
+
+nlohmann::json SCH_COLLAB_TOOL::selectionAnchor( VECTOR2I& aPos )
+{
+    SCH_SELECTION_TOOL* selTool = m_toolMgr ? m_toolMgr->GetTool<SCH_SELECTION_TOOL>() : nullptr;
+
+    if( !selTool || selTool->GetSelection().Size() != 1 )
+        return nlohmann::json();
+
+    SCH_ITEM* item = dynamic_cast<SCH_ITEM*>( selTool->GetSelection().Front() );
+
+    if( !item )
+        return nlohmann::json();
+
+    std::string id = item->m_Uuid.AsString().ToStdString( wxConvUTF8 );
+
+    if( item->Type() == SCH_SYMBOL_T )
+    {
+        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+        aPos = symbol->GetPosition();
+
+        return { { "kind", "item" },
+                 { "id", id },
+                 { "label", symbol->GetRef( &m_frame->GetCurrentSheet() ).ToStdString( wxConvUTF8 ) } };
+    }
+
+    if( SCH_CONNECTION* conn = item->Connection( &m_frame->GetCurrentSheet() ) )
+    {
+        wxString net = conn->Name();
+
+        if( !net.IsEmpty() )
+        {
+            aPos = item->GetBoundingBox().Centre();
+
+            return { { "kind", "net" },
+                     { "id", net.ToStdString( wxConvUTF8 ) },
+                     { "label", UnescapeString( net ).ToStdString( wxConvUTF8 ) },
+                     { "item", id } };
+        }
+    }
+
+    return nlohmann::json();
+}
+
+
+void SCH_COLLAB_TOOL::followCommentAnchors()
+{
+    // Pins of threads on a symbol or a net stay on it as it is moved, by anyone.
+    if( m_pinAnchors.empty() || !m_frame || ++m_pinFollowTick % 5 )
+        return;
+
+    SCH_SCREEN* screen = m_frame->GetScreen();
+
+    for( const PIN_ANCHOR& a : m_pinAnchors )
+    {
+        SCH_ITEM* found = nullptr;
+
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( item->m_Uuid == a.item )
+            {
+                found = item;
+                break;
+            }
+        }
+
+        if( pinPosition( found, a.stored ) != a.drawn )
+        {
+            rebuildCommentPins();
+            return;
+        }
+    }
+}
+
+
 void SCH_COLLAB_TOOL::postComment( const wxString& aDocId, const wxString& aBody,
                                    long long aParentId, const VECTOR2I& aAnchor )
 {
+    // A new thread is about the selected symbol, or the net of the selected wire or label;
+    // with nothing (or several things) selected it is pinned to the place.
+    VECTOR2I       at = aAnchor;
+    nlohmann::json anchor = aParentId < 0 && aDocId == currentDocId() ? selectionAnchor( at )
+                                                                       : nlohmann::json();
+
     std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
     std::string token =
             COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
     std::string docId = aDocId.ToStdString( wxConvUTF8 );
     std::string body = aBody.ToStdString( wxConvUTF8 );
-    long long   x = aAnchor.x;
-    long long   y = aAnchor.y;
+    long long   x = at.x;
+    long long   y = at.y;
 
     COLLAB_SESSION::Get().RunAsync(
-            [server, token, docId, body, aParentId, x, y]()
+            [server, token, docId, body, aParentId, x, y, anchor]()
             {
                 COLLAB_REST::CreateComment( wxString::FromUTF8( server ),
                                             wxString::FromUTF8( token ),
                                             wxString::FromUTF8( docId ),
-                                            wxString::FromUTF8( body ), x, y, aParentId );
+                                            wxString::FromUTF8( body ), x, y, aParentId,
+                                            anchor );
             } );
 }
 
@@ -1401,6 +1538,36 @@ int SCH_COLLAB_TOOL::OpenVendorParts( const TOOL_EVENT& aEvent )
     {
         url << wxS( "/p/" ) << m_projectId << wxS( "/edit?parts=search" );
     }
+
+    if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
+    {
+        m_frame->ShowInfoBarError(
+                wxString::Format( _( "Could not open the browser; the page is %s" ), url ) );
+    }
+
+    return 0;
+}
+
+
+int SCH_COLLAB_TOOL::OpenCompare( const TOOL_EVENT& aEvent )
+{
+    wxString docId = currentDocId();
+
+    if( m_projectId.IsEmpty() || docId.IsEmpty() )
+    {
+        m_frame->ShowInfoBarMsg(
+                _( "No collaboration session; start or join one first." ) );
+        return 0;
+    }
+
+    // The comparison is drawn by the web editor, which holds every version of the shared
+    // sheet; the link opens this sheet there with the Compare window up.
+    wxString url = COLLAB_SESSION::ServerUrl();
+
+    while( url.EndsWith( wxS( "/" ) ) )
+        url.RemoveLast();
+
+    url << wxS( "/p/" ) << m_projectId << wxS( "/edit?doc=" ) << docId << wxS( "&compare=1" );
 
     if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
     {
@@ -1655,6 +1822,10 @@ void SCH_COLLAB_TOOL::rebuildCommentPins()
 {
     std::vector<COMMENT_PIN> pins;
     wxString                 docId = currentDocId();
+    SCH_SCREEN*              screen = m_frame ? m_frame->GetScreen() : nullptr;
+
+    m_pinAnchors.clear();
+    m_pinByThread.clear();
 
     auto it = m_commentsByDoc.find( docId );
 
@@ -1672,6 +1843,14 @@ void SCH_COLLAB_TOOL::rebuildCommentPins()
         // Resolved threads leave the canvas (the comments dialog still lists them).
         if( pin.resolved )
             continue;
+
+            if( SCH_ITEM* item = anchoredItem( screen, c ) )
+            {
+                VECTOR2I stored = pin.pos;
+                pin.pos = pinPosition( item, stored );
+                m_pinAnchors.push_back( { item->m_Uuid, stored, pin.pos } );
+                m_pinByThread[ jsonNumber( c, "id", -1 ) ] = pin.pos;
+            }
 
             long long id = jsonNumber( c, "id", -1 );
             pin.count = 0;
@@ -2154,6 +2333,7 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::ShowHistory,       SCH_ACTIONS::collabHistory.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::CopyShareLink,     SCH_ACTIONS::collabCopyLink.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::OpenGithubSync,    SCH_ACTIONS::collabGithub.MakeEvent() );
+    Go( &SCH_COLLAB_TOOL::OpenCompare,       SCH_ACTIONS::collabCompare.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::OpenVendorParts,   SCH_ACTIONS::collabVendorParts.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::ShowComments,      SCH_ACTIONS::collabComments.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::FollowNextPeer,    SCH_ACTIONS::collabFollow.MakeEvent() );
@@ -2167,6 +2347,12 @@ void SCH_COLLAB_TOOL::setTransitions()
 
 VECTOR2I SCH_COLLAB_TOOL::commentAnchor( long long aRootId ) const
 {
+    // a thread pinned to a symbol or a net is where its pin was drawn
+    auto pinned = m_pinByThread.find( aRootId );
+
+    if( pinned != m_pinByThread.end() )
+        return pinned->second;
+
     auto it = m_commentsByDoc.find( currentDocId() );
 
     if( it != m_commentsByDoc.end() )

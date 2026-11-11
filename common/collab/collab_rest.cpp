@@ -757,7 +757,8 @@ std::optional<nlohmann::json> COLLAB_REST::CreateComment( const wxString& aServe
                                                           const wxString& aToken,
                                                           const wxString& aDocId,
                                                           const wxString& aBody, long long aX,
-                                                          long long aY, long long aParentId )
+                                                          long long aY, long long aParentId,
+                                                          const nlohmann::json& aAnchor )
 {
     KICAD_CURL_EASY curl;
     setupRequest( curl, aServerUrl + wxS( "/api/docs/" ) + aDocId + wxS( "/comments" ), aToken );
@@ -770,6 +771,9 @@ std::optional<nlohmann::json> COLLAB_REST::CreateComment( const wxString& aServe
     {
         body[ "x" ] = aX;
         body[ "y" ] = aY;
+
+        if( aAnchor.is_object() )
+            body[ "anchor" ] = aAnchor;
     }
 
     setJsonBody( curl, body );

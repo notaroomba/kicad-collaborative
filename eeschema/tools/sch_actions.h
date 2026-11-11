@@ -364,6 +364,7 @@ public:
     static TOOL_ACTION collabHistory;
     static TOOL_ACTION collabCopyLink;
     static TOOL_ACTION collabGithub;
+    static TOOL_ACTION collabCompare;
     static TOOL_ACTION collabVendorParts;
     static TOOL_ACTION collabComments;
     static TOOL_ACTION collabFollow;

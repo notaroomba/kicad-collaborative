@@ -33,6 +33,10 @@
 #include <wx/utils.h>
 #include <widgets/collab_history_panel.h>
 #include <kiid.h>
+#include <string_utils.h>
+#include <board_connected_item.h>
+#include <footprint.h>
+#include <tools/pcb_selection_tool.h>
 #include <router/pns_arc.h>
 #include <router/pns_drag_algo.h>
 #include <router/pns_itemset.h>
@@ -654,6 +658,34 @@ int PCB_COLLAB_TOOL::OpenVendorParts( const TOOL_EVENT& aEvent )
 }
 
 
+int PCB_COLLAB_TOOL::OpenCompare( const TOOL_EVENT& aEvent )
+{
+    if( m_projectId.IsEmpty() || m_docId.IsEmpty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                _( "No collaboration session; start or join one first." ) );
+        return 0;
+    }
+
+    // The comparison is drawn by the web editor, which holds every version of the shared
+    // board; the link opens this board there with the Compare window up.
+    wxString url = COLLAB_SESSION::ServerUrl();
+
+    while( url.EndsWith( wxS( "/" ) ) )
+        url.RemoveLast();
+
+    url << wxS( "/p/" ) << m_projectId << wxS( "/edit?doc=" ) << m_docId << wxS( "&compare=1" );
+
+    if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                wxString::Format( _( "Could not open the browser; the page is %s" ), url ) );
+    }
+
+    return 0;
+}
+
+
 int PCB_COLLAB_TOOL::OpenGithubSync( const TOOL_EVENT& aEvent )
 {
     if( m_projectId.IsEmpty() )
@@ -954,24 +986,117 @@ int PCB_COLLAB_TOOL::ShowComments( const TOOL_EVENT& aEvent )
 }
 
 
+/// A string member of a JSON object, empty when it is missing or not a string.
+static std::string anchorString( const nlohmann::json& aObj, const char* aKey )
+{
+    return aObj.is_object() && aObj.contains( aKey ) && aObj[ aKey ].is_string()
+                   ? aObj[ aKey ].get<std::string>()
+                   : std::string();
+}
+
+
+/// The board item a comment thread is pinned to: the item itself, or the track or via a net
+/// thread was started on.  Null when the thread is not pinned or the item is gone.
+static BOARD_ITEM* anchoredItem( BOARD* aBoard, const nlohmann::json& aComment )
+{
+    if( !aBoard || !aComment.contains( "anchor" ) || !aComment[ "anchor" ].is_object() )
+        return nullptr;
+
+    const nlohmann::json& a = aComment[ "anchor" ];
+    std::string           id = anchorString( a, anchorString( a, "kind" ) == "item" ? "id" : "item" );
+
+    if( id.empty() )
+        return nullptr;
+
+    BOARD_ITEM* item = aBoard->ResolveItem( KIID( id ), true );
+
+    return item && item->Type() != NOT_USED ? item : nullptr;
+}
+
+
+/// Where a thread's pin goes: on the corner of the part it is pinned to, on the item a net
+/// thread was started on (its middle once that moved away), or where it was placed.
+static VECTOR2I pinPosition( BOARD_ITEM* aItem, const VECTOR2I& aStored )
+{
+    if( !aItem )
+        return aStored;
+
+    BOX2I box = aItem->GetBoundingBox();
+
+    if( aItem->Type() == PCB_FOOTPRINT_T )
+        return VECTOR2I( box.GetRight(), box.GetTop() );
+
+    return box.Contains( aStored ) ? aStored : box.Centre();
+}
+
+
+nlohmann::json PCB_COLLAB_TOOL::selectionAnchor( VECTOR2I& aPos )
+{
+    PCB_SELECTION_TOOL* selTool = m_toolMgr ? m_toolMgr->GetTool<PCB_SELECTION_TOOL>() : nullptr;
+
+    if( !selTool || selTool->GetSelection().Size() != 1 )
+        return nlohmann::json();
+
+    BOARD_ITEM* item = dynamic_cast<BOARD_ITEM*>( selTool->GetSelection().Front() );
+
+    if( !item )
+        return nlohmann::json();
+
+    std::string id = item->m_Uuid.AsString().ToStdString( wxConvUTF8 );
+
+    if( item->Type() == PCB_FOOTPRINT_T )
+    {
+        FOOTPRINT* fp = static_cast<FOOTPRINT*>( item );
+        aPos = fp->GetPosition();
+
+        return { { "kind", "item" },
+                 { "id", id },
+                 { "label", fp->GetReference().ToStdString( wxConvUTF8 ) } };
+    }
+
+    if( BOARD_CONNECTED_ITEM* conn = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+    {
+        wxString net = conn->GetNetname();
+
+        if( !net.IsEmpty() )
+        {
+            aPos = item->GetBoundingBox().Centre();
+
+            return { { "kind", "net" },
+                     { "id", net.ToStdString( wxConvUTF8 ) },
+                     { "label", UnescapeString( net ).ToStdString( wxConvUTF8 ) },
+                     { "item", id } };
+        }
+    }
+
+    return nlohmann::json();
+}
+
+
 void PCB_COLLAB_TOOL::postComment( const wxString& aBody, long long aParentId,
                                    const VECTOR2I& aAnchor )
 {
+    // A new thread is about the selected part, or the net of the selected track, via or pad;
+    // with nothing (or several things) selected it is pinned to the place.
+    VECTOR2I       at = aAnchor;
+    nlohmann::json anchor = aParentId < 0 ? selectionAnchor( at ) : nlohmann::json();
+
     std::string server = COLLAB_SESSION::ServerUrl().ToStdString( wxConvUTF8 );
     std::string token =
             COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).ToStdString( wxConvUTF8 );
     std::string docId = m_docId.ToStdString( wxConvUTF8 );
     std::string body = aBody.ToStdString( wxConvUTF8 );
-    long long   x = aAnchor.x;
-    long long   y = aAnchor.y;
+    long long   x = at.x;
+    long long   y = at.y;
 
     COLLAB_SESSION::Get().RunAsync(
-            [server, token, docId, body, aParentId, x, y]()
+            [server, token, docId, body, aParentId, x, y, anchor]()
             {
                 COLLAB_REST::CreateComment( wxString::FromUTF8( server ),
                                             wxString::FromUTF8( token ),
                                             wxString::FromUTF8( docId ),
-                                            wxString::FromUTF8( body ), x, y, aParentId );
+                                            wxString::FromUTF8( body ), x, y, aParentId,
+                                            anchor );
             } );
 }
 
@@ -992,9 +1117,37 @@ void PCB_COLLAB_TOOL::resolveComment( long long aRootId, bool aResolved )
 }
 
 
+void PCB_COLLAB_TOOL::followCommentAnchors()
+{
+    // Pins of threads on a part or a net stay on it as it is moved, by anyone.  Only the
+    // items found when the pins were built are looked at: a lookup that misses walks the
+    // whole board, which this tick must not do.
+    if( m_pinAnchors.empty() )
+        return;
+
+    BOARD* board = getModel<BOARD>();
+    bool   moved = false;
+
+    for( const PIN_ANCHOR& a : m_pinAnchors )
+    {
+        BOARD_ITEM* item = board ? board->ResolveItem( a.item, true ) : nullptr;
+
+        if( pinPosition( item && item->Type() != NOT_USED ? item : nullptr, a.stored ) != a.drawn )
+            moved = true;
+    }
+
+    if( moved )
+        rebuildCommentPins();
+}
+
+
 void PCB_COLLAB_TOOL::rebuildCommentPins()
 {
     std::vector<COMMENT_PIN> pins;
+    BOARD*                   board = getModel<BOARD>();
+
+    m_pinAnchors.clear();
+    m_pinByThread.clear();
 
     for( const nlohmann::json& c : m_comments )
     {
@@ -1004,10 +1157,18 @@ void PCB_COLLAB_TOOL::rebuildCommentPins()
         COMMENT_PIN pin;
         pin.pos = VECTOR2I( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
         pin.resolved = c.value( "resolved", false );
-        
+
         // Resolved threads leave the canvas (the comments dialog still lists them).
         if( pin.resolved )
             continue;
+
+        if( BOARD_ITEM* item = anchoredItem( board, c ) )
+        {
+            VECTOR2I stored = pin.pos;
+            pin.pos = pinPosition( item, stored );
+            m_pinAnchors.push_back( { item->m_Uuid, stored, pin.pos } );
+            m_pinByThread[ jsonNumber( c, "id", -1 ) ] = pin.pos;
+        }
 
         long long id = jsonNumber( c, "id", -1 );
         pin.count = 0;
@@ -1245,7 +1406,7 @@ long long PCB_COLLAB_TOOL::pinAt( const VECTOR2I& aPos ) const
         if( !c.is_object() || jsonNumber( c, "parentId", -1 ) >= 0 )
             continue;
 
-        VECTOR2I pos( jsonNumber( c, "x", 0 ), jsonNumber( c, "y", 0 ) );
+        VECTOR2I pos = commentAnchor( jsonNumber( c, "id", -1 ) );
         double   dist = ( pos - aPos ).EuclideanNorm();
 
         if( dist <= bestDist )
@@ -1278,6 +1439,7 @@ void PCB_COLLAB_TOOL::openThread( long long aRootId )
 void PCB_COLLAB_TOOL::onTimer( wxTimerEvent& aEvent )
 {
     updateCommentCard();
+    followCommentAnchors();
     COLLAB_SESSION& session = COLLAB_SESSION::Get();
 
     if( !session.IsLive() )
@@ -2005,6 +2167,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::CopyShareLink,     PCB_ACTIONS::collabCopyLink.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::OpenGithubSync,    PCB_ACTIONS::collabGithub.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::OpenCompare,       PCB_ACTIONS::collabCompare.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::OpenVendorParts,   PCB_ACTIONS::collabVendorParts.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::FollowNextPeer,    PCB_ACTIONS::collabFollow.MakeEvent() );
 
@@ -2017,6 +2180,12 @@ void PCB_COLLAB_TOOL::setTransitions()
 
 VECTOR2I PCB_COLLAB_TOOL::commentAnchor( long long aRootId ) const
 {
+    // a thread pinned to a part or a net is where its pin was drawn
+    auto pinned = m_pinByThread.find( aRootId );
+
+    if( pinned != m_pinByThread.end() )
+        return pinned->second;
+
     for( const nlohmann::json& c : m_comments )
     {
         if( c.is_object() && c.value( "id", -1LL ) == aRootId )

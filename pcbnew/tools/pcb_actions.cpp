@@ -3498,6 +3498,13 @@ TOOL_ACTION PCB_ACTIONS::collabGithub( TOOL_ACTION_ARGS()
         .Tooltip( _( "Push the shared project to a GitHub repository, or pull and merge changes "
                      "from it (opens in the browser)" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::collabCompare( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.compare" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Versions..." ) )
+        .Tooltip( _( "See what changed between the shared board as it is now and a version, "
+                     "a checkpoint or a GitHub commit (opens in the browser)" ) ) );
+
 TOOL_ACTION PCB_ACTIONS::collabFollow( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Collab.follow" )
         .Scope( AS_GLOBAL )

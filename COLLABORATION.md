@@ -146,6 +146,13 @@ document for everyone. Automatic snapshots are taken as the op log grows, and
 old ops are pruned once a snapshot covers them. Named checkpoints are kept
 forever.
 
+## Design review
+
+Comment threads are pinned to a part or a net (or a place on the sheet) and
+follow it as the design changes. The web editor's Compare window shows what
+changed between any two versions of a schematic or board: now, a version, a
+GitHub commit, or a file. See "Design review" in server/README.md.
+
 ## Access control
 
 - Sign-in is GitHub only. There are no passwords.

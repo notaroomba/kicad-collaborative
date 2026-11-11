@@ -175,6 +175,23 @@ void DIALOG_COLLAB_COMMENTS::Reload()
         wxString body = wxString::FromUTF8( c.value( "body", "" ) );
         body.Replace( wxS( "\n" ), wxS( " " ) );
 
+        // A thread pinned to a part or a net leads with what it is on.
+        if( c.contains( "anchor" ) && c[ "anchor" ].is_object() )
+        {
+            const nlohmann::json& a = c[ "anchor" ];
+            wxString label = a.contains( "label" ) && a[ "label" ].is_string()
+                                     ? wxString::FromUTF8( a[ "label" ].get<std::string>() )
+                                     : wxString();
+
+            if( !label.IsEmpty() )
+            {
+                bool net = a.contains( "kind" ) && a[ "kind" ].is_string()
+                           && a[ "kind" ].get<std::string>() == "net";
+                body = wxString::Format( net ? _( "Net %s: %s" ) : wxString( wxS( "%s: %s" ) ),
+                                         label, body );
+            }
+        }
+
         wxVector<wxVariant> row;
         row.push_back( wxVariant( body.Left( 80 ) ) );
         row.push_back( wxVariant( wxString::FromUTF8( c.value( "authorLogin", "" ) ) ) );

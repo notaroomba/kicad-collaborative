@@ -19,7 +19,11 @@
 
 #pragma once
 
+#include <map>
 #include <optional>
+#include <vector>
+#include <kiid.h>
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <memory>
 
@@ -103,6 +107,9 @@ public:
 
     ///< Open the project's GitHub sync page (push, pull, merge) in the browser.
     int OpenGithubSync( const TOOL_EVENT& aEvent );
+
+    /// Open the web editor's Compare window for this board (versions, checkpoints, commits).
+    int OpenCompare( const TOOL_EVENT& aEvent );
 
     ///< Open vendor part search and the saved part libraries (in the browser).
     int OpenVendorParts( const TOOL_EVENT& aEvent );
@@ -232,6 +239,25 @@ private:
 
     ///< Rebuild the overlay's comment pins from m_comments.
     void rebuildCommentPins();
+
+    ///< Move the pins of threads pinned to a part or a net when their item moved.
+    void followCommentAnchors();
+
+    ///< What a new thread is about: the one selected footprint, or the net of the one selected
+    ///< track, via, pad or zone (null otherwise).  aPos becomes the place to store with it.
+    nlohmann::json selectionAnchor( VECTOR2I& aPos );
+
+    ///< The items the current pins sit on with each thread's stored place, and where each
+    ///< pin was last drawn.
+    struct PIN_ANCHOR
+    {
+        KIID     item;
+        VECTOR2I stored;   ///< where the thread was placed
+        VECTOR2I drawn;    ///< where its pin is now
+    };
+
+    std::vector<PIN_ANCHOR>                m_pinAnchors;
+    std::map<long long, VECTOR2I>          m_pinByThread;
 
     ///< The open comments dialog, if any (modeless; owned by wx).
 class DIALOG_COLLAB_COMMENTS* m_commentsDlg = nullptr;

@@ -901,6 +901,7 @@ void SCH_EDIT_FRAME::setupUIConditions()
     // when Copy Share Link was clicked.
     mgr->SetConditions( SCH_ACTIONS::collabCopyLink,     ENABLE( collabLive ) );
     mgr->SetConditions( SCH_ACTIONS::collabGithub,       ENABLE( collabLive ) );
+    mgr->SetConditions( SCH_ACTIONS::collabCompare,      ENABLE( collabLive ) );
     mgr->SetConditions( SCH_ACTIONS::collabComments,     ENABLE( collabLive ) );
     mgr->SetConditions( SCH_ACTIONS::collabFollow,       ENABLE( collabLive ) );
     mgr->SetConditions( SCH_ACTIONS::collabHistory,      ENABLE( collabLive ) );

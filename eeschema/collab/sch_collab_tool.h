@@ -88,6 +88,9 @@ public:
     ///< Open the project's GitHub sync page (push, pull, merge) in the browser.
     int OpenGithubSync( const TOOL_EVENT& aEvent );
 
+    /// Open the web editor's Compare window for the open sheet (versions, checkpoints, commits).
+    int OpenCompare( const TOOL_EVENT& aEvent );
+
     ///< Open vendor part search and the saved part libraries (in the browser).
     int OpenVendorParts( const TOOL_EVENT& aEvent );
 
@@ -237,6 +240,26 @@ private:
 
     ///< Rebuild the overlay's comment pins for the displayed sheet.
     void rebuildCommentPins();
+
+    ///< Move the pins of threads pinned to a symbol or a net when their item moved.
+    void followCommentAnchors();
+
+    ///< What a new thread is about: the one selected symbol, or the net of the one selected
+    ///< wire or label (null otherwise).  aPos becomes the place to store with it.
+    nlohmann::json selectionAnchor( VECTOR2I& aPos );
+
+    ///< The items the current pins sit on with each thread's stored place, where each pin was
+    ///< last drawn, and the pin of each pinned thread.
+    struct PIN_ANCHOR
+    {
+        KIID     item;
+        VECTOR2I stored;   ///< where the thread was placed
+        VECTOR2I drawn;    ///< where its pin is now
+    };
+
+    std::vector<PIN_ANCHOR>                m_pinAnchors;
+    std::map<long long, VECTOR2I>          m_pinByThread;
+    int                                    m_pinFollowTick = 0;
     std::map<wxString, wxString> m_pathByDocId;
 
     nlohmann::json m_lastSentState;

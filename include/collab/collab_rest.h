@@ -283,12 +283,15 @@ KICOMMON_API std::optional<nlohmann::json> ListComments( const wxString& aServer
                                                          const wxString& aToken,
                                                          const wxString& aDocId );
 
-/// POST a new comment (aParentId < 0 for a new thread at aX/aY nm).
+/// POST a new comment (aParentId < 0 for a new thread at aX/aY nm).  aAnchor, when an object,
+/// pins a new thread to what it is about: {kind: "item", id, label} or
+/// {kind: "net", id, label, item}.
 KICOMMON_API std::optional<nlohmann::json> CreateComment( const wxString& aServerUrl,
                                                           const wxString& aToken,
                                                           const wxString& aDocId,
                                                           const wxString& aBody, long long aX,
-                                                          long long aY, long long aParentId );
+                                                          long long aY, long long aParentId,
+                                                          const nlohmann::json& aAnchor = nlohmann::json() );
 
 KICOMMON_API bool SetCommentResolved( const wxString& aServerUrl, const wxString& aToken,
                                       long long aCommentId, bool aResolved );

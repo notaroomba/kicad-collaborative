@@ -132,6 +132,11 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | PATCH/DELETE | `/api/projects/{id}/branches/{bid}` | rename · delete a branch |
 | POST | `/api/projects/{branchId}/merge` | merge `{direction: into_main\|from_main, mode, prefer, dryRun}` |
 | POST/GET | `/api/projects/{id}/checkpoints` | the older names for saving and listing versions (older desktop builds) |
+| GET/POST | `/api/docs/{id}/comments` | a document's comments · add one `{x, y, body, parentId?, anchor?}`; `anchor` is `{kind: item\|net, id, label, item?}` (roots only) |
+| PATCH/DELETE | `/api/comments/{id}` | `{resolved}`, `{body}` (the author), `{anchor, x, y}` or `{unpin: true}` to move a thread · delete (the author or the owner) |
+| GET | `/api/projects/{id}/comments` | every thread of the project with its document: `{comments, docs}` |
+| GET | `/api/projects/{id}/github/commits?path=` | the commits of the linked repository that touched a project file |
+| GET | `/api/projects/{id}/github/file?path=&sha=` | that file at a commit |
 | POST | `/api/docs/{id}/snapshots?seq=N` | upload a snapshot |
 | GET | `/api/docs/{id}/snapshots/{seq}` | fetch a historical file |
 | DELETE | `/api/links/{token}` | revoke a share link |
@@ -168,6 +173,35 @@ ops to lay over it.
   takes `BOARD`, a folder with a KiCad project, and `SHOTS` for screenshots).
 - The full op history is kept for 30 days. Snapshots and ops that a version or
   a branch needs are kept for as long as it exists.
+
+## Design review
+
+**Comment threads** are pinned to what they are about. Right-click a part to
+"Add Comment on R1…", a track, wire or label to "Add Comment on Net VCC…", or
+an empty place to comment on the spot. A part's pin sits on its corner and
+moves with it; a net's pin is square and opening the thread lights the whole
+net. When the item is deleted the thread stays where it was, greyed. Threads
+can be replied to, edited by their author, resolved and reopened; all of it
+reaches everyone in the document at once. The Comments pane lists the open and
+resolved threads of the open document and of the project's other documents.
+A thread is stored with `anchor: {kind, id, label, item}`: an item's uuid, or
+a net's name and the item it was started on.
+
+**Compare** (File ▸ Compare Schematic/Board with History..., or `?compare=1`
+on an editor link) shows what changed between two versions of a sheet or a
+board. Either side can be the document as it is now, a version or checkpoint,
+a commit of the linked GitHub repository, or a file from the computer. Items
+are matched by uuid; what was added, removed or modified is listed (the tracks
+of a net as one row) and drawn in KiCad's diff colours as an overlay, side by
+side, or with a swipe divider. Selecting a change shows its properties before
+and after; "Comment on Change…" starts a thread on that item. A live side
+follows edits made while the window is open. Other code opens it with
+`window.CollabReview.openCompare({ a, b })` (web/review/sources.ts lists the
+version references).
+
+The code is in `web/review/` (the diff engine has its own tests, `npm run
+test:review`) and `web/editor/comments.ts`; `scripts/review-ui.mjs` drives
+both features with two people in two browsers.
 
 ## Vendor parts and part libraries
 
