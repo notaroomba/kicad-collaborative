@@ -244,6 +244,11 @@ serves, but sign-in returns 503.
 
 ## Deploying
 
+The hosted site (kicad.notaroomba.dev) is the Railway service `kicad-collab` in the
+project `kicad-collaborative`.  Its source is this repository, branch `master`, root
+directory `/server`, so every push to master builds `server/Dockerfile` and deploys.
+A one-off upload of a local tree still works:
+
 ```bash
 railway up --service kicad-collab
 ```
