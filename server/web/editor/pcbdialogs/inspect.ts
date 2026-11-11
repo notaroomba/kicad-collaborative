@@ -51,6 +51,35 @@ const PARITY = new Set(DRC_ITEMS.slice(DRC_ITEMS.findIndex((i) => i[0] === "Sche
 const last: { doc: KDoc | null; markers: Marker[]; ran: boolean; elapsed: number } = { doc: null, markers: [], ran: false, elapsed: 0 };
 const prefs = { refill: false, parity: true, errors: true, warnings: true, exclusions: false };
 
+/** One DRC run as DIALOG_DRC lists it: the board checks, then schematic parity when asked and the schematic can be read. */
+async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Marker[]; parityError: string }> {
+  const s = settings();
+  let markers = PT().drc(doc, s); let parityError = parity ? "" : "not requested";
+  if (parity) {
+    const res = await projectNetlist();
+    if ("error" in res) parityError = res.error;
+    else {
+      for (const p of NL().schematicParity(doc, res.netlist)) {
+        const sev = s.severities[p.code] || (DRC_ITEMS.find((i) => i[1] === p.code) || ["", "", "warning"])[2];
+        if (sev !== "ignore") markers.push({ ...p, severity: sev });
+      }
+    }
+  }
+  markers = markers.map((m) => (m.text.startsWith(drcItemTitle(m.code)) || !DRC_ITEMS.some((i) => i[1] === m.code) ? m : { ...m, text: `${drcItemTitle(m.code)}: ${m.text}` }));
+  return { markers, parityError };
+}
+
+/**
+ * The Design Rules Checker's result as data, for callers that have no dialog (a plugin running `kicad-cli pcb drc`):
+ * each marker with the tab it belongs to and a description of every item it names.
+ */
+export async function drcReport(o: { parity?: boolean } = {}): Promise<{ markers: (Marker & { group: "violation" | "unconnected" | "parity"; items: { id: string; description: string }[] })[]; parityError: string } | null> {
+  const doc = board(); if (!doc) return null;
+  const r = await collectMarkers(doc, o.parity !== false);
+  return { parityError: r.parityError, markers: r.markers.map((m) => ({ ...m, group: UNCONNECTED.has(m.code) ? "unconnected" as const : PARITY.has(m.code) ? "parity" as const : "violation" as const,
+    items: m.ids.map((id) => ({ id, description: describeItem(doc, id) })) })) };
+}
+
 export function openDrc(ctx: ToolCtx): void {
   const doc = board(); if (!doc) { ctx.toast("The Design Rules Checker needs a board"); return; }
   if (last.doc !== doc) { last.doc = doc; last.markers = []; last.ran = false; }
@@ -91,18 +120,7 @@ export function openDrc(ctx: ToolCtx): void {
   };
   const run = async (): Promise<void> => {
     const t0 = Date.now(); status.textContent = "Tests Running...";
-    const s = settings();
-    let markers = PT().drc(doc, s);
-    if (prefs.parity) {
-      const res = await projectNetlist();
-      if (!("error" in res)) {
-        for (const p of NL().schematicParity(doc, res.netlist)) {
-          const sev = s.severities[p.code] || (DRC_ITEMS.find((i) => i[1] === p.code) || ["", "", "warning"])[2];
-          if (sev !== "ignore") markers.push({ ...p, severity: sev });
-        }
-      }
-    }
-    markers = markers.map((m) => (m.text.startsWith(drcItemTitle(m.code)) || !DRC_ITEMS.some((i) => i[1] === m.code) ? m : { ...m, text: `${drcItemTitle(m.code)}: ${m.text}` }));
+    const markers = (await collectMarkers(doc, prefs.parity)).markers;
     last.markers = markers; last.ran = true; last.elapsed = (Date.now() - t0) / 1000; selected = null;
     status.textContent = `Done. Completed in ${last.elapsed.toFixed(2)} s`;
     ctx.setHighlight(null); fill(); show();

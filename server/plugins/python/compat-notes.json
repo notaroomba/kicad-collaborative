@@ -2,23 +2,20 @@
   "about": "What the test run cannot see for itself. scripts/plugins-python.mjs runs every official plugin and labels it from what happened; a plugin that runs without an error but cannot do its job here (it needs a program on the computer, a local server, …) is labelled by hand below, and these entries win over the run.",
   "plugins": {
     "com.alsoknownasfoo.spinrender": { "status": "unsupported", "note": "It renders the board with a 3D renderer on the computer (OpenGL), which a browser tab does not have." },
-    "com.github.adamws.kicad-git": { "status": "unsupported", "note": "It runs the git program on the project folder. The web editor keeps history itself: Save version and Branches." },
-    "com.github.danielboston38.prefab-gate": { "status": "unsupported", "note": "It runs kicad-cli, a program of the desktop application." },
-    "com.github.kerstensrobin.kicad-breadboard": { "status": "unsupported", "note": "It runs kicad-cli, a program of the desktop application." },
+    "com.github.adamws.kicad-git": { "status": "works", "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version." },
+    "com.github.danielboston38.prefab-gate": { "status": "partly", "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC, and zones are not refilled first. Read a pass as a first check, not as KiCad's verdict." },
+    "com.github.kerstensrobin.kicad-breadboard": { "status": "unsupported", "note": "Its breadboard is drawn with custom painting, which the web runtime does not carry, and simulating needs the ngspice program." },
     "com.github.samuelcicuitstudio.traceforge-kicad": { "status": "unsupported", "note": "It starts a second program that talks to KiCad over a local network port; neither exists in a browser." },
     "com.github.usetraces.traces": { "status": "unsupported", "note": "It needs the traces server running on the same computer." },
     "com.infernoembedded.vulcans-trials": { "status": "unsupported", "note": "It runs a program that is bundled for the desktop." },
     "com.github.z2labs.z2ems": { "status": "limited", "note": "Its windows open and the setup is saved. Simulating needs the Z2 EMS engine, a desktop program." },
     "com.github.fablabkerala.gerber2png-plugin-for-kicad": { "status": "partly", "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there." },
-    "com.github.gauravmm.kleplacement": { "status": "unsupported", "note": "The plugin is broken as published: it imports itself under a folder name it is not installed as, on the desktop too." },
-    "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": { "status": "unsupported", "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet." },
-    "com.github.SK-Electronics-Consulting.kicad-coil-generators": { "status": "unsupported", "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet." },
     "com.github.yaqwsx.kikit": { "status": "unsupported", "note": "It is only a pointer to KiKit, a command line program that is installed separately on a computer." },
-    "com.github.f-blaze.velatrace": { "status": "unsupported", "note": "Its windows are written with Qt (PySide), which cannot run in a browser." },
-    "vn.thanhduongvs.component-position": { "status": "unsupported", "note": "Its windows are written with Qt (PySide), which cannot run in a browser." },
-    "vn.thanhduongvs.fanout-tool": { "status": "unsupported", "note": "Its windows are written with Qt (PySide), which cannot run in a browser." },
+    "com.github.f-blaze.velatrace": { "status": "untested", "note": "Its Qt window opens in the editor. Routing needs the numpy package, which is compiled code the test machine could not download." },
     "com.github.Steffen-W.KiCad-Parasitics": { "status": "unsupported", "note": "It runs the ngspice circuit simulator as a separate program." },
-    "com.github.tobiglaser.KiPNG": { "status": "unsupported", "note": "It runs kicad-cli and the Cairo graphics library, programs of the desktop." },
-    "com.github.kicadlab.CopperFiller": { "status": "untested", "note": "It needs the shapely package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it." }
+    "com.github.tobiglaser.KiPNG": { "status": "untested", "note": "Its kicad-cli export runs in the editor. Turning the result into a PNG needs the pillow package and the Cairo graphics library, which were not tested here." },
+    "com.github.kicadlab.CopperFiller": { "status": "untested", "note": "It needs the shapely package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it." },
+    "com.github.lou270.pinout-image-generator": { "status": "untested", "note": "Its kicad-cli export runs in the editor. Drawing the pinout image needs the pillow package, which is compiled code the test machine could not download." },
+    "com.github.z2labs.z2viacolino": { "status": "untested", "note": "It needs the numpy package, which is compiled code the test machine could not download." }
   }
 }

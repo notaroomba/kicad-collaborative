@@ -14,8 +14,7 @@
   "status": "works"
  },
  "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
-  "status": "unsupported",
-  "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet."
+  "status": "works"
  },
  "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
   "status": "works"
@@ -62,8 +61,7 @@
   "status": "works"
  },
  "com.github.SK-Electronics-Consulting.kicad-coil-generators": {
-  "status": "unsupported",
-  "note": "It is a footprint wizard. The web editor has no footprint wizard dialog yet."
+  "status": "works"
  },
  "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
   "status": "works"
@@ -85,8 +83,8 @@
   "status": "works"
  },
  "com.github.adamws.kicad-git": {
-  "status": "unsupported",
-  "note": "It runs the git program on the project folder. The web editor keeps history itself: Save version and Branches."
+  "status": "works",
+  "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
  },
  "com.github.adamws.kicad-kbplacer": {
   "status": "works"
@@ -127,8 +125,8 @@
   "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.danielboston38.prefab-gate": {
-  "status": "unsupported",
-  "note": "It runs kicad-cli, a program of the desktop application."
+  "status": "partly",
+  "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC, and zones are not refilled first. Read a pass as a first check, not as KiCad's verdict."
  },
  "com.github.ducky64.SubLayout": {
   "status": "works"
@@ -137,8 +135,8 @@
   "status": "works"
  },
  "com.github.f-blaze.velatrace": {
-  "status": "unsupported",
-  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
+  "status": "untested",
+  "note": "Its Qt window opens in the editor. Routing needs the numpy package, which is compiled code the test machine could not download."
  },
  "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
   "status": "partly",
@@ -151,8 +149,7 @@
   "status": "works"
  },
  "com.github.gauravmm.kleplacement": {
-  "status": "unsupported",
-  "note": "The plugin is broken as published: it imports itself under a folder name it is not installed as, on the desktop too."
+  "status": "works"
  },
  "com.github.heronitec-solutions.kicomlib": {
   "status": "works"
@@ -178,15 +175,15 @@
  },
  "com.github.kerstensrobin.kicad-breadboard": {
   "status": "unsupported",
-  "note": "It runs kicad-cli, a program of the desktop application."
+  "note": "Its breadboard is drawn with custom painting, which the web runtime does not carry, and simulating needs the ngspice program."
  },
  "com.github.kicadlab.CopperFiller": {
   "status": "untested",
   "note": "It needs the shapely package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
  },
  "com.github.lou270.pinout-image-generator": {
-  "status": "unsupported",
-  "note": "It adds no board editor command."
+  "status": "untested",
+  "note": "Its kicad-cli export runs in the editor. Drawing the pinout image needs the pillow package, which is compiled code the test machine could not download."
  },
  "com.github.mey-26.kicad-layout-clone": {
   "status": "works"
@@ -247,8 +244,8 @@
   "status": "works"
  },
  "com.github.tobiglaser.KiPNG": {
-  "status": "unsupported",
-  "note": "It runs kicad-cli and the Cairo graphics library, programs of the desktop."
+  "status": "untested",
+  "note": "Its kicad-cli export runs in the editor. Turning the result into a PNG needs the pillow package and the Cairo graphics library, which were not tested here."
  },
  "com.github.ulikoehler.kicad-bulk-hide-silkscreen-designators": {
   "status": "works"
@@ -275,8 +272,8 @@
   "note": "Its windows open and the setup is saved. Simulating needs the Z2 EMS engine, a desktop program."
  },
  "com.github.z2labs.z2viacolino": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: NameError: name 'e' is not defined"
+  "status": "untested",
+  "note": "It needs the numpy package, which is compiled code the test machine could not download."
  },
  "com.gitlab.dennevi.Board2Pdf": {
   "status": "works"
@@ -315,11 +312,9 @@
   "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "vn.thanhduongvs.component-position": {
-  "status": "unsupported",
-  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
+  "status": "works"
  },
  "vn.thanhduongvs.fanout-tool": {
-  "status": "unsupported",
-  "note": "Its windows are written with Qt (PySide), which cannot run in a browser."
+  "status": "works"
  }
 }

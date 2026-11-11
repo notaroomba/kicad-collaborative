@@ -250,6 +250,140 @@ for cls in (Move, Dialog, Report, Fab, Escape, Fetch):
     cls().register()
 `.replace('${BASE}', BASE).replaceAll('${PCM}', `http://127.0.0.1:${PCM_PORT}`);
 
+// A plugin that leans on the desktop: it starts kicad-cli and git, draws a window with Qt, and carries a footprint wizard.
+const DESK_ID = 'com.example.desktool';
+const DESK_PY = String.raw`
+import json
+import os
+import subprocess
+import shutil
+
+import pcbnew
+import FootprintWizardBase
+
+
+class Programs(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Desk: programs"
+        self.category = "Test"
+        self.description = "Runs kicad-cli and git as a desktop plugin does"
+
+    def Run(self):
+        board = pcbnew.GetBoard().GetFileName()
+        out = {"cli": bool(shutil.which("kicad-cli")), "version": subprocess.run(["kicad-cli", "version"], capture_output=True, text=True).stdout.strip()}
+        folder = os.path.join(os.path.dirname(board), "cli-out")
+        r = subprocess.run(["kicad-cli", "pcb", "export", "gerbers", "-l", "F.Cu,Edge.Cuts", "-o", folder, board], capture_output=True, text=True)
+        out["gerbers"] = [r.returncode, sorted(os.listdir(folder))]
+        with open(os.path.join(folder, os.listdir(folder)[0])) as fh:
+            out["gerber_head"] = fh.read(4)
+        r = subprocess.run(["kicad-cli", "pcb", "export", "svg", "-l", "F.Cu,Edge.Cuts", "--mode-multi", "--page-size-mode", "2", "-o", folder, board], capture_output=True, text=True)
+        svgs = sorted(f for f in os.listdir(folder) if f.endswith(".svg"))
+        body = ""
+        for name in svgs:
+            with open(os.path.join(folder, name)) as fh:
+                body += fh.read()
+        out["svg"] = [r.returncode, svgs, body.count("<path") >= 2 and body.count(" Z") > 20, "viewBox" in body]
+        report = os.path.join(folder, "drc.json")
+        r = subprocess.run(["kicad-cli", "pcb", "drc", "--format", "json", "--schematic-parity", "--severity-all", "-o", report, board], capture_output=True, text=True)
+        with open(report) as fh:
+            d = json.load(fh)
+        out["drc"] = [r.returncode, sorted(d.keys()), "Found" in r.stdout, len(d["violations"]) + len(d["unconnected_items"]) + len(d["schematic_parity"]) > 0]
+        sch = os.path.splitext(board)[0] + ".kicad_sch"
+        bom = os.path.join(folder, "bom.csv")
+        r = subprocess.run(["kicad-cli", "sch", "export", "bom", "--fields", "Reference,Value,Footprint", "-o", bom, sch], capture_output=True, text=True)
+        with open(bom) as fh:
+            rows = fh.read().splitlines()
+        out["bom"] = [r.returncode, rows[0], len(rows) > 5]
+        net = os.path.join(folder, "board.net")
+        r = subprocess.run(["kicad-cli", "sch", "export", "netlist", "-o", net, sch], capture_output=True, text=True)
+        with open(net) as fh:
+            text = fh.read()
+        out["netlist"] = [r.returncode, text.startswith("(export"), "(comp (ref" in text, "(net (code" in text]
+        try:
+            subprocess.run(["kicad-cli", "pcb", "render", "-o", "x.png", board], check=True)
+            out["render"] = "ran"
+        except Exception as e:
+            out["render"] = type(e).__name__
+        p = subprocess.Popen(["git", "rev-parse", "--show-toplevel"], cwd=os.path.dirname(board), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        p.wait()
+        out["git"] = [p.returncode, p.stdout.read().strip() == os.path.dirname(board), subprocess.check_output(["git", "version"], text=True).startswith("git version ")]
+        shutil.rmtree(folder)
+        print("DESKTOOL programs " + json.dumps(out, sort_keys=True))
+
+
+class Commit(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Desk: commit"
+        self.category = "Test"
+        self.description = "Commits the project as a git plugin does"
+
+    def Run(self):
+        r = subprocess.run(["git", "commit", "-am", "Plugin checkpoint"], capture_output=True, text=True)
+        print("DESKTOOL commit " + json.dumps([r.returncode, r.stdout.strip()]))
+
+
+class Window(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Desk: Qt window"
+        self.category = "Test"
+        self.description = "A dialog drawn with PySide6"
+
+    def Run(self):
+        from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout
+        app = QApplication.instance() or QApplication([])
+        dlg = QDialog()
+        dlg.setWindowTitle("Qt in the web editor")
+        lay = QVBoxLayout(dlg)
+        self.label = QLabel("Nothing yet")
+        self.edit = QLineEdit("R2")
+        go = QPushButton("Count")
+        done = QPushButton("Done")
+        for w in (self.label, self.edit, go, done):
+            lay.addWidget(w)
+        go.clicked.connect(lambda: self.label.setText("Pads on %s: %d" % (self.edit.text(), len(pcbnew.GetBoard().FindFootprintByReference(self.edit.text()).Pads()))))
+        done.clicked.connect(dlg.accept)
+        code = dlg.exec()
+        print("DESKTOOL qt " + json.dumps([int(code), self.label.text()]))
+
+
+class Ring(FootprintWizardBase.FootprintWizard):
+    GetName = lambda self: "Test ring"
+    GetDescription = lambda self: "A ring of pads, used to test the wizard dialog"
+    GetValue = lambda self: "Ring_%d" % self.parameters["Pads"]["Count"]
+
+    def GenerateParameterList(self):
+        self.AddParam("Pads", "Count", self.uInteger, 8, min_value=2, max_value=64)
+        self.AddParam("Pads", "Radius", self.uMM, 5, min_value=1)
+        self.AddParam("Pads", "Outline", self.uBool, True)
+
+    def CheckParameters(self):
+        pass
+
+    def BuildThisFootprint(self):
+        import math
+        n, r = self.parameters["Pads"]["Count"], self.parameters["Pads"]["Radius"]
+        for i in range(n):
+            pad = pcbnew.PAD(self.module)
+            pad.SetSize(pcbnew.VECTOR2I(pcbnew.FromMM(1.2), pcbnew.FromMM(1.2)))
+            pad.SetShape(pcbnew.PAD_SHAPE_CIRCLE)
+            pad.SetAttribute(pcbnew.PAD_ATTRIB_SMD)
+            pad.SetLayerSet(pad.SMDMask())
+            pad.SetPosition(pcbnew.VECTOR2I(int(r * math.cos(2 * math.pi * i / n)), int(r * math.sin(2 * math.pi * i / n))))
+            pad.SetNumber(str(i + 1))
+            self.module.Add(pad)
+        if self.parameters["Pads"]["Outline"]:
+            self.draw.Circle(0, 0, r + pcbnew.FromMM(1.5))
+        self.draw.Reference(0, -r - pcbnew.FromMM(3), self.GetTextSize())
+        self.draw.Value(0, r + pcbnew.FromMM(3), self.GetTextSize())
+
+
+for cls in (Programs, Commit, Window):
+    cls().register()
+Ring().register()
+`;
+const DESK_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Desk Tool', description: 'A plugin that uses desktop programs, Qt and a footprint wizard, used to test the web runtime.', description_full: 'Runs kicad-cli and git, opens a Qt window and registers a footprint wizard.', identifier: DESK_ID, type: 'plugin',
+  author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com' }, versions: [{ version: '1.0.0', status: 'stable', kicad_version: '8.0' }] };
+
 // A plugin for KiCad's IPC interface: a program of its own that talks to KiCad through kipy (plugin.json names its entry point).
 const IPC_ID = 'com.example.ipctool';
 const IPC_JSON = { $schema: 'https://go.kicad.org/api/schemas/v1', identifier: IPC_ID, name: 'IPC Tool', description: 'Adds a via through the IPC interface', runtime: { type: 'python', min_version: '3.9' },
@@ -313,7 +447,9 @@ const pcmBase = `http://127.0.0.1:${PCM_PORT}`;
 const packages = [Object.assign({}, METADATA, { versions: [Object.assign({}, METADATA.versions[0], { download_url: `${pcmBase}/zips/${ID}.zip`, download_sha256: crypto.createHash('sha256').update(packageZip).digest('hex'), download_size: packageZip.length, install_size: PLUGIN_PY.length })] })];
 const ipcZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(IPC_META)), 'plugins/plugin.json': Buffer.from(JSON.stringify(IPC_JSON)), 'plugins/main.py': Buffer.from(IPC_PY), 'plugins/requirements.txt': Buffer.from('kicad-python>=0.3.0\n') });
 packages.push(Object.assign({}, IPC_META, { versions: [Object.assign({}, IPC_META.versions[0], { download_url: `${pcmBase}/zips/${IPC_ID}.zip`, download_sha256: crypto.createHash('sha256').update(ipcZip).digest('hex'), download_size: ipcZip.length, install_size: IPC_PY.length })] }));
-const zips = { [`${ID}.zip`]: packageZip, [`${IPC_ID}.zip`]: ipcZip };
+const deskZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(DESK_META)), 'plugins/__init__.py': Buffer.from('from .desk import *\n'), 'plugins/desk.py': Buffer.from(DESK_PY) });
+packages.push(Object.assign({}, DESK_META, { versions: [Object.assign({}, DESK_META.versions[0], { download_url: `${pcmBase}/zips/${DESK_ID}.zip`, download_sha256: crypto.createHash('sha256').update(deskZip).digest('hex'), download_size: deskZip.length, install_size: deskZip.length })] }));
+const zips = { [`${ID}.zip`]: packageZip, [`${IPC_ID}.zip`]: ipcZip, [`${DESK_ID}.zip`]: deskZip };
 const REAL = {};   // real official packages, when a checkout of them is given
 if (process.env.PCM_META && process.env.PCM_ZIPS) {
   for (const id of fs.readdirSync(process.env.PCM_META).sort()) {
@@ -582,6 +718,81 @@ const ipcDetail = await a.locator('#pluginDetail').innerText();
 await a.click('#pluginUninstall');
 await a.waitForFunction((i) => !window.KcPlugins.store.get().installed.some((p) => p.identifier === i), IPC_ID, { timeout: 20000 }).catch(() => {});
 check('the manager shows it with its command, and uninstalling it leaves the other plugin running', /IPC Tool/.test(ipcDetail) && /Command: IPC: add via/.test(ipcDetail) && !(await state(a)).installed.includes(IPC_ID) && (await state(a)).installed.includes(ID), ipcDetail.slice(0, 300));
+await a.click('#pluginManager .kd-x').catch(() => {});
+
+// ---- a plugin that leans on the desktop: kicad-cli, git, a Qt window, a footprint wizard
+await menu(a, 'tools', 'External Plugins', 'pluginManager');
+await a.click('#pluginManager [data-tab="kicad"]');
+await a.waitForSelector(`#pluginKicad [data-install="${DESK_ID}"]`);
+await a.click(`#pluginKicad [data-install="${DESK_ID}"]`);
+await a.waitForSelector('#pluginConsent', { timeout: 30000 });
+await a.click('#pluginConsentOk');
+await a.waitForFunction((i) => window.KcPlugins.store.get().installed.some((p) => p.identifier === i), DESK_ID, { timeout: 30000 });
+await a.click('#pluginManager .kd-x').catch(() => {});
+await ready(a, DESK_ID, 120000);
+const deskActs = ((await state(a)).py[DESK_ID] || []);
+const deskRun = (name) => a.evaluate(([i, x]) => { window.KcPlugins.runUi(`plugin:${i}:${x}`); }, [DESK_ID, (deskActs.find((x) => x.name === name) || {}).identifier || '']);
+const deskLine = async (tag) => { await waitLog(a, DESK_ID, new RegExp('DESKTOOL ' + tag + ' '), 90000).catch(() => {}); const l = (await logOf(a, DESK_ID)).find((x) => x.includes('DESKTOOL ' + tag + ' ')) || ''; try { return JSON.parse(l.slice(l.indexOf('DESKTOOL ' + tag + ' ') + 10 + tag.length)); } catch { return { failed: l || (await logOf(a, DESK_ID)).slice(-4).join(' | ') }; } };
+check('a footprint wizard is offered as a command beside the plugin\'s actions', deskActs.map((x) => x.name).join() === 'Desk: programs,Desk: commit,Desk: Qt window,Footprint Wizard: Test ring', JSON.stringify(deskActs.map((x) => x.name)));
+await deskRun('Desk: programs');
+const prog = await deskLine('programs');
+check('kicad-cli is found and reports a version', prog.cli === true && /^\d+\.\d+/.test(prog.version || ''), JSON.stringify(prog).slice(0, 300));
+check('kicad-cli pcb export gerbers writes the editor\'s Gerbers where the plugin asked', prog.gerbers && prog.gerbers[0] === 0 && prog.gerbers[1].length === 2 && /^(G04 |%TF\.)$/.test(prog.gerber_head), JSON.stringify(prog.gerbers) + prog.gerber_head);
+check('kicad-cli pcb export svg draws each layer', prog.svg && prog.svg[0] === 0 && prog.svg[1].length === 2 && prog.svg[2] && prog.svg[3], JSON.stringify(prog.svg));
+check('kicad-cli pcb drc writes KiCad\'s JSON report from the editor\'s checker', prog.drc && prog.drc[0] === 0 && ['schematic_parity', 'unconnected_items', 'violations'].every((k) => prog.drc[1].includes(k)) && prog.drc[2], JSON.stringify(prog.drc));
+check('kicad-cli sch export bom and netlist read the project\'s schematic', prog.bom && prog.bom[0] === 0 && prog.bom[1] === '"Refs","Value","Footprint"' && prog.bom[2] && prog.netlist && prog.netlist.every((v, i) => (i ? v === true : v === 0)), JSON.stringify([prog.bom, prog.netlist]));
+check('a kicad-cli command the web has no form for is refused, not faked', prog.render === 'WebUnsupported', String(prog.render));
+check('git answers for the project folder', prog.git && prog.git[0] === 0 && prog.git[1] && prog.git[2], JSON.stringify(prog.git));
+await idle(a, DESK_ID);
+const versionsBefore = (await db.query('SELECT count(*)::int AS n FROM versions WHERE project_id = $1 AND name = $2', [projectId, 'Plugin checkpoint']).catch(() => ({ rows: [{ n: -1 }] }))).rows[0].n;
+await deskRun('Desk: commit');
+const commit = await deskLine('commit');
+await a.waitForTimeout(1500);
+const versionsAfter = (await db.query('SELECT count(*)::int AS n FROM versions WHERE project_id = $1 AND name = $2', [projectId, 'Plugin checkpoint']).catch(() => ({ rows: [{ n: -1 }] }))).rows[0].n;
+check('git commit saves a version of the project', Array.isArray(commit) && commit[0] === 0 && versionsAfter === versionsBefore + 1, `${JSON.stringify(commit)} versions ${versionsBefore} → ${versionsAfter}`);
+await idle(a, DESK_ID);
+await deskRun('Desk: Qt window');
+await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+const qt = a.frameLocator(`iframe[data-plugin="${DESK_ID}"]`);
+await qt.getByText('Count', { exact: true }).click();
+await qt.getByText('Pads on R2: 2').waitFor({ timeout: 10000 }).catch(() => {});
+check('a Qt window opens as a KiCad dialog and its signals reach the plugin', (await a.locator('#pluginWindow .kd-title').innerText()).includes('Qt in the web editor') && (await qt.getByText('Pads on R2: 2').count()) === 1);
+await shot(a, 'py-07-qt');
+await qt.getByText('Done', { exact: true }).click();
+const qtOut = await deskLine('qt');
+check('QDialog.exec returns when the dialog is accepted', Array.isArray(qtOut) && qtOut[0] === 1 && qtOut[1] === 'Pads on R2: 2', JSON.stringify(qtOut));
+await idle(a, DESK_ID);
+const fpsBefore = await count(a, 'footprint'), wizDepth = await undoDepth(a);
+await deskRun('Footprint Wizard: Test ring');
+await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+const wiz = a.frameLocator(`iframe[data-plugin="${DESK_ID}"]`);
+await wiz.locator('svg circle').first().waitFor({ timeout: 10000 }).catch(() => {});
+const padsDrawn = () => wiz.locator('svg g > circle').count();
+const drawn8 = await padsDrawn();
+await wiz.locator('input[type=text]:visible').first().fill('12');
+await a.waitForTimeout(500);
+check('the wizard dialog draws the footprint and redraws it when a value changes', drawn8 === 8 && (await padsDrawn()) === 12, `${drawn8} then ${await padsDrawn()}`);
+await wiz.locator('input[type=text]:visible').first().fill('1');
+await a.waitForTimeout(500);
+check('a value outside the wizard\'s limits is reported and nothing can be placed', (await wiz.getByText('Place on Board').isDisabled()) && /below minimum/.test(await wiz.locator('textarea:visible').inputValue()), await wiz.locator('textarea:visible').inputValue());
+await wiz.locator('input[type=text]:visible').first().fill('12');
+await a.waitForTimeout(500);
+await shot(a, 'py-08-wizard');
+await wiz.getByText('Place on Board').click();
+await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'footprint').length === n + 1, fpsBefore, { timeout: 20000 }).catch(() => {});
+const wizPlaced = await a.evaluate(() => { const it = Array.from(window.CollabEditor.kdoc.items.values()).filter((x) => x.kind === 'footprint').pop(); return it ? { pads: (it.pads || []).length, value: it.value } : null; });
+check('Place on Board adds the built footprint to the board as one edit', (await count(a, 'footprint')) === fpsBefore + 1 && (await undoDepth(a)) === wizDepth + 1, `${fpsBefore} → ${await count(a, 'footprint')}, ${JSON.stringify(wizPlaced)}`);
+await b.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'footprint').length === n + 1, fpsBefore, { timeout: 20000 }).catch(() => {});
+check('the second person sees the new footprint', (await count(b, 'footprint')) === fpsBefore + 1);
+await idle(a, DESK_ID);
+await a.keyboard.press('Control+z');
+await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'footprint').length === n, fpsBefore, { timeout: 20000 }).catch(() => {});
+check('and Undo removes it', (await count(a, 'footprint')) === fpsBefore);
+await a.evaluate(() => { window.confirm = () => true; });
+await menu(a, 'tools', 'External Plugins', 'pluginManager');
+await a.waitForSelector('#pluginDetail');
+await a.click('#pluginUninstall');
+await a.waitForFunction((i) => !window.KcPlugins.store.get().installed.some((p) => p.identifier === i), DESK_ID, { timeout: 20000 }).catch(() => {});
 await a.click('#pluginManager .kd-x').catch(() => {});
 
 // ---- the manager's view of it

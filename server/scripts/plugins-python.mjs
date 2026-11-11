@@ -83,6 +83,11 @@ async function one(dir, boardPath) {
     if (method === "fab.positions") return JSON.stringify({ rows: [], csv: "Ref,Val,Package,PosX,PosY,Rot,Side\n", ascii: "" });
     if (method === "fab.layers") return JSON.stringify({ layers: ["F.Cu", "B.Cu", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts"] });
     if (method === "fab.bom") return JSON.stringify({ csv: "", lines: 0 });
+    if (method === "fab.svg") { const ls = a.single ? [(a.layers || []).join("+")] : (a.layers || []); return JSON.stringify({ files: ls.map((l) => ({ name: a.single ? `${stem}.svg` : `${stem}-${l.replace(/\./g, "_")}.svg`, layer: l, text: '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10"></svg>\n' })), warnings: [], missing: [], box: [0, 0, 10, 10], page: [297, 210] }); }
+    if (method === "fab.drc") return JSON.stringify({ markers: [], parityError: "", note: "stand-in design rule check" });
+    if (method === "fab.netlist") return JSON.stringify({ root: `${stem}.kicad_sch`, warnings: [], components: [], nets: [] });
+    if (method === "project.versions") return JSON.stringify({ branch: null, versions: [] });
+    if (method === "project.saveVersion") return JSON.stringify({ saved: !!a.name, dialog: !a.name });
     return "null";
   };
   py.globals.set("_kc_files", py.toPy(readPackage(dir)));

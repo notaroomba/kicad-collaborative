@@ -1282,6 +1282,11 @@ def get_stackup(cmd):
         layer.enabled = True
         layer.material_name = material
         low = word.lower()
+        try:                                # the name the layer has on this board ("top_cu"), as KiCad reports it
+            lid = _board().GetLayerID(name)
+            layer.user_name = str(_board().GetLayerName(lid)) if lid is not None and lid >= 0 else name
+        except Exception:
+            layer.user_name = name
         if low == "copper":
             layer.type = b.BSLT_COPPER
             layer.layer = _layer(name)

@@ -145,7 +145,7 @@ function WindowDialog({ w }: { w: PluginWindowState }) {
   };
   return (
     <div className={cx("kd-overlay plg-winlay", !w.modal && "modeless")} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") closeWindow(); }}>
-      <div className="kd-dialog plg-window" role="dialog" aria-modal={w.modal} id="pluginWindow" tabIndex={-1} style={{ transform: `translate(${off.x}px, ${off.y}px)` }}>
+      <div className="kd-dialog plg-window" role="dialog" aria-modal={w.modal} id="pluginWindow" tabIndex={-1} style={{ transform: `translate(${off.x}px, ${off.y}px)`, maxWidth: "calc(100vw - 24px)" /* theme.css caps its own dialogs at 760px; a plugin window is as wide as its content asks */ }}>
         <div className="kd-title" onPointerDown={startDrag}><span>{w.title}</span><span className="plg-from">plugin: {w.pluginName}</span><span className="kd-x" title="Close (Esc)" onClick={() => closeWindow()}>×</span></div>
         <div className="plg-winbody" ref={body} style={{ minWidth: w.width, height: w.height }}>{busy ? <span className="plg-muted">Starting…</span> : null}</div>
       </div>

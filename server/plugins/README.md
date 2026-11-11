@@ -74,8 +74,8 @@ that asks for more is shown again for consent.
 
 | Permission | Allows |
 |---|---|
-| `design:read` | `kicad.design` reads; the `document`, `selection` and `change` events |
-| `design:write` | `kicad.design.apply()` and `kicad.design.commit()` |
+| `design:read` | `kicad.design` reads; `kicad.fab.*`; `kicad.project.versions()`; the `document`, `selection` and `change` events |
+| `design:write` | `kicad.design.apply()` and `kicad.design.commit()`; `kicad.project.saveVersion()` |
 | `view` | `kicad.view.*`: selection, highlight, view position, markers, opening a document |
 | `files:import` | importers; `kicad.files.pick()`; file fields in `kicad.ui.prompt()` |
 | `files:export` | exporters; `kicad.files.save()` |
@@ -122,6 +122,16 @@ Every call returns a promise. A refused call rejects with an `Error` whose `code
 `prompt({ title, message, fields, okLabel })` with field types `text`, `number`, `select`,
 `checkbox`, `textarea`, `file`; `showPanel()`, `hidePanel()`. Dialogs are drawn by the editor and
 carry the plugin's name.
+
+**Fabrication and checks** (a board must be open): `kicad.fab.layers()`, `gerbers(options)`,
+`drill(options)`, `positions(options)`, `bom(options)` return the files File → Fabrication Outputs
+makes; `svg({ layers, commonLayers, single, mirror, blackAndWhite, area })` draws layers as SVG;
+`drc({ parity })` runs the Design Rules Checker and returns its markers; `netlist()` returns the
+project's schematic as components and nets.
+
+**Versions**: `kicad.project.versions()` lists the project's saved versions;
+`kicad.project.saveVersion({ name, description })` saves one, or opens the Save Version dialog
+when no name is given.
 
 **Files**: `kicad.files.save({ filename, mime, text | bytes })`, `kicad.files.pick({ accept, as })`.
 
@@ -240,7 +250,27 @@ How it works:
   need them then say which module is missing.
 - **Programs and threads.**  A plugin that starts Python again (`subprocess` with
   `sys.executable`) has that script run in the same interpreter.  Threads run in turn; a thread
-  that only waits and polls is parked.  Listening on a socket is refused.
+  that only waits and polls is parked, and a worker that waits on a `queue.Queue` runs when
+  something is put on it.  Listening on a socket is refused.
+- **kicad-cli and git.**  Two desktop programs have an equivalent in the editor, and
+  `plugins/python/kicad_programs.py` answers for them (`shutil.which` finds them, `subprocess`
+  runs them).  `kicad-cli`: `version`, `pcb drc` (the Design Rules Checker's own run, written as
+  KiCad's JSON or text report), `pcb export gerbers`, `gerber`, `drill`, `pos` and `svg` (the
+  fabrication writers), `sch export netlist` and `bom` (the project's schematic).  They work on
+  the design as it is open, and the files land where the plugin asked.  The web DRC checks fewer
+  rules than the desktop's and does not refill zones; the stand-in says so on stderr and in the
+  plugin's log.  `git`: `version`, `rev-parse`, `status`, `log`, `add`, `commit` and `gui`, on
+  the project's version history: a commit is a saved version, `git gui` opens the Save Version
+  dialog.  Any other subcommand, and any other program, is refused with a message, never faked.
+  `pcbnew.SaveBoard` writes the board as a file in the interpreter's file system.
+- **Qt.**  Plugins for the IPC interface that draw with PySide6 get `plugins/python/PySide6`:
+  Qt's Python interface (widgets, layouts, signals and slots, models and views, QThread, QTimer,
+  QSettings) on the same HTML widgets `wx` uses, so a `QMainWindow` is a KiCad dialog.  Custom
+  painting (`QPainter`) is accepted and draws nothing.
+- **Footprint wizards.**  `FootprintWizardBase` and `PadArray` are KiCad's own helper modules.
+  Each wizard a plugin registers becomes a command, "Footprint Wizard: <name>", that opens the
+  wizard dialog (`kicad_wizard.py`): the parameter pages, a live preview, the build messages,
+  *Save Footprint* (a `.kicad_mod` file) and *Place on Board* (one undoable edit).
 - **The network.**  A plugin frame cannot open connections.  A plugin from KiCad's repository
   whose code talks to web services is offered the `network` permission, and the consent dialog
   lists the addresses.  With it, the plugin's sockets (so `urllib`, `http.client`, `requests`) are
@@ -252,9 +282,10 @@ How it works:
   requests a minute.  Every request is written to the plugin's log.
   `KC_PLUGIN_NETWORK=off` turns this off for the whole server.
 
-What does not carry over, by nature of a browser: running other programs (`kicad-cli`, `git`,
-FreeCAD), Python packages with native code that Pyodide does not ship, and Qt user interfaces.
-A plugin that needs one of these says so in its log.
+What does not carry over, by nature of a browser: running other programs (ngspice, FreeCAD, a
+3D renderer, a helper server on a local port), Python packages with native code that Pyodide
+does not ship, and custom painting on a device context.  A plugin that needs one of these says
+so in its log.
 
 The label beside each plugin in the manager is one of *works*, *partly works*, *limited*,
 *not supported* and *not tested yet* (it needs something this check could not load or reach).

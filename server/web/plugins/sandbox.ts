@@ -63,7 +63,8 @@ export function sandboxRuntime(): void {
     assistant: { registerTool: reg("tool") },
     design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit"]),
     view: group("view", ["select", "highlight", "focus", "setMarkers", "clearMarkers", "openDocument"]),
-    fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom"]),
+    fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "drc", "netlist"]),
+    project: group("project", ["versions", "saveVersion"]),
     net: group("net", ["fetch"]),
     ui: Object.assign(group("ui", ["prompt", "confirm", "showPanel", "hidePanel", "showWindow", "hideWindow", "openLink"]), {
       toast: (text: any) => call("ui.toast", text && typeof text === "object" ? text : { text: String(text) }),

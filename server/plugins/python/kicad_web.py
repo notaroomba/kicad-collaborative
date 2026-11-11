@@ -196,9 +196,32 @@ class _WxFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             module.XRC_USE_LOCALE = module.XRC_NO_SUBCLASSING = 0
 
 
+class _OwnNameFinder(importlib.abc.MetaPathFinder):
+    """A plugin that imports itself by the folder name its author had it under (`from KLEPlacement.parser import X`).
+    KiCad's plugin manager installs it under its package identifier instead, so that name finds nothing; here it is the
+    plugin's own package.  Only a name that matches the plugin's own name is answered, and only when nothing else did."""
+
+    @staticmethod
+    def _norm(text):
+        return "".join(c for c in str(text).lower() if c.isalnum())
+
+    def find_spec(self, fullname, path=None, target=None):
+        pkg = _plugin.get("package")
+        if not pkg or "." in fullname or fullname == pkg or pkg not in sys.modules:
+            return None
+        want = self._norm(fullname)
+        own = {self._norm(_plugin.get("name")), self._norm(str(_plugin.get("identifier")).rsplit(".", 1)[-1])}
+        if not want or want not in own:
+            return None
+        sys.modules[fullname] = sys.modules[pkg]          # the same module object: its submodules are found through its __path__
+        return sys.modules[pkg].__spec__
+
+
 def _install_finders():
     if not any(isinstance(f, _WxFinder) for f in sys.meta_path):
         sys.meta_path.append(_WxFinder())
+    if not any(isinstance(f, _OwnNameFinder) for f in sys.meta_path):
+        sys.meta_path.append(_OwnNameFinder())
 
 
 # ----------------------------------------------------------------------------- the environment a plugin expects
@@ -208,6 +231,32 @@ class _Parked(BaseException):
 
 
 _threads = []          # sleep budgets of the threads running now, innermost last
+_thread_objs = []      # and the thread objects themselves
+
+
+def run_thread(thread, fn):
+    """Run a thread's work now, on this stack.  Returns "done", or "waiting" when it was set aside at a queue it reads
+    its jobs from (it goes on when a job arrives), or "parked" when it only sleeps and looks."""
+    thread._kc_alive = True
+    _threads.append([0, 0.0])
+    _thread_objs.append(thread)
+    state = "done"
+    try:
+        fn()
+    except _Parked as e:
+        state = "waiting" if e.args and e.args[0] == "queue" else "parked"
+        if state == "parked":
+            log.debug("a background thread that only waits was set aside")
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _threads.pop()
+        _thread_objs.pop()
+        thread._kc_alive = state == "waiting"
+    done = getattr(thread, "_kc_done", None)
+    if state == "done" and callable(done):
+        done()
+    return state
 
 
 def _patch_threads():
@@ -217,17 +266,35 @@ def _patch_threads():
     a few seconds' worth without finishing is set aside: what it watches for (a download folder,
     another program) does not happen here."""
     def start(self):
-        self._kc_alive = True
-        _threads.append([0, 0.0])
-        try:
-            self.run()
-        except _Parked:
-            log.debug("a background thread that only waits was set aside")
-        except Exception:
-            traceback.print_exc()
-        finally:
-            _threads.pop()
-            self._kc_alive = False
+        run_thread(self, self.run)
+
+    # A worker thread that takes its jobs from a queue: it runs until the queue is empty, is set aside there, and is
+    # picked up again when a job is put in (after the code that put it has finished what it was doing).
+    import queue
+    real_get, real_put = queue.Queue.get, queue.Queue.put
+
+    def q_get(self, block=True, timeout=None):
+        if block and not self.qsize():
+            if _thread_objs:
+                waiting = self.__dict__.setdefault("_kc_waiters", [])
+                if _thread_objs[-1] not in waiting:
+                    waiting.append(_thread_objs[-1])
+                raise _Parked("queue")
+            if timeout is None:
+                raise queue.Empty()             # nothing else runs that could put something in
+        return real_get(self, block and bool(self.qsize()), timeout)
+
+    def q_put(self, item, block=True, timeout=None):
+        real_put(self, item, False)
+        waiting = self.__dict__.get("_kc_waiters")
+        if waiting:
+            worker = waiting.pop(0)
+            wx.CallAfter(lambda: run_thread(worker, worker.run))
+
+    queue.Queue.get = q_get
+    queue.Queue.put = q_put
+    queue.Queue.put_nowait = lambda self, item: q_put(self, item)
+    queue.Queue.join = lambda self: None
 
     def timer_start(self):
         # threading.Timer: "call this in a while".  In the browser that is a timeout; without one, now.
@@ -296,7 +363,11 @@ def _patch_desktop():
     def program(args):
         if isinstance(args, (list, tuple)):
             return os.path.basename(str(args[0])).lower() if args else "", [str(a) for a in args[1:]]
-        parts = str(args).split()
+        import shlex
+        try:
+            parts = shlex.split(str(args))
+        except ValueError:
+            parts = str(args).split()
         return (os.path.basename(parts[0]).lower() if parts else ""), parts[1:]
 
     class Done:
@@ -307,10 +378,10 @@ def _patch_desktop():
             return self.stdout, self.stderr
 
         def wait(self, *a, **k):
-            return 0
+            return self.returncode
 
         def poll(self):
-            return 0
+            return self.returncode
 
         def kill(self):
             pass
@@ -318,7 +389,8 @@ def _patch_desktop():
         terminate = kill
 
         def check_returncode(self):
-            pass
+            if self.returncode:
+                raise subprocess.CalledProcessError(self.returncode, self.args, self.stdout, self.stderr)
 
         def __enter__(self):
             return self
@@ -378,7 +450,56 @@ def _patch_desktop():
                     _open_target(r)
                     break
             return Done(args)
+        import kicad_programs
+        res = kicad_programs.run(name, rest, k.get("cwd"))     # kicad-cli and git: the editor answers for them
+        if res is not None:
+            done = Done(args)
+            done.returncode = res.code
+            text = bool(k.get("text") or k.get("universal_newlines") or k.get("encoding"))
+            merged = k.get("stderr") == subprocess.STDOUT
+            out, err = (res.out + res.err, "") if merged else (res.out, res.err)
+            captured = k.get("capture_output") or k.get("stdout") in (subprocess.PIPE, subprocess.DEVNULL)
+            if not captured and hasattr(k.get("stdout"), "write"):
+                k["stdout"].write(out if "b" not in getattr(k["stdout"], "mode", "w") else out.encode("utf-8"))
+            if hasattr(k.get("stderr"), "write"):
+                k["stderr"].write(err if "b" not in getattr(k["stderr"], "mode", "w") else err.encode("utf-8"))
+            for line in err.splitlines():
+                log.warning("%s: %s", name, line)
+            done.stdout = out if text else out.encode("utf-8")
+            done.stderr = err if text else err.encode("utf-8")
+            if k.get("check") and done.returncode:
+                raise subprocess.CalledProcessError(done.returncode, args, done.stdout, done.stderr)
+            return done
         raise pcbnew.WebUnsupported(f"Running another program ({name or 'a command'}): there are no other programs in the browser")
+
+    def popen(args, *a, **k):
+        """Popen's result is read through streams (proc.stdout.read()), run()'s through strings."""
+        done = launch(args, *a, **k)
+        for attr in ("stdout", "stderr"):
+            v = getattr(done, attr)
+            setattr(done, "_" + attr, v)
+            piped = k.get(attr) == subprocess.PIPE
+            setattr(done, attr, (io.StringIO(v) if isinstance(v, str) else io.BytesIO(v or b"")) if piped else None)
+        done.stdin = io.BytesIO() if k.get("stdin") == subprocess.PIPE else None
+        done.communicate = lambda *x, **y: (done._stdout if k.get("stdout") == subprocess.PIPE else None, done._stderr if k.get("stderr") == subprocess.PIPE else None)
+        return done
+
+    # The two programs the editor answers for are "installed": plugins look for them before they run them.
+    import shutil
+    real_which = shutil.which
+
+    def which(cmd, *a, **k):
+        import kicad_programs
+        return kicad_programs.which(cmd) or real_which(cmd, *a, **k)
+
+    shutil.which = which
+    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git"):
+        try:
+            if not os.path.exists(stub):
+                _write(stub, b"#!/bin/sh\n")
+                os.chmod(stub, 0o755)
+        except OSError:
+            pass
 
     # Nothing can connect to this interpreter: a plugin that listens on a local port (to talk to a helper program or
     # to a page in the browser) is told so at once instead of waiting for a caller that cannot come.
@@ -395,7 +516,7 @@ def _patch_desktop():
     socketserver.BaseServer.serve_forever = no_serve
     socketserver.BaseServer.handle_request = no_serve
 
-    subprocess.Popen = launch
+    subprocess.Popen = popen
     subprocess.run = launch
     subprocess.call = lambda args, *a, **k: launch(args, **k).returncode
     subprocess.check_call = lambda args, *a, **k: launch(args, check=True, **k).returncode
@@ -500,6 +621,13 @@ def _on_register(plugin):
         _actions.append(plugin)
 
 
+def _on_register_wizard(wizard):
+    """A footprint wizard: offered as a command that opens the wizard dialog (kicad_wizard.py)."""
+    import kicad_wizard
+    if not any(isinstance(x, kicad_wizard.WizardAction) and type(x.wizard) is type(wizard) for x in _actions):
+        _actions.append(kicad_wizard.WizardAction(wizard))
+
+
 def boot(identifier, files, bridge=None, name=""):
     """Install the plugin's files and import it.  Returns what it registered, as JSON."""
     global _bridge, _load_error
@@ -534,6 +662,7 @@ def boot(identifier, files, bridge=None, name=""):
     pcbnew._Host.plugin_dir = PLUGIN_DIR
     pcbnew._Host.config_dir = CONFIG_DIR
     pcbnew._Host.on_register = _on_register
+    pcbnew._Host.on_register_wizard = _on_register_wizard
     pcbnew._Host.refresh = flush
     if bridge is not None:
         _install_fabrication()

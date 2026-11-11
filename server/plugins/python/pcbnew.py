@@ -3007,6 +3007,12 @@ class PAD(BOARD_CONNECTED_ITEM):
         seq = s.Seq()
         return seq[0] if seq else UNDEFINED_LAYER
 
+    PTHMask = staticmethod(lambda: LSET.AllCuMask() | LSET([F_Mask, B_Mask]))
+    SMDMask = staticmethod(lambda: LSET([F_Cu, F_Paste, F_Mask]))
+    ConnSMDMask = staticmethod(lambda: LSET([F_Cu, F_Mask]))
+    UnplatedHoleMask = staticmethod(lambda: LSET.AllCuMask() | LSET([F_Mask, B_Mask]))
+    ApertureMask = staticmethod(lambda: LSET([F_Paste]))
+
     def GetPrincipalLayer(self):
         return self.GetLayer()
 
@@ -3650,6 +3656,32 @@ class FOOTPRINT(BOARD_ITEM):
 
     def IsNetTie(self):
         return _kid(self._node, "net_tie_pad_groups") is not None
+
+    def GetNetTiePadGroups(self):
+        k = _kid(self._node, "net_tie_pad_groups")
+        return [str(g) for g in k[1:]] if k is not None else []
+
+    def AddNetTiePadGroup(self, group):
+        """Pads that may touch although they are on different nets: one group is a list of pad numbers, "1, 2"."""
+        k = _kid(self._node, "net_tie_pad_groups")
+        if k is None:
+            k = [Sym("net_tie_pad_groups")]
+            self._node.append(k)
+        k.append(str(group))
+        self._touch()
+
+    def ClearNetTiePadGroups(self):
+        k = _kid(self._node, "net_tie_pad_groups")
+        if k is not None:
+            self._node.remove(k)
+            self._touch()
+
+    def MapPadNumbersToNetTieGroups(self):
+        out = {}
+        for i, g in enumerate(self.GetNetTiePadGroups()):
+            for n in g.split(","):
+                out[n.strip()] = i
+        return out
 
     def GetFriendlyName(self):
         return "Footprint"
@@ -4647,6 +4679,7 @@ class BOARD(EDA_ITEM):
         root = next((t for t in trees if isinstance(t, list) and t and t[0] == "kicad_pcb"), None)
         if root is None:
             raise ValueError("this is not a KiCad board")
+        self._head = [n for n in root[1:] if isinstance(n, list) and n and (n[0] in _HEAD or (n[0] not in _ITEM_CLASSES and _kid(n, "uuid") is None))]
         for n in root[1:]:
             if not isinstance(n, list) or not n:
                 continue
@@ -5041,8 +5074,13 @@ class BOARD(EDA_ITEM):
     def GetBoardUse(self):
         return 0
 
-    def Save(self, *_):
-        _unsupported("Saving the board to a file (the web editor saves every change as it is made)")
+    def _text(self):
+        """The board as a .kicad_pcb file: the header as it arrived, the items as they are now."""
+        head = getattr(self, "_head", None) or [[Sym("version"), 20241229], [Sym("generator"), "pcbnew"], [Sym("generator_version"), "10.0"]]
+        return "(kicad_pcb\n" + "\n".join("  " + _dump(n) for n in list(head) + [it._node for it in self._items if getattr(it, "_node", None) is not None]) + "\n)\n"
+
+    def Save(self, path=None, *_):
+        return SaveBoard(path or self._filename, self)
 
     def SetModified(self):
         self._modified = True
@@ -5220,6 +5258,8 @@ class _Host:
     config_dir = "/config"
     project = {}             # the open project's .kicad_pro, parsed: net classes and design rules
     on_register = None
+    wizards = []             # registered footprint wizards
+    on_register_wizard = None
 
 
 def GetBoard():
@@ -5258,7 +5298,26 @@ def LoadBoard(path, *_):
 
 
 def SaveBoard(path, board, *_):
-    _unsupported("Saving the board to a file (the web editor saves every change as it is made)")
+    """Saving to the board's own file sends the changes so far to the editor (which saves every change as it is made); the
+    file itself is written too, in this interpreter's file system, where the plugin and what it starts can read it.  Saving
+    under another name writes a copy there."""
+    import os as _os
+    path = str(path or board._filename or "")
+    if not path:
+        _unsupported("Saving a board that has no file name")
+    if not _os.path.isabs(path):
+        path = _os.path.join(_os.path.dirname(board._filename or "") or _os.getcwd(), path)
+    own = _os.path.abspath(path) == _os.path.abspath(board._filename or "")
+    if own and board is _Host.board and _Host.refresh is not None:
+        _Host.refresh()
+    d = _os.path.dirname(path)
+    if d:
+        _os.makedirs(d, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(board._text())
+    if own:
+        board._modified = False
+    return True
 
 
 def NewBoard(path=""):
@@ -5446,26 +5505,271 @@ class FilePlugin(ActionPlugin):
     pass
 
 
-class FootprintWizard:
-    """Footprint wizards need the footprint editor, which the web does not have yet: they load but are not offered."""
+uMM, uMils, uFloat, uInteger, uBool, uRadians, uDegrees, uPercent, uString = "mm", "mils", "float", "integer", "bool", "radians", "degrees", "%", "string"
+uNumeric = [uMM, uMils, uFloat, uInteger, uDegrees, uRadians, uPercent]
+uUnits = [uMM, uMils, uFloat, uInteger, uBool, uDegrees, uRadians, uPercent, uString]
+
+
+class FootprintWizardParameter:
+    """One value of a footprint wizard: its page, name, unit, limits and what the person typed."""
+
+    _true = ["true", "t", "y", "yes", "on", "1", 1]
+    _false = ["false", "f", "n", "no", "off", "0", 0, "", None]
+    _bools = _true + _false
+
+    def __init__(self, page, name, units, default, **kwarg):
+        self.page = page
+        self.name = name
+        self.hint = kwarg.get("hint", "")
+        self.designator = kwarg.get("designator", " ")
+        if isinstance(units, (list, tuple)):
+            self.units = ",".join(str(el).strip() for el in units)
+        elif str(units).lower() in uUnits:
+            self.units = str(units).lower()
+        elif str(units).lower() == "percent":
+            self.units = uPercent
+        else:
+            self.units = units
+        self.multiple = int(kwarg.get("multiple", 1))
+        self.min_value = kwarg.get("min_value", None)
+        self.max_value = kwarg.get("max_value", None)
+        self.raw_value = ""
+        self.SetValue(default)
+        self.default = self.raw_value
+        self.error_list = []
+
+    def ClearErrors(self):
+        self.error_list = []
+
+    def AddError(self, err, info=None):
+        if err in self.error_list:
+            return
+        self.error_list.append("{err} ({info})".format(err=err, info=info) if info is not None else err)
+
+    def Check(self, min_value=None, max_value=None, multiple=None, info=None):
+        if min_value is None:
+            min_value = self.min_value
+        if max_value is None:
+            max_value = self.max_value
+        if multiple is None:
+            multiple = self.multiple
+        if self.units not in uUnits and "," not in str(self.units):
+            self.AddError("type '{t}' unknown".format(t=self.units), info)
+            self.AddError("Allowable types: " + str(self.units), info)
+        if self.units in uNumeric:
+            try:
+                to_num = float(self.raw_value)
+                if min_value is not None and to_num < min_value:
+                    self.AddError("value '{v}' is below minimum ({m})".format(v=self.raw_value, m=min_value), info)
+                if max_value is not None and to_num > max_value:
+                    self.AddError("value '{v}' is above maximum ({m})".format(v=self.raw_value, m=max_value), info)
+            except (TypeError, ValueError):
+                self.AddError("value '{v}' is not of type '{t}'".format(v=self.raw_value, t=self.units), info)
+        if self.units == uInteger:
+            try:
+                to_int = int(float(self.raw_value))
+                if multiple is not None and multiple > 1 and to_int % multiple > 0:
+                    self.AddError("value '{v}' is not a multiple of {m}".format(v=self.raw_value, m=multiple), info)
+            except (TypeError, ValueError):
+                self.AddError("value '{v}' is not an integer".format(v=self.raw_value), info)
+        if self.units == uBool and self.raw_value not in ("0", "1"):
+            self.AddError("value '{v}' is not a boolean value".format(v=self.raw_value), info)
+
+    @property
+    def value(self):
+        v = str(self.raw_value)
+        if self.units in uNumeric:
+            try:
+                v = float(v.replace(",", "."))
+            except ValueError:
+                v = 0.0
+            if self.units == uInteger:
+                return int(v)
+            if self.units == uMM:
+                return FromMM(v)
+            if self.units == uMils:
+                return FromMils(v)
+            return v
+        if self.units == uBool:
+            return v.lower() in self._true
+        return v
+
+    def DefaultValue(self):
+        return str(self.default)
+
+    def SetValue(self, new_value):
+        new_value = str(new_value)
+        if len(new_value.strip()) == 0 and self.units not in (uString, uBool):
+            return
+        if self.units == uBool:
+            new_value = "1" if new_value.lower() in self._true else "0"
+        elif self.units in uNumeric:
+            new_value = new_value.replace(",", ".")
+        elif "," in str(self.units) and new_value not in str(self.units).split(","):
+            new_value = str(self.units).split(",")[0]
+        self.raw_value = new_value
+
+    def __str__(self):
+        s = self.name + ": " + str(self.raw_value)
+        if self.units in (uMM, uMils, uPercent, uRadians, uDegrees):
+            s += self.units
+        elif self.units == uBool:
+            s = self.name + ": " + ("True" if self.raw_value == "1" else "False")
+        elif self.units == uString:
+            s = self.name + ": '" + self.raw_value + "'"
+        return s
+
+
+class FootprintWizardPlugin(KiCadPlugin):
+    """A footprint wizard as KiCad registers it.  The web editor offers each one as a command that opens the wizard dialog."""
 
     def __init__(self):
-        self.name = ""
-        self.description = ""
+        self.module = None
         self.params = []
+        self.name = "KiCad FP Wizard"
+        self.description = "Undefined Footprint Wizard plugin"
+        self.image = ""
+        self.buildmessages = ""
+        self.category = "Footprint Wizard"
+        self.icon_file_name = self.dark_icon_file_name = ""
+        self.show_toolbar_button = False
+        self.defaults()
+
+    def defaults(self):
+        pass
 
     def register(self):
-        pass
+        try:
+            self.name = str(self.GetName())
+            self.description = str(self.GetDescription())
+        except NotImplementedError:
+            pass
+        if not any(type(w) is type(self) for w in _Host.wizards):
+            _Host.wizards.append(self)
+            if _Host.on_register_wizard is not None:
+                _Host.on_register_wizard(self)
 
     def deregister(self):
-        pass
+        if self in _Host.wizards:
+            _Host.wizards.remove(self)
+
+    def AddParam(self, page, name, unit, default, **kwarg):
+        self.params.append(FootprintWizardParameter(page, name, unit, default, **kwarg))
+
+    @property
+    def parameters(self):
+        pages = {}
+        for p in self.params:
+            pages.setdefault(p.page, {})[p.name] = p.value
+        return pages
+
+    @property
+    def values(self):
+        return self.parameters
+
+    @property
+    def pages(self):
+        page_list = []
+        for p in self.params:
+            if p.page not in page_list:
+                page_list.append(p.page)
+        return page_list
 
     def GetName(self):
         return self.name
 
+    def GetImage(self):
+        return self.image
 
-class FootprintWizardPlugin(FootprintWizard):
-    pass
+    def GetDescription(self):
+        return self.description
+
+    def GetValue(self):
+        raise NotImplementedError
+
+    def GetReferencePrefix(self):
+        return "REF"
+
+    def GetParam(self, page, name):
+        for p in self.params:
+            if p.page == page and p.name == name:
+                return p
+        return None
+
+    def CheckParam(self, page, name, **kwarg):
+        self.GetParam(page, name).Check(**kwarg)
+
+    def AnyErrors(self):
+        return any(len(p.error_list) > 0 for p in self.params)
+
+    def GetNumParameterPages(self):
+        return len(self.pages)
+
+    def GetParameterPageName(self, page_n):
+        return self.pages[page_n]
+
+    def GetParametersByPageName(self, page_name):
+        return [p for p in self.params if p.page == page_name]
+
+    def GetParametersByPageIndex(self, page_index):
+        return self.GetParametersByPageName(self.GetParameterPageName(page_index))
+
+    def GetParameterDesignators(self, page_index):
+        return [p.designator for p in self.GetParametersByPageIndex(page_index)]
+
+    def GetParameterNames(self, page_index):
+        return [p.name for p in self.GetParametersByPageIndex(page_index)]
+
+    def GetParameterValues(self, page_index):
+        return [str(p.raw_value) for p in self.GetParametersByPageIndex(page_index)]
+
+    def GetParameterErrors(self, page_index):
+        return [str("\n".join(p.error_list)) for p in self.GetParametersByPageIndex(page_index)]
+
+    def GetParameterTypes(self, page_index):
+        return [str(p.units) for p in self.GetParametersByPageIndex(page_index)]
+
+    def GetParameterHints(self, page_index):
+        return [str(p.hint) for p in self.GetParametersByPageIndex(page_index)]
+
+    def SetParameterValues(self, page_index, list_of_values):
+        params = self.GetParametersByPageIndex(page_index)
+        for i, param in enumerate(params):
+            if i < len(list_of_values):
+                param.SetValue(list_of_values[i])
+
+    def ResetWizard(self):
+        for p in self.params:
+            p.raw_value = p.default
+            p.ClearErrors()
+
+    def GetFootprint(self):
+        self.BuildFootprint()
+        return self.module
+
+    def BuildFootprint(self):
+        return
+
+    def GetBuildMessages(self):
+        return self.buildmessages
+
+    def Show(self):
+        text = "Footprint Wizard Name:        {name}\n".format(name=self.GetName())
+        text += "Footprint Wizard Description: {desc}\n".format(desc=self.GetDescription())
+        n_pages = self.GetNumParameterPages()
+        text += "Pages: {n}\n".format(n=n_pages)
+        for i in range(n_pages):
+            name = self.GetParameterPageName(i)
+            params = self.GetParametersByPageName(name)
+            text += "{name}\n".format(name=name)
+            for j in range(len(params)):
+                text += ("\t{param}{err}\n".format(param=str(params[j]), err=" *" if len(params[j].error_list) > 0 else ""))
+        if self.AnyErrors():
+            text += " * Errors exist for these parameters"
+        return text
+
+
+FootprintWizard = FootprintWizardPlugin
 
 
 class PCB_PLOT_PARAMS:

@@ -70,6 +70,11 @@ export function pythonRuntime(): void {
       case "fab.drill": out = await kicad.fab.drill(a); break;
       case "fab.positions": out = await kicad.fab.positions(a); break;
       case "fab.bom": out = await kicad.fab.bom(a); break;
+      case "fab.svg": out = await kicad.fab.svg(a); break;
+      case "fab.drc": out = await kicad.fab.drc(a); break;
+      case "fab.netlist": out = await kicad.fab.netlist(); break;
+      case "project.versions": out = await kicad.project.versions(); break;
+      case "project.saveVersion": out = await kicad.project.saveVersion(a); break;
       case "net.fetch": out = await kicad.net.fetch(a); break;
       case "view.select": out = await kicad.view.select(a); break;
       case "view.focus": out = await kicad.view.focus(a); break;

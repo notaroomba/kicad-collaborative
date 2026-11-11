@@ -8,7 +8,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useSyncExternalStore } from "react";
-import { ApiError, editorState, fab, reads, selectionSummary, views, writes } from "./api";
+import { ApiError, editorState, fab, project, reads, selectionSummary, views, writes } from "./api";
 import { pythonRuntime } from "./pyruntime";
 import { createSandbox, type Sandbox } from "./sandbox";
 import { inScope, isPython, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
@@ -428,6 +428,7 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
+  "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write",
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
   "storage.get": null, "storage.set": null, "storage.remove": null, "storage.keys": null,
@@ -471,6 +472,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   }
   if (ns === "view") return views[fn](a);
   if (ns === "fab") return fab[fn](a);
+  if (ns === "project") { if (fn === "saveVersion") log(p.identifier, "host", a && a.name ? `Saved a version: ${String(a.name).slice(0, 80)}` : "Opened the Save Version dialog"); return project[fn](a); }
   if (ns === "net") return netFetch(p, a);
   if (ns === "storage") return storage(p.identifier, fn, a);
   if (ns === "files") return fn === "save" ? saveFile(p, a) : pickFile(p, a);
