@@ -8,15 +8,22 @@ import { cx } from "../util";
 export function Toast() {
   const toast = useApp((s) => s.toast);
   const [show, setShow] = useState(false);
+  const [box, setBox] = useState<CSSProperties | null>(null);
   useEffect(() => {
     if (!toast) return;
+    // In the editor the message is KiCad's infobar (WX_INFOBAR::ShowMessageFor): a bar over the top edge of the
+    // canvas, laid over it rather than pushing it down; elsewhere a toast at the bottom of the window.
+    const stage = document.getElementById("stage"), r = stage && stage.offsetParent ? stage.getBoundingClientRect() : null;
+    setBox(r && r.width > 0 ? { left: r.left, top: r.top, width: r.width } : null);
     setShow(true);
     const t = setTimeout(() => setShow(false), toast.ms || 2200);
     return () => clearTimeout(t);
   }, [toast]);
+  const close = <button type="button" className="kinfobar-x" aria-label="Close" onClick={() => setShow(false)}><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 2l6 6M8 2L2 8" stroke="currentColor" strokeWidth="1.4" /></svg></button>;
+  if (box) return <div id="toast" role="status" aria-live="polite" className={cx("kinfobar", show && "show")} style={box}>{toast ? toast.text : ""}{close}</div>;
   // transform-[…] rather than -translate-x-1/2: Tailwind's translate-* utilities emit the separate `translate`
   // property, and app.html's centring for #toast (if ever re-added) uses `transform` — keep the one property.
-  return <div id="toast" className={cx("fixed left-1/2 bottom-10 transform-[translateX(-50%)] bg-ink text-paper rounded-sm py-2 px-3.5 opacity-0 transition-opacity duration-200 ease-[ease] pointer-events-none z-100 show:opacity-100", show && "show")}>{toast ? toast.text : ""}</div>;
+  return <div id="toast" role="status" aria-live="polite" className={cx("fixed left-1/2 bottom-10 transform-[translateX(-50%)] bg-ink text-paper rounded-sm py-2 px-3.5 opacity-0 transition-opacity duration-200 ease-[ease] pointer-events-none z-100 show:opacity-100", show && "show")}>{toast ? toast.text : ""}</div>;
 }
 
 const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
