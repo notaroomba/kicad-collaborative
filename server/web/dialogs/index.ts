@@ -5,6 +5,7 @@
 import { E, isSch, requestRender, setToggle, store, toast, toolCtx } from "./editor";
 import { openAssignFootprints } from "./assign-footprints";
 import { KD } from "./dom";
+import { openErc } from "./erc";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
 import { openFind } from "./find";
@@ -57,6 +58,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     assignFootprints: needDoc(openAssignFootprints, true),
     schematicSetup: needDoc(() => openSchematicSetup(), true),
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
+    runERC: needDoc(openErc, true),
     toggleGridOverrides: (() => { const on = toggleGridOverrides(); toast(on ? "Grid overrides on" : "Grid overrides off"); }) as Handler,
     openPreferences: (() => openPreferences()) as Handler,
   });
