@@ -25,7 +25,10 @@ export interface RouteOptions {
   maxAmplitude?: number;         // how far a serpentine may swing off its track, mm; default 3
   pairs?: boolean;               // route differential pairs (D+/D-, _P/_N, DP/DM …) side by side at a constant gap; default true
   pairGap?: number;              // the gap between a pair's tracks in mm; default the nets' clearance
-  fewerVias?: boolean;           // after routing, lay each route that changes layer again without (or with fewer) vias where the finished board leaves room; default true
+  fewerVias?: boolean;
+  /** false keeps every via at its net class's size.  By default a connection that cannot be made with it may use
+   *  the smallest via Board Setup's constraints permit. */
+  smallVias?: boolean;           // after routing, lay each route that changes layer again without (or with fewer) vias where the finished board leaves room; default true
   timeMs?: number;               // stop starting new connections after this long
   zones?: boolean;               // let a route end in the net's own copper zone; default true
   // ---- a plan from outside (the assistant's model, or a person): the engine still does the geometry and the rules
@@ -222,15 +225,18 @@ export class Router {
   }
 
   /** The rule class a net routes with (its netclass's track width, clearance and via), built on first use. */
-  classFor(netKey: string, cap = Infinity, want = 0): RuleClass {
+  classFor(netKey: string, cap = Infinity, want = 0, smallVia = false): RuleClass {
     const { P, s, G } = this; const nc = P.netclassOf(s, netKey); const plan = (this.opts.netOpts || {})[netKey]; const pw = plan && +plan.width! > 0 ? +plan.width! : 0;
     const zw = pw ? 0 : (this.zWidth.get(netKey) || 0);   // a plan's own width stands; else the width its impedance asks for
     let width = Math.max(pw || zw || Math.max(nc.track_width !== undefined ? nc.track_width : s.trackWidth, want), s.minTrackWidth || 0);
     // A fine-pitch pad only has room for so wide a track between its neighbours: a connection that ends on one
     // runs as wide as that room allows, as people neck tracks down at such pads.
     if (cap < width) width = Math.max(s.minTrackWidth || 0.1, 0.1, Math.floor(cap * 100 + 1e-6) / 100);
-    const clr = Math.max(P.netClearance(s, netKey), s.minClearance || 0); const viaD = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
-    const viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
+    const clr = Math.max(P.netClearance(s, netKey), s.minClearance || 0); const viaD0 = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
+    let viaD = viaD0, viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
+    // The smallest via Board Setup permits, for a connection the class's own via cannot serve (a ball in a grid
+    // array has no room for it).  Only when the board states its minimums; the hole keeps its annular ring.
+    if (smallVia && s.minViaDiameter > 0 && s.minViaDrill > 0 && s.minViaDiameter < viaD0 - 1e-6) { const d = Math.max(s.minViaDiameter, s.minViaDrill + 2 * (s.minViaAnnular || 0.05)); if (d < viaD0 - 1e-6) { viaD = d; viaDrill = Math.min(viaDrill, s.minViaDrill); } }
     const key = `${width}/${clr}/${viaD}/${viaDrill}`; return G.classes.get(key) || buildClass(G, key, width, clr, viaD, viaDrill);
   }
   /** Supply nets carry the board's current: where the net has no class or plan of its own, they run wider. */
@@ -885,8 +891,8 @@ export class Router {
     // does not.  Narrower than the net class asks for, never narrower than the design rules permit.
     const floor = Math.max(this.s.minTrackWidth || 0, 0.1);
     for (const c of conns) {
-      if (c.nodes || c.why === "budget" || timeUp() || c.cls.width <= floor + 1e-6) continue;
-      const known = new Set(this.G.classes.keys()); const wide = c.cls; const thin = this.classFor(c.net, floor);
+      if (c.nodes || c.why === "budget" || timeUp() || c.pair) continue;
+      const known = new Set(this.G.classes.keys()); const wide = c.cls; const thin = this.classFor(c.net, Math.min(floor, wide.width), 0, this.opts.smallVias !== false); if (thin === wide) continue;
       if (!known.has(thin.key)) for (const o of conns) if (o.nodes) for (const sh of o.shapes) stampClass(this.G, thin, sh, 1, false);
       c.cls = thin; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
       if (!(force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0)) { c.cls = wide; back(snap); }

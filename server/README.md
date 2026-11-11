@@ -428,6 +428,10 @@ Once every connection has been tried, a few passes work on the finished board (a
   A via may drop into the net's pour on a plane layer. `opts.stitch: false` turns it off.
 - **Fewer vias** (`fewerVias`): a via costs twice what the fitted weights say, and each route that changes layer
   is laid again on the finished board without vias (then with fewer) where that does not send it a long way round.
+- **Smaller vias where nothing else fits** (`smallVias`): a connection still open after repair is tried once more
+  with the smallest via Board Setup's constraints permit (minimum via diameter and hole, keeping the annular
+  ring), next to the narrowest track. This is what lets balls inside a grid array escape when the net class's via
+  is wider than the ball pitch allows. Set `smallVias: false` to keep every via at its class size.
 - **Supply widths** (`powerWidth`): GND, rails and `VBUS`-style nets without a class or plan width of their own are
   widened piece by piece wherever the clearances leave room, necked down at tight pads. `0` keeps the class width.
 - Board Setup's minimum clearance and hole clearance are floors for every net.
