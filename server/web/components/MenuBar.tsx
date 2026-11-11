@@ -82,15 +82,20 @@ export function editorMenus(editor: Editor, moduleActions: ModuleAction[], sourc
 }
 
 // ---------------------------------------------------------------- entry state
-interface Ctx { a: Avail; toggles: AppState["toggles"]; panes: AppState["panes"]; viewOnly: boolean; undo: AppState["undo"]; selCount: number; editing: boolean; inEditor: boolean }
+interface Ctx { a: Avail; toggles: AppState["toggles"]; panes: AppState["panes"]; viewOnly: boolean; canCopy: boolean; canComment: boolean; canShare: boolean; guest: boolean; undo: AppState["undo"]; selCount: number; editing: boolean; inEditor: boolean }
 
 /** Why an available entry cannot run right now (KiCad greys these out); null when it can. */
 function disabledWhy(c: Ctx, id: string): string | null {
   if (!c.inEditor) return c.viewOnly && (id === "share" || id === "checkpoint") ? "View-only access" : null;
+  // The owner's permission settings (server/src/access.rs): the server refuses these too.
+  if ((id === "archive" || id === "clone") && !c.canCopy) return "The owner does not let viewers download or copy this project";
+  if (id === "clone" && c.guest) return "Sign in to make your own copy";
+  if (id === "share" && c.guest) return "Sign in to see who has access";
+  if (id === "checkpoint" && c.viewOnly) return c.canComment ? "Comment-only access" : "View-only access";
   if (id === "undo" && !c.undo.undo) return "Nothing to undo";
   if (id === "redo" && !c.undo.redo) return "Nothing to redo";
   // Plugin entries stay open to viewers: reading and exporting are theirs to do, and the plugin host refuses a viewer's writes itself.
-  if (c.viewOnly && c.editing && !READ_ONLY_OK.has(id) && !id.startsWith("plugin")) return "View-only access";
+  if (c.viewOnly && c.editing && !READ_ONLY_OK.has(id) && !id.startsWith("plugin")) return c.canComment ? "Comment-only access" : "View-only access";
   if (NEEDS_SELECTION.has(id) && c.selCount === 0) return "Nothing selected";
   return null;
 }
@@ -275,6 +280,9 @@ export function MenuBar() {
   const toggles = useApp((s) => s.toggles);
   const panes = useApp((s) => s.panes);
   const viewOnly = useApp((s) => s.viewOnly);
+  const can = useApp((s) => s.can);
+  const canComment = useApp((s) => s.canComment);
+  const guest = useApp((s) => s.guest);
   const undo = useApp((s) => s.undo);
   const inEditor = view === "editor" && !!editor;
   const withPlugins = usePluginMenus(inEditor && editor ? MENUS[editor] : HOME_MENUS, inEditor && editor ? editor : null);   // plugin actions, importers and exporters join KiCad's menus
@@ -302,7 +310,7 @@ export function MenuBar() {
   // while a menu is open (or the bar is focused) the editor's hotkeys stand down (editor/hotkeys.ts typingTarget)
   useEffect(() => { if (st || focus !== null) document.body.dataset.menuOpen = "1"; else delete document.body.dataset.menuOpen; }, [st, focus]);
 
-  const c: Ctx = { a, toggles, panes, viewOnly, undo, selCount, editing: false, inEditor };
+  const c: Ctx = { a, toggles, panes, viewOnly, canCopy: !can || can.copy, canComment, canShare: !!can?.share, guest, undo, selCount, editing: false, inEditor };
   const ctxFor = (menu: number): Ctx => ({ ...c, editing: inEditor && !/^(View|Preferences|Help)$/.test(menus[menu].title) });
   const cRef = useRef(c); cRef.current = c;
 

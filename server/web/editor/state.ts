@@ -7,6 +7,7 @@ export const E: any = {
   retries: 0,
   canJoin: false,
   viewOnly: false,
+  canComment: false,   // commenter or editor, and signed in (server/src/access.rs decides; this is what the interface offers)
   overrideLocks: false,   // the aux bar's "Override locks": locked board items may be moved, turned, flipped and deleted
   myClientId: "",
   wsToken: "",

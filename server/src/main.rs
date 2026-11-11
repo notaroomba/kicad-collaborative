@@ -1,3 +1,4 @@
+mod access;
 mod ai;
 mod kicadlib;
 mod auth;
@@ -321,6 +322,11 @@ async fn main() -> anyhow::Result<()> {
             delete(http::remove_member).patch(http::set_member_role),
         )
         .route("/api/projects/{id}/leave", post(http::leave_project))
+        .route("/api/projects/{id}/join", post(http::join_opened))
+        .route(
+            "/api/projects/{id}/permissions",
+            get(http::get_permissions).patch(http::set_permissions),
+        )
         .route("/api/links/{token}", delete(http::revoke_link))
         .route("/api/join/{token}", post(http::claim_link))
         .route("/api/docs/{doc_id}/snapshots", post(http::upload_snapshot))

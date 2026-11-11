@@ -22,6 +22,48 @@ Server-authoritative, Figma-style — **not** a CRDT:
 - **Snapshots are client-produced.** Editors upload canonical s-expression files
   they already serialize; the server stores bytes and never parses KiCad formats.
 
+## Roles and sharing
+
+Who may do what is decided in one place, `src/access.rs`, and asked by every handler: the
+web editor, the desktop clients (same HTTP and WebSocket endpoints) and the MCP endpoint
+get the same answer.
+
+| Role | Reads the design, comments and history | Comments, replies, resolves | Edits, saves versions, syncs with GitHub | Invites, makes links | Changes roles, removes people, settings, delete, transfer |
+|---|---|---|---|---|---|
+| viewer | yes | no | no | no | no |
+| commenter | yes | yes | no | no | no |
+| editor | yes | yes | yes | only with "editors can share" | no |
+| owner | yes | yes | yes | yes | yes |
+
+A role is held as the owner, as a member (invited by GitHub username or email, or by joining
+through a share link), or as a visitor: of a public project, or of a project whose share link
+was opened in this browser (cookie `kc_links`, set by `GET /j/{token}`). A visitor who is not
+signed in only ever reads. A link that was opened but not joined only ever reads; joining
+(`POST /api/join/{token}`, or `POST /api/projects/{id}/join` for the link already opened)
+makes its holder a member with the link's role. A link never lowers a role and never
+overrides one the owner set by hand.
+
+Someone who is not signed in may also watch live: a browser `hello` with no token is a guest
+(`hello_ok.guest`, peer name "Guest", user id 0) who may join documents they can read and
+whose ops are refused. Native clients must sign in.
+
+Per-project settings (`PATCH /api/projects/{id}/permissions`, owner):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `publicRole` | `viewer` | what a signed-in visitor of a public project may do (`viewer` or `commenter`) |
+| `editorsCanShare` | off | editors may invite people and make links, and take back the ones they made |
+| `viewersCanCopy` | on | off: Download .zip and Clone are refused for viewers and commenters |
+| `linksRequireSignin` | off | on: an opened link shows nothing until its holder signs in |
+
+Every change (role, removal, link turned off, a setting) reaches sessions that are already
+connected within about a second: the socket is dropped from documents it may no longer see,
+and is told its new role (`{type:"role", docId, role}`) when it changed.
+
+`/api/projects/{id}/info` and `/api/projects/{id}` carry `role` and `can: { edit, comment,
+copy, share, manage, join }` for the interface to follow; the server decides again on every
+request.
+
 ## Wire protocol (v1, JSON over one WebSocket at `/ws`)
 
 Client → server: `hello` · `join_doc` · `leave_doc` · `op` · `presence` · `resync`
@@ -72,10 +114,12 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | POST | `/api/projects/{id}/clone` | copy a visible project into the caller's account |
 | POST | `/api/projects/{id}/leave` | a member gives up their own access |
 | GET | `/api/projects/{id}/archive` | download zip |
-| GET/POST | `/api/projects/{id}/links` | list the share links that still work (owner) · create one (`role`, optional `expiresInDays`) |
+| GET/POST | `/api/projects/{id}/links` | list the share links that still work, with `label`, `uses` and who made each · create one (`role`: editor, commenter or viewer; optional `expiresInDays`, `label`) |
+| POST | `/api/projects/{id}/join` | join through the share link this browser already opened |
+| GET/PATCH | `/api/projects/{id}/permissions` | the permission settings and what the caller may do · change the settings (owner) |
 | POST | `/api/projects/{id}/invites` | invite by login/email (instant grant when the account exists, else pending) |
 | PATCH/DELETE | `/api/projects/{id}/invites/{inviteId}` | change the role a pending invite grants · revoke it |
-| GET | `/api/projects/{id}/members` | who has access: owner, members, `canManage`; any member may read it, pending invites are owner-only |
+| GET | `/api/projects/{id}/members` | who has access: owner, members, `canManage`, `canShare`, `myRole`, `permissions`; any member may read it, pending invites are shown to whoever sent them and to the owner |
 | PATCH/DELETE | `/api/projects/{id}/members/{userId}` | change a member's role · revoke access (owner); both reach sessions that are already connected |
 | POST/GET | `/api/projects/{id}/checkpoints` | name · list version checkpoints |
 | POST | `/api/projects/{id}/restore` | restore a checkpoint (hard reset + resync) |
@@ -343,7 +387,13 @@ cargo test
 ```
 
 Covers the wire-format validator, the zip path/type guards, the zip-bomb decode
-bound, and the presence size cap.
+bound, the presence size cap, and the role and permission rules (access.rs).
+
+Roles and sharing end to end, against a local server on a throwaway database (see
+`scripts/e2e.mjs` for how to start one): `scripts/roles-e2e.mjs` drives every role, share
+links with and without an account, guests on the live session, the permission settings and
+MCP over the real HTTP and WebSocket endpoints (119 checks); `scripts/roles-ui.mjs` does the
+same in real browsers, five people on one project (35 checks, `SHOTS=dir` keeps screenshots).
 
 Against a running deployment, the unauthenticated protocol surface (HTTP status
 codes, share-link page, OAuth state-cookie binding, WebSocket handshake

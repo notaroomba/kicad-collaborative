@@ -6,24 +6,38 @@ import { applyChanges, renderObjects, setDocFromText } from "./doc";
 import { applyFollowWeb, renderPeers, startPresenceKeepalive } from "./peers";
 import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
+import { setTool } from "./tools";
 import { api, toast } from "./util";
 import { dragG, drawPeers, peersG, scheduleRenderRefresh } from "./view";
 // ---- websocket / presence / ops ----
 export function setConn(cls, text) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
 
 export function setViewOnly(v) { E.viewOnly = !!v; store.set({ viewOnly: E.viewOnly }); }
+/** The role the server says we hold on the open document: what the tools and the comment box follow. */
+export function setRole(role) {
+  const was = state.role;
+  state.role = role;
+  E.viewOnly = !state.me || role !== "editor";
+  E.canComment = !!state.me && (role === "editor" || role === "commenter");
+  const can = { ...(store.get().can || { copy: true, share: false, manage: false }), edit: !E.viewOnly, comment: E.canComment };
+  store.set({ role, viewOnly: E.viewOnly, canComment: E.canComment, can });
+  return was;
+}
+/** How the status bar words the access: "live", "live · comment-only", "live · view-only". */
+export function liveLabel() { return E.viewOnly ? (E.canComment ? "live · comment-only" : "live · view-only") : "live"; }
 
    // bumped by every connect()/leaveDoc(); a stale socket's events are ignored
 export async function connect() {
   const gen = ++E.connectGen;
-  if (!state.me) { setConn("", "sign in to collaborate"); return; }
   setConn("err", E.retries ? `reconnecting…` : "connecting…");
   // A cookie riding the WS upgrade is unreliable (SameSite / tracking
   // protection / proxies), so authenticate the socket with a token fetched
   // over a normal request and sent in the hello frame, like the desktop.
   let ticket;
   try {
-    ticket = (await api("/api/ws-ticket")).token || "";
+    // A guest (not signed in) has no ticket to fetch: the server lets them watch what a public
+    // project or an opened share link shows.
+    ticket = state.me ? (await api("/api/ws-ticket")).token || "" : "";
   } catch (e) {
     if (gen !== E.connectGen) return;
     // Only a refused ticket means the sign-in is gone (a bad ticket would just loop; wait for a
@@ -91,8 +105,8 @@ export async function connect() {
       // doc_info's role is the server's answer, and it is re-sent on every rejoin — so a
       // demotion mid-session takes effect, and a session that was flipped read-only by a
       // refused op recovers on the next join instead of staying read-only for good.
-      if (typeof msg.role === "string") setViewOnly(msg.role !== "editor");
-      setConn("live", E.viewOnly ? "live · view-only" : "live"); renderPeers(); startPresenceKeepalive();
+      if (typeof msg.role === "string") setRole(msg.role);
+      setConn("live", liveLabel()); renderPeers(); startPresenceKeepalive();
     }
     if (msg.type === "presence") { for (const [cid, e] of Object.entries(msg.peers || {})) { if (cid === E.myClientId || cid.endsWith(":" + E.myClientId)) continue; if (e === null) delete E.peerState[cid]; else E.peerState[cid] = e; }
       drawPeers(E.peerState); applyFollowWeb(E.peerState); renderPeers(); }
@@ -104,6 +118,14 @@ export async function connect() {
     if (msg.type === "error" && msg.code === "desynced") requestResync(sock, true);
     if (msg.type === "error" && msg.code === "no_desktop") toast("Nobody has this board open in the desktop app, so zones keep their last fill. They refill as soon as someone opens it there.", 5000);
     if (msg.type === "error" && msg.code === "request_refused") toast("Only editors can ask for a refill");
+    // The owner changed our role while the document is open: the tools follow at once.
+    if (msg.type === "role" && typeof msg.role === "string" && (!msg.docId || msg.docId === state.docId)) {
+      const was = setRole(msg.role);
+      if (E.viewOnly) { E.drag = null; dragG.replaceChildren(); if (E.tool !== "select" && E.tool !== "pan") setTool("select"); }
+      if (!E.canComment && E.tool === "comment") setTool("select");
+      setConn("live", liveLabel()); renderProps();
+      if (was !== msg.role) toast(msg.role === "editor" ? "You can now edit this project" : msg.role === "commenter" ? "You can now comment on this project, but not change it" : "You now have view-only access to this project", 4500);
+    }
     if (msg.type === "comment") noteCommentMsg(msg);
     if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
       if (setDocFromText(msg.file)) {
@@ -157,7 +179,8 @@ export function requestResync(sock, force) {
 export function onOpRejected(sock, msg) {
   if (msg.clientOpId) {
     E.pendingOps.delete(msg.clientOpId);
-    toast(msg.code === "permission_denied" ? "That edit was refused — you may no longer have edit access" : "The server refused an edit; reloading it");
+    if (msg.code === "permission_denied" && typeof msg.role === "string") { setRole(msg.role); setConn("live", liveLabel()); renderProps(); }
+    toast(msg.code === "permission_denied" ? (E.canComment ? "That edit was not saved: you can comment here, but not edit" : "That edit was not saved: you have view-only access") : "The server refused an edit; reloading it");
     requestResync(sock);
     return;
   }
@@ -167,7 +190,9 @@ export function onOpRejected(sock, msg) {
     return;
   }
   if (msg.code !== "permission_denied") { toast("The server could not open this document here"); setConn("err", "join refused"); return; }
-  setViewOnly(true); E.drag = null; dragG.replaceChildren(); setConn("live", "live · view-only"); renderProps(); toast("You have view-only access here");
+  // A join refused outright: access is gone (removed, link turned off, project made private).
+  E.viewOnly = true; E.canComment = false; store.set({ viewOnly: true, canComment: false });
+  E.drag = null; dragG.replaceChildren(); setConn("err", "no access"); renderProps(); toast("You no longer have access to this project", 5000);
 }
 
 /**

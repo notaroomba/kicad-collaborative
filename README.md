@@ -14,7 +14,7 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 - **Presence on the canvas.** Named, color-coded cursors and selections show where collaborators are working. Follow a peer’s viewport while reviewing a design.
 - **In-progress previews.** See peers’ routing, wiring, and drag previews before they commit an edit.
 - **Cloud projects.** Upload, browse, and open shared projects from the project manager or from the web home in any browser (search, stars, thumbnails, a Trash with 30-day restore); paired projects automatically rejoin their session.
-- **Sharing and roles.** Invite collaborators by GitHub username or email, or create revocable editor/viewer links; change roles, remove people or transfer ownership, effective immediately.
+- **Sharing and roles.** Invite collaborators by GitHub username or email as editors, commenters or viewers, or create revocable edit, comment-only and view-only links (view links open without an account); set per-project permissions; change roles, remove people or transfer ownership, effective immediately, also for people who have the project open.
 - **Comments and review.** Discuss the design through document comment threads and canvas pins.
 - **Version history.** Create named checkpoints and restore an earlier version as the project owner.
 - **Offline recovery.** Local edits are journalled and replayed after reconnection, with duplicate operations suppressed.
@@ -25,7 +25,7 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 
 1. Open KiCad Collaborative and choose **File → Online Projects…** in the project manager.
 2. Sign in with GitHub, then upload a project or open one shared with you.
-3. Use **Share…** to invite a collaborator or create an editor/viewer link.
+3. Use **Share…** to invite a collaborator or create an edit, comment-only or view-only link.
 4. Open the same schematic or PCB in both clients. Cursors and supported edits synchronize live.
 
 See [the collaboration guide](COLLABORATION.md) for supported operations and limitations, and [the server README](server/README.md) for self-hosting and protocol details.

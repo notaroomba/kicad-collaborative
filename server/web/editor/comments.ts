@@ -72,7 +72,7 @@ export function showThread(rootId) {
   E.openThread = rootId;
   const thread = [root, ...E.comments.filter((c) => c.parentId === rootId)];
   cmtPanel.innerHTML = thread.map((c) => `<div class="meta">${esc(c.authorLogin)} · ${ago(c.createdAt)}</div><div class="cbody">${esc(c.body)}</div>`).join("")
-    + (E.canJoin ? `<textarea id="replyText" rows="2" placeholder="Reply…"></textarea>
+    + (E.canComment ? `<textarea id="replyText" rows="2" placeholder="Reply…"></textarea>
        <p><button class="btn sm primary" id="replyBtn">Reply</button><button class="btn sm" id="resolveBtn">${root.resolved ? "Reopen" : "Resolve"}</button><button class="btn sm" id="closeBtn">Close</button></p>`
      : `<p><button class="btn sm" id="closeBtn">Close</button></p>`);
   panelAt(root.x, root.y);

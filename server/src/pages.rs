@@ -248,18 +248,61 @@ pub async fn join_page(
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let owner_login = owner.map(|o| o.login).unwrap_or_else(|| "unknown".into());
 
-    // A GET must not change anything: a link opened from another site would
-    // otherwise enrol the visitor (and show their name to the link's owner)
-    // without a click.  "Open in the web editor" does the claim, same-origin.
-    let signed_in = auth::user_from_jar(&state, &jar).await.is_some();
-    let signin_html = if signed_in {
-        r#"<p class="muted" id="joined">You're signed in. Opening the project adds it to your projects.</p>"#.to_string()
-    } else {
+    // A GET must not change anything on the server: a link opened from another site would
+    // otherwise enrol the visitor (and show their name to the link's owner) without a
+    // click.  "Open in the web editor" does the claim, same-origin.  What a GET does do
+    // is remember the link in this browser (a cookie), which is what lets its holder
+    // look at the project before, or without, signing in.
+    let who = crate::access::Viewer::from_jar(&state, &jar).await;
+    let signed_in = who.user.is_some();
+    let access = crate::access::resolve(&state.pool, &who, link.project_id).await?;
+    let settings: Option<(bool,)> =
+        sqlx::query_as("SELECT links_require_signin FROM projects WHERE id = $1")
+            .bind(link.project_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let require_signin = settings.is_some_and(|s| s.0);
+    let already = access.filter(|a| a.member).map(|a| a.role_str());
+    let (role_word, role_note) = match link.role.as_str() {
+        "editor" => ("Editor", "You can change the design, comment and save versions."),
+        "commenter" => ("Commenter", "You can look at everything and leave comments. You cannot change the design."),
+        _ => ("Viewer", "You can look at everything. You cannot comment or change the design."),
+    };
+    let signin_btn = format!(
+        r#"<a class="btn secondary" href="/auth/github/login?next=/j/{}">Sign in with GitHub</a>"#,
+        esc(&token)
+    );
+    let signin_html = if let Some(role) = already {
         format!(
-            r#"<p><a class="btn secondary" href="/auth/github/login?next=/j/{}">Sign in with GitHub</a>
-               <span class="muted">to keep access under your account</span></p>"#,
-            esc(&token)
+            r#"<p class="muted" id="joined">You're already in this project as {}. Opening it changes nothing unless this link gives you more.</p>"#,
+            match role { "editor" => "an editor", "commenter" => "a commenter", _ => "a viewer" }
         )
+    } else if signed_in {
+        r#"<p class="muted" id="joined">You're signed in. Opening the project adds it to your projects.</p>"#.to_string()
+    } else if require_signin {
+        format!(r#"<p>{signin_btn} <span class="muted">The owner asks everyone to sign in before opening this project.</span></p>"#)
+    } else {
+        match link.role.as_str() {
+            "editor" => format!(r#"<p>{signin_btn} <span class="muted">to edit. Without signing in you can look, and nothing else.</span></p>"#),
+            "commenter" => format!(r#"<p>{signin_btn} <span class="muted">to comment. Without signing in you can look, and nothing else.</span></p>"#),
+            _ => format!(r#"<p class="muted" id="guest">No account needed to look. {signin_btn} to keep the project in your list.</p>"#),
+        }
+    };
+    let web_note = if !signed_in && require_signin {
+        "Sign in first; the project opens right after."
+    } else if signed_in {
+        match link.role.as_str() {
+            "editor" => "Right here in your browser: edit, comment, follow collaborators.",
+            "commenter" => "Right here in your browser: look around, comment, follow collaborators.",
+            _ => "Right here in your browser: look around and follow collaborators.",
+        }
+    } else {
+        "Right here in your browser, view only until you sign in."
+    };
+    let web_href = if !signed_in && require_signin {
+        format!("/auth/github/login?next=/j/{}", esc(&token))
+    } else {
+        format!("/p/{}/edit", link.project_id)
     };
 
     let url = format!("{}/j/{}", state.cfg.site_url, token);
@@ -269,15 +312,16 @@ pub async fn join_page(
     );
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
 <div class="dialog">
   <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">{host}</span></div>
   <div class="body">
     <h1>{name}</h1>
-    <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>You join as</dt><dd>{role}</dd></dl>
+    <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>This link makes you a</dt><dd><b id="linkrole" data-role="{role}">{role_word}</b><br><span class="muted">{role_note}</span></dd></dl>
     <div class="choices">
-      <a class="choice web" id="openweb" href="/p/{pid}/edit"><b>Open in the web editor</b><span class="muted">Right here in your browser — move parts, comment, follow collaborators.</span></a>
-      <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">Full editing in the desktop app; a working copy is kept in sync.</span></a>
+      <a class="choice web" id="openweb" href="{web_href}"><b>Open in the web editor</b><span class="muted">{web_note}</span></a>
+      <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">The desktop app, signed in; a working copy is kept in sync.</span></a>
     </div>
     {signin}
     <p class="muted">Desktop app didn't open? Paste this link into KiCad Collaborative &rarr; <b>File &rarr; Join Session from URL…</b></p>
@@ -290,7 +334,7 @@ pub async fn join_page(
 <script>
 // Joining is a deliberate click: claim the link, then open the project.
 document.getElementById('openweb').addEventListener('click', function (ev) {{
-  if (!{signed}) return;            // signed out: the editor opens read-only or asks to sign in
+  if (!{signed}) return;            // signed out: the editor opens view-only
   ev.preventDefault();
   var a = this;
   fetch('/api/join/{token}', {{ method: 'POST', credentials: 'same-origin' }})
@@ -302,12 +346,12 @@ document.getElementById('openweb').addEventListener('click', function (ev) {{
         name = esc(&project.name),
         owner = esc(&owner_login),
         role = esc(&link.role),
-        pid = link.project_id,
         token = esc(&token),
         url = esc(&url),
         signin = signin_html,
     );
-    Ok(Html(html).into_response())
+    let cookie = crate::access::links_cookie(&who.links, &token, state.cfg.public_url.starts_with("https://"));
+    Ok((CookieJar::new().add(cookie), Html(html)).into_response())
 }
 
 
@@ -387,10 +431,9 @@ pub async fn project_page(
 
     let viewer = auth::user_from_jar(&state, &jar).await;
 
-    if !project.public {
-        let Some(user) = &viewer else { return Err(AppError::NotFound) };
-        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::NotFound)?;
-    }
+    crate::access::resolve(&state.pool, &crate::access::Viewer::from_jar(&state, &jar).await, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let owner_login = owner.map(|o| o.login).unwrap_or_else(|| "unknown".into());
@@ -510,10 +553,9 @@ pub async fn live_page(
 
     let viewer = auth::user_from_jar(&state, &jar).await;
 
-    if !project.public {
-        let Some(user) = &viewer else { return Err(AppError::NotFound) };
-        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::NotFound)?;
-    }
+    crate::access::resolve(&state.pool, &crate::access::Viewer::from_jar(&state, &jar).await, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     // Live presence requires joining the doc, which requires a signed-in user
     // (any user may view public projects).

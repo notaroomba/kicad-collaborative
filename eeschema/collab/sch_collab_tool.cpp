@@ -1188,8 +1188,9 @@ void SCH_COLLAB_TOOL::OnOpRejected( const wxString& aClientOpId, const wxString&
     if( aCode == wxS( "permission_denied" ) )
     {
         m_frame->ShowInfoBarError(
-                _( "You have view-only access to this shared project. Your change was not "
-                   "saved and the schematic has been refreshed." ) );
+                _( "You can view this shared project, and comment on it if the owner lets you, "
+                   "but not change it. Your change was not saved and the schematic has been "
+                   "refreshed." ) );
     }
     else
     {

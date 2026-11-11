@@ -113,16 +113,18 @@ pub async fn fill_pending_grants(
         .execute(pool)
         .await?;
         if claimed.rows_affected() == 0 {
-            // User already has a row on this project: upgrade role if the invite is higher.
-            if role == "editor" {
-                sqlx::query(
-                    "UPDATE permissions SET role = 'editor' WHERE project_id = $1 AND user_id = $2",
-                )
-                .bind(project_id)
-                .bind(user_id)
-                .execute(pool)
-                .await?;
-            }
+            // User already has a row on this project: upgrade role if the invite is higher
+            // (unless the owner set that role by hand).
+            sqlx::query(
+                "UPDATE permissions SET role = $3
+                 WHERE project_id = $1 AND user_id = $2 AND NOT role_pinned
+                   AND (CASE role WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END) < (CASE $3 WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END)",
+            )
+            .bind(project_id)
+            .bind(user_id)
+            .bind(&role)
+            .execute(pool)
+            .await?;
             sqlx::query("DELETE FROM permissions WHERE id = $1 AND user_id IS NULL")
                 .bind(perm_id)
                 .execute(pool)
@@ -142,6 +144,8 @@ pub struct ProjectListing {
     pub description: String,
     pub role: String,
     pub public: bool,
+    /// Whether this user may download or copy the project (access.rs).
+    pub can_copy: bool,
     pub doc_count: i64,
     pub member_count: i64,
     pub starred: bool,
@@ -157,6 +161,7 @@ pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec
                 u.avatar_url AS owner_avatar_url, p.description,
                 CASE WHEN p.owner_id = $1 THEN 'editor' ELSE perm.role END AS role,
                 p.public,
+                (p.owner_id = $1 OR perm.role = 'editor' OR p.viewers_can_copy) AS can_copy,
                 (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) AS doc_count,
                 (SELECT COUNT(*) FROM permissions m WHERE m.project_id = p.id AND m.user_id IS NOT NULL AND m.user_id <> p.owner_id) AS member_count,
                 EXISTS (SELECT 1 FROM project_stars st
@@ -181,6 +186,32 @@ pub async fn list_projects_for_user(pool: &PgPool, user_id: i64) -> DbResult<Vec
     .bind(user_id)
     .fetch_all(pool)
     .await
+}
+
+/// Change the per-project permission settings (migration 0110); `None` leaves one as it is.
+pub async fn update_project_permissions(
+    pool: &PgPool,
+    id: Uuid,
+    public_role: Option<&str>,
+    editors_can_share: Option<bool>,
+    viewers_can_copy: Option<bool>,
+    links_require_signin: Option<bool>,
+) -> DbResult<bool> {
+    let res = sqlx::query(
+        "UPDATE projects SET public_role = COALESCE($2, public_role),
+                             editors_can_share = COALESCE($3, editors_can_share),
+                             viewers_can_copy = COALESCE($4, viewers_can_copy),
+                             links_require_signin = COALESCE($5, links_require_signin)
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(public_role)
+    .bind(editors_can_share)
+    .bind(viewers_can_copy)
+    .bind(links_require_signin)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn update_project(
@@ -400,7 +431,8 @@ pub async fn grant_role(pool: &PgPool, project_id: Uuid, user_id: i64, role: &st
         "INSERT INTO permissions (project_id, user_id, role)
          VALUES ($1, $2, $3)
          ON CONFLICT (project_id, user_id) DO UPDATE
-           SET role = CASE WHEN permissions.role = 'editor' THEN 'editor' ELSE EXCLUDED.role END",
+           SET role = CASE WHEN (CASE permissions.role WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END) >= (CASE EXCLUDED.role WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END)
+                           THEN permissions.role ELSE EXCLUDED.role END",
     )
     .bind(project_id)
     .bind(user_id)
@@ -410,13 +442,13 @@ pub async fn grant_role(pool: &PgPool, project_id: Uuid, user_id: i64, role: &st
     Ok(())
 }
 
-/// Pending (unclaimed) invites on a project: (permission id, login, email, role).
+/// Pending (unclaimed) invites on a project: (permission id, login, email, role, invited by).
 pub async fn list_pending_invites(
     pool: &PgPool,
     project_id: Uuid,
-) -> DbResult<Vec<(i64, Option<String>, Option<String>, String)>> {
+) -> DbResult<Vec<(i64, Option<String>, Option<String>, String, Option<i64>)>> {
     let rows = sqlx::query(
-        "SELECT id, invited_login, invited_email, role FROM permissions
+        "SELECT id, invited_login, invited_email, role, created_by FROM permissions
          WHERE project_id = $1 AND user_id IS NULL
          ORDER BY id",
     )
@@ -426,16 +458,24 @@ pub async fn list_pending_invites(
 
     Ok(rows
         .into_iter()
-        .map(|r| (r.get("id"), r.get("invited_login"), r.get("invited_email"), r.get("role")))
+        .map(|r| (r.get("id"), r.get("invited_login"), r.get("invited_email"), r.get("role"), r.get("created_by")))
         .collect())
 }
 
-pub async fn delete_pending_invite(pool: &PgPool, project_id: Uuid, perm_id: i64) -> DbResult<bool> {
+/// Cancel a pending invite; with `only_by`, only one that user sent.
+pub async fn delete_pending_invite(
+    pool: &PgPool,
+    project_id: Uuid,
+    perm_id: i64,
+    only_by: Option<i64>,
+) -> DbResult<bool> {
     let res = sqlx::query(
-        "DELETE FROM permissions WHERE id = $1 AND project_id = $2 AND user_id IS NULL",
+        "DELETE FROM permissions WHERE id = $1 AND project_id = $2 AND user_id IS NULL
+           AND ($3::bigint IS NULL OR created_by = $3)",
     )
     .bind(perm_id)
     .bind(project_id)
+    .bind(only_by)
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
@@ -497,26 +537,13 @@ pub async fn project_documents(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<
     .await
 }
 
-/// Effective role of a user on a project: owner => editor, else permissions row.
-/// A branch (versions.rs) has no access list of its own: it answers with its parent's.
+/// Effective role of a signed-in user on a project ("editor", "commenter" or "viewer"):
+/// the owner is an editor, a member has the role of their grant, and a public project
+/// gives everyone else the role its owner chose for visitors.  See access.rs.
 pub async fn effective_role(pool: &PgPool, user_id: i64, project_id: Uuid) -> DbResult<Option<String>> {
-    let row = sqlx::query(
-        "SELECT CASE
-                  WHEN r.owner_id = $1 THEN 'editor'
-                  WHEN perm.role IS NOT NULL THEN perm.role
-                  WHEN r.public THEN 'viewer'
-                  ELSE NULL
-                END AS role
-         FROM projects p
-         JOIN projects r ON r.id = COALESCE(p.parent_id, p.id)
-         LEFT JOIN permissions perm ON perm.project_id = r.id AND perm.user_id = $1
-         WHERE p.id = $2 AND p.deleted_at IS NULL AND r.deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.and_then(|r| r.get::<Option<String>, _>("role")))
+    Ok(crate::access::resolve_for(pool, Some(user_id), &[], project_id)
+        .await?
+        .map(|a| a.role_str().to_string()))
 }
 
 pub async fn create_share_link(
@@ -526,16 +553,18 @@ pub async fn create_share_link(
     role: &str,
     created_by: i64,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    label: Option<&str>,
 ) -> DbResult<()> {
     sqlx::query(
-        "INSERT INTO share_links (token, project_id, role, created_by, expires_at)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO share_links (token, project_id, role, created_by, expires_at, label)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(token)
     .bind(project_id)
     .bind(role)
     .bind(created_by)
     .bind(expires_at)
+    .bind(label)
     .execute(pool)
     .await?;
     Ok(())
@@ -554,11 +583,13 @@ pub async fn get_valid_share_link(pool: &PgPool, token: &str) -> DbResult<Option
     .await
 }
 
+/// Turn a link off: its project's owner can, and so can whoever made it.
 pub async fn revoke_share_link(pool: &PgPool, token: &str, by_user: i64) -> DbResult<bool> {
     let res = sqlx::query(
         "UPDATE share_links l SET revoked_at = now()
          FROM projects p
-         WHERE l.token = $1 AND l.project_id = p.id AND p.owner_id = $2 AND l.revoked_at IS NULL",
+         WHERE l.token = $1 AND l.project_id = p.id AND (p.owner_id = $2 OR l.created_by = $2)
+           AND l.revoked_at IS NULL",
     )
     .bind(token)
     .bind(by_user)
@@ -567,13 +598,15 @@ pub async fn revoke_share_link(pool: &PgPool, token: &str, by_user: i64) -> DbRe
     Ok(res.rows_affected() > 0)
 }
 
-/// Claim a share link: grant its role, never downgrading an existing one.
+/// Claim a share link: grant its role, never downgrading an existing one and never
+/// overriding a role the owner set by hand.
 pub async fn claim_share_link(pool: &PgPool, user_id: i64, link: &ShareLink) -> DbResult<()> {
     sqlx::query(
         "INSERT INTO permissions (project_id, user_id, role)
          VALUES ($1, $2, $3)
          ON CONFLICT (project_id, user_id) DO UPDATE
-           SET role = CASE WHEN permissions.role = 'editor' OR permissions.role_pinned
+           SET role = CASE WHEN permissions.role_pinned
+                             OR (CASE permissions.role WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END) >= (CASE EXCLUDED.role WHEN 'editor' THEN 3 WHEN 'commenter' THEN 2 ELSE 1 END)
                            THEN permissions.role ELSE EXCLUDED.role END",
     )
     .bind(link.project_id)
@@ -581,6 +614,10 @@ pub async fn claim_share_link(pool: &PgPool, user_id: i64, link: &ShareLink) -> 
     .bind(&link.role)
     .execute(pool)
     .await?;
+    sqlx::query("UPDATE share_links SET uses = uses + 1, last_used_at = now() WHERE token = $1")
+        .bind(&link.token)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -997,13 +1034,16 @@ pub async fn set_invite_role(
     project_id: Uuid,
     perm_id: i64,
     role: &str,
+    only_by: Option<i64>,
 ) -> DbResult<bool> {
     let res = sqlx::query(
-        "UPDATE permissions SET role = $3 WHERE id = $1 AND project_id = $2 AND user_id IS NULL",
+        "UPDATE permissions SET role = $3 WHERE id = $1 AND project_id = $2 AND user_id IS NULL
+           AND ($4::bigint IS NULL OR created_by = $4)",
     )
     .bind(perm_id)
     .bind(project_id)
     .bind(role)
+    .bind(only_by)
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
@@ -1015,15 +1055,21 @@ pub struct ActiveLink {
     pub role: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub label: Option<String>,
+    pub uses: i64,
+    pub created_by: i64,
+    pub created_by_login: String,
 }
 
 /// Share links of a project that still work (neither revoked nor expired), newest first.
 pub async fn list_share_links(pool: &PgPool, project_id: Uuid) -> DbResult<Vec<ActiveLink>> {
     sqlx::query_as::<_, ActiveLink>(
-        "SELECT token, role, created_at, expires_at FROM share_links
-         WHERE project_id = $1 AND revoked_at IS NULL
-           AND (expires_at IS NULL OR expires_at > now())
-         ORDER BY created_at DESC",
+        "SELECT l.token, l.role, l.created_at, l.expires_at, l.label, l.uses, l.created_by,
+                u.login AS created_by_login
+         FROM share_links l JOIN users u ON u.id = l.created_by
+         WHERE l.project_id = $1 AND l.revoked_at IS NULL
+           AND (l.expires_at IS NULL OR l.expires_at > now())
+         ORDER BY l.created_at DESC",
     )
     .bind(project_id)
     .fetch_all(pool)

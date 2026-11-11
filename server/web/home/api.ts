@@ -3,6 +3,8 @@ export interface Project {
   projectId: string; name: string; description?: string;
   ownerId?: number; ownerLogin: string; ownerAvatarUrl?: string | null;
   role?: string | null; public?: boolean; docCount?: number; memberCount?: number; starred?: boolean;
+  /** False when the owner does not let viewers and commenters download or copy the project. */
+  canCopy?: boolean;
   createdAt?: string; updatedAt: string;
   /** The GitHub repository the project is linked to, if any. */
   github?: { repo: string; branch: string } | null;
@@ -11,11 +13,16 @@ export interface Member { userId: number; login: string; avatarUrl?: string | nu
 export interface Invite { inviteId: number; login?: string | null; email?: string | null; role: Role }
 export interface Members {
   ownerId: number; owner?: { userId: number; login: string; avatarUrl?: string | null } | null;
-  canManage: boolean; members: Member[]; pending: Invite[];
+  canManage: boolean; canShare?: boolean; myRole?: Role; permissions?: Permissions; members: Member[]; pending: Invite[];
 }
-export interface ShareLink { token: string; url: string; role: Role; createdAt?: string; expiresAt?: string | null }
+export interface ShareLink { token: string; url: string; role: Role; label?: string | null; uses?: number; createdBy?: string; canRevoke?: boolean; createdAt?: string; expiresAt?: string | null }
 export interface FoundUser { login: string; name?: string | null; avatarUrl?: string | null; userId?: number | null; source: "server" | "github" }
-export type Role = "editor" | "viewer";
+export type Role = "editor" | "commenter" | "viewer";
+/** The per-project permission settings (server/src/access.rs). */
+export interface Permissions { public: boolean; publicRole: "viewer" | "commenter"; editorsCanShare: boolean; viewersCanCopy: boolean; linksRequireSignin: boolean }
+/** How a role reads in a sentence and on a control. */
+export const ROLE_VERB: Record<Role, string> = { editor: "edit", commenter: "comment on", viewer: "view" };
+export const ROLE_LABEL: Record<Role, string> = { editor: "Can edit", commenter: "Can comment", viewer: "Can view" };
 
 export class ApiError extends Error {
   status: number;
@@ -78,14 +85,16 @@ export const claimLink = (token: string) => api<{ projectId: string; role: Role 
 
 export const listMembers = (id: string) => api<Members>(`/api/projects/${id}/members`);
 export const invite = (id: string, who: { login?: string; email?: string }, role: Role) =>
-  api<{ ok: boolean; status: "granted" | "pending"; login?: string }>(`/api/projects/${id}/invites`, { method: "POST", json: { ...who, role } });
+  api<{ ok: boolean; status: "granted" | "pending"; login?: string; role?: Role }>(`/api/projects/${id}/invites`, { method: "POST", json: { ...who, role } });
 export const setMemberRole = (id: string, userId: number, role: Role) => api(`/api/projects/${id}/members/${userId}`, { method: "PATCH", json: { role } });
 export const removeMember = (id: string, userId: number) => api(`/api/projects/${id}/members/${userId}`, { method: "DELETE" });
 export const setInviteRole = (id: string, inviteId: number, role: Role) => api(`/api/projects/${id}/invites/${inviteId}`, { method: "PATCH", json: { role } });
 export const revokeInvite = (id: string, inviteId: number) => api(`/api/projects/${id}/invites/${inviteId}`, { method: "DELETE" });
 export const listLinks = (id: string) => api<{ links: ShareLink[] }>(`/api/projects/${id}/links`).then((j) => j.links);
-export const createLink = (id: string, role: Role, expiresInDays?: number) =>
-  api<ShareLink>(`/api/projects/${id}/links`, { method: "POST", json: expiresInDays ? { role, expiresInDays } : { role } });
+export const createLink = (id: string, role: Role, expiresInDays?: number, label?: string) =>
+  api<ShareLink>(`/api/projects/${id}/links`, { method: "POST", json: { role, ...(expiresInDays ? { expiresInDays } : {}), ...(label ? { label } : {}) } });
+export const setPermissions = (id: string, patch: Partial<Omit<Permissions, "public">>) =>
+  api<{ ok: boolean; permissions: Permissions }>(`/api/projects/${id}/permissions`, { method: "PATCH", json: patch }).then((j) => j.permissions);
 export const revokeLink = (token: string) => api(`/api/links/${token}`, { method: "DELETE" });
 export const searchUsers = (q: string, signal?: AbortSignal) =>
   api<{ users: FoundUser[] }>(`/api/users/search?q=${encodeURIComponent(q)}`, { signal }).then((j) => j.users);

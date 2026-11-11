@@ -65,7 +65,9 @@ function changeAnywhere(fn: (l: Project[]) => Project[]) {
 const putBack = (ps: Project[]) => (l: Project[]) => [...l, ...ps.filter((p) => !l.some((x) => x.projectId === p.projectId))];
 
 /** Several archives, without pop-ups (a click allows one new window; the rest are blocked): hidden download links, a moment apart. */
-function downloadArchives(ps: Project[]) {
+function downloadArchives(all: Project[]) {
+  const ps = all.filter((p) => p.canCopy !== false);
+  if (ps.length < all.length) toast(ps.length ? "Some projects were skipped: their owner does not let viewers download them." : "The owner does not let viewers download this project.", { kind: "err" });
   ps.forEach((p, i) => window.setTimeout(() => {
     const a = document.createElement("a");
     a.href = `/api/projects/${p.projectId}/archive`; a.download = ""; a.hidden = true;
@@ -451,8 +453,11 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
         { id: "public", label: p.public ? "Make private" : "Make public", icon: p.public ? "lock" : "globe", run: () => { setPublic(p, !p.public); } },
       ] as MenuEntry[] : []),
       "-",
-      { id: "copyp", label: "Make a copy", icon: "copy", run: () => { duplicate(p); } },
-      { id: "zip", label: "Download .zip", icon: "download", run: () => { location.href = `/api/projects/${p.projectId}/archive`; } },
+      // Not offered when the owner keeps viewers and commenters from downloading or copying (the server refuses too).
+      ...(p.canCopy !== false ? [
+        { id: "copyp", label: "Make a copy", icon: "copy", run: () => { duplicate(p); } },
+        { id: "zip", label: "Download .zip", icon: "download", run: () => { location.href = `/api/projects/${p.projectId}/archive`; } },
+      ] as MenuEntry[] : []),
       ...(mine ? [{ id: "github", label: "GitHub sync…", icon: "branch", run: () => { location.href = `/p/${p.projectId}/github`; } }] as MenuEntry[] : []),
       "-",
       // Nobody else to surprise: straight to the Trash, with Undo.  A shared project asks first.

@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { dispatch, useApp, type PopoverState } from "../store";
+import { toast } from "../home/ui";
 import { cx } from "../util";
 
 export function Toast() {
@@ -114,14 +115,31 @@ export function Popover() {
   return <div id="popover" ref={ref} style={style} className="fixed hidden bg-panel border border-line rounded-md py-3 px-3.5 min-w-80 shadow-panel z-60">{p ? <PopoverBody p={p} /> : null}</div>;
 }
 
-/** "Viewing as a guest" on the stage (the stage itself stays app.js's; this is portalled into it). */
+/** The access note on the stage (the stage itself stays app.js's; this is portalled into it): a guest is told how to
+ *  get more than looking, and someone who opened a share link without joining is offered the role it gives. */
 export function SignInOverlay() {
-  const canJoin = useApp((s) => s.canJoin);
+  const guest = useApp((s) => s.guest);
+  const can = useApp((s) => s.can);
+  const project = useApp((s) => s.project);
   const inEditor = useApp((s) => s.view === "editor");
+  const [busy, setBusy] = useState(false);
   const stage = document.getElementById("stage");
   if (!stage) return null;
+  const offer = !guest && can?.join ? can.join : null;
+  const join = async () => {
+    if (!project || busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/projects/${project.projectId}/join`, { method: "POST", credentials: "same-origin" });
+      if (!r.ok) throw new Error(String(r.status));
+      // The project is opened again from the top: the role, the tools and the live session all follow.
+      location.reload();
+    } catch { setBusy(false); toast("That link no longer works. Ask the owner for a new one."); }
+  };
+  const roleWord = offer === "editor" ? "an editor" : offer === "commenter" ? "a commenter" : "a viewer";
   return createPortal(
-    <div id="signinOverlay" style={{ display: inEditor && !canJoin ? "block" : "none" }}>
-      Viewing as a guest. <a id="signinLink" href={`/auth/github/login?next=${encodeURIComponent(location.pathname)}`}>Sign in</a> to edit, comment and see live cursors.
+    <div id="signinOverlay" data-kind={guest ? "guest" : offer ? "join" : undefined} style={{ display: inEditor && (guest || offer) ? "block" : "none" }}>
+      {guest ? <>Viewing as a guest. <a id="signinLink" href={`/auth/github/login?next=${encodeURIComponent(location.pathname)}`}>Sign in</a> to comment or edit, if the project lets you.</>
+        : <>You opened this project from a share link. <button type="button" id="joinLinkBtn" className="btn sm primary" disabled={busy} onClick={join}>{busy ? "Joining…" : `Join as ${roleWord}`}</button></>}
     </div>, stage);
 }

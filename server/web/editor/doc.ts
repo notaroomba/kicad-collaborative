@@ -228,11 +228,15 @@ export async function openEditor(id) {
   state.role = info.role;
   document.title = `${info.name} — KiCad Collaborative`;
   state.docs = [];
-  E.canJoin = !!state.me;
-  E.viewOnly = !E.canJoin || info.role === "viewer" || !info.role;
+  // What the server lets this person do (server/src/access.rs).  Someone who is not signed in
+  // still joins the live session, as a guest who only watches.
+  const can = info.can || { edit: info.role === "editor", comment: info.role === "editor" || info.role === "commenter", copy: true, share: false, manage: false };
+  E.canJoin = true;
+  E.viewOnly = !state.me || !can.edit;
+  E.canComment = !!state.me && !!can.comment;
   state.docs = info.docs.filter((d) => d.docType === "kicad_pcb" || d.docType === "kicad_sch")
     .sort((a, b) => (a.docType === "kicad_pcb" ? 0 : 1) - (b.docType === "kicad_pcb" ? 0 : 1) || a.path.localeCompare(b.path));
-  store.set({ project: info, role: info.role || null, canJoin: E.canJoin, viewOnly: E.viewOnly });
+  store.set({ project: info, role: info.role || null, canJoin: E.canJoin, viewOnly: E.viewOnly, canComment: E.canComment, guest: !state.me, can });
   publishDocs();
   loadHistory();
   const wanted = new URLSearchParams(location.search).get("doc");

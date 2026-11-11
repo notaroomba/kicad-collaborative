@@ -64,7 +64,7 @@ public:
     /// whatever lists the project should be reloaded.
     bool ProjectChanged() const { return m_projectChanged; }
 
-    /// A server role name ("owner", "editor", "viewer") the way the user interface words it.
+    /// A server role name ("owner", "editor", "commenter", "viewer") the way the user interface words it.
     static wxString RoleLabel( const wxString& aRole );
 
 private:

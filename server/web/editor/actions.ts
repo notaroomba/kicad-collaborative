@@ -39,7 +39,10 @@ export async function runAction(act, el) {
     case "tab-history": showPane("history", true); break;
     case "refreshHistory": loadHistory(); break;
     case "about": showPopover("about", null, el); break;
-    case "archive": if (id) location.href = `/api/projects/${id}/archive`; break;
+    case "archive": if (!id) break;
+      if (!state.me) { toast("Sign in to download the project"); break; }
+      if (store.get().can && !store.get().can.copy) { toast("The owner does not let viewers download this project", 4000); break; }
+      location.href = `/api/projects/${id}/archive`; break;
     case "github": location.href = id ? `/p/${id}/github` : "/github"; break;
     case "clone": if (!id) break; if (!state.me) { toast("Sign in to clone"); break; }
       try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + e.message, 4000); } break;
@@ -47,7 +50,7 @@ export async function runAction(act, el) {
     // to see who has access, and only the owner can change anything.
     case "share": if (!id) break; if (!state.me) { toast("Sign in to share"); break; }
       if (window.CollabHome) window.CollabHome.openShare(id, state.project.name); break;
-    case "checkpoint": if (!id) break; if (E.viewOnly) { toast("Only editors can create checkpoints"); break; }
+    case "checkpoint": if (!id) break; if (E.viewOnly) { toast("Only editors can save versions"); break; }
       { const name = prompt("Checkpoint name", `checkpoint ${new Date().toLocaleString()}`); if (!name) break;
         try { await api(`/api/projects/${id}/checkpoints`, { method: "POST", body: JSON.stringify({ name }) }); toast("Checkpoint created"); loadHistory(); showPane("history", true); }
         catch (e) { toast("Checkpoint failed: " + e.message, 4000); } } break;

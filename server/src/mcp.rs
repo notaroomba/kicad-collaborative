@@ -603,6 +603,34 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
     }
     let project = if tool.project { Some(resolve_project(state, caller, &args["project"]).await?) } else { None };
 
+    // The person's role on the project decides, whatever the connection was allowed: a
+    // commenter's Claude may comment, a viewer's may only read.  The endpoints the tools
+    // go through refuse as well (http.rs, ws.rs); this is the answer a model can act on.
+    if let (true, Some(p)) = (tool.write, &project) {
+        let commenting = matches!(name, "add_comment" | "resolve_comment");
+        let allowed = match p.role.as_str() {
+            "editor" => true,
+            "commenter" => commenting,
+            _ => false,
+        };
+        if !allowed {
+            return Err(match (p.role.as_str(), commenting) {
+                ("commenter", _) => format!(
+                    "This person can comment on \"{}\" but not change it. add_comment and resolve_comment work; to make changes they need the owner to give them the editor role.",
+                    p.name
+                ),
+                (_, true) => format!(
+                    "This person can only view \"{}\", not comment on it. They need the owner to give them the commenter or editor role.",
+                    p.name
+                ),
+                _ => format!(
+                    "This person can only view \"{}\". To change it they need the owner to give them the editor role.",
+                    p.name
+                ),
+            });
+        }
+    }
+
     match name {
         "list_projects" => return Ok(json!([text_content(&list_projects(state, caller, site, &args).await?)])),
         "get_project" => return Ok(json!([text_content(&get_project(state, site, project.as_ref().expect("project")).await?)])),

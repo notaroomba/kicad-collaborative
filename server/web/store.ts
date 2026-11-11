@@ -17,9 +17,12 @@ export interface User { id: number; login: string; name?: string | null; avatarU
 
 export interface DocEntry { docId: string; path: string; docType: string; hasPreview?: boolean }
 
+/** What a person may do on a project; `join` is the role an opened share link offers someone who is not a member yet. */
+export interface ProjectCan { edit: boolean; comment: boolean; copy: boolean; share: boolean; manage: boolean; join?: string | null }
 export interface ProjectInfo {
   projectId: string; name: string; ownerLogin: string; ownerId?: number;
   role?: string | null; docs: DocEntry[]; isPublic?: boolean;
+  can?: ProjectCan; isOwner?: boolean; isMember?: boolean;
 }
 
 /** A movable item (footprint / symbol) as app.js tracks it: positions in internal units. */
@@ -102,6 +105,12 @@ export interface AppState {
   role: string | null;
   canJoin: boolean;
   viewOnly: boolean;
+  /** May write comments: the commenter role or more, signed in. */
+  canComment: boolean;
+  /** Not signed in: looking at a public project or through a share link. */
+  guest: boolean;
+  /** What the server says this person may do on the open project (server/src/access.rs). */
+  can: ProjectCan | null;
   connection: { status: ConnStatus; text: string; edits: number };
   viewport: {
     zoom: number; cursor: [number, number]; origin: [number, number]; polar: boolean; units: Units;
@@ -179,7 +188,7 @@ declare global {
 
 // ---------------------------------------------------------------- React binding
 const EMPTY: AppState = {
-  view: "home", me: null, project: null, role: null, canJoin: false, viewOnly: true,
+  view: "home", me: null, project: null, role: null, canJoin: false, viewOnly: true, canComment: false, guest: false, can: null,
   connection: { status: "offline", text: "offline", edits: 0 },
   viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
     crosshair: "small", selMode: "rect", lineMode: null, dragMode: null, renderOpts: {}, activeLayer: "" },
@@ -194,6 +203,8 @@ const EMPTY: AppState = {
 function app(): CollabAppApi | undefined { return window.CollabApp; }
 function subscribe(fn: () => void): () => void { const a = app(); return a ? a.subscribe(fn) : () => {}; }
 function getState(): AppState { const a = app(); return a ? a.getState() : EMPTY; }
+/** The state right now, for a read that needs no subscription of its own. */
+export const appState = getState;
 
 /** Select a slice of the app state; the component re-renders when the selected value changes (Object.is). */
 export function useApp<T>(selector: (s: AppState) => T): T {

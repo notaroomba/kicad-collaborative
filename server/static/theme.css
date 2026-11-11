@@ -176,6 +176,7 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
               letter-spacing: .06em; white-space: nowrap; }
 .pill.owner { border-color: var(--copper); color: var(--copper); }
 .pill.editor { border-color: var(--teal); color: var(--teal); }
+.pill.commenter { border-color: var(--blue); color: var(--blue); }
 .pill.info { border-color: var(--blue); color: var(--blue); }
 .pill.ok { border-color: var(--wire); color: var(--wire); }
 .pill.warn { border-color: var(--warn); color: var(--warn); }

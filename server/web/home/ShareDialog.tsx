@@ -1,9 +1,11 @@
-// ShareDialog.tsx — who can open a project: invite by GitHub username or email, change roles,
-// remove people, manage share links, and gallery visibility.  The owner manages; everyone else in
-// the project sees the same list read-only.
+// ShareDialog.tsx — who can open a project and what they may do in it: invite by GitHub username
+// or email as an editor, a commenter or a viewer, change roles, remove people, make share links
+// (view and comment links open without an account), and the project's permission settings.  The
+// owner manages; an editor may invite and make links when the owner allows it; everyone else in
+// the project sees the list read-only.
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as API from "./api";
-import type { FoundUser, Invite, Member, Members, Role, ShareLink } from "./api";
+import type { FoundUser, Invite, Member, Members, Permissions, Role, ShareLink } from "./api";
 import { ago, Avatar, Confirm, copyText, Ic, Modal, toast, toastError } from "./ui";
 
 export interface ShareTarget { projectId: string; name: string; isPublic?: boolean }
@@ -13,6 +15,7 @@ function RoleSelect({ value, onChange, disabled, label, onMakeOwner }: { value: 
     <select className="hp-select" aria-label={label} value={value} disabled={disabled}
       onChange={(ev) => { if (ev.target.value === "owner") { ev.target.value = value; onMakeOwner?.(); } else onChange(ev.target.value as Role); }}>
       <option value="editor">Can edit</option>
+      <option value="commenter">Can comment</option>
       <option value="viewer">Can view</option>
       {onMakeOwner ? <option value="owner">Make owner…</option> : null}
     </select>
@@ -54,7 +57,7 @@ function InviteRow({ projectId, taken, onInvited }: { projectId: string; taken: 
     try {
       const r = await API.invite(projectId, email ? { email: target } : { login: target }, role);
       setText(""); setFound([]);
-      setNote({ text: r.status === "granted" ? `${r.login || target} can now ${role === "editor" ? "edit" : "view"} this project.`
+      setNote({ text: r.status === "granted" ? `${r.login || target} can now ${API.ROLE_VERB[r.role || role]} this project.`
         : `${target} will get access the first time they sign in.` });
       onInvited();
     } catch (e) { setNote({ text: e instanceof Error ? e.message : String(e), err: true }); }
@@ -106,6 +109,8 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
   const [isPublic, setIsPublic] = useState<boolean | undefined>(target.isPublic);
   const [linkRole, setLinkRole] = useState<Role>("editor");
   const [linkDays, setLinkDays] = useState(0);
+  const [linkLabel, setLinkLabel] = useState("");
+  const [perms, setPerms] = useState<Permissions | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | { title: string; body: string; action: string; run: () => Promise<void> }>(null);
   const alive = useRef(true);
@@ -122,6 +127,8 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
       const m = await API.listMembers(id);
       if (stale()) return;
       setData(m); setError(null);
+      if (m.permissions) { setPerms(m.permissions); setIsPublic(m.permissions.public); }
+      if (m.canShare && !m.canManage) { const l = await API.listLinks(id); if (!stale()) setLinks(l); }
       if (m.canManage) {
         const [l, info] = await Promise.all([API.listLinks(id), API.api<{ public?: boolean }>(`/api/projects/${id}/info`).catch(() => null)]);
         if (stale()) return;
@@ -141,6 +148,8 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
 
   const changed = () => { load(); onChanged?.(); };
   const can = !!data?.canManage;
+  /** May invite and make links: the owner, or an editor when the owner allows it. */
+  const canShare = can || !!data?.canShare;
   const taken = new Set<string>([...(data?.members || []).map((m) => m.login.toLowerCase()), ...(data?.owner ? [data.owner.login.toLowerCase()] : []),
     ...(data?.pending || []).map((p) => (p.login || "").toLowerCase()).filter(Boolean)]);
 
@@ -162,29 +171,38 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
     () => API.revokeInvite(id, p.inviteId), () => toast("Invite cancelled"));
   const newLink = async () => {
     setLinkBusy(true);
-    try { const l = await API.createLink(id, linkRole, linkDays || undefined); await copyText(l.url, "Link created and copied"); setLinks(await API.listLinks(id)); }
+    try { const l = await API.createLink(id, linkRole, linkDays || undefined, linkLabel.trim() || undefined); await copyText(l.url, "Link created and copied"); setLinkLabel(""); setLinks(await API.listLinks(id)); }
     catch (e) { toastError(e); }
     setLinkBusy(false);
   };
   const revokeLink = (l: ShareLink) => setConfirm({
-    title: "Turn off link", action: "Turn off", body: "The link stops working for anyone who has not used it yet. People who already joined with it keep their access until you remove them above.",
+    title: "Turn off link", action: "Turn off", body: "The link stops working at once, also for people looking at the project through it right now. People who joined with it keep their access until the owner removes them.",
     run: async () => { await API.revokeLink(l.token); setLinks((x) => x.filter((y) => y.token !== l.token)); toast("Link turned off"); },
   });
   const togglePublic = async (next: boolean) => {
     setIsPublic(next);
-    try { await API.patchProject(id, { public: next }); toast(next ? "Listed in Explore" : "Now private"); onChanged?.(); }
+    try { await API.patchProject(id, { public: next }); setPerms((p) => p && { ...p, public: next }); toast(next ? "Listed in Explore" : "Now private"); onChanged?.(); }
     catch (e) { setIsPublic(!next); toastError(e); }
+  };
+  /** One permission setting: shown changed at once, put back if the server refuses. */
+  const setPerm = async (patch: Partial<Omit<Permissions, "public">>, done: string) => {
+    const before = perms;
+    setPerms((p) => p && { ...p, ...patch });
+    try { setPerms(await API.setPermissions(id, patch)); toast(done); }
+    catch (e) { setPerms(before); toastError(e); }
   };
 
   return (
     <Modal title={<>Share <span className="hp-dim">“{target.name}”</span></>} onClose={onClose} width={540}
-      footer={<><span className="hp-foot-note">{can ? "Changes to who can edit apply right away, also for people who have the project open." : ""}</span><button type="button" className="btn" onClick={onClose}>Done</button></>}>
+      footer={<><span className="hp-foot-note">{can ? "Changes apply right away, also for people who have the project open." : ""}</span><button type="button" className="btn" onClick={onClose}>Done</button></>}>
       {error ? <div className="hp-error" role="alert"><span>{error}</span><button type="button" className="btn sm" onClick={load}>Try again</button></div> : null}
       {!data && !error ? <div className="hp-skel-rows" aria-busy="true"><i /><i /><i /></div> : null}
       {data ? (
         <>
-          {can ? <InviteRow projectId={id} taken={taken} onInvited={changed} />
-            : <p className="hp-note">Only the owner can invite people or change roles. You can see who has access below.</p>}
+          {canShare ? <InviteRow projectId={id} taken={taken} onInvited={changed} /> : null}
+          {!can ? <p className="hp-note hp-yourrole" id="hp-yourrole">{data.myRole ? <span className={"pill " + data.myRole}>{data.myRole}</span> : null}
+            <span>{canShare ? "You can invite people and make links. Only the owner changes roles or removes people."
+              : `You can ${data.myRole ? API.ROLE_VERB[data.myRole] : "view"} this project. Only the owner can invite people or change roles.`}</span></p> : null}
 
           <h3 className="hp-h3">People with access</h3>
           <ul className="hp-people">
@@ -209,43 +227,80 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
                 <button type="button" className="hp-iconbtn" title="Cancel invite" aria-label={`Cancel invite for ${p.login || p.email}`} onClick={() => revokeInvite(p)}><Ic name="close" /></button>
               </li>
             ))}
-            {!data.members.length && !data.pending.length ? <li className="hp-people-empty">Nobody else yet.{can ? " Invite someone above, or send them a link." : ""}</li> : null}
+            {!data.members.length && !data.pending.length ? <li className="hp-people-empty">Nobody else yet.{canShare ? " Invite someone above, or send them a link." : ""}</li> : null}
           </ul>
 
-          {can ? (
+          {canShare ? (
             <>
               <h3 className="hp-h3">Share links</h3>
-              <p className="hp-note">Anyone with a link can join after signing in. It works in the browser and in KiCad Collaborative (File → Join Session from URL…).</p>
+              <p className="hp-note" id="hp-link-note">{linkRole === "editor" ? "Anyone with this link can edit after signing in."
+                : perms?.linksRequireSignin ? `Anyone with this link can ${linkRole === "commenter" ? "view and comment" : "view"} after signing in.`
+                : linkRole === "commenter" ? "Anyone with this link can view without an account, and comment after signing in. They cannot change the design."
+                : "Anyone with this link can view without an account. They cannot comment or change the design."} Links also open in KiCad Collaborative (File → Join Session from URL…).</p>
               <div className="hp-linknew">
                 <RoleSelect value={linkRole} onChange={setLinkRole} label="Role the link grants" />
                 <select className="hp-select" aria-label="Link expiry" value={linkDays} onChange={(ev) => setLinkDays(Number(ev.target.value))}>
                   <option value={0}>Never expires</option><option value={1}>Expires in 1 day</option><option value={7}>Expires in 7 days</option><option value={30}>Expires in 30 days</option>
                 </select>
+                <input className="hp-input" aria-label="Name for the link (optional)" placeholder="Name (optional)" maxLength={80} value={linkLabel}
+                  onChange={(ev) => setLinkLabel(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter") { ev.preventDefault(); newLink(); } }} />
                 <button type="button" className="btn" onClick={newLink} disabled={linkBusy}><Ic name="link" />{linkBusy ? "Creating…" : "Create and copy link"}</button>
               </div>
               {links.length ? (
                 <ul className="hp-links">
                   {links.map((l) => (
-                    <li key={l.token}>
-                      <input className="hp-input mono" readOnly value={l.url} aria-label="Share link" onFocus={(ev) => ev.currentTarget.select()} />
-                      <span className="hp-link-meta"><span className={"pill " + l.role}>{l.role}</span>
-                        <span className="hp-dim">{l.expiresAt ? `expires ${new Date(l.expiresAt).toLocaleDateString()}` : `made ${ago(l.createdAt)}`}</span></span>
+                    <li key={l.token} data-role={l.role}>
+                      <input className="hp-input mono" readOnly value={l.url} aria-label={l.label ? `Share link “${l.label}”` : "Share link"} onFocus={(ev) => ev.currentTarget.select()} />
+                      <span className="hp-link-meta">{l.label ? <span className="hp-link-name" title={l.label}>{l.label}</span> : null}<span className={"pill " + l.role}>{l.role}</span>
+                        <span className="hp-dim" title={l.createdBy ? `Made by ${l.createdBy} ${ago(l.createdAt)}` : undefined}>{l.expiresAt ? `expires ${new Date(l.expiresAt).toLocaleDateString()}` : `made ${ago(l.createdAt)}`}
+                          {l.uses ? ` · ${l.uses} joined` : ""}</span></span>
                       <button type="button" className="hp-iconbtn" title="Copy link" aria-label="Copy link" onClick={() => copyText(l.url, "Link copied")}><Ic name="copy" /></button>
-                      <button type="button" className="hp-iconbtn" title="Turn off link" aria-label="Turn off link" onClick={() => revokeLink(l)}><Ic name="trash" /></button>
+                      {l.canRevoke !== false ? <button type="button" className="hp-iconbtn" title="Turn off link" aria-label="Turn off link" onClick={() => revokeLink(l)}><Ic name="trash" /></button> : null}
                     </li>
                   ))}
                 </ul>
               ) : null}
+            </>
+          ) : null}
 
-              <h3 className="hp-h3">General access</h3>
-              <label className="hp-access">
-                <Ic name={isPublic ? "globe" : "lock"} size={18} />
-                <span className="hp-person"><b>{isPublic ? "Public" : "Private"}</b>
-                  <small>{isPublic ? "Listed in Explore. Anyone signed in can view it and make their own copy." : "Only the people above can open it."}</small></span>
-                <select className="hp-select" aria-label="General access" value={isPublic ? "public" : "private"} onChange={(ev) => togglePublic(ev.target.value === "public")}>
-                  <option value="private">Private</option><option value="public">Public</option>
-                </select>
-              </label>
+          {can ? (
+            <>
+              <h3 className="hp-h3">Permissions</h3>
+              <div className="hp-perms" id="hp-perms">
+                <label className="hp-access">
+                  <Ic name={isPublic ? "globe" : "lock"} size={18} />
+                  <span className="hp-person"><b>{isPublic ? "Public" : "Private"}</b>
+                    <small>{isPublic ? "Listed in Explore. Anyone can view it." : "Only the people above, and people with a link, can open it."}</small></span>
+                  <select className="hp-select" aria-label="General access" value={isPublic ? "public" : "private"} onChange={(ev) => togglePublic(ev.target.value === "public")}>
+                    <option value="private">Private</option><option value="public">Public</option>
+                  </select>
+                </label>
+                {perms ? (
+                  <>
+                    {isPublic ? (
+                      <label className="hp-access sub">
+                        <span className="hp-person"><b>Signed-in visitors</b><small>What someone who finds the project in Explore may do.</small></span>
+                        <select className="hp-select" aria-label="What signed-in visitors can do" value={perms.publicRole}
+                          onChange={(ev) => setPerm({ publicRole: ev.target.value as "viewer" | "commenter" }, ev.target.value === "commenter" ? "Visitors can now comment" : "Visitors can now only view")}>
+                          <option value="viewer">Can view</option><option value="commenter">Can comment</option>
+                        </select>
+                      </label>
+                    ) : null}
+                    <label className="hp-access">
+                      <input type="checkbox" checked={perms.editorsCanShare} onChange={(ev) => setPerm({ editorsCanShare: ev.target.checked }, ev.target.checked ? "Editors can now share" : "Only you can share now")} />
+                      <span className="hp-person"><b>Editors can share</b><small>Editors may invite people and make links. Only you change roles or remove people.</small></span>
+                    </label>
+                    <label className="hp-access">
+                      <input type="checkbox" checked={perms.viewersCanCopy} onChange={(ev) => setPerm({ viewersCanCopy: ev.target.checked }, ev.target.checked ? "Viewers can download and copy" : "Viewers can no longer download or copy")} />
+                      <span className="hp-person"><b>Viewers and commenters can download and copy</b><small>Off: Download .zip and Clone are refused for them. They can still open and read the design.</small></span>
+                    </label>
+                    <label className="hp-access">
+                      <input type="checkbox" checked={perms.linksRequireSignin} onChange={(ev) => setPerm({ linksRequireSignin: ev.target.checked }, ev.target.checked ? "Links now need a sign-in" : "View links open without an account")} />
+                      <span className="hp-person"><b>Links need a sign-in</b><small>Off: view and comment links show the design to anyone who has them, without an account.</small></span>
+                    </label>
+                  </>
+                ) : null}
+              </div>
             </>
           ) : null}
         </>

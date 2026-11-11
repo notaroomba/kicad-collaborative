@@ -8,7 +8,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, ty
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
 import { EXTRA_TOOLS, READ_ONLY_OK, ZOOM_PRESETS, toolFor } from "../tables";
-import { dispatch, useApp, type Editor } from "../store";
+import { appState, dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
 import { Glyph, KIcon } from "./Icon";
@@ -46,7 +46,11 @@ const VIEW_SAFE = new Set<string>([...READ_ONLY_OK, "selectSetRect", "selectSetL
   "showFootprintBrowser", "showSymbolEditor", "showFootprintEditor", "showPcbNew", "showEeschema", "generateBOM", "showSimulator",
   ...Object.values(SPEC.toolbars).flatMap((t) => (t.left || []).flatMap((it) => (isGroup(it) ? it.items.map((x) => x.id) : isSep(it) || isControl(it) ? [] : [it.id])))]);
 /** Why a toolbar entry is greyed for a viewer; null when it can run. */
-function viewOnlyWhy(viewOnly: boolean, id: string): string | null { return viewOnly && id && !VIEW_SAFE.has(id) ? "View-only access" : null; }
+/** Why a tool is off for someone who may not edit; a commenter is told they can still comment. */
+function viewOnlyWhy(viewOnly: boolean, id: string): string | null {
+  if (!viewOnly || !id || VIEW_SAFE.has(id)) return null;
+  return appState().canComment ? "Comment-only access" : "View-only access";
+}
 
 // ---------------------------------------------------------------- buttons
 function ActionButton({ item, a, main }: { item: ActionItem; a: Avail; main?: boolean }) {

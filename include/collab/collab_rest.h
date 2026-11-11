@@ -204,13 +204,13 @@ KICOMMON_API bool RevokeInvite( const wxString& aServerUrl, const wxString& aTok
                                 const wxString& aProjectId, long long aInviteId,
                                 ERROR_INFO* aError = nullptr );
 
-/// PATCH /api/projects/{id}/members/{userId} { role: "editor"|"viewer" } (owner only).
+/// PATCH /api/projects/{id}/members/{userId} { role: "editor"|"commenter"|"viewer" } (owner only).
 KICOMMON_API bool SetMemberRole( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId, long long aUserId,
                                  const wxString& aRole,
                                  ERROR_INFO* aError = nullptr );
 
-/// PATCH /api/projects/{id}/invites/{inviteId} { role: "editor"|"viewer" } (owner only).
+/// PATCH /api/projects/{id}/invites/{inviteId} { role: "editor"|"commenter"|"viewer" } (owner only).
 KICOMMON_API bool SetInviteRole( const wxString& aServerUrl, const wxString& aToken,
                                  const wxString& aProjectId, long long aInviteId,
                                  const wxString& aRole,

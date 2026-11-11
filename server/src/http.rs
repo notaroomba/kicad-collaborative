@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read, Write};
 
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -9,6 +9,7 @@ use serde_json::json;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
+use crate::access::{self, Role, Viewer};
 use crate::auth::{self, AuthUser};
 use crate::error::{AppError, AppResult};
 use crate::lenient_json::LenientJson;
@@ -297,7 +298,7 @@ pub async fn list_projects(
                 "description": p.description,
                 "ownerId": p.owner_id, "ownerLogin": p.owner_login,
                 "ownerAvatarUrl": p.owner_avatar_url,
-                "role": p.role, "public": p.public, "docCount": p.doc_count,
+                "role": p.role, "public": p.public, "canCopy": p.can_copy, "docCount": p.doc_count,
                 "memberCount": p.member_count, "starred": p.starred,
                 "createdAt": p.created_at.to_rfc3339(),
                 "updatedAt": p.updated_at.to_rfc3339(),
@@ -383,12 +384,21 @@ pub async fn clone_project(
     State(state): State<AppState>,
     // AuthUser takes the web's cookie and the desktop's bearer token alike.
     AuthUser(user): AuthUser,
+    Viewer { links, .. }: Viewer,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
 
-    if !project.public {
-        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::NotFound)?;
+    let access = access::resolve(&state.pool, &Viewer { user: Some(user.clone()), links },
+                                 id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !access.can_copy() {
+        return Err(AppError::Api(
+            StatusCode::FORBIDDEN,
+            "copy_disabled",
+            "The owner of this project does not let viewers make copies.".into(),
+        ));
     }
 
     let name = format!("{} (copy)", project.name);
@@ -420,12 +430,9 @@ pub async fn preview_svg(
     Path(id): Path<Uuid>,
     Query(q): Query<PreviewQuery>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-
-    if !project.public {
-        let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
-        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
-    }
+    access::resolve(&state.pool, &Viewer::from_jar(&state, &jar).await, id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
 
     let Some(kicad_cli) = state.cfg.kicad_cli.clone() else {
         // No renderer on this server: serve the latest client-pushed preview.
@@ -522,18 +529,13 @@ pub async fn preview_svg(
 /// ones for members.  Carries the docs so the client can join the board.
 pub async fn project_info(
     State(state): State<AppState>,
-    jar: axum_extra::extract::CookieJar,
+    who: Viewer,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    let viewer = auth::user_from_jar(&state, &jar).await;
-    let role = match &viewer {
-        Some(u) => persist::effective_role(&state.pool, u.id, id).await?,
-        None => None,
-    };
-    if !project.public && role.is_none() {
-        return Err(AppError::NotFound);
-    }
+    
+    let access = access::resolve(&state.pool, &who, id).await?.ok_or(AppError::NotFound)?;
+    let viewer = who.user;
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let all_docs = persist::project_documents(&state.pool, id).await?;
     let ids: Vec<Uuid> = all_docs.iter().map(|d| d.id).collect();
@@ -549,7 +551,11 @@ pub async fn project_info(
         "projectId": project.id, "name": project.name, "description": project.description,
         "public": project.public, "ownerId": project.owner_id,
         "ownerLogin": owner.map(|o| o.login).unwrap_or_default(),
-        "role": role, "docs": docs,
+        "role": access.role_str(), "docs": docs,
+        // What the interface should offer; the server decides again on every request.
+        "can": access.can_json(),
+        "isOwner": access.owner, "isMember": access.member,
+        "permissions": access.settings.to_json(),
         "viewer": viewer.map(|u| json!({ "id": u.id, "login": u.login })),
     }))
     .into_response())
@@ -580,11 +586,9 @@ async fn doc_with_access(
     doc_id: Uuid,
 ) -> AppResult<persist::Document> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
-    let project = persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
-    if !project.public {
-        let user = auth::user_from_jar(state, jar).await.ok_or(AppError::Forbidden)?;
-        persist::effective_role(&state.pool, user.id, project.id).await?.ok_or(AppError::Forbidden)?;
-    }
+    access::resolve(&state.pool, &Viewer::from_jar(state, jar).await, doc.project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
     Ok(doc)
 }
 
@@ -745,12 +749,9 @@ pub async fn board_items(
     jar: axum_extra::extract::CookieJar,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-
-    if !project.public {
-        let user = auth::user_from_jar(&state, &jar).await.ok_or(AppError::Forbidden)?;
-        persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
-    }
+    access::resolve(&state.pool, &Viewer::from_jar(&state, &jar).await, id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
 
     let docs = persist::project_documents(&state.pool, id).await?;
     let doc = docs
@@ -864,40 +865,39 @@ pub struct UpdateCommentRequest {
     pub resolved: Option<bool>,
 }
 
-/// Comment access: any member may read and write (commenting is the viewer
-/// role's superpower); anyone may read on public projects.
+/// Comment access (access.rs): anyone who can see the project reads its comments;
+/// writing one (a new thread, a reply, resolving) takes the commenter role or more,
+/// and an account to write it as.
 async fn comment_access(
     state: &AppState,
-    user: Option<persist::User>,
+    viewer: &Viewer,
     doc_id: Uuid,
     write: bool,
 ) -> Result<(persist::Document, Option<persist::User>), AppError> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
-    let project =
-        persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
+    let access = access::resolve(&state.pool, viewer, doc.project_id).await?.ok_or(AppError::Forbidden)?;
 
-    let member_role = match &user {
-        Some(u) => persist::effective_role(&state.pool, u.id, doc.project_id).await?,
-        None => None,
-    };
-
-    if write {
-        if user.is_none() || (member_role.is_none() && !project.public) {
-            return Err(AppError::Forbidden);
-        }
-    } else if member_role.is_none() && !project.public {
-        return Err(AppError::Forbidden);
+    if write && !access.can_comment() {
+        return Err(if viewer.user.is_none() {
+            AppError::Unauthorized
+        } else {
+            AppError::Api(
+                StatusCode::FORBIDDEN,
+                "comment_denied",
+                "You can view this project but not comment on it.".into(),
+            )
+        });
     }
 
-    Ok((doc, user))
+    Ok((doc, viewer.user.clone()))
 }
 
 pub async fn list_comments(
     State(state): State<AppState>,
-    auth::MaybeAuthUser(user): auth::MaybeAuthUser,
+    viewer: Viewer,
     Path(doc_id): Path<Uuid>,
 ) -> AppResult<Response> {
-    let _ = comment_access(&state, user, doc_id, false).await?;
+    let _ = comment_access(&state, &viewer, doc_id, false).await?;
 
     let comments: Vec<_> = persist::list_comments(&state.pool, doc_id)
         .await?
@@ -910,11 +910,11 @@ pub async fn list_comments(
 
 pub async fn create_comment(
     State(state): State<AppState>,
-    auth::MaybeAuthUser(user): auth::MaybeAuthUser,
+    viewer: Viewer,
     Path(doc_id): Path<Uuid>,
     LenientJson(req): LenientJson<NewCommentRequest>,
 ) -> AppResult<Response> {
-    let (_, user) = comment_access(&state, user, doc_id, true).await?;
+    let (_, user) = comment_access(&state, &viewer, doc_id, true).await?;
     let user = user.ok_or(AppError::Forbidden)?;
 
     let body = req.body.trim();
@@ -948,12 +948,12 @@ pub async fn create_comment(
 
 pub async fn update_comment(
     State(state): State<AppState>,
-    auth::MaybeAuthUser(user): auth::MaybeAuthUser,
+    viewer: Viewer,
     Path(id): Path<i64>,
     LenientJson(req): LenientJson<UpdateCommentRequest>,
 ) -> AppResult<Response> {
     let comment = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    let (doc, user) = comment_access(&state, user, comment.doc_id, true).await?;
+    let (doc, user) = comment_access(&state, &viewer, comment.doc_id, true).await?;
     let user = user.ok_or(AppError::Forbidden)?;
 
     // Anyone who can comment may resolve/unresolve (the Figma model); only
@@ -978,11 +978,13 @@ pub async fn update_comment(
 
 pub async fn delete_comment(
     State(state): State<AppState>,
-    auth::MaybeAuthUser(user): auth::MaybeAuthUser,
+    viewer: Viewer,
     Path(id): Path<i64>,
 ) -> AppResult<Response> {
     let comment = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    let (_, user) = comment_access(&state, user, comment.doc_id, true).await?;
+    // Taking a comment back needs no right to write new ones: its author may, whatever
+    // their role is now, and so may the owner.
+    let (_, user) = comment_access(&state, &viewer, comment.doc_id, false).await?;
     let user = user.ok_or(AppError::Forbidden)?;
 
     let doc =
@@ -1214,7 +1216,7 @@ pub async fn get_project(
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    let role = persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
+    let access = access::require(&state.pool, &Viewer::user(&user), id).await?;
     let docs = persist::project_documents(&state.pool, id).await?;
     let docs: Vec<_> = docs
         .iter()
@@ -1222,7 +1224,9 @@ pub async fn get_project(
         .collect();
     Ok(Json(json!({
         "projectId": project.id, "name": project.name, "ownerId": project.owner_id,
-        "role": role, "docs": docs,
+        "role": access.role_str(), "docs": docs,
+        "can": access.can_json(), "isOwner": access.owner,
+        "permissions": access.settings.to_json(),
     }))
     .into_response())
 }
@@ -1233,7 +1237,14 @@ pub async fn download_archive(
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::Forbidden)?;
+    let access = access::require(&state.pool, &Viewer::user(&user), id).await?;
+    if !access.can_copy() {
+        return Err(AppError::Api(
+            StatusCode::FORBIDDEN,
+            "copy_disabled",
+            "The owner of this project does not let viewers download it.".into(),
+        ));
+    }
 
     let docs = persist::project_documents(&state.pool, id).await?;
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
@@ -1282,12 +1293,49 @@ pub async fn download_archive(
 }
 
 // ---------- Share links & invites ----------
+//
+// Who may do what here (access.rs): the owner manages everything.  When the project's
+// "editors can share" setting is on, an editor may also invite people and make links,
+// never above editor, and may take back the invites and links they made themselves.
+// Changing or removing someone who is already in stays with the owner.
+
+/// The caller's access, refused unless they may share the project.
+async fn sharing_access(state: &AppState, user: &persist::User, id: Uuid) -> AppResult<access::Access> {
+    let access = access::resolve(&state.pool, &Viewer::user(user), id).await?.ok_or(AppError::NotFound)?;
+    if !access.can_share() {
+        return Err(AppError::Forbidden);
+    }
+    Ok(access)
+}
+
+async fn owner_only(state: &AppState, user: &persist::User, id: Uuid) -> AppResult<persist::Project> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        return Err(AppError::Forbidden);
+    }
+    Ok(project)
+}
+
+fn link_json(state: &AppState, l: &persist::ActiveLink, me: i64, is_owner: bool) -> serde_json::Value {
+    json!({
+        "token": l.token,
+        "url": format!("{}/j/{}", state.cfg.site_url, l.token),
+        "role": l.role,
+        "label": l.label,
+        "uses": l.uses,
+        "createdBy": l.created_by_login,
+        "canRevoke": is_owner || l.created_by == me,
+        "createdAt": l.created_at.to_rfc3339(),
+        "expiresAt": l.expires_at.map(|t| t.to_rfc3339()),
+    })
+}
 
 #[derive(Deserialize)]
 pub struct CreateLinkRequest {
     pub role: Option<String>,
     #[serde(rename = "expiresInDays")]
     pub expires_in_days: Option<i64>,
+    pub label: Option<String>,
 }
 
 pub async fn create_link(
@@ -1296,14 +1344,8 @@ pub async fn create_link(
     Path(id): Path<Uuid>,
     LenientJson(req): LenientJson<CreateLinkRequest>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
-    let role = req.role.unwrap_or_else(|| "editor".into());
-    if !matches!(role.as_str(), "editor" | "viewer") {
-        return Err(AppError::BadRequest("role must be editor or viewer".into()));
-    }
+    sharing_access(&state, &user, id).await?;
+    let role = Role::checked(req.role.as_deref().unwrap_or("editor"))?;
     let expires_at = match req.expires_in_days {
         Some(d) if (1..=3650).contains(&d) => Some(
             chrono::Utc::now()
@@ -1315,12 +1357,18 @@ pub async fn create_link(
         }
         None => None,
     };
+    let label = req.label.as_deref().map(str::trim).filter(|l| !l.is_empty());
+    if label.is_some_and(|l| l.chars().count() > 80 || l.chars().any(char::is_control)) {
+        return Err(AppError::BadRequest("label too long (80 characters max)".into()));
+    }
     let token = auth::random_token();
-    persist::create_share_link(&state.pool, &token, id, &role, user.id, expires_at).await?;
+    persist::create_share_link(&state.pool, &token, id, role.as_str(), user.id, expires_at, label).await?;
     Ok(Json(json!({
         "token": token,
         "url": format!("{}/j/{}", state.cfg.site_url, token),
-        "role": role,
+        "role": role.as_str(),
+        "label": label,
+        "expiresAt": expires_at.map(|t| t.to_rfc3339()),
     }))
     .into_response())
 }
@@ -1331,6 +1379,8 @@ pub async fn revoke_link(
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     if persist::revoke_share_link(&state.pool, &token, user.id).await? {
+        // Someone looking through the link (not joined) loses the project now.
+        state.access_changed();
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::NotFound)
@@ -1359,30 +1409,49 @@ pub async fn claim_link(
     Ok(Json(json!({ "projectId": link.project_id, "role": role })).into_response())
 }
 
+/// POST /api/projects/{id}/join: someone who is looking at the project through a
+/// share link they opened (not yet a member) joins it with that link's role.
+pub async fn join_opened(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Viewer { links, .. }: Viewer,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
+    if project.owner_id != user.id {
+        let link = access::best_opened_link(&state.pool, &links, id).await?.ok_or(AppError::NotFound)?;
+        persist::claim_share_link(&state.pool, user.id, &link).await?;
+        state.access_changed();
+    }
+    let role = persist::effective_role(&state.pool, user.id, id).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(json!({ "projectId": id, "role": role })).into_response())
+}
+
 /// Who has access.  Any member can read the list (so collaborators can see who
-/// else is in the project); pending invites and every change stay owner-only.
+/// else is in the project); pending invites are shown to whoever may share.
 pub async fn list_members(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    let can_manage = project.owner_id == user.id;
-    let rows = persist::list_members(&state.pool, id).await?;
-    // A public project gives everyone the viewer role, which is not membership.
-    if !can_manage && !rows.iter().any(|m| m.id == user.id) {
+    let access = access::resolve(&state.pool, &Viewer::user(&user), id).await?;
+    // A public project gives everyone a role, which is not membership.
+    let Some(access) = access.filter(|a| a.member) else {
         return Err(AppError::Forbidden);
-    }
+    };
+    let rows = persist::list_members(&state.pool, id).await?;
     let owner = persist::get_user(&state.pool, project.owner_id).await?;
     let members: Vec<_> = rows
         .into_iter()
         .map(|m| json!({ "userId": m.id, "login": m.login, "avatarUrl": m.avatar_url, "role": m.role }))
         .collect();
-    let pending: Vec<_> = if can_manage {
+    let pending: Vec<_> = if access.can_share() {
         persist::list_pending_invites(&state.pool, id)
             .await?
             .into_iter()
-            .map(|(perm_id, login, email, role)| {
+            .filter(|i| access.owner || i.4 == Some(user.id))
+            .map(|(perm_id, login, email, role, _)| {
                 json!({ "inviteId": perm_id, "login": login, "email": email, "role": role })
             })
             .collect()
@@ -1392,7 +1461,10 @@ pub async fn list_members(
     Ok(Json(json!({
         "ownerId": project.owner_id,
         "owner": owner.map(|o| json!({ "userId": o.id, "login": o.login, "avatarUrl": o.avatar_url })),
-        "canManage": can_manage,
+        "canManage": access.can_manage(),
+        "canShare": access.can_share(),
+        "myRole": access.role_str(),
+        "permissions": access.settings.to_json(),
         "members": members, "pending": pending,
     }))
     .into_response())
@@ -1403,28 +1475,17 @@ pub struct RoleRequest {
     pub role: String,
 }
 
-fn checked_role(role: &str) -> AppResult<&str> {
-    if matches!(role, "editor" | "viewer") {
-        Ok(role)
-    } else {
-        Err(AppError::BadRequest("role must be editor or viewer".into()))
-    }
-}
-
 /// PATCH /api/projects/{id}/members/{userId}: the owner changes a member's role.
-/// Like removal, it reaches a live socket on its next join_doc.
+/// Like removal, it reaches a live socket within about a second.
 pub async fn set_member_role(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path((id, member_id)): Path<(Uuid, i64)>,
     LenientJson(req): LenientJson<RoleRequest>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
-    let role = checked_role(&req.role)?;
-    if persist::set_member_role(&state.pool, id, member_id, role).await? {
+    owner_only(&state, &user, id).await?;
+    let role = Role::checked(&req.role)?;
+    if persist::set_member_role(&state.pool, id, member_id, role.as_str()).await? {
         state.access_changed();
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
@@ -1439,41 +1500,30 @@ pub async fn set_invite_role(
     Path((id, invite_id)): Path<(Uuid, i64)>,
     LenientJson(req): LenientJson<RoleRequest>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
-    let role = checked_role(&req.role)?;
-    if persist::set_invite_role(&state.pool, id, invite_id, role).await? {
+    let access = sharing_access(&state, &user, id).await?;
+    let role = Role::checked(&req.role)?;
+    let only_by = if access.owner { None } else { Some(user.id) };
+    if persist::set_invite_role(&state.pool, id, invite_id, role.as_str(), only_by).await? {
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::NotFound)
     }
 }
 
-/// GET /api/projects/{id}/links: the share links that still work, so the owner
-/// can see what is out there and revoke it.
+/// GET /api/projects/{id}/links: the share links that still work, so whoever may
+/// share can see what is out there and turn it off.
 pub async fn list_links(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
+    let access = sharing_access(&state, &user, id).await?;
     let links: Vec<_> = persist::list_share_links(&state.pool, id)
         .await?
-        .into_iter()
-        .map(|l| {
-            json!({
-                "token": l.token,
-                "url": format!("{}/j/{}", state.cfg.site_url, l.token),
-                "role": l.role,
-                "createdAt": l.created_at.to_rfc3339(),
-                "expiresAt": l.expires_at.map(|t| t.to_rfc3339()),
-            })
-        })
+        .iter()
+        // An editor who may share sees the links they made, not the owner's.
+        .filter(|l| access.owner || l.created_by == user.id)
+        .map(|l| link_json(&state, l, user.id, access.owner))
         .collect();
     Ok(Json(json!({ "links": links })).into_response())
 }
@@ -1483,11 +1533,9 @@ pub async fn revoke_invite(
     AuthUser(user): AuthUser,
     Path((id, invite_id)): Path<(Uuid, i64)>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
-    if persist::delete_pending_invite(&state.pool, id, invite_id).await? {
+    let access = sharing_access(&state, &user, id).await?;
+    let only_by = if access.owner { None } else { Some(user.id) };
+    if persist::delete_pending_invite(&state.pool, id, invite_id, only_by).await? {
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
         Err(AppError::NotFound)
@@ -1499,10 +1547,7 @@ pub async fn remove_member(
     AuthUser(user): AuthUser,
     Path((id, member_id)): Path<(Uuid, i64)>,
 ) -> AppResult<Response> {
-    let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
+    owner_only(&state, &user, id).await?;
     if persist::remove_member(&state.pool, id, member_id).await? {
         // Live sockets look their role up again on their next message (ws.rs).
         state.access_changed();
@@ -1544,16 +1589,12 @@ pub async fn invite(
     LenientJson(req): LenientJson<InviteRequest>,
 ) -> AppResult<Response> {
     let project = persist::get_project(&state.pool, id).await?.ok_or(AppError::NotFound)?;
-    if project.owner_id != user.id {
-        return Err(AppError::Forbidden);
-    }
+    sharing_access(&state, &user, id).await?;
     if req.login.is_none() && req.email.is_none() {
         return Err(AppError::BadRequest("provide login or email".into()));
     }
-    let role = req.role.unwrap_or_else(|| "editor".into());
-    if !matches!(role.as_str(), "editor" | "viewer") {
-        return Err(AppError::BadRequest("role must be editor or viewer".into()));
-    }
+    let role = Role::checked(req.role.as_deref().unwrap_or("editor"))?;
+    let role = role.as_str();
 
     // If the invitee already has an account, grant access immediately instead
     // of parking a pending row they would only pick up at next sign-in.
@@ -1567,18 +1608,85 @@ pub async fn invite(
         if invitee.id == project.owner_id {
             return Err(AppError::BadRequest("that user owns this project".into()));
         }
-        persist::grant_role(&state.pool, id, invitee.id, &role).await?;
+        // Never downgrades: only the owner lowers a role (set_member_role).
+        persist::grant_role(&state.pool, id, invitee.id, role).await?;
         state.access_changed();
+        let now = persist::effective_role(&state.pool, invitee.id, id).await?;
         return Ok(Json(json!({
             "ok": true, "status": "granted",
             "userId": invitee.id, "login": invitee.login,
+            "role": now.unwrap_or_else(|| role.to_string()),
         }))
         .into_response());
     }
 
-    persist::add_invite(&state.pool, id, req.login.as_deref(), req.email.as_deref(), &role, user.id)
+    persist::add_invite(&state.pool, id, req.login.as_deref(), req.email.as_deref(), role, user.id)
         .await?;
-    Ok(Json(json!({ "ok": true, "status": "pending" })).into_response())
+    Ok(Json(json!({ "ok": true, "status": "pending", "role": role })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct PermissionsRequest {
+    #[serde(rename = "publicRole")]
+    pub public_role: Option<String>,
+    #[serde(rename = "editorsCanShare")]
+    pub editors_can_share: Option<bool>,
+    #[serde(rename = "viewersCanCopy")]
+    pub viewers_can_copy: Option<bool>,
+    #[serde(rename = "linksRequireSignin")]
+    pub links_require_signin: Option<bool>,
+}
+
+/// GET /api/projects/{id}/permissions: the project's permission settings and what
+/// the caller may do, for anyone who can see the project.
+pub async fn get_permissions(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    let access = access::require(&state.pool, &viewer, id).await?;
+    Ok(Json(json!({
+        "role": access.role_str(), "isOwner": access.owner, "isMember": access.member,
+        "can": access.can_json(), "permissions": access.settings.to_json(),
+    }))
+    .into_response())
+}
+
+/// PATCH /api/projects/{id}/permissions: the owner changes the permission settings.
+pub async fn set_permissions(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    LenientJson(req): LenientJson<PermissionsRequest>,
+) -> AppResult<Response> {
+    owner_only(&state, &user, id).await?;
+    let public_role = match req.public_role.as_deref() {
+        Some(r) => match Role::parse(r) {
+            Some(r @ (Role::Viewer | Role::Commenter)) => Some(r.as_str()),
+            _ => return Err(AppError::BadRequest("publicRole must be viewer or commenter".into())),
+        },
+        None => None,
+    };
+    if public_role.is_none()
+        && req.editors_can_share.is_none()
+        && req.viewers_can_copy.is_none()
+        && req.links_require_signin.is_none()
+    {
+        return Err(AppError::BadRequest("nothing to update".into()));
+    }
+    persist::update_project_permissions(
+        &state.pool,
+        id,
+        public_role,
+        req.editors_can_share,
+        req.viewers_can_copy,
+        req.links_require_signin,
+    )
+    .await?;
+    // Open sockets look their role up again: a visitor's may just have changed.
+    state.access_changed();
+    let access = access::require(&state.pool, &Viewer::user(&user), id).await?;
+    Ok(Json(json!({ "ok": true, "permissions": access.settings.to_json() })).into_response())
 }
 
 // ---------- User search (share-dialog typeahead) ----------
@@ -1687,18 +1795,15 @@ pub struct SnapshotQuery {
 /// download when a peer adds a new sheet file mid-session.
 pub async fn doc_content(
     State(state): State<AppState>,
-    auth::MaybeAuthUser(viewer): auth::MaybeAuthUser,
+    viewer: Viewer,
     Path(doc_id): Path<Uuid>,
 ) -> AppResult<Response> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
     // Readable by members, and by anyone for a public project (the web editor
     // draws the document itself, signed in or not).
-    let project = persist::get_project(&state.pool, doc.project_id).await?.ok_or(AppError::NotFound)?;
-    if !project.public {
-        let user = viewer.ok_or(AppError::Unauthorized)?;
-        persist::effective_role(&state.pool, user.id, doc.project_id)
-            .await?
-            .ok_or(AppError::Forbidden)?;
+    // A share link that was opened in this browser counts as well (access.rs).
+    if access::resolve(&state.pool, &viewer, doc.project_id).await?.is_none() {
+        return Err(if viewer.user.is_some() { AppError::Forbidden } else { AppError::Unauthorized });
     }
 
     let Some((seq, content)) = persist::latest_snapshot(&state.pool, doc_id).await? else {
@@ -1847,12 +1952,11 @@ pub async fn upload_snapshot(
 pub async fn get_snapshot(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    Viewer { links, .. }: Viewer,
     Path((doc_id, seq)): Path<(Uuid, i64)>,
 ) -> AppResult<Response> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
-    persist::effective_role(&state.pool, user.id, doc.project_id)
-        .await?
-        .ok_or(AppError::Forbidden)?;
+    access::require(&state.pool, &Viewer { user: Some(user), links }, doc.project_id).await?;
 
     let content = persist::snapshot_at(&state.pool, doc_id, seq).await?.ok_or(AppError::NotFound)?;
 

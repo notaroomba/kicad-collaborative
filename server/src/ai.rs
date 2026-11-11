@@ -441,11 +441,12 @@ pub struct OpsQuery { since: i64 }
 pub async fn doc_ops(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    crate::access::Viewer { links, .. }: crate::access::Viewer,
     Path(doc_id): Path<Uuid>,
     axum::extract::Query(q): axum::extract::Query<OpsQuery>,
 ) -> AppResult<Json<Value>> {
     let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
-    persist::effective_role(&state.pool, user.id, doc.project_id).await?.ok_or(AppError::Forbidden)?;
+    crate::access::require(&state.pool, &crate::access::Viewer { user: Some(user), links }, doc.project_id).await?;
     let ops = persist::ops_since(&state.pool, doc_id, q.since).await?;
     let head = ops.last().map(|o| o.seq).unwrap_or(q.since);
     Ok(Json(json!({ "since": q.since, "head": head, "ops": ops.iter().map(|o| json!({ "seq": o.seq, "changes": o.changes })).collect::<Vec<_>>() })))

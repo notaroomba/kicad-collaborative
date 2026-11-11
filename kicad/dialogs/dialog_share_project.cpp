@@ -121,9 +121,27 @@ static wxString prettyTimestamp( const wxString& aRfc3339 )
 }
 
 
+/// The role choices list "can edit", "can comment", "can view", in that order.
 static wxString roleFromChoice( wxChoice* aChoice )
 {
-    return aChoice->GetSelection() == 1 ? wxS( "viewer" ) : wxS( "editor" );
+    switch( aChoice->GetSelection() )
+    {
+    case 1:  return wxS( "commenter" );
+    case 2:  return wxS( "viewer" );
+    default: return wxS( "editor" );
+    }
+}
+
+
+static int choiceFromRole( const wxString& aRole )
+{
+    if( aRole == wxS( "commenter" ) )
+        return 1;
+
+    if( aRole == wxS( "viewer" ) )
+        return 2;
+
+    return 0;
 }
 
 
@@ -134,6 +152,9 @@ wxString DIALOG_SHARE_PROJECT::RoleLabel( const wxString& aRole )
 
     if( aRole == wxS( "editor" ) )
         return _( "can edit" );
+
+    if( aRole == wxS( "commenter" ) )
+        return _( "can comment" );
 
     if( aRole == wxS( "viewer" ) )
         return _( "can view" );
@@ -186,6 +207,7 @@ DIALOG_SHARE_PROJECT::DIALOG_SHARE_PROJECT( wxWindow* aParent, const wxString& a
 
     wxArrayString roles;
     roles.Add( _( "can edit" ) );
+    roles.Add( _( "can comment" ) );
     roles.Add( _( "can view" ) );
 
     // -- Read-only note (members who are not the owner) ----------------------
@@ -419,7 +441,7 @@ void DIALOG_SHARE_PROJECT::syncMemberRoleChoice()
     if( !member || jsonBool( *member, "isOwner" ) )
         return;
 
-    int selection = jsonStr( *member, "role" ) == wxS( "viewer" ) ? 1 : 0;
+    int selection = choiceFromRole( jsonStr( *member, "role" ) );
 
     // Only on a real difference: setting it again would disturb a choice the user has
     // open, or one that shows a change still on its way to the server.
@@ -888,10 +910,11 @@ void DIALOG_SHARE_PROJECT::onInvite( wxCommandEvent& aEvent )
                 }
                 else
                 {
-                    m_inviteStatus->SetLabelText( wxString::Format( _( "Invited %s as %s" ), invited,
-                                                                roleStd == "viewer"
-                                                                        ? _( "viewer" )
-                                                                        : _( "editor" ) ) );
+                    m_inviteStatus->SetLabelText( wxString::Format(
+                            _( "Invited %s as %s" ), invited,
+                            roleStd == "viewer"      ? _( "viewer" )
+                            : roleStd == "commenter" ? _( "commenter" )
+                                                     : _( "editor" ) ) );
                 }
 
                 m_suppressSearch = true;

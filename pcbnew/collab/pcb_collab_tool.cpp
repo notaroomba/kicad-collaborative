@@ -1662,8 +1662,9 @@ void PCB_COLLAB_TOOL::OnOpRejected( const wxString& aClientOpId, const wxString&
     if( aCode == wxS( "permission_denied" ) )
     {
         frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
-                _( "You have view-only access to this shared project. Your change was not "
-                   "saved and the board has been refreshed." ) );
+                _( "You can view this shared project, and comment on it if the owner lets you, "
+                   "but not change it. Your change was not saved and the board has been "
+                   "refreshed." ) );
     }
     else
     {
