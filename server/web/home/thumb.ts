@@ -6,7 +6,7 @@ import { api } from "./api";
 
 interface DocEntry { docId: string; path: string; docType: string }
 interface CanvasApi {
-  parseDoc(text: string, docType: string): { type: string; bbox: number[] | null; page: number[] };
+  parseDoc(text: string, docType: string): { type: string; bbox: number[] | null; page: number[]; items?: { size: number } };
   renderPng(doc: unknown, opts: Record<string, unknown>): Promise<Blob>;
 }
 
@@ -38,8 +38,11 @@ async function draw(projectId: string): Promise<string | null> {
   const text = await api<string>(`/api/docs/${doc.docId}/content`);
   if (typeof text !== "string" || !text || text.length > MAX_BYTES) return null;
   const parsed = K.parseDoc(text, doc.docType);
+  // Nothing placed yet (a project that was started blank): a picture of an empty sheet reads as a
+  // broken image, so the card shows its placeholder instead.
+  if (parsed.items && parsed.items.size === 0) return null;
   const box = parsed.type === "pcb" ? parsed.bbox : [0, 0, parsed.page[0], parsed.page[1]];
-  if (!box) return null;
+  if (!box || box[2] - box[0] < 0.5 || box[3] - box[1] < 0.5) return null;
   const long = Math.max(box[2] - box[0], box[3] - box[1], 1);
   const blob = await K.renderPng(parsed, { dpi: (LONG_SIDE / long) * 25.4, padNumbers: false });
   return URL.createObjectURL(blob);

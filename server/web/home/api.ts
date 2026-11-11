@@ -36,13 +36,26 @@ function errorText(status: number, body: string): string {
   return `The server answered ${status}.`;
 }
 
+/** The session ended behind the page's back (expired, signed out in another tab): the home view hears this and
+ *  falls back to its signed-out state.  At most once in a while, so a server that keeps answering 401 cannot make a loop. */
+export const SIGNED_OUT = "kc-signed-out";
+let lastSignedOut = 0;
+function signedOut() {
+  const now = Date.now();
+  if (now - lastSignedOut < 10000) return;
+  lastSignedOut = now;
+  window.dispatchEvent(new Event(SIGNED_OUT));
+}
+/** Where "Sign in" leads: GitHub, and then back to the page the person is on. */
+export const loginUrl = (next: string = location.pathname) => `/auth/github/login?next=${encodeURIComponent(next)}`;
+
 export async function api<T = unknown>(path: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = opts;
   const init: RequestInit = { credentials: "same-origin", ...rest };
   if (json !== undefined) { init.body = JSON.stringify(json); init.headers = { "content-type": "application/json", ...(rest.headers || {}) }; }
   let r: Response;
   try { r = await fetch(path, init); } catch { throw new ApiError(0, "Can't reach the server. Check your connection."); }
-  if (!r.ok) throw new ApiError(r.status, errorText(r.status, await r.text().catch(() => "")));
+  if (!r.ok) { if (r.status === 401) signedOut(); throw new ApiError(r.status, errorText(r.status, await r.text().catch(() => ""))); }
   const ct = r.headers.get("content-type") || "";
   return (ct.includes("json") ? await r.json() : await r.text()) as T;
 }
@@ -99,7 +112,7 @@ export function uploadProject(name: string, files: UploadFile[], onProgress: (fr
     xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) onProgress(ev.loaded / ev.total); };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new ApiError(xhr.status, "The server sent an answer that could not be read.")); } }
-      else reject(new ApiError(xhr.status, errorText(xhr.status, xhr.responseText || "")));
+      else { if (xhr.status === 401) signedOut(); reject(new ApiError(xhr.status, errorText(xhr.status, xhr.responseText || ""))); }
     };
     xhr.onerror = () => reject(new ApiError(0, "Can't reach the server. Check your connection."));
     xhr.onabort = () => reject(new ApiError(0, "Upload cancelled."));

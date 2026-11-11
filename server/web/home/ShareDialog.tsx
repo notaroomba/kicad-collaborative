@@ -111,18 +111,32 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
 
+  // An answer that was asked for before a local edit is from before it: `seq` moves with every
+  // load and every edit, and only the newest answer is shown.
+  const seq = useRef(0);
+  const editing = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++seq.current;
+    const stale = () => !alive.current || mine !== seq.current || editing.current > 0;
     try {
       const m = await API.listMembers(id);
-      if (!alive.current) return;
+      if (stale()) return;
       setData(m); setError(null);
       if (m.canManage) {
         const [l, info] = await Promise.all([API.listLinks(id), API.api<{ public?: boolean }>(`/api/projects/${id}/info`).catch(() => null)]);
-        if (!alive.current) return;
+        if (stale()) return;
         setLinks(l); if (info && typeof info.public === "boolean") setIsPublic(info.public);
       }
-    } catch (e) { if (alive.current) setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { if (!stale()) setError(e instanceof Error ? e.message : String(e)); }
   }, [id]);
+  /** An optimistic edit: the row changes at once, the server's view is fetched again once the last edit under way has landed. */
+  const edit = async (apply: (d: Members) => Members, request: () => Promise<unknown>, done?: () => void) => {
+    seq.current++; editing.current++;
+    setData((d) => d && apply(d));
+    try { await request(); done?.(); } catch (e) { toastError(e); }
+    seq.current++;
+    if (!--editing.current && alive.current) load();
+  };
   useEffect(() => { load(); }, [load]);
 
   const changed = () => { load(); onChanged?.(); };
@@ -131,14 +145,10 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
     ...(data?.pending || []).map((p) => (p.login || "").toLowerCase()).filter(Boolean)]);
 
   // Optimistic edits: the row changes at once and snaps back if the server refuses.
-  const memberRole = async (m: Member, role: Role) => {
-    setData((d) => d && { ...d, members: d.members.map((x) => (x.userId === m.userId ? { ...x, role } : x)) });
-    try { await API.setMemberRole(id, m.userId, role); onChanged?.(); } catch (e) { toastError(e); load(); }
-  };
-  const inviteRole = async (p: Invite, role: Role) => {
-    setData((d) => d && { ...d, pending: d.pending.map((x) => (x.inviteId === p.inviteId ? { ...x, role } : x)) });
-    try { await API.setInviteRole(id, p.inviteId, role); } catch (e) { toastError(e); load(); }
-  };
+  const memberRole = (m: Member, role: Role) => edit((d) => ({ ...d, members: d.members.map((x) => (x.userId === m.userId ? { ...x, role } : x)) }),
+    () => API.setMemberRole(id, m.userId, role), () => onChanged?.());
+  const inviteRole = (p: Invite, role: Role) => edit((d) => ({ ...d, pending: d.pending.map((x) => (x.inviteId === p.inviteId ? { ...x, role } : x)) }),
+    () => API.setInviteRole(id, p.inviteId, role));
   const removeMember = (m: Member) => setConfirm({
     title: "Remove access", action: "Remove", body: `${m.login} will no longer be able to open “${target.name}”. Their local copies are not touched.`,
     run: async () => { await API.removeMember(id, m.userId); toast(`Removed ${m.login}`); changed(); },
@@ -148,10 +158,8 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
     body: `${m.login} becomes the owner of “${target.name}” and can rename, share and delete it. You stay on as an editor and can no longer manage who has access.`,
     run: async () => { await API.transferProject(id, m.userId); toast(`${m.login} now owns “${target.name}”`); changed(); },
   });
-  const revokeInvite = async (p: Invite) => {
-    setData((d) => d && { ...d, pending: d.pending.filter((x) => x.inviteId !== p.inviteId) });
-    try { await API.revokeInvite(id, p.inviteId); toast("Invite cancelled"); } catch (e) { toastError(e); load(); }
-  };
+  const revokeInvite = (p: Invite) => edit((d) => ({ ...d, pending: d.pending.filter((x) => x.inviteId !== p.inviteId) }),
+    () => API.revokeInvite(id, p.inviteId), () => toast("Invite cancelled"));
   const newLink = async () => {
     setLinkBusy(true);
     try { const l = await API.createLink(id, linkRole, linkDays || undefined); await copyText(l.url, "Link created and copied"); setLinks(await API.listLinks(id)); }

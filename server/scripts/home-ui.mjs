@@ -194,8 +194,8 @@ await step('share', async () => {
   await a.locator('.hp-combo input').fill('erin@example.com'); await a.keyboard.press('Enter');
   await a.waitForSelector('.hp-people li.pending');
   check('email invite is pending, and says so', /first time they sign in/.test(await a.locator('.hp-invite .hp-note').textContent()));
-  await a.locator('.hp-people li.pending select').selectOption('viewer'); await a.waitForTimeout(300);
-  const m2 = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body;
+  await a.locator('.hp-people li.pending select').selectOption('viewer');
+  let m2; for (let i = 0; i < 20; i++) { m2 = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body; if (m2.pending[0]?.role === 'viewer') break; await a.waitForTimeout(150); }
   check('pending invite role can be changed', m2.pending[0]?.role === 'viewer');
   await a.locator('.hp-combo input').fill('bob'); await a.locator('.hp-combo input').press('Enter');
   check('inviting someone who already has access is explained', /already has access/.test(await a.locator('.hp-invite .hp-note').textContent()));
@@ -377,6 +377,167 @@ await step('errors', async () => {
   await a.unroute('**/api/projects'); await a.click('.hp-error button'); await a.waitForSelector('.hp-error', { state: 'detached' }); check('Try again recovers', true);
 });
 
+// ---------------------------------------------------------------- slow, failing and out-of-order answers
+/** Hold (and optionally fail) the requests of one method to a URL. */
+const hold = (p, url, method, ms, status = 0) => p.route(url, async (r) => {
+  if (r.request().method() !== method) return r.continue();
+  await new Promise((x) => setTimeout(x, ms));
+  return (status ? r.fulfill({ status, contentType: 'application/json', body: '{"error":"internal"}' }) : r.continue()).catch(() => {});   // the page may have moved on
+});
+const mine = async () => (await api(ids.ta, '/api/projects')).body.projects;
+const idOf = async (name) => (await mine()).find((x) => x.name === name)?.projectId;
+
+await step('loading state', async () => {
+  await hold(a, '**/api/projects', 'GET', 1500);
+  await a.reload(); await a.waitForSelector('.hp-item.skel');
+  check('while the list loads there is no toolbar of zero counts', await a.locator('.hp-tools').count() === 0);
+  await a.unroute('**/api/projects'); await a.waitForSelector('.hp-item:not(.skel)');
+  check('…and it is there once the list is', await a.locator('.hp-tools .hp-seg button span').first().textContent() !== '0');
+});
+
+await step('a slow change is not undone', async () => {
+  await hold(a, `**/api/projects/${ids.p3}`, 'PATCH', 3600);
+  await menu(a, 'StickHub', 'Rename'); await a.locator('.hp-rename').fill('StickHub 2'); await a.locator('.hp-rename').press('Enter');
+  await a.waitForTimeout(3100);
+  check('a rename still on its way is not put back by a list reload', await card(a, 'StickHub 2').count() === 1 && await card(a, 'StickHub').count() === 0, (await names(a)).join(', '));
+  check('…the toast comes when the server has it', await toastText(a, /Renamed/));
+  await a.waitForTimeout(900);   // the look that follows the answer
+  check('…and the card keeps the new name afterwards', await card(a, 'StickHub 2').count() === 1 && (await mine()).some((x) => x.name === 'StickHub 2'));
+  await a.unroute(`**/api/projects/${ids.p3}`);
+  // a star whose request is slow
+  await hold(a, `**/api/projects/${ids.p2}/star`, 'PUT', 3200);
+  await card(a, 'ECC83 preamp').hover(); await card(a, 'ECC83 preamp').locator('.hp-star').click();
+  await a.waitForTimeout(2900);
+  check('a slow star stays on', await card(a, 'ECC83 preamp').locator('.hp-star').getAttribute('aria-pressed') === 'true');
+  await until(async () => (await mine()).find((x) => x.projectId === ids.p2).starred === true); await a.waitForTimeout(700);
+  check('…and is still on after the server answered', await card(a, 'ECC83 preamp').locator('.hp-star').getAttribute('aria-pressed') === 'true');
+  await a.unroute(`**/api/projects/${ids.p2}/star`);
+  await card(a, 'ECC83 preamp').locator('.hp-star').click(); await until(async () => !(await mine()).find((x) => x.projectId === ids.p2).starred);
+});
+
+await step('a failed Move to Trash brings back only that project', async () => {
+  const hid = await idOf('Hierarchy v2');
+  await hold(a, `**/api/projects/${hid}`, 'DELETE', 1500, 500);
+  await menu(a, 'Hierarchy v2', 'Move to Trash'); await a.waitForSelector('.hp-item-name:has-text("Hierarchy v2")', { state: 'detached' });
+  await menu(a, 'ECC83 preamp', 'Rename'); await a.locator('.hp-rename').fill('ECC83 v2'); await a.locator('.hp-rename').press('Enter');
+  check('the failure is reported', await toastText(a, /server had a problem/));
+  const n = await names(a);
+  check('…the project is back, and a rename made meanwhile stays', n.includes('Hierarchy v2') && n.includes('ECC83 v2') && !n.includes('ECC83 preamp'), n.join(', '));
+  await a.unroute(`**/api/projects/${hid}`);
+  await a.waitForTimeout(800);
+});
+
+await step('Undo after moving to another page', async () => {
+  await menu(a, 'Hierarchy v2', 'Move to Trash'); await toastText(a, /Moved .Hierarchy v2. to Trash/);
+  await a.click('.hp-nav a:has-text("Explore")'); await a.waitForSelector('.hp-head h1:has-text("Explore")');
+  await a.click('.hp-nav a:has-text("Projects")'); await a.waitForSelector('.hp-item:not(.skel)');
+  await a.locator('.hp-toast button', { hasText: 'Undo' }).click();
+  let ok = true; try { await a.waitForSelector('.hp-item-name:has-text("Hierarchy v2")', { timeout: 4000 }); } catch { ok = false; }
+  check('Undo pressed after leaving and coming back shows the project again', ok, (await names(a)).join(', '));
+  await menu(a, 'Hierarchy v2', 'Move to Trash'); await toastText(a, /Moved .Hierarchy v2. to Trash/);
+  await a.locator('.hp-side-btn', { hasText: 'Trash' }).click(); await a.waitForSelector('.hp-trash-row:has-text("Hierarchy v2")');
+  await a.locator('.hp-toast button', { hasText: 'Undo' }).click();
+  ok = true; try { await a.waitForSelector('.hp-trash-row:has-text("Hierarchy v2")', { state: 'detached', timeout: 4000 }); } catch { ok = false; }
+  check('Undo pressed on the Trash page takes the project off that page', ok && (await mine()).some((x) => x.name === 'Hierarchy v2'));
+  await a.locator('.hp-nav a', { hasText: 'Projects' }).click(); await a.waitForSelector('.hp-item-name:has-text("Hierarchy v2")');
+});
+
+await step('selection covers only what is shown', async () => {
+  await a.click('.hp-selbtn');
+  await card(a, 'ECC83 v2').locator('.hp-item-link').click(); await card(a, 'StickHub 2').locator('.hp-item-link').click();
+  check('two picked', /2 selected/.test(await a.locator('.hp-bulk').textContent()));
+  await a.locator('.hp-search input').fill('pic'); await settle(a);
+  check('a search that hides the picked projects leaves nothing selected to act on', /0 selected/.test(await a.locator('.hp-bulk').textContent())
+    && await a.locator('.hp-bulk .hp-danger').isDisabled() && await a.locator('.hp-bulk .btn', { hasText: 'Select all' }).isEnabled(), await a.locator('.hp-bulk').textContent());
+  await a.locator('.hp-search input').fill(''); await settle(a);
+  check('…and they are selected again when they are back', /2 selected/.test(await a.locator('.hp-bulk').textContent()));
+  // Delete acts on the selection, not on the card that has the focus
+  const before = (await names(a)).length;
+  await card(a, 'PIC programmer').locator('.hp-item-link').focus(); await a.keyboard.press('Delete');
+  await a.waitForSelector('.hp-modal');
+  check('Delete while selecting asks about the selection', /Remove projects/.test(await a.locator('.hp-modal-h').textContent()) && /2 projects/.test(await a.locator('.hp-modal-b').textContent()), await a.locator('.hp-modal-b').textContent());
+  await a.click('.hp-modal-f .btn:has-text("Cancel")'); await a.waitForSelector('.hp-modal', { state: 'detached' });
+  check('…and the focused card is not trashed', (await names(a)).length === before && (await mine()).some((x) => x.name === 'PIC programmer'));
+  // several archives: downloads, not pop-ups
+  const got = []; const pages = []; const onDl = (d) => got.push(d.suggestedFilename()); const onPage = (pg) => pages.push(pg);
+  a.on('download', onDl); a.context().on('page', onPage);
+  await a.locator('.hp-bulk .btn', { hasText: 'Download' }).click();
+  await until(async () => got.length === 2, 6000); await a.waitForTimeout(500);
+  check('bulk Download fetches every selected archive without opening windows', got.length === 2 && pages.length === 0, `${got.join(', ')} / ${pages.length} windows`);
+  a.off('download', onDl); a.context().off('page', onPage);
+  await a.keyboard.press('Escape');
+  check('nothing picked: Delete does nothing', await (async () => { await a.click('.hp-selbtn'); await card(a, 'PIC programmer').locator('.hp-item-link').focus(); await a.keyboard.press('Delete'); await a.waitForTimeout(300); const r = await a.locator('.hp-modal').count() === 0 && (await names(a)).length === before; await a.keyboard.press('Escape'); return r; })());
+});
+
+await step('menu placement', async () => {
+  const n = await names(a); const last = n[n.length - 1];
+  const btn = card(a, last).locator('.hp-item-acts .hp-iconbtn'); await btn.click(); await a.waitForSelector('.hp-menu'); await a.waitForTimeout(200);
+  const bb = await btn.boundingBox(), mb = await a.locator('.hp-menu').boundingBox();
+  check('a menu with no room below opens above its button, not over it', mb.y + mb.height <= bb.y + 1 || mb.y >= bb.y + bb.height, JSON.stringify({ bb, mb }));
+  await a.locator('.hp-menu button', { hasText: 'Copy link' }).hover();
+  const lit = await a.evaluate(() => { const blue = getComputedStyle(document.activeElement).backgroundColor; return [...document.querySelectorAll('.hp-menu button')].filter((b) => getComputedStyle(b).backgroundColor === blue).map((b) => b.textContent); });
+  check('only one menu item is highlighted', lit.length === 1 && lit[0] === 'Copy link', lit.join(' | '));
+  await a.screenshot({ path: `${out}/20-menu-above.png` });
+  await a.keyboard.press('Escape');
+});
+
+await step('share dialog: answers out of order, files dropped on it', async () => {
+  await menu(a, 'StickHub 2', 'Share'); await a.waitForSelector('.hp-people li:has-text("bob")');
+  const before = await a.locator('.hp-people li:has-text("bob") select').inputValue();
+  const next = before === 'viewer' ? 'editor' : 'viewer';
+  let held = 0;
+  await a.route(`**/api/projects/${ids.p3}/members`, async (r) => { if (r.request().method() !== 'GET' || held++) return r.continue(); const resp = await r.fetch(); await new Promise((x) => setTimeout(x, 1500)); return r.fulfill({ response: resp }).catch(() => {}); });
+  const asked = a.waitForRequest((q) => q.method() === 'GET' && q.url().endsWith(`/api/projects/${ids.p3}/members`));
+  await a.locator('.hp-combo input').fill('frank@example.com'); await a.keyboard.press('Enter'); await asked; await a.waitForTimeout(150);
+  await a.locator('.hp-people li:has-text("bob") select').selectOption(next);
+  await a.waitForTimeout(2200);
+  const srv = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body.members.find((m) => m.login === 'bob')?.role;
+  check('a member list fetched before a role change does not put the old role back', await a.locator('.hp-people li:has-text("bob") select').inputValue() === next && srv === next, `shown ${await a.locator('.hp-people li:has-text("bob") select').inputValue()}, server ${srv}`);
+  await a.unroute(`**/api/projects/${ids.p3}/members`);
+  const dragOver = (sel) => a.evaluate((s) => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.txt')); const ev = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }); document.querySelector(s).dispatchEvent(ev); return ev.defaultPrevented; }, sel);
+  check('a file dragged over the Share dialog or its backdrop is not left to the browser', await dragOver('.hp-scrim') && await dragOver('.hp-modal'));
+  await a.keyboard.press('Escape'); await a.waitForSelector('.hp-modal', { state: 'detached' });
+  await a.click('.hp-head-acts .btn:has-text("Join with link")'); await a.waitForSelector('.hp-modal');
+  check('…nor over the Join dialog', await dragOver('.hp-scrim'));
+  await a.keyboard.press('Escape'); await a.waitForSelector('.hp-modal', { state: 'detached' });
+  check('…and over the bare page it still offers an upload', await dragOver('.hp-page'));
+});
+
+await step('blank thumbnail + empty trash that fails part-way', async () => {
+  const mk = async (name) => (await api(ids.ta, '/api/projects/blank', { method: 'POST', json: { name } })).body.projectId;
+  const s1 = await mk('Scratch one'), s2 = await mk('Scratch two');
+  await a.click('.hp-head-title .hp-iconbtn'); await a.waitForSelector('.hp-item-name:has-text("Scratch one")');
+  const none = await until(() => card(a, 'Scratch one').locator('.hp-thumb.none svg').count().then((c) => c === 1), 10000);
+  check('a blank project shows the placeholder, not a picture of nothing', none, await card(a, 'Scratch one').locator('.hp-thumb').getAttribute('class'));
+  await a.screenshot({ path: `${out}/21-blank-thumb.png` });
+  await api(ids.ta, `/api/projects/${s1}`, { method: 'DELETE' }); await api(ids.ta, `/api/projects/${s2}`, { method: 'DELETE' });
+  await a.goto(BASE + '/trash'); await a.waitForSelector('.hp-trash-row');
+  const total = await a.locator('.hp-trash-row').count();
+  await a.route(`**/api/projects/${s2}?permanent=true`, (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"internal"}' }));
+  await a.click('.hp-head-acts .btn:has-text("Empty Trash")'); await a.click('.hp-modal-f .hp-danger');
+  check('Empty Trash that fails for one says how many are left', await toastText(a, new RegExp(`1 of ${total} could not be deleted`)));
+  await a.waitForSelector('.hp-modal', { state: 'detached' }); await a.waitForTimeout(500);
+  const left = await a.locator('.hp-trash-row .hp-item-name').allTextContents();
+  check('…and lists only what is really still in Trash', left.join() === 'Scratch two' && (await api(ids.ta, '/api/trash')).body.projects.length === 1, left.join(', '));
+  await a.unroute(`**/api/projects/${s2}?permanent=true`);
+  await a.click('.hp-head-acts .btn:has-text("Empty Trash")'); await a.click('.hp-modal-f .hp-danger'); await a.waitForSelector('.hp-trash-row', { state: 'detached' });
+  await a.goto(BASE + '/'); await a.waitForSelector('.hp-item:not(.skel)');
+});
+
+await step('session expiry', async () => {
+  const x = await open(ids.ta); await x.waitForSelector('.hp-item:not(.skel)');
+  await x.context().clearCookies();
+  // A request still in flight (a thumbnail, the settle reload) may notice first and take the
+  // page to the signed-out view before the click: then there is no Refresh left to press.
+  await x.click('.hp-head-title .hp-iconbtn', { timeout: 1500 }).catch(() => {});
+  let ok = true; try { await x.waitForSelector('.hp-welcome', { timeout: 5000 }); } catch { ok = false; }
+  check('when the session is gone the page falls back to the signed-out home', ok && await x.locator('.hp-account').count() === 0);
+  const hrefs = await x.locator('a[href^="/auth/github/login?next="]').evaluateAll((l) => l.map((e) => e.getAttribute('href')));
+  check('…with a way to sign in again', hrefs.length >= 1 && await toastText(x, /signed out/), hrefs.join(' '));
+  await x.screenshot({ path: `${out}/22-signed-out.png` });
+  await x.context().close();
+});
+
 await step('phone', async () => {
   const m = await open(ids.ta, { ...devices['iPhone 13'] }); await m.waitForSelector('.hp-item:not(.skel)');
   check('phone: no sideways scrolling', await m.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), await m.evaluate(() => document.documentElement.scrollWidth + ' vs ' + innerWidth));
@@ -393,7 +554,9 @@ await step('phone', async () => {
   await m.locator('.hp-x').tap();
   await m.locator('.hp-tabbar a >> nth=1').tap(); await m.waitForSelector('.hp-item:not(.skel)'); check('phone: Explore tab', await m.locator('.hp-head h1').textContent() === 'Explore');
   await m.locator('.hp-topbar .hp-account').tap(); await m.locator('.hp-menu button', { hasText: 'Sign out' }).tap();
-  await m.waitForSelector('.hp-welcome'); check('sign out returns to the welcome page', (await m.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401);
+  // Signed out, "/" is the public home page (web/landing), not this app.
+  await m.waitForFunction(() => !document.querySelector('.hp-account') && document.readyState === 'complete' && /KiCad Collaborative/.test(document.title));
+  check('sign out returns to the public home page', (await m.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401);
   await m.screenshot({ path: `${out}/15-phone-signed-out.png` });
   await m.context().close();
 });
