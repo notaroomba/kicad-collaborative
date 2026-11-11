@@ -416,7 +416,7 @@ const pcbWatch = await watch(pcbDocId, adaJwt);
   check('a project shared with the person is listed with their role', list.data.projects.some((p) => p.name === 'mcp-e2e-bobs' && p.role === 'viewer' && p.owner === 'mcp-bob'), list.text.slice(0, 300));
   const read = await call(T(), 'get_design_overview', { project: 'mcp-e2e-bobs' });
   const write = await call(T(), 'apply_changes', { project: 'mcp-e2e-bobs', document: 'schematic', title: 'x', edits: [{ op: 'add_text', text: 'hello', x: 50, y: 50 }] });
-  check('a view-only project can be read but not changed', !read.isError && write.isError && /view-only/.test(write.text), write.text);
+  check('a view-only project can be read but not changed', !read.isError && write.isError && /can only view/.test(write.text), write.text);
   const hidden = await db.query(`INSERT INTO projects (owner_id, name) VALUES ($1, 'mcp-e2e-private') RETURNING id`, [bob]);
   const peek = await call(T(), 'get_project', { project: hidden.rows[0].id });
   check('somebody else\'s private project does not exist for this person', peek.isError && /no project/.test(peek.text), peek.text.slice(0, 200));
