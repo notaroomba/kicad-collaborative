@@ -128,7 +128,7 @@ stage.addEventListener("dblclick", (ev) => {
   const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
   if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
   const best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
-  if (best) { const it = E.kdoc.items.get(best.id); if (it) KDialogs.openItem(ctx, it); return; }
+  if (best) { const it = E.kdoc.items.get(best.id); if (it && it.kind === "sheet" && it.file) { enterSheet(it.file); return; } if (it) KDialogs.openItem(ctx, it); return; }   // nearestFootprint() picks sheets too
   // KiCad: a double-click on a hierarchical sheet enters it (E opens its properties)
   if (isSch()) { const sh = E.sheets.find((r) => x >= r.x / E.IU && x <= (r.x + r.w) / E.IU && y >= r.y / E.IU && y <= (r.y + r.h) / E.IU); if (sh) { const it = E.kdoc.items.get(sh.id); if (it && it.file) { enterSheet(it.file); return; } if (it) { KDialogs.openItem(ctx, it); return; } } }
   const other = hitAny([x, y]); const it = other && E.kdoc.items.get(other.id);
