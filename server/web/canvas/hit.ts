@@ -142,7 +142,7 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
     if (!it.movable || !it.bbox) continue;
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-    let onGeom = false, hitLayer = null, vis = null, hull = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
+    let onGeom = false, exact = false, hitLayer = null, vis = null, hull = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
     const grow = (b, gb) => { if (!b) return gb.slice(); if (gb[0] < b[0]) b[0] = gb[0]; if (gb[1] < b[1]) b[1] = gb[1]; if (gb[2] > b[2]) b[2] = gb[2]; if (gb[3] > b[3]) b[3] = gb[3]; return b; };
     for (const g of it.geom) {
       if (hidden && g.layer && hidden.has(g.layer)) continue;
@@ -151,7 +151,8 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
       if (g.padText || g.padNum || g.noBox) continue;                       // pad numbers / net names are labels, not selectable geometry
       if (g.t !== "text") hull = grow(hull, gb);                             // FOOTPRINT::HitTestAccurate / SCH_SYMBOL body box: shapes and pads, never the fields
       if (hitClass > 0 && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) {
-        onGeom = true; const cls = (g.t === "pad" || (g.t !== "text" && /\.Cu$/.test(g.layer || ""))) ? 0 : 1;   // a pad under the cursor beats another part's silkscreen / courtyard / text over it
+        onGeom = true; if (!exact && (slopMm <= 0 || geomHit(g, x, y, 0))) exact = true;
+        const cls = (g.t === "pad" || (g.t !== "text" && /\.Cu$/.test(g.layer || ""))) ? 0 : 1;   // a pad under the cursor beats another part's silkscreen / courtyard / text over it
         if (cls < hitClass) { hitClass = cls; hitLayer = g.layer || null; }
       }
     }
@@ -160,9 +161,13 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
     // the body must not make the empty space beside a part select it (KiCad's HitTestAccurate)
     const hb = hull || vis;
     if (x < hb[0] - slopMm || x > hb[2] + slopMm || y < hb[1] - slopMm || y > hb[3] + slopMm) continue;
+    // PCB_SELECTION_TOOL::GuessSelectionCandidates "prefer exact hits to sloppy ones": a point inside a part's
+    // hull (hitTestDistance 0 for a footprint / symbol) or on an item's own geometry beats an item that is only
+    // reached through the click tolerance, so the middle of a part never picks its neighbour's silkscreen
+    if (!exact && hull && (it.kind === "footprint" || it.kind === "symbol" || it.kind === "sheet") && x >= hull[0] && x <= hull[2] && y >= hull[1] && y <= hull[3]) exact = true;
     const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
     const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
-    const score = hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;
+    const score = (exact ? 0 : 1e13) + hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;
     if (!best || score < best.score) best = { id: it.id, onGeom, cls: hitClass, layer: hitLayer, box: vis, score };
   }
   return best;
