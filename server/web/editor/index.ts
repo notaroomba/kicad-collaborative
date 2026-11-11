@@ -79,6 +79,18 @@ function moduleGhost(mod) {
   return segs.map((g) => [Math.round(g[0] * E.IU), Math.round(g[1] * E.IU), Math.round(g[2] * E.IU), Math.round(g[3] * E.IU), Math.round((g[4] || 0.1) * E.IU)]);
 }
 
+/**
+ * The ghost to attach to a presence message: the module's in-flight geometry while there is any, one empty
+ * list when it ends (the "stopped" signal, which bypasses the rate limit) and nothing after that.
+ */
+let ghostLive = false;
+function liveGhost(mod) {
+  const g = moduleGhost(mod);
+  if (g && g.length) { ghostLive = true; return g; }
+  if (ghostLive) { ghostLive = false; return []; }
+  return undefined;
+}
+
 // wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
 // Installed before every other stage listener so it sees each event first.
 installGestures(openContextMenu);
@@ -196,7 +208,7 @@ stage.addEventListener("pointermove", (ev) => {
   if (E.measure && !E.measure.b) { drawMeasure(snapMm(mm)); }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   const modM = activeModule();
-  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, moduleGhost(modM)); return; }
+  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, liveGhost(modM)); return; }
   if (E.fdrag) {
     if (!E.fdrag.moved && Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4) E.fdrag.moved = true;
     if (E.fdrag.moved) {
@@ -209,17 +221,17 @@ stage.addEventListener("pointermove", (ev) => {
     }
     sendPresence(mm); return;
   }
-  if (!E.drag) { sendPresence(mm); return; }
+  if (!E.drag) { sendPresence(mm, liveGhost(modM)); return; }   // a Move / Drag (M / G) or a paste following the cursor ghosts to peers too
   if (E.drag.group) { moveGroupDrag(mm); sendPresence(mm); return; }
   if (E.drag.engine) {
     const d = CollabTools.sch.state.drag;
     if (!d) { E.drag = null; sendPresence(mm); return; }           // cancelled (Escape) or already dropped
     CollabTools.sch.moveDrag(toolCtx(), mm);
-    if (!d.moved) { sendPresence(mm); return; }
+    if (!d.moved) { sendPresence(mm, liveGhost(modM)); return; }
     E.drag.moved = true; E.drag.curMm = [E.drag.fp.x / E.IU + d.last[0], E.drag.fp.y / E.IU + d.last[1]];
     const nowE = Date.now();
     if (nowE - E.lastLiveMove > 150 && d.kind === "symbol") { E.lastLiveMove = nowE; sendOp([moveOp(E.drag.fp, Math.round(E.drag.curMm[0] * E.IU), Math.round(E.drag.curMm[1] * E.IU))], true); }
-    sendPresence(mm); return;
+    sendPresence(mm, liveGhost(modM)); return;
   }
   if (!E.drag.moved && Math.hypot(mm[0] - E.drag.startMm[0], mm[1] - E.drag.startMm[1]) > 0.4) E.drag.moved = true;
   if (!E.drag.moved) return;
@@ -264,7 +276,7 @@ const onPointerUp = (ev) => {
   if (E.zoomRect) { finishZoomRect(ev); return; }
   if (E.boxSel) { finishBoxSel(ev); return; }
   const modU = activeModule();
-  if (modU && moduleTool(E.tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } sendPresence(worldMm(ev), moduleGhost(modU)); return; }
+  if (modU && moduleTool(E.tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } sendPresence(worldMm(ev), liveGhost(modU)); return; }
   if (ev.button !== 0 || !E.drag) return;
   if (E.drag.group) { finishGroupDrag(); return; }
   if (E.drag.engine) {

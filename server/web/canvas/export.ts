@@ -196,6 +196,24 @@ export function atomText(v, quoted) {
   return s;
 }
 
+// Slots KiCad's writers always emit as quoted strings (Quotew / Quotes), whatever the text looks like:
+// (label "VCC" ...), (property "Reference" "R1" ...), (lib_id "Device:R"), (reference "R1"), (page "1").
+// The reader records the quoting of what it parsed; this covers nodes built by hand, where a bare
+// identifier-shaped text would otherwise go out as a token KiCad's parser rejects (it wants T_STRING).
+const STRING_SLOTS = {
+  label: 1, global_label: 1, hierarchical_label: 1, netclass_flag: 1, directive_label: 1, text: 1, text_box: 1, table_cell: 1,
+  property: 2, lib_id: 1, lib_name: 1, reference: 1, page: 1, path: 1, project: 1, name: 1, number: 1, face: 1, href: 1,
+  title: 1, date: 1, rev: 1, company: 1, paper: 1, generator: 1, generator_version: 1, group: 1, bus_alias: 1, members: 99, comment: -2,
+};
+function stringSlot(node, j) {
+  const head = node[0]; if (typeof head !== "string" || j === 0 || typeof node[j] !== "string") return false;
+  if (head === "pin") return j === 1 && !node.some((c) => isList(c) && c[0] === "name");   // an instance / sheet pin, not a library pin's electrical type
+  if (head === "symbol") return j === 1;
+  if (head === "property") return j <= 2 && typeof node[2] === "string";                   // not a pad's (property pad_prop_bga)
+  const n = Object.prototype.hasOwnProperty.call(STRING_SLOTS, head) ? STRING_SLOTS[head] : 0;
+  return n < 0 ? j === -n : j <= n;
+}
+
 export function serialize(node) {
   if (!isList(node)) return atomText(node, false);
   // The reader records which slots were quoted (sexpr.ts QUOTED): reproduce them
@@ -206,7 +224,7 @@ export function serialize(node) {
   for (let j = 0; j < node.length; j++) {
     if (j) out += " ";
     const c = node[j];
-    out += isList(c) ? serialize(c) : atomText(c, j < 30 && ((q >> j) & 1) === 1);
+    out += isList(c) ? serialize(c) : atomText(c, (j < 30 && ((q >> j) & 1) === 1) || stringSlot(node, j));
   }
   return out + ")";
 }

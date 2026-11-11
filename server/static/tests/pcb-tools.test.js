@@ -815,7 +815,7 @@ test("clipboard: copy writes KiCad's kicad_pcb clipboard document; paste lands a
   assert.deepEqual(P.pasteChanges(doc, "not a board", [0, 0]), { changes: [], ids: [] });
   // a group travels with its members and comes back pointing at the copies
   const g = P.groupChanges(doc, ["s-4", "a-1"], "pair"); const gid = g[0].id;
-  const t2 = P.clipboardText(doc, ["s-4"], [0, 0]); assert.ok(/\(group pair/.test(t2) && /\(arc /.test(t2), "the group and its other member come along");
+  const t2 = P.clipboardText(doc, ["s-4"], [0, 0]); assert.ok(/\(group "pair"/.test(t2) && /\(arc /.test(t2), "the group and its other member come along");
   const r2 = P.pasteChanges(doc, t2, [0, 0]); const ng = r2.ids.map((id) => doc.items.get(id)).find((it) => it.kind === "group");
   assert.ok(ng && ng.id !== gid); assert.deepEqual(P.groupMembers(ng.node).sort(), r2.ids.filter((id) => id !== ng.id).sort());
   // into a numbered-net board the names become that board's codes; unknown names go unconnected

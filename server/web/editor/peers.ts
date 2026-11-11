@@ -64,10 +64,15 @@ export function sendPresence(mmPos, ghostSegs) {
   // ids in its own copy; with neither the peer is a bare cursor and the desktop cannot tell that
   // the items moving under it belong to that person.  Same frame as the desktop sends:
   // BOX2I(origin, size) in internal units.
-  const ids = new Set(E.selection); if (E.selected) ids.add(E.selected.id);
-  if (E.kdoc && ids.size) {
+  // Everything this client has picked: the multi-selection, the single symbol / footprint (E.selected) and the
+  // schematic module's own single pick (a wire, label, junction ...).
+  const picked = new Set(E.selection || []);
+  if (E.selected && E.selected.id) picked.add(E.selected.id);
+  const schSel = E.DOC_TYPE === "kicad_sch" && window.CollabTools && window.CollabTools.sch && window.CollabTools.sch.state ? window.CollabTools.sch.state.sel : null;
+  if (typeof schSel === "string" && schSel) picked.add(schSel);
+  if (E.kdoc && picked.size) {
     const sel = [], boxes = [], at = [], plain = [];
-    for (const id of ids) {
+    for (const id of picked) {
       if (sel.length >= MAX_PRESENCE_ITEMS) break;
       const it = E.kdoc.items.get(id), b = it && it.bbox;
       if (!b) { plain.push(id); continue; }

@@ -104,7 +104,12 @@ test("wire ending on the middle of another wire gets a junction (T)", () => {
   assert.strictEqual(sch.state.wire, null, "wire finished on connection");
   const c = lastCommit(ctx); assert.strictEqual(c.label, "wire");
   const wires = byKind(c.changes, "ADDED").filter((x) => x.typeName === "SCH_LINE"), js = c.changes.filter((x) => x.typeName === "SCH_JUNCTION");
-  assert.strictEqual(wires.length, 1); assert.strictEqual(js.length, 1);
+  // KiCad's AddJunction breaks the wire the new one lands on: w4 now ends on the junction, its other half is a new wire
+  assert.strictEqual(wires.length, 2); assert.strictEqual(js.length, 1);
+  const cut = byKind(c.changes, "MODIFIED"); assert.strictEqual(cut.length, 1);
+  const tail = fragItem(wires[1]), head = fragItem(cut[0]);
+  assert.ok(ptsOf(head).some((p) => p[0] === 101.6 && p[1] === 63.5) && ptsOf(tail).some((p) => p[0] === 101.6 && p[1] === 63.5), "both halves end on the junction");
+  assert.deepStrictEqual(kid(tail, "stroke"), kid(head, "stroke"), "the new half keeps the wire's stroke");
   const wn = fragItem(wires[0]); assert.strictEqual(wn[0], "wire");
   assert.deepStrictEqual(ptsOf(wn), [[88.9, 63.5], [101.6, 63.5]]);
   assert.deepStrictEqual(kid(wn, "stroke"), ["stroke", ["width", 0], ["type", "default"]]);
@@ -164,7 +169,7 @@ test("labels: prompt text lands as KiCad's (label …) shape; global/hierarchica
   const n = fragItem(c.changes[0]);
   assert.deepStrictEqual(n.slice(0, 4), ["label", "NET_X", ["at", 88.9, 76.2, 0], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "bottom"]]]);
   assert.strictEqual(n[4][0], "uuid");
-  assert.ok(/^\(label NET_X \(at 88\.9 76\.2 0\) \(effects \(font \(size 1\.27 1\.27\)\) \(justify left bottom\)\) \(uuid "[^"]+"\)\)$/.test(c.changes[0].sexpr), c.changes[0].sexpr);
+  assert.ok(/^\(label "NET_X" \(at 88\.9 76\.2 0\) \(effects \(font \(size 1\.27 1\.27\)\) \(justify left bottom\)\) \(uuid "[^"]+"\)\)$/.test(c.changes[0].sexpr), c.changes[0].sexpr);
   assert.strictEqual(sch.state.sel, c.changes[0].id, "new label becomes the module selection");
   const g = _.labelNode("global_label", "GL", [1.27, 2.54], 0);
   assert.strictEqual(g[0], "global_label"); assert.deepStrictEqual(kid(g, "shape"), ["shape", "input"]); assert.deepStrictEqual(kid(g, "fields_autoplaced"), ["fields_autoplaced", "yes"]);

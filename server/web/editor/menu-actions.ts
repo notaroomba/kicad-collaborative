@@ -15,6 +15,7 @@ import { openAbout, openHotkeyList } from "./help-dialogs";
 import { setCrosshair, setUnitsAction } from "./panes";
 import { openSelectionProperties } from "./pointer";
 import { E } from "./state";
+import { startMove } from "./gestures";
 import { schKey } from "./tools";
 import { esc, toast } from "./util";
 import { applyView, fitBox, isSch, mmW, mmX0, mmY0, stage, world, zoomBy } from "./view";
@@ -303,8 +304,8 @@ export const MENU_HANDLERS: Record<string, (anchor?: unknown) => unknown> = {
 };
 Object.assign(HANDLERS, MENU_HANDLERS, {
   // schematic only (tables.ts EDITOR_ONLY): Move / Drag start the module's connected drag exactly as its M / G keys do
-  move: () => { if (!schKey("m")) toast("Select an item first"); },
-  drag: () => { if (!schKey("g")) toast("Select an item first"); },
+  move: () => { if (!startMove("move")) toast("Select an item first"); },
+  drag: () => { if (!startMove("drag")) toast("Select an item first"); },
 });
 setToggle("languageEnglish", true);
 

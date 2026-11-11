@@ -373,7 +373,20 @@ function connectsAt(doc, p, kind) {
 // Junction changes for every point in pts that now needs one (items must already be in the doc).
 function junctionChanges(doc, pts, kind) {
   const out = [];
-  for (const p of pts) if (!junctionAt(doc, p[0], p[1]) && needsJunction(doc, p[0], p[1], kind)) out.push(addNode(doc, junctionNode(p)).change);
+  for (const p of pts) if (!junctionAt(doc, p[0], p[1]) && needsJunction(doc, p[0], p[1], kind)) { out.push(...breakLinesAt(doc, p, kind)); out.push(addNode(doc, junctionNode(p)).change); }
+  return out;
+}
+// KiCad's AddJunction() breaks the lines running through the point (SCH_LINE_WIRE_BUS_TOOL::BreakSegments):
+// each becomes two segments that end on the junction.
+function breakLinesAt(doc, p, kind) {
+  const out = [];
+  for (const it of lineMidsAt(doc, p[0], p[1], kind)) {
+    const pts = ptsOf(it.node); if (pts.length !== 2) continue;
+    const a = deep(it.node); setPts(a, [pts[0], [r4(p[0]), r4(p[1])]]);
+    const tail = lineNode(it.kind, p, pts[1]), st = kid(it.node, "stroke"); if (st) replaceKid(tail, deep(st));
+    const b = addNode(doc, tail); doc.items.delete(b.item.id);
+    out.push(modChange(doc, it, a), b.change);
+  }
   return out;
 }
 
@@ -548,6 +561,7 @@ function dropCarry(ctx) {
   const { item, change } = addNode(doc, c.node); const changes = [change];
   if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
   else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
+  else if (c.kind === "junction") changes.push(...breakLinesAt(doc, p, "wire"), ...breakLinesAt(doc, p, "bus"));
   ctx.commit(changes, c.kind === "symbol" ? "place " + (item.ref || "symbol") : c.kind.replace("_", " "));
   rememberPlaced(item.kind, item.node);
   if (c.kind === "symbol" || c.kind === "sheet") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
@@ -1081,7 +1095,7 @@ function onKeyCapture(ev) {
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA") return;
   if (ev.key === "Escape") {
     let took = true;
-    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) finishWire(ctx); else if (S.draw) cancelDraw(ctx);
+    if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) { S.wire = null; S.unfold = null; ctx.requestRender(); } else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
     else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) setHighlight(ctx, null); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
@@ -1383,6 +1397,20 @@ function ghostSegs() {
     const width = seg.kind === "bus" ? 0.3048 : 0.1524;
     for (let i = 1; i < seg.pts.length; i++) out.push([seg.pts[i - 1][0], seg.pts[i - 1][1], seg.pts[i][0], seg.pts[i][1], width]);
   }
+  // What a peer would otherwise not see until the drop: the outline of the items a move / drag carries,
+  // of the item on the cursor (a symbol, label, image being placed) and of the shape being drawn.
+  const box = (b) => { if (b && out.length < 120) out.push([b[0], b[1], b[2], b[1], 0.1524], [b[2], b[1], b[2], b[3], 0.1524], [b[2], b[3], b[0], b[3], 0.1524], [b[0], b[3], b[0], b[1], 0.1524]); };
+  const path = (pts) => { for (let i = 1; i < pts.length && out.length < 120; i++) out.push([pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], 0.1524]); };
+  const d = S.drag;
+  if (d && d.moved) for (const e of d.items) { if (LINE_KINDS.has(e.kind)) path(ptsOf(e.item.node)); else box(e.item.bbox || rectOf(e.item)); }
+  if (S.carry && S.carry.item) box(S.carry.item.bbox || rectOf(S.carry.item));
+  const dr = S.draw;
+  if (dr && dr.pts.length && dr.cur) {
+    const a = dr.pts[0], c = dr.cur;
+    if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
+    else if (dr.shape === "circle") { const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring = []; for (let i = 0; i <= 24; i++) ring.push([a[0] + r * Math.cos(i * Math.PI / 12), a[1] + r * Math.sin(i * Math.PI / 12)]); path(ring); }
+    else path(dr.pts.concat([c]));
+  }
   return out;
 }
 
@@ -1544,11 +1572,15 @@ function onKey(key, ev, ctx) {
   };
   if (S.wire) {
     if (key === "/") { S.wire.flip = !S.wire.flip; ctx.requestRender(); return true; }
-    if (key === "Enter" || lower === "k") { finishWire(ctx); return true; }
+    if (key === "Enter" || key === "End" || lower === "k") {
+      const w = S.wire, last = w.pts[w.pts.length - 1];     // the leg up to the cursor is part of the wire (KiCad's finishSegments)
+      if (!same(last, w.cur)) w.pts.push(...legPoints(last, w.cur, posture(w), w.flip));
+      finishWire(ctx); return true;
+    }   // ACTIONS::finishInteractive is End
     if (key === "Backspace") { undoLeg(ctx); return true; }
   }
   if (S.draw && !S.draw.await) {
-    if (key === "Enter") {
+    if (key === "Enter" || key === "End") {
       const sh = S.draw.shape, n = S.draw.pts.length;
       if ((sh === "lines" && n >= 2) || ((sh === "polygon" || sh === "rulearea") && n >= 3)) finishDraw(ctx); else cancelDraw(ctx);
       return true;
@@ -1583,7 +1615,7 @@ function onKey(key, ev, ctx) {
   case "g": case "G": case "m": case "M": {
     setDragMode(ctx, lower === "m" ? "move" : "drag");
     if (S.drag) return true;                                // switched mid-drag: the preview re-resolved
-    const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it || !S.cursor) return true;
+    const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it || !S.cursor) return false;   // a symbol / multi-selection is the editor's (startMove)
     return !!beginDrag(ctx, it, S.cursor, false);
   }
   case " ": if (ev && ev.shiftKey) { cycleLineMode(ctx); return true; } return false;
