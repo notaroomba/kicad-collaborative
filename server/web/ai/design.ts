@@ -109,9 +109,14 @@ export function schNets(doc: any): SchNet[] {
     }
     if (!pins.length && !labels.size) continue;   // a stray wire with nothing on it
     pins.sort((a, b) => byRef(a, b) || a.number.localeCompare(b.number, undefined, { numeric: true }));
+    // An unnamed net takes its name from one of its pins, the way KiCad's connection graph picks it: a pin with a
+    // real name beats a bare pad number, then the smaller name; a pin on its own is "unconnected-(…)" on the board.
+    const auto = pins.map((p) => (p.name && p.name !== p.number ? `Net-(${p.ref}-${p.name})` : `Net-(${p.ref}-Pad${p.number})`))
+      .sort((a, b) => Number(a.includes("-Pad")) - Number(b.includes("-Pad")) || (a < b ? -1 : a > b ? 1 : 0))[0];
     const first = pins[0];
-    const name = best || (first ? `Net-(${first.ref}-${first.name || "Pad" + first.number})` : "(unnamed)");
-    out.push({ name, board: best && rank < 3 ? "/" + best : name, named: !!best, pins, labels: Array.from(labels), ids: Array.from(n.ids) });
+    const name = best || auto || "(unnamed)";
+    const alone = !best && pins.length === 1 ? `unconnected-(${first.ref}-${first.name && first.name !== first.number ? first.name.replace(/\//g, "{slash}") + "-" : ""}Pad${first.number})` : "";
+    out.push({ name, board: best && rank < 3 ? "/" + best : alone || name, named: !!best, pins, labels: Array.from(labels), ids: Array.from(n.ids) });
   }
   return out.sort((a, b) => Number(b.named) - Number(a.named) || a.name.localeCompare(b.name));
 }

@@ -174,6 +174,28 @@ function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: s
       }
     } catch { /* keep the autoplaced position */ }
   }
+  // A two-pin part reads best with its reference and value tight against it: across the wire from each other when
+  // the part lies along a horizontal wire (reference above, value below), stacked close together beside the body
+  // when it stands on a vertical one.  Always upright text, never on the wire or the body.
+  if (!s._.isPowerSymbol(doc, libId) && s._.bodyBox && s._.symbolPins && k.symbolTransform) {
+    try {
+      const probe = { node: out, id: "__new", kind: "symbol" }; const pins = s._.symbolPins(doc, probe).filter((p: any) => !p.hidden);
+      if (pins.length === 2) {
+        const box = s._.bodyBox(doc, probe); const [x, y] = k.atOf(out); const T = k.symbolTransform(turn, e.mirror || "");
+        const lying = Math.abs(pins[0].y - pins[1].y) < 0.01, standing = Math.abs(pins[0].x - pins[1].x) < 0.01;
+        const put = (name: string, px: number, py: number, hj: "left" | "center") => {
+          const f = k.kids(out, "property").find((q: any) => k.str(q[1]) === name); if (!f) return;
+          const at = k.kid(f, "at"); if (!at) return; at[1] = r4(px); at[2] = r4(py); at[3] = turn === 90 || turn === 270 ? 90 : 0;   // a field turns with its symbol; this keeps it upright
+          let ef = k.kid(f, "effects"); if (!ef) { ef = ["effects", ["font", ["size", 1.27, 1.27]]]; f.push(ef); }
+          const j = ef.findIndex((c: any) => Array.isArray(c) && c[0] === "justify"); if (j >= 0) ef.splice(j, 1);
+          if (hj === "left") { const flip = (T[1] !== 0 ? T[1] : T[0]) < 0; ef.push(["justify", flip ? "right" : "left"]); }
+        };
+        const gap = 0.4, half = 0.635;   // clear of the body by 0.4 mm; half the 1.27 mm text height
+        if (lying) { put("Reference", x, box[1] - gap - half, "center"); put("Value", x, box[3] + gap + half, "center"); }
+        else if (standing) { put("Reference", box[2] + 0.635, y - 0.9, "left"); put("Value", box[2] + 0.635, y + 0.9, "left"); }
+      }
+    } catch { /* keep what the library or the autoplacer gave */ }
+  }
   return { change: added(doc, out), ref };
 }
 
@@ -214,19 +236,20 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
   const k = K(); const P = PCB(); const s = SCH(); if (!s) throw new ToolError("The schematic tools are not loaded.");
   const sheets = projectDocs().filter((d) => d.docType === "kicad_sch" && (!e.schematic || d.path === e.schematic || d.path.endsWith("/" + e.schematic)));
   if (!sheets.length) throw new ToolError(e.schematic ? `there is no schematic ${e.schematic} in this project` : "this project has no schematic");
-  const parts = new Map<string, { ref: string; value: string; fpid: string; fields: Record<string, string>; pins: Map<string, string>; path: string; sheetfile: string }>(); const netNames = new Set<string>(); const problems: string[] = [];
+  const parts = new Map<string, { ref: string; value: string; fpid: string; fields: Record<string, string>; pins: Map<string, string>; path: string; sheetfile: string }>(); const netNames = new Set<string>(); const lone = new Set<string>();   // lone: a pin on its own keeps KiCad's unconnected-(…) net on its pad, but is not counted as a net to route
+  const problems: string[] = [];
   for (const sh of sheets) {
     const { doc } = await resolveDoc(sh.path);
     const multi = sheets.length > 1; const nets = schNets(doc);
     const local = (n: { board: string }) => n.board;   // as desktop KiCad names it, so its schematic parity check agrees; unnamed nets are named from a pin, unique across sheets
     const pinNet = new Map<string, string>();
-    for (const n of nets) { if (n.pins.length < 1) continue; const name = local(n); for (const p of n.pins) pinNet.set(`${p.ref}\u0000${p.number}`, name); if (n.pins.length > 1 || n.named) netNames.add(name); }
+    for (const n of nets) { if (n.pins.length < 1) continue; const name = local(n); for (const p of n.pins) pinNet.set(`${p.ref}\u0000${p.number}`, name); if (n.pins.length > 1 || n.named) netNames.add(name); else if (n.pins.length === 1) lone.add(name); }
     for (const it of doc.items.values() as Iterable<any>) {
       if (it.kind !== "symbol" || !it.ref || /^#/.test(it.ref)) continue;
       const ob = k.kid(it.node, "on_board"); if (ob && k.str(ob[1]) === "no") continue;
       const f = fieldsOf(it.node); let part = parts.get(it.ref);
       if (!part) { part = { ref: it.ref, value: f.Value || "", fpid: f.Footprint || "", fields: f, pins: new Map(), path: symbolPath(doc, it.node), sheetfile: sh.path.split("/").pop() || sh.path }; parts.set(it.ref, part); }
-      for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && netNames.has(net)) part.pins.set(String(p.number), net); }
+      for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && (netNames.has(net) || lone.has(net))) part.pins.set(String(p.number), net); }
     }
   }
   if (/\?$/.test(Array.from(parts.keys()).join(" ")) || Array.from(parts.keys()).some((r) => /\?$/.test(r))) problems.push("some symbols are not annotated (their reference ends in ?); annotate the schematic first");
