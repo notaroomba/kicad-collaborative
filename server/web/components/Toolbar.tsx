@@ -7,7 +7,7 @@ import { usePluginBarEntries } from "../plugins/PluginUi";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
-import { EXTRA_TOOLS, ZOOM_PRESETS, toolFor } from "../tables";
+import { EXTRA_TOOLS, READ_ONLY_OK, ZOOM_PRESETS, toolFor } from "../tables";
 import { dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
@@ -37,6 +37,17 @@ const KMORE = "kb kmore flex-none w-7.5 h-7.5 p-0.5 border border-transparent ro
   + " hover:bg-paper hover:border-line hover:text-ink [&[hidden]]:hidden";
 const KSEL = "ksel bg-panel border border-line rounded-sm px-1 py-0.5 h-6 text-sm text-ink max-w-[170px]";
 
+// ---------------------------------------------------------------- view-only access
+/* A viewer (or a signed-out visitor of a public project) may look, select, measure and inspect, but every tool and
+   command that changes the document is greyed out the way KiCad greys an action whose condition fails — the menus
+   do the same (MenuBar disabledWhy).  The left bars are display options; the rest is listed here. */
+const VIEW_SAFE = new Set<string>([...READ_ONLY_OK, "selectSetRect", "selectSetLasso", "highlightNetTool", "localRatsnestTool", "measureTool", "zoomRedraw", "zoomInCenter", "zoomOutCenter",
+  "zoomFitScreen", "zoomFitObjects", "zoomTool", "navigateBack", "navigateUp", "navigateForward", "find", "print", "plot", "runERC", "runDRC", "show3DViewer", "showSymbolBrowser",
+  "showFootprintBrowser", "showSymbolEditor", "showFootprintEditor", "showPcbNew", "showEeschema", "generateBOM", "showSimulator",
+  ...Object.values(SPEC.toolbars).flatMap((t) => (t.left || []).flatMap((it) => (isGroup(it) ? it.items.map((x) => x.id) : isSep(it) || isControl(it) ? [] : [it.id])))]);
+/** Why a toolbar entry is greyed for a viewer; null when it can run. */
+function viewOnlyWhy(viewOnly: boolean, id: string): string | null { return viewOnly && id && !VIEW_SAFE.has(id) ? "View-only access" : null; }
+
 // ---------------------------------------------------------------- buttons
 function ActionButton({ item, a, main }: { item: ActionItem; a: Avail; main?: boolean }) {
   const tool = useApp((s) => s.tool.current);
@@ -45,12 +56,13 @@ function ActionButton({ item, a, main }: { item: ActionItem; a: Avail; main?: bo
   const id = item.id;
   const meta = actionMeta(id) || item;
   const tid = toolFor(a.editor, id);
-  const why = unavailable(a, id);
+  const ro = viewOnlyWhy(useApp((s) => s.viewOnly), id);
+  const why = unavailable(a, id) || ro;
   const on = tid ? tool === tid : isOn(id, toggles, panes);
-  const menuHandled = a.handled.has(id + ":menu");
+  const menuHandled = a.handled.has(id + ":menu") && !ro;
   return (
-    <button type="button" className={cx(KB, main && "kmain", why && "desk", on && "on")} data-uiact={id} data-ktool={tid || undefined}
-      title={titleFor(a, id)} onClick={(ev) => runUiAction(a, id, ev.currentTarget)}
+    <button type="button" className={cx(KB, main && "kmain", why && "desk", on && "on")} data-uiact={id} data-ktool={tid || undefined} aria-disabled={ro ? true : undefined}
+      title={titleFor(a, id) + (ro ? "\n— " + ro : "")} onClick={(ev) => { if (!ro) runUiAction(a, id, ev.currentTarget); }}
       onContextMenu={menuHandled ? (ev) => { ev.preventDefault(); dispatch({ type: "action", id: id + ":menu", anchor: rectOf(ev.currentTarget) }); } : undefined}>
       <KIcon name={meta.icon || "options_generic"} />
     </button>
@@ -68,6 +80,7 @@ function paletteLabel(it: ActionItem, group: GroupItem): string {
 function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElement; a: Avail; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const groupCurrent = useApp((s) => s.groupCurrent);
+  const viewOnly = useApp((s) => s.viewOnly);
   const cur = groupCurrent[group.group] || group.items[0].id;
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
@@ -85,12 +98,12 @@ function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElem
   return createPortal(
     <div className="kpalette fixed z-70 bg-panel border border-line rounded-md shadow-panel p-1 min-w-50" ref={ref} style={style}>
       {group.items.map((it) => {
-        const why = unavailable(a, it.id); const k = keyFor(a, it.id);
+        const ro = viewOnlyWhy(viewOnly, it.id); const why = unavailable(a, it.id) || ro; const k = keyFor(a, it.id);
         return (
           <button type="button" key={it.id} title={titleFor(a, it.id)} data-uiact={it.id}
             className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white cur:shadow-[inset_2px_0_0_var(--color-blue)] desk:opacity-[.45]",
               why && "desk", cur === it.id && "cur")}
-            onClick={(ev) => { onClose(); dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
+            onClick={(ev) => { onClose(); if (ro) return; dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
             <KIcon name={(actionMeta(it.id) || it).icon || "options_generic"} />
             <span className="flex-1">{paletteLabel(it, group)}</span>
             {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-white">{k}</kbd> : null}
@@ -197,6 +210,7 @@ const CONTROL_LABELS: Record<string, string> = { currentVariant: "Current varian
 /** The overflow menu: the tools that did not fit, in bar order, as a wxAUI drop-down. */
 function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entries: BarEntry[]; anchor: HTMLElement; onRight: boolean; vertical: boolean; a: Avail; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const viewOnly = useApp((s) => s.viewOnly);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
     const r = anchor.getBoundingClientRect();
@@ -218,11 +232,11 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
         // wxAuiToolBar cannot re-parent a control into its overflow menu, so it lists it as a
         // disabled item (wx/aui/auibar.cpp OnOverflowClick) — the label alone, exactly as here.
         if (m.control) return <div key={e.key} className="krow flex items-center gap-2 w-full rounded-xs px-2 py-1 text-ink-3 text-left opacity-60">{m.label}</div>;
-        const why = unavailable(a, m.id); const k = keyFor(a, m.id);
+        const ro = viewOnlyWhy(viewOnly, m.id); const why = unavailable(a, m.id) || ro; const k = keyFor(a, m.id);
         return (
           <button type="button" key={e.key} title={titleFor(a, m.id)} data-uiact={m.id}
             className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white desk:opacity-[.45]", why && "desk")}
-            onClick={(ev) => { onClose(); runUiAction(a, m.id, ev.currentTarget); }}>
+            onClick={(ev) => { onClose(); if (!ro) runUiAction(a, m.id, ev.currentTarget); }}>
             {m.glyph ? <Glyph svg={m.glyph} /> : <KIcon name={m.icon || "options_generic"} />}
             <span className="flex-1">{m.label}</span>
             {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-white">{k}</kbd> : null}

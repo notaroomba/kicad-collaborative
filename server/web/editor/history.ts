@@ -5,6 +5,8 @@ import { E } from "./state";
 import { api, toast } from "./util";
 import { scheduleRenderRefresh } from "./view";
 export async function loadHistory() {
+  // the checkpoints route needs a signed-in member; a guest of a public project sees why, not the server's 401
+  if (!state.me) { store.set({ history: { groups: [], loading: false, error: "Sign in to see the project's checkpoints." } }); return; }
   store.slice("history", { loading: true });
   try {
     const j = await api(`/api/projects/${state.project.projectId}/checkpoints`);

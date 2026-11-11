@@ -50,7 +50,7 @@ export function HistoryButtons() {
   const valid = !!cur && groups.some((g) => g.name === cur);
   return (
     <div className="flex gap-1.5 px-2 py-1.5 border-t border-line bg-bench flex-none">
-      <button type="button" className={BTN} data-uiact="save" onClick={(ev) => runUiAction(a, "save", ev.currentTarget)}>Checkpoint...</button>
+      <button type="button" className={BTN} data-uiact="save" disabled={viewOnly} title={viewOnly ? "Only editors can create checkpoints" : undefined} onClick={(ev) => runUiAction(a, "save", ev.currentTarget)}>Checkpoint...</button>
       <button type="button" className={BTN} id="restoreBtn" disabled={viewOnly || !valid} onClick={() => { if (cur) dispatch({ type: "restore", name: cur }); }}>Restore</button>
       <button type="button" className={BTN} data-uiact="refreshHistory" onClick={(ev) => runUiAction(a, "refreshHistory", ev.currentTarget)}>Refresh</button>
     </div>

@@ -135,6 +135,8 @@ export function moduleTool(id) { const m = activeModule(); return m && m.tools ?
 // ---- tools ----
 export function setTool(t) {
   if (t === "follow") { cycleFollow(); return; }
+  // a viewer may highlight, measure and pan; a drawing or editing tool does not start (KiCad greys it, and so do our bars)
+  if (E.viewOnly && moduleTool(t) && t !== "highlight") { toast("View-only access"); if (E.tool !== "select" && moduleTool(E.tool) && E.tool !== "highlight") setTool("select"); return; }
   const prev = E.tool; if (t !== prev) toolChanging(t);   // a drag in flight is put back; a drawing tool starts with nothing selected
   E.tool = t;
   store.slice("tool", { current: t });

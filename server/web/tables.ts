@@ -169,7 +169,7 @@ export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete",
   "toggleLock", "lock", "unlock", "convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks", "zoneDuplicate", "zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower",
   "zonePriorityMoveToBottom", "toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "module:toggleDNP", "leftJustify", "centerJustify", "rightJustify", "hideNetInRatsnest", "showNetInRatsnest"]);
 /** Entries that never change the document: everything else is greyed out for a view-only visitor, as in a read-only frame. */
-export const READ_ONLY_OK = new Set(["save", "saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
+export const READ_ONLY_OK = new Set(["saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
   "selectNet", "deselectNet", "selectSameSheet", "module:selectAllOnLayer", "selectUnconnected", "filterSelection", "runERC", "runDRC", "clearMarkers", "boardStatistics", "measureTool", "inspectClearance",
   "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "languageEnglish",
