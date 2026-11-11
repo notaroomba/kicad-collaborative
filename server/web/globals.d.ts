@@ -94,6 +94,13 @@ interface KiCadCanvasApi {
   PCB_HIDDEN_DEFAULT: Set<string>;
   PCB_COLORS: Record<string, string>;
   SCH: Record<string, string>;
+  /** schematic colour themes (web/canvas/colors.ts) */
+  SCH_DEFAULT: Readonly<Record<string, string>>;
+  SCH_THEMES: Record<string, { name: string; dark: boolean; colors: Record<string, string> }>;
+  schTheme(): string;
+  schThemeColors(id: string): Record<string, string>;
+  setSchTheme(id: string): boolean;
+  withSchTheme<T>(id: string, fn: () => T): T;
   ORIENT: unknown;
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */

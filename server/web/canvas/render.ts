@@ -3,6 +3,7 @@
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
+import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
 import { documentDrawingSheet } from "./sheet";
@@ -267,6 +268,7 @@ export const ZS = [];
 export function bucket(map, z) { let arr = map.get(z); if (!arr) { arr = []; map.set(z, arr); } return arr; }
 
 export function render(doc, ctx, view, opts) {
+  ensureSchTheme(doc);   // geometry built under another schematic colour theme is rebuilt first
   opts = opts || {}; const hidden = opts.hidden || new Set();
   const isPcb = doc.type === "pcb";
   const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;

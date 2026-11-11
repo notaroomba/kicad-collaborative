@@ -1,6 +1,6 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { SCH_LAYERS, pcbColor, pcbZ } from "./colors";
+import { SCH, SCH_LAYERS, pcbColor, pcbZ } from "./colors";
 import { boxUnion } from "./geom";
 import { kids, pointInPoly, rotator } from "./sexpr";
 import { textWidth } from "./text";
@@ -173,7 +173,7 @@ export function hitTest(doc, x, y, slopMm, opts) { const h = hitTestDetail(doc, 
 export function layerList(doc) {
   const counts = new Map();
   for (const it of doc.items.values()) for (const g of it.geom) counts.set(g.layer, (counts.get(g.layer) || 0) + 1);
-  if (doc.type === "sch") return SCH_LAYERS.map(([name, color]) => ({ key: name, name, color, count: counts.get(name) || 0 })).filter((l) => l.count);
+  if (doc.type === "sch") return SCH_LAYERS.map(([name, key]) => ({ key: name, name, color: SCH[key], count: counts.get(name) || 0 })).filter((l) => l.count);
   const out = [];
   for (const [layer, count] of counts) if (layer !== "holes") out.push({ key: layer, name: layer, color: pcbColor(layer), count, z: pcbZ(layer) });
   out.sort((a, b) => b.z - a.z);

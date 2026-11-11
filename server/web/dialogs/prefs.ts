@@ -2,15 +2,18 @@
 // applied live.  Defaults are KiCad's (common/settings/app_settings.cpp, eeschema/eeschema_settings.cpp).
 import { E, GRID_CHOICES, isSch, requestRender, setToggle, setToggles, store, toolCtx, updateGridStatus } from "./editor";
 import { syncSchModes } from "../editor/panes";
+import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 
 export type EditorId = "sch" | "pcb";
+export type SchThemeId = "default" | "classic" | "dark";
 export interface GridPrefs { sizes: number[]; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }   // axes: window.grid.axes_enabled
 export interface Prefs {
   mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "none"; rightDrag: "pan" | "none"; centerOnZoom: boolean };
   schDisplay: { showHiddenPins: boolean; showHiddenFields: boolean; showPageLimits: boolean };
   schEditing: { lineMode: "free" | "90" | "45"; mouseDragIsDrag: boolean; autoAnnotate: boolean };
-  schColors: { theme: "default" | "classic" };
+  /** the schematic canvas colours (Preferences > Schematic Editor > Colors): a theme, and whether a dark UI swaps in the dark sheet */
+  schColors: { theme: SchThemeId; followDark: boolean };
   pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean; highContrast: boolean };
   grids: Record<EditorId, GridPrefs>;
 }
@@ -19,7 +22,7 @@ export const DEFAULT_PREFS: Prefs = {
   mouse: { autoZoomSpeed: true, zoomSpeed: 5, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
-  schColors: { theme: "default" },
+  schColors: { theme: "default", followDark: false },
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, highContrast: false },
   grids: {
     // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
@@ -50,21 +53,20 @@ export function clonePrefs(): Prefs { return JSON.parse(JSON.stringify(prefs()))
 export function gridLabel(mm: number): string { const mils = mm / MIL; return Math.abs(mils - Math.round(mils)) < 1e-6 ? `${Math.round(mils)} mil` : `${+mm.toFixed(4)} mm`; }
 export function editorId(): EditorId { return isSch() ? "sch" : "pcb"; }
 
-// ---- colour themes (common/settings/builtin_color_themes.h): the schematic layers kicad-canvas paints from K.SCH
-const CLASSIC: Record<string, string> = { bg: "#FFFFFF", grid: "#848484", wire: "#008400", bus: "#000084", junction: "#008400", outline: "#840000", body: "#FFFFC2", pin: "#840000", pinName: "#008484", pinNum: "#840000",
-  ref: "#008484", value: "#008484", field: "#840084", label: "#000000", glabel: "#840000", hlabel: "#848400", sheet: "#840084", sheetName: "#008484", sheetFile: "#848400", sheetFields: "#840084", sheetLabel: "#008484",
-  noconnect: "#000084", notes: "#0000C2", busEntry: "#008400", netclass: "#000000", frame: "#840000", pageLimits: "#C2C2C2" };
-let defaultSch: Record<string, string> | null = null, themeOn = "default", themedDoc: unknown = null;
-export const COLOR_THEMES: [Prefs["schColors"]["theme"], string][] = [["default", "KiCad Default"], ["classic", "KiCad Classic"]];
-function applyColorTheme(theme: string): void {
-  const SCH = KiCadCanvas.SCH; if (!SCH) return;
-  if (!defaultSch) defaultSch = Object.assign({}, SCH);
-  Object.assign(SCH, defaultSch, theme === "classic" ? CLASSIC : {});
-  // geometry carries its colour from the moment it is built: a theme change (or a document parsed under the other
-  // theme) rebuilds the schematic's items
-  const doc = E.kdoc as KDoc | null;
-  if (doc && doc.type === "sch" && (theme !== themeOn || (themedDoc !== doc && theme !== "default"))) for (const it of doc.items.values()) { try { KiCadCanvas.replaceChange(doc, it); } catch (e) { /* an item without geometry */ } }
-  themeOn = theme; themedDoc = doc;
+// ---- colour themes: the palettes and the switch live in web/canvas/colors.ts (KiCadCanvas.setSchTheme); the painters
+// rebuild geometry built under another theme.  Exports and plots keep KiCad Default unless they are told otherwise.
+export const COLOR_THEMES: [SchThemeId, string][] = [["default", "KiCad Default"], ["classic", "KiCad Classic"], ["dark", "Dark"]];
+/** The schematic theme the canvas should show: the chosen one, or the dark sheet while the UI is dark and the user asked to follow it. */
+export function schThemeFor(p: Prefs, ui: "light" | "dark" = effectiveTheme()): SchThemeId {
+  const t = COLOR_THEMES.some(([id]) => id === p.schColors.theme) ? p.schColors.theme : "default";
+  return p.schColors.followDark && ui === "dark" ? "dark" : t;
+}
+let followingUi = false;
+function applyColorTheme(p: Prefs): void {
+  if (typeof KiCadCanvas === "undefined" || !KiCadCanvas.setSchTheme) return;
+  if (KiCadCanvas.setSchTheme(schThemeFor(p))) requestRender();
+  // with "follow the app's dark mode" on, a UI theme change (menu, other tab, the system) swaps the sheet too
+  if (!followingUi) { followingUi = true; subscribeTheme(() => applyColorTheme(prefs())); }
 }
 
 /** The pitch the cursor snaps to right now: the grid override of the active tool (or of the item being dragged), else the current grid. */
@@ -90,7 +92,7 @@ export function applyPrefs(full = true): void {
   E.zoomStep = p.mouse.autoZoomSpeed ? 1.0018 : 1.0006 + 0.0004 * Math.max(1, Math.min(10, p.mouse.zoomSpeed));
   E.middleDragPan = p.mouse.middleDrag !== "none"; E.rightDragPan = p.mouse.rightDrag !== "none";
   E.gridFor = activeGridPitch;
-  applyColorTheme(p.schColors.theme);
+  applyColorTheme(p);
   const ed = editorId(), g = p.grids[ed];
   if (E.kdoc) {
     const choices = g.sizes.map((mm) => [mm, gridLabel(mm)] as [number, string]);

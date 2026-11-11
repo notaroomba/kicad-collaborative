@@ -1,5 +1,6 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { schTheme, withSchTheme } from "./colors";
 import { buildPcbGeom } from "./geom-pcb";
 import { buildSchGeom } from "./geom-sch";
 import { flipH, flipV, justOf, rotator, str } from "./sexpr";
@@ -33,7 +34,32 @@ export function G(item, g) {
 
 export function buildGeom(doc, item) {
   item.geom = []; item.bbox = null; item.hiddenGeom = null;
-  if (doc.type === "sch") buildSchGeom(doc, item); else buildPcbGeom(doc, item);
+  if (doc.type === "sch") { item.schTheme = schTheme(); buildSchGeom(doc, item); } else buildPcbGeom(doc, item);
+}
+
+/**
+ * Schematic geometry carries the colours of the theme it was built under: after a theme switch
+ * (colors.ts setSchTheme) the painters call this to rebuild what is stale, once per switch.
+ */
+export function ensureSchTheme(doc) {
+  if (!doc || doc.type !== "sch") return;
+  const t = schTheme(); if (doc.schTheme === t) return;
+  for (const it of doc.items.values()) if (it.schTheme !== t) { try { buildGeom(doc, it); } catch (e) { /* an item without geometry */ } }
+  doc.schTheme = t;
+}
+
+/**
+ * The schematic as theme `id` paints it, without touching the document: a shallow copy whose items carry geometry
+ * rebuilt in that theme (exports and plots use KiCad Default whatever the screen shows).  fn(copy) runs with the
+ * palette switched to `id`; a board, or a sheet already in that theme, is passed through as it is.
+ */
+export function inSchTheme(doc, id, fn) {
+  if (!doc || doc.type !== "sch" || !id || id === schTheme()) return fn(doc);
+  return withSchTheme(id, () => {
+    const copy = Object.assign({}, doc, { items: new Map(), schTheme: schTheme() });
+    for (const [k, it] of doc.items) { const c = Object.assign({}, it); try { buildGeom(copy, c); } catch (e) { /* an item without geometry */ } copy.items.set(k, c); }
+    return fn(copy);
+  });
 }
 
 /**

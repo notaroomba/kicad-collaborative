@@ -1,12 +1,13 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
+import { schTheme } from "./colors";
 import { buildGeom } from "./geom";
 import { setupOrigins } from "./pcb-sizes";
 import { has, isList, kid, kids, num, parse, str, uuidOf } from "./sexpr";
 import { KICAD_BASE_VERSION } from "./version";
 // ---------------------------------------------------------------- documents
 export function newDoc(type) {
-  return { type, items: new Map(), lib: new Map(), page: PAPER_SIZES.A4.slice(), layers: new Map(), copper: [], bbox: null, nets: new Map(), version: 0,
+  return { type, schTheme: schTheme(), items: new Map(), lib: new Map(), page: PAPER_SIZES.A4.slice(), layers: new Map(), copper: [], bbox: null, nets: new Map(), version: 0,
     // drawing-sheet context (web/canvas/sheet.ts): the paper's KiCad name (${PAPER}), the (title_block …)
     // fields, and the sheet identity the app fills in — fileName / filePath / sheetName / sheetPath /
     // pageNumber / sheetCount — so the title block resolves the same variables eeschema does.

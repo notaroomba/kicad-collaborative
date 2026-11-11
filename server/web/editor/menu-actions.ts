@@ -164,6 +164,7 @@ export function plotDialog(): void {
         <label>Plot format</label><select id="kd-fmt"><option value="svg">SVG</option><option value="pdf">PDF</option><option value="png">PNG</option></select>
         <label>Content</label><select id="kd-scope"><option value="all">${sch ? "Whole sheet" : "Whole board"}</option>${sch ? "" : '<option value="page">Whole page</option>'}<option value="sel"${E.selection.size ? "" : " disabled"}>Selection only</option></select>
         <label>Resolution (PNG, PDF)</label><input id="kd-dpi" type="number" value="${sch ? 300 : 600}" min="72" max="2400" step="1">
+        ${sch ? `<label>Color theme</label><select id="kd-theme">${Object.entries(KiCadCanvas.SCH_THEMES).map(([id, t]) => `<option value="${id}">${esc(t.name)}</option>`).join("")}</select>` : ""}
         ${check("kd-frame", "Plot drawing sheet", sch)}
         ${check("kd-bg", sch ? "Plot background color" : "Plot background color", false)}
         ${sch ? check("kd-hid", "Show hidden pins", !!E.renderOpts.showHiddenPins) : ""}</div>
@@ -183,6 +184,8 @@ export function plotDialog(): void {
       if (!sch && hidden.size >= layers.length) { toast("Select at least one layer to plot"); return false; }
       const hid = g<HTMLInputElement>("kd-hid");
       const opts: Record<string, unknown> = { hidden, showHiddenPins: !!(hid && hid.checked), zoneOutline: !!E.renderOpts.zoneOutline };
+      // DIALOG_PLOT_SCHEMATIC's colour theme: KiCad Default unless another is picked, whatever the screen shows
+      const theme = g<HTMLSelectElement>("kd-theme"); if (theme) opts.colorTheme = theme.value;
       if (scope === "sel" && E.selection.size) opts.ids = [...E.selection];
       else if (scope === "page" || (sch && scope === "all")) { opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]]; opts.margin = 0; }
       opts.frame = frame && scope !== "sel";

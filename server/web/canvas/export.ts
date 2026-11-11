@@ -1,6 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH } from "./colors";
+import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH, schTheme } from "./colors";
+import { inSchTheme } from "./geom";
 import { bboxOf } from "./hit";
 import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
 import { isList, kid, quotedMask, str } from "./sexpr";
@@ -163,6 +164,8 @@ export function svgDrawingSheet(doc, hairline) {
  * mirroring as the canvas (board text keeps its mirror), images become data-URI <image>s.
  */
 export function renderSvg(doc, opts) {
+  // a schematic exports in KiCad Default unless the caller names a theme (opts.colorTheme), whatever the screen shows
+  if (doc.type === "sch" && (opts && opts.colorTheme || "default") !== schTheme()) return inSchTheme(doc, opts && opts.colorTheme || "default", (d) => renderSvg(d, opts));
   opts = opts || {}; const isPcb = doc.type === "pcb"; const hidden = opts.hidden || new Set();
   const { ids, x0, y0, w, h } = exportBox(doc, opts); const x1 = x0 + w, y1 = y0 + h;
   const hairline = opts.hairline !== undefined ? opts.hairline : 0.1;
@@ -200,6 +203,7 @@ export function renderSvg(doc, opts) {
  * 64 M) caps the raster.
  */
 export function renderPng(doc, opts) {
+  if (doc.type === "sch" && (opts && opts.colorTheme || "default") !== schTheme()) return inSchTheme(doc, opts && opts.colorTheme || "default", (d) => renderPng(d, opts));
   opts = opts || {}; const dpi = opts.dpi > 0 ? opts.dpi : 300; const ppm = dpi / 25.4;
   const { x0, y0, w, h } = exportBox(doc, opts);
   let W = Math.max(1, Math.ceil(w * ppm)), H = Math.max(1, Math.ceil(h * ppm));

@@ -5,7 +5,8 @@
 import { E, toast } from "./editor";
 import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
 import { KD, checkbox, h, promptText, select, textInput } from "./dom";
-import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, gridLabel, savePrefs, type EditorId, type Prefs } from "./prefs";
+import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, gridLabel, savePrefs, type EditorId, type Prefs, type SchThemeId } from "./prefs";
+import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 
 interface ActionMeta { id: string; label: string; key: string | null }
 const MIL = 0.0254;
@@ -18,6 +19,7 @@ export function parseGrid(text: string): number | null {
 
 export function openPreferences(page?: string): void {
   const p: Prefs = clonePrefs();
+  let uiMode: ThemeMode = getThemeMode();
   const here: EditorId = E.DOC_TYPE === "kicad_sch" ? "sch" : "pcb";
   const gridsPage = (ed: EditorId) => (pg: HTMLElement) => {
     const g = p.grids[ed], o = g.overrides, pre = `kd-pref-${ed}`;
@@ -50,6 +52,13 @@ export function openPreferences(page?: string): void {
     build(body) {
       KD().treebook(body, [
         { label: "Common", pages: [
+          { label: "Common", build(pg) {
+            // panel_common_settings' "User Interface" box: the web's light / dark chrome (web/theme.ts)
+            const ui = KD().staticBox(pg, "User Interface");
+            ui.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Appearance:"),
+              select([["light", "Light"], ["dark", "Dark"], ["system", "System"]], uiMode, (v) => { uiMode = v as ThemeMode; }, { id: "kd-pref-uitheme", style: "width:160px" })),
+              h("p", { class: "kd-note", style: "margin:8px 0 0" }, "System follows the light or dark setting of your computer.  Also in Preferences > Appearance."));
+          } },
           { label: "Mouse and Touchpad", build(pg) {
             const pz = KD().staticBox(pg, "Pan and Zoom");
             const slider = h("input", { type: "range", min: "1", max: "10", step: "1", value: String(p.mouse.zoomSpeed), id: "kd-pref-zoomspeed", disabled: p.mouse.autoZoomSpeed, style: "width:220px", title: "How far to zoom in for each rotation of the mouse wheel" });
@@ -90,9 +99,11 @@ export function openPreferences(page?: string): void {
           { label: "Colors", build(pg) {
             const sw = h("div", { id: "kd-pref-swatches", style: "display:flex;gap:6px;flex-wrap:wrap;margin-top:12px" });
             const names: [string, string][] = [["bg", "Background"], ["wire", "Wires"], ["bus", "Buses"], ["junction", "Junctions"], ["outline", "Symbol body outlines"], ["body", "Symbol body fills"], ["pin", "Pins"], ["pinName", "Pin names"], ["pinNum", "Pin numbers"], ["ref", "References"], ["value", "Values"], ["field", "Fields"], ["label", "Labels"], ["glabel", "Global labels"], ["hlabel", "Hierarchical labels"], ["sheet", "Sheet borders"], ["notes", "Schematic text && graphics"], ["frame", "Drawing sheet"]];
-            const paint = () => { const C = KiCadCanvas.SCH; sw.replaceChildren(...names.map(([k, n]) => h("div", { class: "kd-row", style: "width:240px;gap:6px" }, h("span", { style: `display:inline-block;width:26px;height:14px;border:1px solid var(--line);background:${C[k] || "transparent"}` }), n.replace("&&", "&")))); };
-            pg.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Theme:"), select(COLOR_THEMES, p.schColors.theme, (v) => { p.schColors.theme = v as Prefs["schColors"]["theme"]; }, { id: "kd-pref-theme", style: "width:220px" })), sw,
-              h("p", { class: "kd-note", style: "margin-top:10px" }, "The swatches show the theme in use; a new theme is applied when the dialog is closed with OK."));
+            // the swatches preview the theme picked in the dialog; the canvas changes on OK
+            const paint = () => { const C = KiCadCanvas.schThemeColors(p.schColors.theme); sw.replaceChildren(...names.map(([k, n]) => h("div", { class: "kd-row", style: "width:240px;gap:6px" }, h("span", { style: `display:inline-block;width:26px;height:14px;border:1px solid var(--line);background:${C[k] || "transparent"}` }), n.replace("&&", "&")))); };
+            pg.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Theme:"), select(COLOR_THEMES, p.schColors.theme, (v) => { p.schColors.theme = v as SchThemeId; paint(); }, { id: "kd-pref-theme", style: "width:220px" })),
+              h("div", { style: "margin-top:8px" }, checkbox("Follow the app's dark mode for the schematic sheet", p.schColors.followDark, (on) => { p.schColors.followDark = on; }, { id: "kd-pref-followdark", title: "While the user interface is dark, draw the schematic with the Dark theme" })), sw,
+              h("p", { class: "kd-note", style: "margin-top:10px" }, "A new theme is applied when the dialog is closed with OK.  Plots and exports always use KiCad Default."));
             paint();
           } },
         ] },
@@ -106,5 +117,5 @@ export function openPreferences(page?: string): void {
         ] },
       ], { selected: page || (here === "sch" ? "Mouse and Touchpad" : "Mouse and Touchpad") });
     },
-    ok() { savePrefs(p); toast("Preferences saved"); } });
+    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); toast("Preferences saved"); } });
 }

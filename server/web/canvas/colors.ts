@@ -16,7 +16,8 @@ export function dimColor(c, bg) {
   return rgba(Math.round((l + br) / 2), Math.round((l + bgc) / 2), Math.round((l + bb) / 2), a);
 }
 
-export const SCH = {
+/** "KiCad Default" (builtin_color_themes.h s_defaultTheme): the schematic colours of a fresh KiCad, and of every export. */
+export const SCH_DEFAULT = Object.freeze({
   bg: "#F5F4EF", grid: "#B5B5B5", gridAxes: "#000084", wire: "#009600", bus: "#000084", junction: "#009600", outline: "#840000",
   body: "#FFFFC2", pin: "#840000", pinName: "#006464", pinNum: "#A90000", ref: "#006464", value: "#006464",
   field: "#840084", label: "#0F0F0F", glabel: "#840000", hlabel: "#725600", sheet: "#840000", sheetName: "#006464",
@@ -28,17 +29,69 @@ export const SCH = {
   // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
   pageLimits: "#B5B5B5",
   brightened: "#FF00FF",   // LAYER_BRIGHTENED: net highlighting / selection disambiguation
+});
+
+// ---------------------------------------------------------------- schematic colour themes
+// KiCad's two built-in themes (common/settings/builtin_color_themes.h; COLOR4D names resolved through
+// common/gal/color4d.cpp, whose table is B, G, R) plus a dark sheet.  A key a theme leaves out keeps KiCad
+// Default's colour, as COLOR_SETTINGS falls back to s_defaultTheme.
+export const SCH_THEMES = {
+  default: { name: "KiCad Default", dark: false, colors: {} },
+  classic: { name: "KiCad Classic", dark: false, colors: {
+    bg: "#FFFFFF", grid: "#848484", wire: "#008400", bus: "#000084", junction: "#008400", outline: "#840000", body: "#FFFFC2", pin: "#840000",
+    pinName: "#008484", pinNum: "#840000", ref: "#008484", value: "#008484", field: "#840084", label: "#000000", glabel: "#840000", hlabel: "#848400",
+    sheet: "#840084", sheetName: "#008484", sheetFile: "#848400", sheetFields: "#840084", sheetLabel: "#008484", noconnect: "#000084", notes: "#0000C2",
+    busEntry: "#008400", dnp: "rgba(255,0,0,0.85)", netclass: "#000000", ruleArea: "#840000", excluded: "rgba(194,194,194,0.95)", hidden: "#C2C2C2",
+    privateNotes: "#0000C2", frame: "#840000", brightened: "#FF00FF",
+  } },
+  // A dark sheet in the manner of the popular community dark themes: near-black paper, KiCad's hues lifted so
+  // every layer keeps at least 4.5:1 against the background, the same layer-to-hue mapping as KiCad Default.
+  dark: { name: "Dark", dark: true, colors: {
+    bg: "#1C1D20", grid: "#4A4D53", gridAxes: "#6E8EFF", wire: "#4CC864", bus: "#6E8EFF", junction: "#4CC864", outline: "#E46F6F", body: "#2B2A22", pin: "#E46F6F",
+    pinName: "#3CC6C6", pinNum: "#F09090", ref: "#3CC6C6", value: "#3CC6C6", field: "#D684D6", label: "#E8E8E8", glabel: "#F2885A", hlabel: "#DDBB4C",
+    sheet: "#E46F6F", sheetName: "#3CC6C6", sheetFile: "#DDBB4C", sheetFields: "#D684D6", sheetLabel: "#3CC6C6", noconnect: "#7F9BFF", notes: "#86A6FF",
+    busEntry: "#4CC864", dnp: "rgba(255,72,76,0.85)", netclass: "#B4B4B4", ruleArea: "#FF5C5C", excluded: "rgba(120,120,120,0.95)", hidden: "#6C6E73",
+    privateNotes: "#A0A0FF", frame: "#C46A6A", pageLimits: "#55585E", brightened: "#FF4DFF",
+  } },
 };
+
+/** The live palette every painter reads (geometry takes its colours from here when it is built). */
+export const SCH = Object.assign({}, SCH_DEFAULT);
+let schThemeId = "default";
+
+/** The schematic theme the palette holds now. */
+export function schTheme() { return schThemeId; }
+
+/** The palette of a theme (KiCad Default for an unknown id). */
+export function schThemeColors(id) { const t = SCH_THEMES[id] || SCH_THEMES.default; return Object.assign({}, SCH_DEFAULT, t.colors); }
+
+/**
+ * Switch the live palette.  Geometry built under another theme is rebuilt lazily by the painters (geom.ts
+ * ensureSchTheme), so a switch costs nothing until the next paint.  Returns whether anything changed.
+ */
+export function setSchTheme(id) {
+  if (!SCH_THEMES[id]) id = "default";
+  if (id === schThemeId) return false;
+  Object.assign(SCH, schThemeColors(id)); schThemeId = id;
+  return true;
+}
+
+/** Run fn with the palette switched to theme `id` (an export in KiCad Default while the screen shows another). */
+export function withSchTheme(id, fn) {
+  const was = schThemeId; setSchTheme(id);
+  try { return fn(); } finally { setSchTheme(was); }
+}
 
 // draw order (eeschema SCH_VIEW layer order, bottom first)
 export const SCH_Z = { bitmap: -7, sheetBg: -6, sheetFields: -5, sheet: -4, notesBg: -3, deviceBg: -2, notes: -1, device: 0, pinName: 1, pinNum: 2, pin: 3,
   wire: 4, bus: 5, junction: 6, noconnect: 7, loclabel: 8, globlabel: 9, hierlabel: 10, ruleArea: 11, netclass: 12, fields: 13, value: 14, ref: 15, marker: 16 };
 
+// [layer name, palette key]: the colour is read from the live palette, so it follows the theme
 export const SCH_LAYERS = [
-  ["Wires", SCH.wire], ["Buses", SCH.bus], ["Junctions", SCH.junction], ["Symbols", SCH.outline], ["Pins", SCH.pin],
-  ["Pin names", SCH.pinName], ["Pin numbers", SCH.pinNum], ["Reference & value", SCH.ref], ["Fields", SCH.field],
-  ["Labels", SCH.label], ["Sheets", SCH.sheet], ["Notes", SCH.notes], ["No-connects", SCH.noconnect], ["Rule areas", SCH.ruleArea],
-  ["Images", SCH.hidden],
+  ["Wires", "wire"], ["Buses", "bus"], ["Junctions", "junction"], ["Symbols", "outline"], ["Pins", "pin"],
+  ["Pin names", "pinName"], ["Pin numbers", "pinNum"], ["Reference & value", "ref"], ["Fields", "field"],
+  ["Labels", "label"], ["Sheets", "sheet"], ["Notes", "notes"], ["No-connects", "noconnect"], ["Rule areas", "ruleArea"],
+  ["Images", "hidden"],
 ];
 
 export const PCB_COLORS = {
