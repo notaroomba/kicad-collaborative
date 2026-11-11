@@ -8,7 +8,9 @@ import * as API from "./api";
 import type { Project } from "./api";
 import { ShareDialog, type ShareTarget } from "./ShareDialog";
 import { cachedThumb, localThumb } from "./thumb";
-import { filesFromDrop, UploadDialog } from "./UploadDialog";
+import { filesFromDrop, UploadDialog, type NewMode } from "./UploadDialog";
+import { FirstProject } from "../onboarding/FirstProject";
+import { miniBoard, startGuidedProject } from "../onboarding/state";
 import { ago, Avatar, Confirm, copyText, Ic, layerOpen, Menu, Modal, PHONE, toast, toastError, useMedia, type MenuAt, type MenuEntry } from "./ui";
 
 const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
@@ -289,7 +291,7 @@ function Retry({ signedOut, onRetry, small }: { signedOut: boolean; onRetry: () 
 }
 
 // ---------------------------------------------------------------- the projects page
-function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: number; onUpload: () => void; onJoin: () => void; onShare: (t: ShareTarget) => void }) {
+function Projects({ me, tick, onUpload, onTemplate, onGuided, onJoin, onShare }: { me: User; tick: number; onUpload: () => void; onTemplate: (id?: string) => void; onGuided: () => void; onJoin: () => void; onShare: (t: ShareTarget) => void }) {
   const { list, error, signedOut, loading, reload, mutate } = useProjects("mine", true, me.id, tick);
   // `q` is what the box says, `find` what the list is filtered by: it follows a frame later, as a view transition.
   const [q, setQ] = useState("");
@@ -519,18 +521,7 @@ function Projects({ me, tick, onUpload, onJoin, onShare }: { me: User; tick: num
       {error && list ? <div className="hp-error" role="alert"><span>Couldn't refresh: {error}</span><Retry signedOut={signedOut} onRetry={reload} small /></div> : null}
       {!list && !error ? <Skeleton layout={layout} /> : null}
 
-      {empty ? (
-        <div className="hp-empty">
-          <Ic name="projects" size={34} />
-          <h2>No projects yet</h2>
-          <p>Upload a KiCad project to keep it online and edit it with other people, or join one that someone shared with you.</p>
-          <div className="hp-empty-acts">
-            <button type="button" className="btn primary" onClick={onUpload}><Ic name="upload" />Upload a project</button>
-            <button type="button" className="btn" onClick={onJoin}><Ic name="link" />Join with link</button>
-          </div>
-          <p className="hp-note">Using the desktop app? Open a project there and choose File → Publish Project Online. <a href={RELEASES} target="_blank" rel="noreferrer">Get the app</a></p>
-        </div>
-      ) : null}
+      {empty ? <FirstProject onGuided={onGuided} onTemplate={onTemplate} onUpload={onUpload} onJoin={onJoin} releases={RELEASES} /> : null}
 
       {list && list.length && !shown.length ? (
         <div className="hp-empty small"><p>{find.trim() ? <>Nothing matches “{find.trim()}”.</> : scope === "shared" ? "Nobody has shared a project with you yet." : scope === "starred" ? "No starred projects. Star one to keep it at the top of the list." : "You don't own any projects yet."}</p>
@@ -721,7 +712,7 @@ export function Home() {
   const tab: Tab = homeTab === "explore" ? "explore" : homeTab === "trash" ? "trash" : "projects";
   const tick = useApp((s) => s.homeTick) || 0;
   const [share, setShare] = useState<ShareTarget | null>(null);
-  const [upload, setUpload] = useState<null | { files?: API.UploadFile[] }>(null);
+  const [upload, setUpload] = useState<null | { files?: API.UploadFile[]; start?: NewMode; template?: string }>(null);
   const [join, setJoin] = useState(false);
   const [account, setAccount] = useState<MenuAt | null>(null);
   const [drag, setDrag] = useState(false);
@@ -742,7 +733,35 @@ export function Home() {
   useEffect(() => { if (first.current) { first.current = false; return; } setShare(null); setJoin(false); setAccount(null); setUpload((u) => (u && uploading.current ? u : null)); }, [where]);
   const uploading = useRef(false);
 
-  const startUpload = (files?: API.UploadFile[]) => { if (!me) { location.href = "/auth/github/login?next=/"; return; } setUpload({ files }); };
+  const startUpload = (files?: API.UploadFile[], start?: NewMode, template?: string) => {
+    if (!me) { location.href = API.loginUrl(start === "template" ? "/?new=template" + (template ? "&t=" + encodeURIComponent(template) : "") : "/"); return; }
+    setUpload({ files, start, template });
+  };
+  // The guided first project: made from the blinker (or from the board the visitor was routing on
+  // the home page) and opened with its guide beside it.
+  const guiding = useRef(false);
+  const startGuided = async (from: "home" | "mini") => {
+    if (guiding.current) return;
+    if (!me) { location.href = API.loginUrl("/?start=" + (from === "mini" ? "mini" : "guided")); return; }
+    guiding.current = true;
+    try { const r = await startGuidedProject(from); cache.mine = null; freshId = r.projectId; go(editUrl(r.projectId)); }
+    catch (e) { toast(`Couldn't start the first project: ${e instanceof Error ? e.message : String(e)}`, { kind: "err" }); }
+    finally { guiding.current = false; }
+  };
+  // Links that start something: /?start=mini (the home page's small editor), /?start=guided,
+  // /?new=template[&t=id].  Read once, then taken out of the address so Back does not start it again.
+  const linked = useRef(false);
+  useEffect(() => {
+    if (linked.current || view !== "home" || !me) return;   // signed out, / is the public home page, which sends these through sign-in
+    const q = new URLSearchParams(location.search), start = q.get("start"), fresh = q.get("new");
+    if (!start && !fresh) return;
+    linked.current = true;
+    const t = q.get("t") || undefined;
+    q.delete("start"); q.delete("new"); q.delete("t");
+    history.replaceState(history.state, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash);
+    if (start === "mini" || start === "guided") startGuided(start === "mini" && miniBoard() ? "mini" : "home");
+    else if (fresh === "template") startUpload(undefined, "template", t);
+  }, [view, me]);   // eslint-disable-line
   const signOut = async () => { try { await API.api("/auth/logout", { method: "POST" }); } catch { /* the reload decides */ } cache.mine = null; location.href = "/"; };
   acts.current = { newProject: () => startUpload(), signOut };
   const home = view === "home";
@@ -821,7 +840,7 @@ export function Home() {
             <div className="hp-page">
               {tab === "explore" ? <Explore me={me} tick={tick + bump} />
                 : tab === "trash" && me ? <Trash tick={tick + bump} />
-                : me ? <Projects me={me} tick={tick + bump} onUpload={() => startUpload()} onJoin={() => setJoin(true)} onShare={setShare} />
+                : me ? <Projects me={me} tick={tick + bump} onUpload={() => startUpload()} onTemplate={(t) => startUpload(undefined, "template", t)} onGuided={() => startGuided("home")} onJoin={() => setJoin(true)} onShare={setShare} />
                 : <Welcome onJoin={() => setJoin(true)} />}
             </div>
           </main>
@@ -835,7 +854,7 @@ export function Home() {
       ) : null}
 
       {share ? <ShareDialog target={share} onClose={() => setShare(null)} onChanged={() => setBump((n) => n + 1)} /> : null}
-      {upload ? <UploadDialog initial={upload.files} onClose={() => setUpload(null)} onBusy={(b) => { uploading.current = b; }}
+      {upload ? <UploadDialog initial={upload.files} start={upload.start} template={upload.template} onClose={() => setUpload(null)} onBusy={(b) => { uploading.current = b; }}
         onBlank={(r) => { setUpload(null); cache.mine = null; freshId = r.projectId; toast(`Created “${r.name}”`); go(editUrl(r.projectId)); }}
         onDone={(r) => { setUpload(null); cache.mine = null; freshId = r.projectId; setBump((n) => n + 1); if (tab !== "projects") go("/");
           const left = r.skipped?.length || 0;

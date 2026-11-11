@@ -110,7 +110,8 @@ export function renderModuleTools() {
 export function runModuleAction(id) {
   const m = activeModule(); const a = m && m.actions && m.actions[id];
   if (!a || typeof a.run !== "function") return false;
-  try { return a.run(toolCtx()) !== false; } catch (e) { console.warn(e); toast("Action failed: " + e.message, 3000); return true; }
+  // Whoever watches what the person does (the guided first project) hears that the action ran.
+  try { const ok = a.run(toolCtx()) !== false; window.dispatchEvent(new CustomEvent("kc:action", { detail: { id } })); return ok; } catch (e) { console.warn(e); toast("Action failed: " + e.message, 3000); return true; }
 }
 
 // Hotkeys in the spec's notation ("Ctrl+Shift+G", "Del", "Space"); Cmd counts as Ctrl on a Mac.

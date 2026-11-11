@@ -1202,7 +1202,7 @@ mod landing_tests {
         assert!(html.contains("/auth/github/login?next=/"), "sign-in hands off to the projects home");
         assert!(html.contains("<html lang=\"en\">"), "the signed-in marker is added to this tag");
         // The hero is the small editor: its three tools, the two layers, undo and start over.
-        for hook in ["data-tool-btn=\"select\"", "data-tool-btn=\"route\"", "data-tool-btn=\"via\"", "data-layer-btn=\"F.Cu\"", "data-layer-btn=\"B.Cu\"", "data-act=\"undo\"", "data-act=\"reset\""] {
+        for hook in ["data-tool-btn=\"select\"", "data-tool-btn=\"route\"", "data-tool-btn=\"via\"", "data-layer-btn=\"F.Cu\"", "data-layer-btn=\"B.Cu\"", "data-act=\"undo\"", "data-act=\"reset\"", "data-keep", "data-template"] {
             assert!(html.contains(hook), "{hook}");
         }
         // The demo design it draws is real KiCad files, bundled into the page script.

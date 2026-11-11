@@ -20,6 +20,7 @@ import { openFabOutputs } from "./fab-outputs";
 // ---- actions (the home menu's entries and the collab items of the editor menus) ----
 export async function runAction(act, el) {
   const id = state.project && state.project.projectId;
+  window.dispatchEvent(new CustomEvent("kc:action", { detail: { id: act } }));
   switch (act) {
     case "home": navigate("/"); break;
     // the project manager's File menu: the same things the home sidebar offers

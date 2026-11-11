@@ -4,7 +4,7 @@
 // collaborators keep their pointers on the board, as teammates would in a real project.
 
 import {
-  BOARD, Box, HIDDEN, K, PEERS, Pt, Rat, View, clamp, copperAt, drawCursor, ease, fit, lerp, loadPcbOpen, meta, ratsnest, span, toMm, toPx, trackAt,
+  BOARD, Box, HIDDEN, K, PEERS, boardText, Pt, Rat, View, clamp, copperAt, drawCursor, ease, fit, lerp, loadPcbOpen, meta, ratsnest, span, toMm, toPx, trackAt,
 } from "./demo";
 import { SANS, Stage, makeStage, reducedMotion } from "./stage";
 
@@ -68,6 +68,19 @@ export function startMini(root: HTMLElement): void {
   /** One undo step that takes back everything added since `made` was started. */
   function remember(made: string[]): void { if (made.length) undo.push(() => { for (const id of made) doc.items.delete(id); }); }
   function change(): void { dirty = true; touched = true; stage.invalidate(); sync(); }
+
+  // "Keep going in a real project": the board as it stands is left for the app (web/onboarding/state.ts
+  // reads it under this key), which makes a project of it with its schematic and opens it.  Signed
+  // out, sign-in comes first and returns to the same place.
+  const keep = document.querySelector<HTMLAnchorElement>("[data-keep]");   // under the window, beside the caption
+  if (keep) {
+    const next = "/?start=mini";
+    keep.href = document.documentElement.dataset.me ? next : "/auth/github/login?next=" + encodeURIComponent(next);
+    keep.addEventListener("click", () => {
+      endRoute();
+      try { localStorage.setItem("kc.onboard.mini", JSON.stringify({ board: boardText(doc), at: Date.now() })); } catch { /* without it the project starts from the same board, four connections open */ }
+    });
+  }
 
   /** KiCad's two-leg track: straight along the longer axis, then 45 degrees into the target. */
   function legs(a: Pt, b: Pt): Pt[] {

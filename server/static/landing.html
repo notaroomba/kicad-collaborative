@@ -126,6 +126,10 @@
   .win canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
   .win[data-tool="route"] canvas, .win[data-tool="via"] canvas { cursor: crosshair; }
   .cap { margin-top: 12px; font: 12px var(--mono); color: var(--ink-3); }
+  .keep { display: flex; align-items: flex-start; gap: 16px; margin-top: 12px; }
+  .keep .cap { margin: 0; flex: 1; min-width: 0; }
+  .keep .btn { flex: none; }
+  @media (max-width: 720px) { .keep { flex-direction: column; gap: 10px; } }
 
   /* ---- the scroll story ---- */
   .story { padding: 0; }
@@ -395,7 +399,10 @@
       </div>
       <div class="win-status"><span class="hide-s" data-counts>Pads 42</span><span data-unrouted>Unrouted 4</span><span class="sp"></span><span class="hide-s" data-z>Z 1.00</span><span data-xy>X --.--  Y --.--</span><span class="hide-s">grid 0.25</span><span class="hide-s">mm</span><span class="hide-m" data-toolname>Select item(s)</span></div>
     </div>
-    <p class="cap">Try it: this is the web editor's renderer on a real .kicad_pcb, with four connections left for you. Drag a part, route a track (X), change layer and drop a via (V). Mara and Jun are scripted here; in a project they are your teammates.</p>
+    <div class="keep">
+      <p class="cap">Try it: this is the web editor's renderer on a real .kicad_pcb, with four connections left for you. Drag a part, route a track (X), change layer and drop a via (V). Mara and Jun are scripted here; in a project they are your teammates.</p>
+      <a class="btn" data-keep href="/auth/github/login?next=%2F%3Fstart%3Dmini" title="Makes a project of this board, with its schematic, and opens it in the editor">Keep going in a real project</a>
+    </div>
   </div>
 </section>
 
@@ -504,7 +511,7 @@
           <li>Upload a KiCad project, import one from a repository, or open an invite link.</li>
           <li>Edit. People in the desktop app see you, and you see them.</li>
         </ol>
-        <div class="acts"><a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><span>Sign in with GitHub</span></a><a class="btn" href="/gallery">Browse public projects</a></div>
+        <div class="acts"><a class="btn primary" data-signin data-long href="/auth/github/login?next=/"><span>Sign in with GitHub</span></a><a class="btn" data-template href="/auth/github/login?next=%2F%3Fnew%3Dtemplate">Start from a template</a><a class="btn" href="/gallery">Browse public projects</a></div>
         <p class="os">kicad.notaroomba.dev</p>
       </div>
     </div>

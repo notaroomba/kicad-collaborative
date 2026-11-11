@@ -4,6 +4,7 @@
 // wrappers so the rendered elements are the page grid's own children, exactly as the static
 // markup used to be.
 import { createRoot } from "react-dom/client";
+import { Guide } from "./onboarding/Guide";
 import type { ReactNode } from "react";
 // chrome styling: web/styles/tailwind.css (built by @tailwindcss/cli into static/dist/ui.css)
 import { MenuBar } from "./components/MenuBar";
@@ -39,6 +40,6 @@ mount("ui-dockPlugins", <PluginDock />);
 mount("ui-dockB", <DockBottom />);
 mount("ui-statusbar", <StatusBar />);
 mount("ui-home", <><Home /><Toasts /></>);
-mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /><HistoryBar /><VersionDialogs /><CompareWindow /></>);
+mount("ui-overlays", <><Toast /><Popover /><SignInOverlay /><ContextMenu /><PluginDialogs /><HistoryBar /><VersionDialogs /><CompareWindow /><Guide /></>);
 installReview();
 installToolbarTooltips();

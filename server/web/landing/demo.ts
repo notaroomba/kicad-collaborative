@@ -38,6 +38,28 @@ export function loadPcbOpen(): KDoc {
   return K.parseDoc(K.serialize(tree));
 }
 
+/**
+ * The board as a .kicad_pcb again, for carrying it into a real project: the file's own header and
+ * order, each item as the editor left it, tracks that were taken out gone, new ones at the end with
+ * proper ids.  The pour keeps the fill KiCad gave it (the editor here works with it left off).
+ */
+export function boardText(doc: KDoc): string {
+  const tree = K.parse(PCB_TEXT), out: any[] = [], seen = new Set<string>(), items = loadPcb().items;
+  for (const node of tree) {
+    const id = Array.isArray(node) ? K.uuidOf(node) : "";
+    if (!id || !items.has(id)) { out.push(node); continue; }
+    const item = doc.items.get(id);
+    if (!item) continue;
+    seen.add(id); out.push(node[0] === "zone" ? node : item.node);
+  }
+  for (const item of doc.items.values()) {
+    if (seen.has(item.id)) continue;
+    const node = (item.node as any[]).map((n) => (Array.isArray(n) && n[0] === "uuid" ? K.parse(`(uuid "${K.newUuid()}")`) : n));
+    out.push(node);
+  }
+  return K.serialize(out) + "\n";
+}
+
 /** Layers the page keeps off, as most people do: fabrication drawings and paste. */
 export const HIDDEN = new Set(["F.Fab", "B.Fab", "F.Paste", "B.Paste", "F.Adhes", "B.Adhes"]);
 

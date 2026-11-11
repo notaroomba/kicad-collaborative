@@ -79,6 +79,20 @@ export const listTrash = () => api<{ projects: Trashed[] }>("/api/trash").then((
 export const setStar = (id: string, on: boolean) => api(`/api/projects/${id}/star`, { method: on ? "PUT" : "DELETE" });
 export const transferProject = (id: string, userId: number) => api(`/api/projects/${id}/transfer`, { method: "POST", json: { userId } });
 export const createBlank = (name: string) => api<UploadResult>("/api/projects/blank", { method: "POST", json: { name } });
+/** A starter template (server/src/templates.rs): a finished KiCad project a new one can begin from. */
+export interface Template {
+  id: string; title: string; summary: string; detail: string; level: string; tags: string[];
+  parts: number; nets: number; size: [number, number]; layers: number;
+  /** pictures KiCad drew: the board as its 3D viewer shows it, and the schematic */
+  board: string; schematic: string;
+  /** has a board with connections left open, for the guided first project */
+  guided: boolean;
+}
+let templates: Promise<Template[]> | null = null;
+/** The list does not change while the page is open, so it is asked for once. */
+export const listTemplates = () => (templates ||= api<{ templates: Template[] }>("/api/templates").then((j) => j.templates).catch((e) => { templates = null; throw e; }));
+export const createFromTemplate = (req: { template: string; name?: string; guided?: boolean; board?: string }) =>
+  api<UploadResult & { template: string }>("/api/projects/from-template", { method: "POST", json: req });
 export const leaveProject = (id: string) => api(`/api/projects/${id}/leave`, { method: "POST" });
 export const cloneProject = (id: string) => api<{ projectId: string; name: string }>(`/api/projects/${id}/clone`, { method: "POST" });
 export const claimLink = (token: string) => api<{ projectId: string; role: Role }>(`/api/join/${token}`, { method: "POST" });
