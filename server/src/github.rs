@@ -259,6 +259,40 @@ impl Gh {
         Ok((out, v["truncated"].as_bool().unwrap_or(false)))
     }
 
+    /// The tree of a folder inside `root`, found one level at a time so a project
+    /// in a small corner of a huge repository never lists the whole repository.
+    /// None when the folder does not exist there.
+    async fn subtree(&self, repo: &RepoRef, root: &str, subdir: &str) -> Result<Option<String>, GhErr> {
+        let mut cur = root.to_string();
+        for seg in subdir.split('/').filter(|s| !s.is_empty()) {
+            let v = self.get(&format!("/repos/{}/git/trees/{cur}", repo.slug())).await?;
+            let next = v["tree"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|e| e["type"] == "tree" && e["path"] == seg)
+                .and_then(|e| e["sha"].as_str().map(str::to_string));
+            match next {
+                Some(sha) => cur = sha,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(cur))
+    }
+
+    /// Several blobs at once, a few requests at a time, in the order asked for.
+    async fn blobs(&self, repo: &RepoRef, shas: &[String]) -> Result<Vec<Vec<u8>>, GhErr> {
+        let mut out = Vec::with_capacity(shas.len());
+        for group in shas.chunks(6) {
+            let mut jobs = Vec::with_capacity(group.len());
+            for sha in group {
+                jobs.push(self.blob(repo, sha));
+            }
+            out.extend(futures_util::future::try_join_all(jobs).await?);
+        }
+        Ok(out)
+    }
+
     async fn blob(&self, repo: &RepoRef, sha: &str) -> Result<Vec<u8>, GhErr> {
         let v = self.get(&format!("/repos/{}/git/blobs/{sha}", repo.slug())).await?;
         let content: String =
@@ -348,6 +382,10 @@ struct Link {
     linked_by: Option<String>,
     base_commit: Option<String>,
     synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Push whenever a checkpoint is saved.
+    auto_push: bool,
+    /// What the last automatic push did.
+    last_auto: Option<Value>,
 }
 
 impl Link {
@@ -377,7 +415,7 @@ impl Link {
 
 async fn load_link(state: &AppState, project_id: Uuid) -> AppResult<Option<Link>> {
     let row = sqlx::query(
-        "SELECT g.repo_owner, g.repo_name, g.branch, g.subdir, g.base_commit, g.synced_at, u.login
+        "SELECT g.repo_owner, g.repo_name, g.branch, g.subdir, g.base_commit, g.synced_at, g.auto_push, g.last_auto, u.login
          FROM project_github g LEFT JOIN users u ON u.id = g.linked_by
          WHERE g.project_id = $1",
     )
@@ -391,6 +429,8 @@ async fn load_link(state: &AppState, project_id: Uuid) -> AppResult<Option<Link>
         linked_by: r.get("login"),
         base_commit: r.get("base_commit"),
         synced_at: r.get("synced_at"),
+        auto_push: r.get("auto_push"),
+        last_auto: r.get("last_auto"),
     }))
 }
 
@@ -415,7 +455,8 @@ async fn save_link(
          ON CONFLICT (project_id) DO UPDATE
            SET repo_owner = EXCLUDED.repo_owner, repo_name = EXCLUDED.repo_name,
                branch = EXCLUDED.branch, subdir = EXCLUDED.subdir, linked_by = EXCLUDED.linked_by,
-               base_commit = NULL, synced_at = NULL, created_at = now()",
+               base_commit = NULL, synced_at = NULL, created_at = now(),
+               auto_push = false, last_auto = NULL",
     )
     .bind(project_id)
     .bind(&repo.owner)
@@ -427,6 +468,23 @@ async fn save_link(
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// The repository each of these projects is linked to, for the project list.
+pub async fn linked_repos(pool: &sqlx::PgPool, ids: &[Uuid]) -> AppResult<HashMap<Uuid, Value>> {
+    let rows = sqlx::query(
+        "SELECT project_id, repo_owner, repo_name, branch FROM project_github WHERE project_id = ANY($1)",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let (owner, name): (String, String) = (r.get("repo_owner"), r.get("repo_name"));
+            (r.get("project_id"), json!({ "repo": format!("{owner}/{name}"), "branch": r.get::<String, _>("branch") }))
+        })
+        .collect())
 }
 
 async fn load_base(state: &AppState, project_id: Uuid) -> AppResult<HashMap<String, String>> {
@@ -539,15 +597,13 @@ async fn remote_files(gh: &Gh, link: &Link) -> Result<Remote, GhErr> {
         return Ok(Remote { head: None, tree: None, files: BTreeMap::new(), truncated: false });
     };
     let tree = gh.commit_tree(&link.repo, &head).await?;
-    let (all, truncated) = gh.tree(&link.repo, &tree).await?;
-    let prefix = if link.subdir.is_empty() { String::new() } else { format!("{}/", link.subdir) };
+    let Some(folder) = gh.subtree(&link.repo, &tree, &link.subdir).await? else {
+        return Ok(Remote { head: Some(head), tree: Some(tree), files: BTreeMap::new(), truncated: false });
+    };
+    let (all, truncated) = gh.tree(&link.repo, &folder).await?;
     let files = all
         .into_iter()
-        .filter_map(|(path, v)| {
-            let rel = path.strip_prefix(&prefix)?.to_string();
-            (allowed_file(&rel) && !is_local_state_path(&rel) && safe_zip_name(&rel).is_some())
-                .then_some((rel, v))
-        })
+        .filter(|(rel, _)| allowed_file(rel) && !is_local_state_path(rel) && safe_zip_name(rel).is_some())
         .collect();
     Ok(Remote { head: Some(head), tree: Some(tree), files, truncated })
 }
@@ -755,6 +811,8 @@ pub async fn scan_repo(
         linked_by: None,
         base_commit: None,
         synced_at: None,
+        auto_push: false,
+        last_auto: None,
     };
     let remote = remote_files(&gh, &link).await?;
 
@@ -824,7 +882,7 @@ pub async fn import_project(
             .unwrap_or("main")
             .to_string(),
     };
-    let link = Link { repo: repo.clone(), branch: branch.clone(), subdir: subdir.clone(), linked_by: None, base_commit: None, synced_at: None };
+    let link = Link { repo: repo.clone(), branch: branch.clone(), subdir: subdir.clone(), linked_by: None, base_commit: None, synced_at: None, auto_push: false, last_auto: None };
     let remote = remote_files(&gh, &link).await?;
     let head = remote.head.clone().ok_or_else(|| {
         AppError::BadRequest(format!("{} has no branch named {branch}.", repo.slug()))
@@ -841,10 +899,15 @@ pub async fn import_project(
     }
 
     // Download everything before creating anything, so a failure leaves no half project.
-    let mut contents = Vec::new();
-    for (path, (sha, _)) in &remote.files {
-        contents.push((path.clone(), sha.clone(), gh.blob(&repo, sha).await?));
-    }
+    let shas: Vec<String> = remote.files.values().map(|(sha, _)| sha.clone()).collect();
+    let contents: Vec<(String, String, Vec<u8>)> = remote
+        .files
+        .keys()
+        .cloned()
+        .zip(shas.iter().cloned())
+        .zip(gh.blobs(&repo, &shas).await?)
+        .map(|((path, sha), bytes)| (path, sha, bytes))
+        .collect();
 
     let name = req
         .name
@@ -968,6 +1031,8 @@ fn link_json(state: &AppState, link: &Link) -> Value {
         "linkedBy": link.linked_by,
         "baseCommit": link.base_commit,
         "syncedAt": link.synced_at.map(|t| t.to_rfc3339()),
+        "autoPush": link.auto_push,
+        "lastAuto": link.last_auto,
     })
 }
 
@@ -1136,6 +1201,8 @@ pub async fn file_diff(
         return Err(AppError::NotFound);
     }
     let base = match load_base(&state, id).await?.get(&path) {
+        // GitHub has not moved: the base is the copy just downloaded.
+        Some(sha) if remote.files.get(&path).is_some_and(|(r, _)| r == sha) => theirs.clone(),
         Some(sha) => gh.blob(&link.repo, sha).await.ok(),
         None => None,
     };
@@ -1175,6 +1242,76 @@ pub async fn push(
     Path(id): Path<Uuid>,
     LenientJson(req): LenientJson<PushRequest>,
 ) -> AppResult<Response> {
+    Ok(Json(push_as(&state, &user, id, req).await?).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SettingsRequest {
+    #[serde(rename = "autoPush")]
+    pub auto_push: bool,
+}
+
+/// Turn pushing on every checkpoint on or off.
+pub async fn settings(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    LenientJson(req): LenientJson<SettingsRequest>,
+) -> AppResult<Response> {
+    let a = access(&state, &user, id).await?;
+    require_editor(&a)?;
+    let done = sqlx::query("UPDATE project_github SET auto_push = $2 WHERE project_id = $1")
+        .bind(id)
+        .bind(req.auto_push)
+        .execute(&state.pool)
+        .await?;
+    if done.rows_affected() == 0 {
+        return Err(AppError::BadRequest("This project is not linked to a repository.".into()));
+    }
+    Ok(Json(json!({ "ok": true, "autoPush": req.auto_push })).into_response())
+}
+
+/// Called when a checkpoint is saved: if the project asks for it, push what
+/// changed to GitHub in the background, as the person who saved the checkpoint.
+/// Files changed on both sides are left for the sync page.  Returns whether a
+/// push was started.
+pub async fn push_on_checkpoint(state: &AppState, user: &User, project_id: Uuid, checkpoint: &str) -> bool {
+    match load_link(state, project_id).await {
+        Ok(Some(link)) if link.auto_push => {}
+        _ => return false,
+    }
+    let (state, user, name) = (state.clone(), user.clone(), checkpoint.trim().to_string());
+    tokio::spawn(async move {
+        let req = PushRequest { message: Some(format!("Checkpoint: {name}")), ..Default::default() };
+        let mut report = match push_as(&state, &user, project_id, req).await {
+            Ok(v) => json!({
+                "ok": true,
+                "message": match v["pushed"].as_array().map_or(0, Vec::len) {
+                    1 => "Pushed 1 file".to_string(),
+                    n => format!("Pushed {n} files"),
+                },
+                "commit": v["commit"], "commitUrl": v["commitUrl"],
+            }),
+            Err(AppError::Api(_, "nothing_to_push", _)) => json!({ "ok": true, "message": "Nothing had changed" }),
+            Err(e) => json!({ "ok": false, "message": e.to_string() }),
+        };
+        report["at"] = json!(chrono::Utc::now().to_rfc3339());
+        report["by"] = json!(user.login);
+        report["checkpoint"] = json!(name);
+        if let Err(e) = sqlx::query("UPDATE project_github SET last_auto = $2 WHERE project_id = $1")
+            .bind(project_id)
+            .bind(&report)
+            .execute(&state.pool)
+            .await
+        {
+            tracing::warn!("recording an automatic github push failed: {e}");
+        }
+    });
+    true
+}
+
+async fn push_as(state: &AppState, user: &User, id: Uuid, req: PushRequest) -> AppResult<Value> {
+    let (state, user) = (state.clone(), user.clone());
     let a = access(&state, &user, id).await?;
     require_editor(&a)?;
     let link = load_link(&state, id).await?.ok_or_else(|| AppError::BadRequest("This project is not linked to a repository.".into()))?;
@@ -1350,11 +1487,10 @@ pub async fn push(
                 }),
             )
             .await?;
-        return Ok(Json(json!({
+        return Ok(json!({
             "ok": true, "pushed": pushed, "commit": commit_sha, "branch": target_branch,
             "pullRequest": { "number": pr["number"], "url": pr["html_url"] },
-        }))
-        .into_response());
+        }));
     }
 
     // Now level: what was pushed, plus everything that was already identical.
@@ -1367,10 +1503,9 @@ pub async fn push(
     );
     save_base(&state, id, &agreed, Some(&commit_sha)).await?;
 
-    Ok(Json(json!({
+    Ok(json!({
         "ok": true, "pushed": pushed, "commit": commit_sha, "commitUrl": commit_url, "branch": target_branch,
     }))
-    .into_response())
 }
 
 // ------------------------------------------------------------------ pull

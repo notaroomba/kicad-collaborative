@@ -306,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/projects/{id}/github/diff", get(github::file_diff))
         .route("/api/projects/{id}/github/push", post(github::push))
+        .route("/api/projects/{id}/github/settings", post(github::settings))
         .route("/api/projects/{id}/github/pull", post(github::pull))
         // The design assistant (ai.rs)
         .route("/api/ai", get(ai::status))

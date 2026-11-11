@@ -283,11 +283,14 @@ pub async fn list_projects(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> AppResult<Response> {
-    let projects: Vec<_> = persist::list_projects_for_user(&state.pool, user.id)
-        .await?
+    let list = persist::list_projects_for_user(&state.pool, user.id).await?;
+    let ids: Vec<Uuid> = list.iter().map(|p| p.id).collect();
+    let linked = crate::github::linked_repos(&state.pool, &ids).await?;
+    let projects: Vec<_> = list
         .into_iter()
         .map(|p| {
             json!({
+                "github": linked.get(&p.id),
                 "projectId": p.id, "name": p.name,
                 "description": p.description,
                 "ownerId": p.owner_id, "ownerLogin": p.owner_login,
@@ -1841,7 +1844,10 @@ pub async fn create_checkpoint(
         return Err(AppError::BadRequest("project has no snapshots to name".into()));
     }
 
-    Ok(Json(json!({ "name": req.name, "docs": named })).into_response())
+    // A project linked to GitHub can ask for every checkpoint to be pushed.
+    let pushing = crate::github::push_on_checkpoint(&state, &user, id, &req.name).await;
+
+    Ok(Json(json!({ "name": req.name, "docs": named, "githubPush": pushing })).into_response())
 }
 
 pub async fn list_checkpoints(

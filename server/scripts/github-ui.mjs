@@ -226,6 +226,29 @@ try {
   await page.waitForFunction(() => document.querySelector('.chip.synced b')?.textContent === '5');
   check('first push fills the new repository', Object.keys((await ctl('files?repo=ui-dana/preamp-rev-b')).files).filter((p) => p.startsWith('hardware/')).length === 5);
 
+  // ---- push on every checkpoint
+  await page.check('#autoPush');
+  await page.waitForFunction(() => document.querySelector('#autoPush')?.checked && !document.querySelector('#autoPush').disabled);
+  const pcbDoc = (await db.query(`SELECT id FROM documents WHERE project_id = $1 AND path LIKE '%.kicad_pcb' LIMIT 1`, [pid])).rows[0].id;
+  const curPcb = (await db.query('SELECT content, seq FROM snapshots WHERE doc_id = $1 ORDER BY seq DESC LIMIT 1', [pcbDoc])).rows[0];
+  await db.query('INSERT INTO snapshots (doc_id, seq, content) VALUES ($1, $2, $3)', [pcbDoc, curPcb.seq + 1, Buffer.from(curPcb.content.toString().replace('"10k"', '"12k"'))]);
+  const cp = await page.evaluate(async (id) => (await fetch(`/api/projects/${id}/checkpoints`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Rev B release' }) })).json(), pid);
+  check('saving a checkpoint starts a push to GitHub', cp.githubPush === true, JSON.stringify(cp));
+  await page.waitForTimeout(800);
+  await page.click('#refresh');
+  await page.waitForSelector('#lastAuto');
+  check('the sync page says what the checkpoint pushed', /Rev B release/.test(await page.textContent('#lastAuto')) && /Pushed 1 file/.test(await page.textContent('#lastAuto')), await page.textContent('#lastAuto'));
+  check('…and the commit is on GitHub under the checkpoint\'s name', (await ctl('files?repo=ui-dana/preamp-rev-b')).message === 'Checkpoint: Rev B release');
+  await shot(page, '14-auto-push');
+
+  // ---- the project list shows which projects are linked
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector('.hp-item-gh');
+  check('the project list names the linked repository', /preamp-rev-b/.test(await page.textContent('.hp-item-gh')));
+  await shot(page, '15-home-badge');
+  await page.goto(`${BASE}/p/${pid}/github`);
+  await page.waitForSelector('#refresh');
+
   // ---- error surfaces
   await ctl('revoke', { login: 'ui-dana' });
   await page.click('#refresh');

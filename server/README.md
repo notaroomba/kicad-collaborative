@@ -150,6 +150,12 @@ File → GitHub Sync… in the web editor).
   never forced, and files GitHub changed are left alone. It can instead go to a
   new branch with a pull request. A missing branch is created from the default
   branch; an empty repository gets its first commit.
+- **Push on checkpoint** (a checkbox on the sync page) pushes the same way
+  every time a checkpoint is saved, as the person who saved it, with the
+  checkpoint's name as the commit message. It never overwrites a change made
+  on GitHub; the page shows what the last one did.
+- Only the linked folder is read from GitHub, so a project in a corner of a
+  very large repository syncs as fast as one in its own.
 - **Pull** brings GitHub's changes in. A file changed on both sides is merged
   item by item (`src/merge.rs`): items are matched by their `uuid`, each side's
   changes are kept, and only an item both sides changed differently needs a

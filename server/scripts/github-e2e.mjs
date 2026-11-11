@@ -246,6 +246,45 @@ try {
   check('pushing the merge brings both sides level', r.status === 200 && gh.files['hw/amp.kicad_pcb'] === WANT);
   eq('in sync after merge + push', (await status(alice, pid)).summary, { push: 0, pull: 0, conflict: 0, synced: 4, unsaved: 0 });
 
+  // ============================================================ push on checkpoint
+  const lastAuto = async (name) => {
+    for (let i = 0; i < 50; i++) {
+      const la = (await status(alice, pid)).link.lastAuto;
+      if (la && la.checkpoint === name) return la;
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    return null;
+  };
+  r = await call(alice, 'POST', `/api/projects/${pid}/checkpoints`, { name: 'quiet' });
+  check('a checkpoint pushes nothing unless the project asks for it', r.status === 200 && r.j.githubPush === false, JSON.stringify(r.j));
+  r = await call(bob, 'POST', `/api/projects/${pid}/github/settings`, { autoPush: true });
+  check('a stranger cannot change the sync settings', r.status === 403);
+  r = await call(alice, 'POST', `/api/projects/${pid}/github/settings`, { autoPush: true });
+  check('push-on-checkpoint can be switched on', r.status === 200 && (await status(alice, pid)).link.autoPush === true, JSON.stringify(r.j));
+  const AUTO = WANT.replace('"5k1"', '"5k6"');
+  await saveOnline(docs['amp.kicad_pcb'], AUTO);
+  r = await call(alice, 'POST', `/api/projects/${pid}/checkpoints`, { name: 'rev C' });
+  check('saving a checkpoint starts a push', r.status === 200 && r.j.githubPush === true, JSON.stringify(r.j));
+  let la = await lastAuto('rev C');
+  gh = await ghFiles('gh-alice/amp');
+  check('…which lands on GitHub, named after the checkpoint', la?.ok === true && gh.files['hw/amp.kicad_pcb'] === AUTO && gh.message === 'Checkpoint: rev C', JSON.stringify(la));
+  eq('in sync after the automatic push', (await status(alice, pid)).summary, { push: 0, pull: 0, conflict: 0, synced: 4, unsaved: 0 });
+  r = await call(alice, 'POST', `/api/projects/${pid}/checkpoints`, { name: 'again' });
+  la = await lastAuto('again');
+  check('a checkpoint with nothing new is reported, not an error', la?.ok === true && /Nothing/.test(la.message), JSON.stringify(la));
+  // GitHub and the online copy both move: the automatic push must not overwrite GitHub.
+  await saveOnline(docs['amp.kicad_pcb'], AUTO.replace('"5k6"', '"6k8"'));
+  await ctl('commit', { fullName: 'gh-alice/amp', files: { 'hw/amp.kicad_pcb': WANT }, author: 'gh-bob' });
+  r = await call(alice, 'POST', `/api/projects/${pid}/checkpoints`, { name: 'clash' });
+  la = await lastAuto('clash');
+  gh = await ghFiles('gh-alice/amp');
+  check('an automatic push never overwrites a change made on GitHub', la && gh.files['hw/amp.kicad_pcb'] === WANT && states(await status(alice, pid))['amp.kicad_pcb'] === 'conflict', JSON.stringify(la));
+  // Back to where the next section expects to start: both sides at WANT, switch off.
+  r = await call(alice, 'POST', `/api/projects/${pid}/github/pull`, { resolve: { 'amp.kicad_pcb': 'github' } });
+  r = await call(alice, 'POST', `/api/projects/${pid}/github/settings`, { autoPush: false });
+  check('…and can be switched off again', r.status === 200 && (await status(alice, pid)).link.autoPush === false);
+  eq('level again', (await status(alice, pid)).summary, { push: 0, pull: 0, conflict: 0, synced: 4, unsaved: 0 });
+
   // ============================================================ merge: same item on both sides
   await saveOnline(docs['amp.kicad_pcb'], WANT.replace('(at 101.5 52)', '(at 1 1)'));
   await ctl('commit', { fullName: 'gh-alice/amp', files: { 'hw/amp.kicad_pcb': WANT.replace('(at 101.5 52)', '(at 2 2)').replace('"1k"', '"2k"') }, author: 'gh-bob' });

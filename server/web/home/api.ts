@@ -4,6 +4,8 @@ export interface Project {
   ownerId?: number; ownerLogin: string; ownerAvatarUrl?: string | null;
   role?: string | null; public?: boolean; docCount?: number; memberCount?: number; starred?: boolean;
   createdAt?: string; updatedAt: string;
+  /** The GitHub repository the project is linked to, if any. */
+  github?: { repo: string; branch: string } | null;
 }
 export interface Member { userId: number; login: string; avatarUrl?: string | null; role: Role }
 export interface Invite { inviteId: number; login?: string | null; email?: string | null; role: Role }

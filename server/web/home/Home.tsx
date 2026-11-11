@@ -173,6 +173,7 @@ function ProjectItem({ p, me, layout, renaming, fresh, onMenu, onRename, onStart
             <span aria-hidden="true">·</span><span className="hp-item-when">{ago(p.updatedAt)}</span>
             {people > 1 ? <span className="hp-item-people" title={`${people} people have access`} aria-label={`${people} people have access`}><Ic name="people" size={12} />{people}</span> : null}
             {p.public ? <span className="hp-item-pub" title="Public: listed in Explore" aria-label="public"><Ic name="globe" size={12} /></span> : null}
+            {p.github ? <span className="hp-item-gh" title={`Linked to ${p.github.repo} on GitHub (${p.github.branch})`} aria-label={`linked to ${p.github.repo} on GitHub`}><Ic name="branch" size={12} />{p.github.repo.split("/")[1]}</span> : null}
           </div>
         </div>
         <div className="hp-item-tags">

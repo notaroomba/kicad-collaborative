@@ -109,6 +109,8 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 .hp-item-acts { display: flex; align-items: center; gap: 2px; }
 .hp-item.grid .hp-item-acts { position: absolute; right: 5px; bottom: 6px; }
 .hp-item-people, .hp-item-pub { display: none; }
+.hp-item-gh { display: inline-flex; align-items: center; gap: 3px; flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-item-gh svg { flex: none; }
 .hp-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; background: none; border: 0; border-radius: 3px; color: var(--ink-3); font: 11px var(--mono); }
 .hp-chip:hover { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
 .hp-rename { padding: 2px 6px; margin: -3px 0 -3px -7px; font-weight: 600; width: calc(100% - 56px); }
