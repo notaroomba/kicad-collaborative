@@ -22,6 +22,7 @@ interface PcbToolsApi {
   boardStatistics(doc: KDoc): Stats;
   inspectClearance(doc: KDoc, a: string, b: string, settings: unknown): { gap: number | null; required: number; sameNet: boolean; nets: string[] } | null;
   netclassOf(s: Settings, net: string): { clearance?: number };
+  selectionIds(ctx: ToolCtx): Set<string>;
 }
 const PT = (): PcbToolsApi => (window as unknown as { PcbTools: PcbToolsApi }).PcbTools;
 const settings = (): Settings => PT().designSettings(E.proSettings || null);
@@ -221,7 +222,7 @@ export function openNetInspector(ctx: ToolCtx): void {
 // ---------------------------------------------------------------- Clearance Resolution
 export function openClearance(ctx: ToolCtx): void {
   const doc = board(); if (!doc) return;
-  const ids = Array.from(ctx.selection || []);
+  const ids = Array.from(PT().selectionIds(ctx));   // the editor's selection and the board module's (tracks, vias, graphics)
   if (ids.length !== 2) { ctx.toast("Select two items for a clearance resolution report."); return; }
   const set = settings(), r = PT().inspectClearance(doc, ids[0], ids[1], set);
   if (!r) { ctx.toast("Both items need copper"); return; }
