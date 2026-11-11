@@ -1350,6 +1350,35 @@ void SCH_COLLAB_TOOL::resolveComment( long long aRootId, bool aResolved )
 }
 
 
+int SCH_COLLAB_TOOL::OpenGithubSync( const TOOL_EVENT& aEvent )
+{
+    if( m_projectId.IsEmpty() )
+    {
+        m_frame->ShowInfoBarMsg(
+                _( "No collaboration session; start or join one first." ) );
+        return 0;
+    }
+
+    // Repository sync lives on the server's own page: it works from the project's saved
+    // files (the server asks this app for a fresh save before it reads them), and the
+    // browser already carries the session the desktop sign-in created there.
+    wxString url = COLLAB_SESSION::ServerUrl();
+
+    while( url.EndsWith( wxS( "/" ) ) )
+        url.RemoveLast();
+
+    url << wxS( "/p/" ) << m_projectId << wxS( "/github" );
+
+    if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
+    {
+        m_frame->ShowInfoBarError(
+                wxString::Format( _( "Could not open the browser; the page is %s" ), url ) );
+    }
+
+    return 0;
+}
+
+
 int SCH_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 {
     // Ours, not COLLAB_SESSION's: the process-wide id survives Leave Session and
@@ -2021,6 +2050,7 @@ void SCH_COLLAB_TOOL::setTransitions()
     Go( &SCH_COLLAB_TOOL::LeaveSession,      SCH_ACTIONS::collabLeaveSession.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::ShowHistory,       SCH_ACTIONS::collabHistory.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::CopyShareLink,     SCH_ACTIONS::collabCopyLink.MakeEvent() );
+    Go( &SCH_COLLAB_TOOL::OpenGithubSync,    SCH_ACTIONS::collabGithub.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::ShowComments,      SCH_ACTIONS::collabComments.MakeEvent() );
     Go( &SCH_COLLAB_TOOL::FollowNextPeer,    SCH_ACTIONS::collabFollow.MakeEvent() );
 

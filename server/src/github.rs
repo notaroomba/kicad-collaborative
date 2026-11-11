@@ -1086,6 +1086,76 @@ pub async fn project_status(
     Ok(Json(out).into_response())
 }
 
+// ------------------------------------------------------------------ what changed inside a file
+
+#[derive(Deserialize)]
+pub struct DiffQuery {
+    pub path: String,
+}
+
+const DIFF_LIMIT: usize = 200;
+
+fn changes_json(old: Option<&[u8]>, new: Option<&[u8]>) -> Value {
+    let (Some(old), Some(new)) = (old, new) else { return Value::Null };
+    if old == new {
+        return json!({ "changes": [], "total": 0 });
+    }
+    let items = match (std::str::from_utf8(old), std::str::from_utf8(new)) {
+        (Ok(o), Ok(n)) => merge::diff(o, n),
+        _ => None,
+    };
+    match items {
+        Some(items) => json!({ "total": items.len(), "changes": items.into_iter().take(DIFF_LIMIT).collect::<Vec<_>>() }),
+        // Not an s-expression (the project file, a 3D model): only sizes can be told.
+        None => json!({ "opaque": true, "oldSize": old.len(), "newSize": new.len() }),
+    }
+}
+
+/// Item-level changes in one file: what the online project did since the last
+/// sync and what GitHub did.  Without a common ancestor, the difference between
+/// the two as they stand (GitHub -> online).
+pub async fn file_diff(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<DiffQuery>,
+) -> AppResult<Response> {
+    access(&state, &user, id).await?;
+    let link = load_link(&state, id).await?.ok_or_else(|| AppError::BadRequest("This project is not linked to a repository.".into()))?;
+    let gh = Gh::for_user(&state, &user).await?;
+    let path = safe_zip_name(&q.path).ok_or_else(|| AppError::BadRequest("bad path".into()))?;
+
+    let remote = remote_files(&gh, &link).await?;
+    let local = match persist::project_documents(&state.pool, id).await?.into_iter().find(|d| d.path == path) {
+        Some(doc) => persist::latest_snapshot(&state.pool, doc.id).await?.map(|(_, c)| c),
+        None => None,
+    };
+    let theirs = match remote.files.get(&path) {
+        Some((sha, size)) if *size <= MAX_FILE_BYTES => Some(gh.blob(&link.repo, sha).await?),
+        _ => None,
+    };
+    if local.is_none() && theirs.is_none() {
+        return Err(AppError::NotFound);
+    }
+    let base = match load_base(&state, id).await?.get(&path) {
+        Some(sha) => gh.blob(&link.repo, sha).await.ok(),
+        None => None,
+    };
+
+    let out = match &base {
+        Some(b) => json!({
+            "path": path, "hasBase": true,
+            "online": changes_json(Some(b), local.as_deref()),
+            "github": changes_json(Some(b), theirs.as_deref()),
+        }),
+        None => json!({
+            "path": path, "hasBase": false,
+            "between": changes_json(theirs.as_deref(), local.as_deref()),
+        }),
+    };
+    Ok(Json(out).into_response())
+}
+
 // ------------------------------------------------------------------ push
 
 #[derive(Deserialize, Default)]

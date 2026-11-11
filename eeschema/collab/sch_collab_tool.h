@@ -84,6 +84,9 @@ public:
     ///< Copy an invite link for the current session to the clipboard.
     int CopyShareLink( const TOOL_EVENT& aEvent );
 
+    ///< Open the project's GitHub sync page (push, pull, merge) in the browser.
+    int OpenGithubSync( const TOOL_EVENT& aEvent );
+
     ///< The last minted share link, copied instantly on repeat clicks.
     wxString m_cachedShareLink;
 

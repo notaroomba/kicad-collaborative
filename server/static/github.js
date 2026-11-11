@@ -185,6 +185,38 @@
   const resolve = {};            // path -> merge | github | online
   let lastResult = null;         // html of the last push/pull outcome
 
+  // ---------------------------------------------------------------- what changed inside a file
+  const openDiffs = new Set();   // paths whose change list is expanded
+  const diffs = {};              // path -> response | { error } | undefined while loading
+
+  async function loadDiff(path) {
+    diffs[path] = undefined;
+    try { diffs[path] = await api(`/api/projects/${projectId}/github/diff?path=${encodeURIComponent(path)}`); }
+    catch (e) { diffs[path] = { error: e.message }; }
+    const cell = $$("[data-diffbody]").find((c) => c.dataset.diffbody === path);
+    if (cell) cell.innerHTML = diffHtml(path);
+  }
+
+  function changeList(title, side) {
+    if (!side) return "";
+    let body;
+    if (side.opaque) body = `<p class="muted">This file type can't be compared item by item (${kb(side.oldSize)} → ${kb(side.newSize)}).</p>`;
+    else if (!side.total) body = `<p class="muted">No changes.</p>`;
+    else body = `<ul class="changes">${side.changes.map((c) => `<li><span class="k ${c.kind}">${c.kind}</span> ${esc(c.item)}${
+        c.parts && c.parts.length ? ` <span class="muted">— ${esc(c.parts.join(", "))}</span>` : ""}</li>`).join("")}${
+        side.total > side.changes.length ? `<li class="muted">…and ${side.total - side.changes.length} more</li>` : ""}</ul>`;
+    return `<div class="side"><h3>${title}${side.total ? ` <span class="muted">(${side.total})</span>` : ""}</h3>${body}</div>`;
+  }
+
+  function diffHtml(path) {
+    const d = diffs[path];
+    if (!d) return `<div class="muted"><span class="spin"></span> Comparing…</div>`;
+    if (d.error) return `<div class="note err">${esc(d.error)}</div>`;
+    if (d.hasBase) return `<div class="sides">${changeList("Changed online", d.online)}${changeList("Changed on GitHub", d.github)}</div>`;
+    return `<div class="sides">${changeList("Online, compared with GitHub", d.between)}</div>
+      <p class="muted" style="margin-top:6px">These two were never synced, so there is no common version to tell who changed what.</p>`;
+  }
+
   async function loadStatus() {
     try { st = await api(`/api/projects/${projectId}/github`); }
     catch (e) {
@@ -193,6 +225,10 @@
       return;
     }
     render();
+    // A refresh may have changed the files: re-read the open change lists, close those that no longer apply.
+    openDiffs.forEach((p) => {
+      if (st.files && st.files.some((f) => f.path === p && f.state !== "synced")) loadDiff(p); else openDiffs.delete(p);
+    });
   }
 
   function render() {
@@ -274,7 +310,9 @@
         <td class="detail">${esc(f.detail)}${f.unsavedOps > 0 ? ` · ${plural(f.unsavedOps, "unsaved edit")}` : ""} <span class="muted">· ${kb(f.size)}</span></td>
         <td class="act">${f.state === "conflict" && canWrite ? `<select data-resolve="${esc(f.path)}" aria-label="How to resolve ${esc(f.path)}">
             ${f.mergeable ? `<option value="merge">Merge both</option>` : `<option value="">Choose…</option>`}
-            <option value="github">Use GitHub's</option><option value="online">Keep online</option></select>` : ""}</td></tr>`).join("")
+            <option value="github">Use GitHub's</option><option value="online">Keep online</option></select>` : ""}${
+            f.state !== "synced" ? `<button class="btn small" data-diff="${esc(f.path)}" aria-expanded="${openDiffs.has(f.path)}">Changes</button>` : ""}</td></tr>
+        ${f.state !== "synced" && openDiffs.has(f.path) ? `<tr class="diffrow"><td colspan="4" data-diffbody="${esc(f.path)}">${diffHtml(f.path)}</td></tr>` : ""}`).join("")
         || `<tr><td colspan="4" class="muted">No KiCad files on either side yet.</td></tr>`}
       </tbody></table></section>`;
 
@@ -290,6 +328,11 @@
       if (resolve[sel.dataset.resolve] !== undefined) sel.value = resolve[sel.dataset.resolve];
       sel.onchange = () => { resolve[sel.dataset.resolve] = sel.value; };
     });
+    $$("[data-diff]").forEach((b) => (b.onclick = () => {
+      const path = b.dataset.diff;
+      if (openDiffs.has(path)) openDiffs.delete(path); else { openDiffs.add(path); loadDiff(path); }
+      render();
+    }));
     const seg = $("#prefer");
     if (seg) $$("button", seg).forEach((b) => (b.onclick = () => { $$("button", seg).forEach((x) => x.classList.toggle("on", x === b)); }));
     const pullBtn = $("#pull"), pushBtn = $("#push");

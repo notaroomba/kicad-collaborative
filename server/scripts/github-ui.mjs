@@ -123,6 +123,10 @@ try {
   const chips = await page.$$eval('.chip b', (els) => els.map((e) => e.textContent).join(','));
   check('the page shows what differs: 1 to push, 2 to pull, 1 changed on both, 1 in sync', chips === '1,2,1,1', chips);
   check('the file changed on both sides offers a choice, defaulting to merge', (await page.inputValue('[data-resolve="preamp.kicad_pcb"]')) === 'merge');
+  await page.click('[data-diff="preamp.kicad_pcb"]');
+  await page.waitForSelector('ul.changes');
+  const sides = await page.$$eval('.diffrow .side', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
+  check('"Changes" lists what each side did to the file', sides.length === 2 && /Changed online \(2\).*footprint R1 — at.*footprint R2 — property Value/.test(sides[0]) && /Changed on GitHub \(2\).*footprint R1 — at.*footprint R2 — at/.test(sides[1]), sides.join(' || '));
   await shot(page, '04-changes');
 
   // ---- pull (with a merge)
@@ -163,6 +167,9 @@ try {
   await phone.waitForSelector('table.files');
   check('phone: the sync page fits the screen width', await fits(phone));
   check('phone: buttons are finger-sized', (await phone.locator('#push').boundingBox()).height >= 40);
+  await phone.click('[data-diff="preamp.kicad_sch"]');
+  await phone.waitForSelector('ul.changes');
+  check('phone: an open change list still fits the screen width', await fits(phone));
   await shot(phone, '08-phone-sync');
   await phone.goto(`${BASE}/github`);
   await phone.waitForSelector('[data-repo="ui-dana/preamp"]');

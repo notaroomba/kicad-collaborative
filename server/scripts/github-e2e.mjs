@@ -220,6 +220,17 @@ try {
   await ctl('commit', { fullName: 'gh-alice/amp', files: { 'hw/amp.kicad_pcb': PCB_GITHUB }, message: 'Move R2, add R3', author: 'gh-bob' });
   st = await status(alice, pid);
   check('changed on both sides shows as a conflict', states(st)['amp.kicad_pcb'] === 'conflict' && st.summary.conflict === 1, JSON.stringify(st.summary));
+  r = await call(alice, 'GET', `/api/projects/${pid}/github/diff?path=amp.kicad_pcb`);
+  const brief = (side) => side.changes.map((c) => `${c.kind} ${c.item}${c.parts?.length ? ' [' + c.parts.join(', ') + ']' : ''}`);
+  eq('the diff says what changed online…', brief(r.j.online), ['changed footprint R2 [property Value]']);
+  eq('…and what changed on GitHub, item by item', brief(r.j.github), ['changed footprint R2 [at]', 'added footprint R3']);
+  r = await call(alice, 'GET', `/api/projects/${pid}/github/diff?path=amp.kicad_sch`);
+  check('an unchanged file has an empty diff', r.j.online.total === 0 && r.j.github.total === 0, JSON.stringify(r.j));
+  r = await call(alice, 'GET', `/api/projects/${pid}/github/diff?path=nope.kicad_sch`);
+  check('a diff of a file on neither side is a 404', r.status === 404);
+  r = await call(bob, 'GET', `/api/projects/${pid}/github/diff?path=amp.kicad_pcb`);
+  check('a stranger cannot read a diff', r.status === 403);
+
   r = await call(alice, 'POST', `/api/projects/${pid}/github/push`, {});
   check('a plain push will not overwrite GitHub\'s change', r.status === 409 && r.j.error === 'nothing_to_push', JSON.stringify(r.j));
 
@@ -249,6 +260,8 @@ try {
   await saveOnline(docs['amp.kicad_pro'], PRO0.replace('"version": 3', '"version": 4'));
   await ctl('commit', { fullName: 'gh-alice/amp', files: { 'hw/amp.kicad_pro': PRO0.replace('"version": 3', '"version": 5') }, author: 'gh-bob' });
   st = await status(alice, pid);
+  r = await call(alice, 'GET', `/api/projects/${pid}/github/diff?path=amp.kicad_pro`);
+  check('a file that is not an s-expression is reported as not comparable', r.j.online.opaque === true && r.j.github.opaque === true, JSON.stringify(r.j));
   check('project file conflict is flagged as not mergeable', st.files.find((f) => f.path === 'amp.kicad_pro').mergeable === false);
   r = await call(alice, 'POST', `/api/projects/${pid}/github/pull`, {});
   check('it is left alone until a side is chosen', r.j.updated.length === 0 && /choose which version/.test(r.j.skipped[0]?.reason), JSON.stringify(r.j));
@@ -366,6 +379,12 @@ try {
 
   // A link between two sides that were never synced and differ: nothing is assumed.
   r = await call(alice, 'PUT', `/api/projects/${pid}/github`, { repo: 'gh-alice/amp', branch: 'main', path: 'panel' });
+  st = await status(alice, pid);
+  await db.query(`INSERT INTO documents (project_id, path, doc_type) VALUES ($1, 'panel.kicad_pcb', 'kicad_pcb') RETURNING id`, [pid])
+    .then((x) => saveOnline(x.rows[0].id, board([fp('R9', R3, 5, 5, '0R')])));
+  r = await call(alice, 'GET', `/api/projects/${pid}/github/diff?path=panel.kicad_pcb`);
+  eq('never-synced files are compared directly', [r.j.hasBase, brief(r.j.between)], [false, ['added footprint R9']]);
+  await db.query(`DELETE FROM documents WHERE project_id = $1 AND path = 'panel.kicad_pcb'`, [pid]);
   st = await status(alice, pid);
   check('unrelated folder: differing files are not silently overwritten either way', st.summary.pull === 2 && st.summary.push === 4 && st.summary.conflict === 0, JSON.stringify(st.summary));
 

@@ -3312,6 +3312,13 @@ TOOL_ACTION PCB_ACTIONS::collabCopyLink( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Copy Share Link" ) )
         .Tooltip( _( "Copy an invite link for the current collaboration session" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::collabGithub( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Collab.github" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "GitHub Sync..." ) )
+        .Tooltip( _( "Push the shared project to a GitHub repository, or pull and merge changes "
+                     "from it (opens in the browser)" ) ) );
+
 TOOL_ACTION PCB_ACTIONS::collabFollow( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Collab.follow" )
         .Scope( AS_GLOBAL )

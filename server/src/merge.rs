@@ -163,12 +163,10 @@ fn parse(text: &str) -> Option<List<'_>> {
     }
 
     // Identity: a uuid when the item has one; otherwise the head, qualified by the
-    // first argument when several siblings share that head (nets, properties,
-    // library symbols), and by position when even that repeats or it is a bare atom.
-    let mut head_count: HashMap<&str, usize> = HashMap::new();
-    for c in &children {
-        *head_count.entry(head_of(c.text)).or_default() += 1;
-    }
+    // first argument for the kinds that come in named sets (nets, properties,
+    // library symbols), and by position when that repeats or it is a bare atom.
+    // The rule must not depend on what else is in the list, or an item's identity
+    // would change when a sibling is added or removed.
     let mut seen: HashMap<String, usize> = HashMap::new();
     for (i, c) in children.iter_mut().enumerate() {
         let head = head_of(c.text);
@@ -176,7 +174,7 @@ fn parse(text: &str) -> Option<List<'_>> {
             format!("@{i}")
         } else if let Some(u) = direct_value(c.text, "uuid") {
             format!("uuid:{u}")
-        } else if head_count[head] > 1 {
+        } else if named_by_first_arg(head) {
             match first_arg(c.text) {
                 Some(a) => format!("{head}:{a}"),
                 None => head.to_string(),
@@ -191,6 +189,15 @@ fn parse(text: &str) -> Option<List<'_>> {
 
     let _ = close;
     Some(List { head: &text[start..head_end], children, tail: &text[prev..] })
+}
+
+/// Kinds of item without a uuid that are told apart by their first argument.
+fn named_by_first_arg(head: &str) -> bool {
+    matches!(
+        head,
+        "net" | "property" | "symbol" | "pad" | "fp_text" | "path" | "model" | "net_class" | "layer_pair"
+            | "user" | "variant" | "file" | "project" | "class"
+    )
 }
 
 fn has_sublist(text: &str) -> bool {
@@ -219,11 +226,17 @@ fn label(text: &str) -> String {
             }
         }
     }
+    // A property is known by its name even when it also carries a uuid.
+    if named_by_first_arg(head) {
+        if let Some(a) = first_arg(text).filter(|a| a.len() <= 40) {
+            return format!("{head} {}", unquote(a));
+        }
+    }
     if let Some(u) = direct_value(text, "uuid") {
         return format!("{head} {}", &unquote(u)[..unquote(u).len().min(8)]);
     }
     match first_arg(text) {
-        Some(a) if a.len() <= 40 && has_sublist(text) => format!("{head} {}", unquote(a)),
+        Some(a) if a.len() <= 40 && (has_sublist(text) || named_by_first_arg(head)) => format!("{head} {}", unquote(a)),
         _ => head.to_string(),
     }
 }
@@ -431,6 +444,65 @@ pub fn merge3(base: Option<&str>, ours: &str, theirs: &str, prefer: Prefer) -> O
     Some(Merged { text, conflicts: ctx.conflicts, from_theirs: ctx.from_theirs, from_ours: ctx.from_ours })
 }
 
+/// One item that differs between two versions of a file.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct ItemChange {
+    /// `added`, `removed` or `changed`.
+    pub kind: &'static str,
+    /// Human label: `footprint R1`, `segment 1a2b3c4d`.
+    pub item: String,
+    /// For a changed item, which of its parts differ: `at`, `property Value`, …
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+}
+
+/// What turned `old` into `new`, item by item — the same matching the merge uses,
+/// so the list is exactly what a merge would carry across.  None when either file
+/// is not an s-expression.  The program stamps (version, generator) are left out.
+pub fn diff(old: &str, new: &str) -> Option<Vec<ItemChange>> {
+    let o = parse(old)?;
+    let n = parse(new)?;
+    let o_map: HashMap<&str, &str> = o.children.iter().map(|c| (c.key.as_str(), c.text)).collect();
+    let n_keys: HashSet<&str> = n.children.iter().map(|c| c.key.as_str()).collect();
+    let mut out = Vec::new();
+    for c in &n.children {
+        if is_stamp(&c.key) {
+            continue;
+        }
+        match o_map.get(c.key.as_str()) {
+            None => out.push(ItemChange { kind: "added", item: label(c.text), parts: Vec::new() }),
+            Some(old_text) if *old_text != c.text => {
+                let mut parts = Vec::new();
+                if let (true, Some(oc), Some(nc)) = (has_sublist(c.text), parse(old_text), parse(c.text)) {
+                    let om: HashMap<&str, &str> = oc.children.iter().map(|x| (x.key.as_str(), x.text)).collect();
+                    let nk: HashSet<&str> = nc.children.iter().map(|x| x.key.as_str()).collect();
+                    for x in &nc.children {
+                        match om.get(x.key.as_str()) {
+                            None => parts.push(format!("{} added", label(x.text))),
+                            Some(t) if *t != x.text => parts.push(label(x.text)),
+                            _ => {}
+                        }
+                    }
+                    for x in &oc.children {
+                        if !nk.contains(x.key.as_str()) {
+                            parts.push(format!("{} removed", label(x.text)));
+                        }
+                    }
+                    parts.truncate(12);
+                }
+                out.push(ItemChange { kind: "changed", item: label(c.text), parts });
+            }
+            _ => {}
+        }
+    }
+    for c in &o.children {
+        if !n_keys.contains(c.key.as_str()) && !is_stamp(&c.key) {
+            out.push(ItemChange { kind: "removed", item: label(c.text), parts: Vec::new() });
+        }
+    }
+    Some(out)
+}
+
 /// Whether a file of this document type is an s-expression the merge understands.
 pub fn mergeable(doc_type: &str) -> bool {
     matches!(doc_type, "kicad_sch" | "kicad_pcb" | "symbol_lib" | "footprint" | "worksheet")
@@ -501,6 +573,17 @@ mod tests {
         let theirs = BASE.replace("\t(net 1 \"GND\")\n", "");
         let m = merge3(Some(BASE), BASE, &theirs, Prefer::Ours).unwrap();
         assert_eq!(m.text, theirs);
+    }
+
+    /// An item's identity must not depend on its siblings: with two nets, one
+    /// removed on GitHub and the other renamed online, both changes land.
+    #[test]
+    fn identity_survives_a_sibling_being_removed() {
+        let theirs = BASE.replace("\t(net 1 \"GND\")\n", "");
+        let ours = BASE.replace("(net 0 \"\")", "(net 0 \"unconnected\")");
+        let m = merge3(Some(BASE), &ours, &theirs, Prefer::Ours).unwrap();
+        assert!(m.conflicts.is_empty(), "{:?}", m.conflicts);
+        assert_eq!(m.text, ours.replace("\t(net 1 \"GND\")\n", ""));
     }
 
     #[test]
@@ -580,6 +663,28 @@ mod tests {
         }
         println!("{ok} files round-tripped, {edited} also merged an edit, {skipped} not s-expressions");
         assert!(ok > 100, "expected the KiCad tree's files, found {ok}");
+    }
+
+    #[test]
+    fn diff_lists_items_and_their_changed_parts() {
+        let new = BASE
+            .replace("(at 10 10)", "(at 15 15)")
+            .replace("\"10k\"", "\"22k\"")
+            .replace("\t(net 1 \"GND\")\n", "")
+            .replace("20240108", "20250101")
+            .replace("\t(segment", "\t(via\n\t\t(at 5 5)\n\t\t(uuid \"dddd4444\")\n\t)\n\t(segment");
+        let d = diff(BASE, &new).unwrap();
+        let brief: Vec<String> = d.iter().map(|c| format!("{} {} [{}]", c.kind, c.item, c.parts.join(", "))).collect();
+        assert_eq!(
+            brief,
+            vec![
+                "changed footprint R1 [at, property Value]",
+                "added via dddd4444 []",
+                "removed net 1 []",
+            ]
+        );
+        assert!(diff(BASE, BASE).unwrap().is_empty());
+        assert!(diff("{}", BASE).is_none());
     }
 
     #[test]

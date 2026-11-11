@@ -1157,6 +1157,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     // Every one of these needs a session.  Without a condition they stayed permanently
     // enabled and answered with an infobar instead.
     mgr->SetConditions( PCB_ACTIONS::collabCopyLink,     ENABLE( collabLive ) );
+    mgr->SetConditions( PCB_ACTIONS::collabGithub,       ENABLE( collabLive ) );
     mgr->SetConditions( PCB_ACTIONS::collabComments,     ENABLE( collabLive ) );
     mgr->SetConditions( PCB_ACTIONS::collabFollow,       ENABLE( collabLive ) );
     mgr->SetConditions( PCB_ACTIONS::collabHistory,      ENABLE( collabLive ) );

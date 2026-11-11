@@ -601,6 +601,35 @@ COLLAB_HISTORY_PANEL* PCB_COLLAB_TOOL::historyPanel()
 }
 
 
+int PCB_COLLAB_TOOL::OpenGithubSync( const TOOL_EVENT& aEvent )
+{
+    if( m_projectId.IsEmpty() )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarMsg(
+                _( "No collaboration session; start or join one first." ) );
+        return 0;
+    }
+
+    // Repository sync lives on the server's own page: it works from the project's saved
+    // files (the server asks this app for a fresh save before it reads them), and the
+    // browser already carries the session the desktop sign-in created there.
+    wxString url = COLLAB_SESSION::ServerUrl();
+
+    while( url.EndsWith( wxS( "/" ) ) )
+        url.RemoveLast();
+
+    url << wxS( "/p/" ) << m_projectId << wxS( "/github" );
+
+    if( !wxLaunchDefaultBrowser( url, wxBROWSER_NEW_WINDOW ) )
+    {
+        frame<PCB_EDIT_FRAME>()->ShowInfoBarError(
+                wxString::Format( _( "Could not open the browser; the page is %s" ), url ) );
+    }
+
+    return 0;
+}
+
+
 int PCB_COLLAB_TOOL::CopyShareLink( const TOOL_EVENT& aEvent )
 {
     if( m_projectId.IsEmpty() )
@@ -1823,6 +1852,7 @@ void PCB_COLLAB_TOOL::setTransitions()
     Go( &PCB_COLLAB_TOOL::ShowComments,      PCB_ACTIONS::collabComments.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::ShowHistory,       PCB_ACTIONS::collabHistory.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::CopyShareLink,     PCB_ACTIONS::collabCopyLink.MakeEvent() );
+    Go( &PCB_COLLAB_TOOL::OpenGithubSync,    PCB_ACTIONS::collabGithub.MakeEvent() );
     Go( &PCB_COLLAB_TOOL::FollowNextPeer,    PCB_ACTIONS::collabFollow.MakeEvent() );
 
     Go( &PCB_COLLAB_TOOL::onSelectionChange, EVENTS::PointSelectedEvent );

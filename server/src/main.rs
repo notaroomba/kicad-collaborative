@@ -244,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/projects/{id}/github",
             get(github::project_status).put(github::link_project).delete(github::unlink_project),
         )
+        .route("/api/projects/{id}/github/diff", get(github::file_diff))
         .route("/api/projects/{id}/github/push", post(github::push))
         .route("/api/projects/{id}/github/pull", post(github::pull))
         .route("/ws", get(ws::ws_handler))

@@ -108,6 +108,7 @@ File → GitHub Sync… in the web editor).
 | `GET /api/github/repos`, `GET /api/github/scan?repo=&branch=` | repositories; KiCad project folders in one |
 | `POST /api/github/import` | create a project from a repository folder, linked |
 | `GET/PUT/DELETE /api/projects/{id}/github` | sync state / link (owner) / unlink (owner) |
+| `GET /api/projects/{id}/github/diff?path=` | what each side changed in one file, item by item |
 | `POST /api/projects/{id}/github/push`, `…/pull` | editors |
 
 `GITHUB_API_URL` / `GITHUB_WEB_URL` point the server at another GitHub
