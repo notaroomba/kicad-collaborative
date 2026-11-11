@@ -5,24 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GitHub — KiCad Collaborative</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script>try { var t = localStorage.getItem("kui.theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
-  :root {
-    color-scheme: light dark;
-    --bench: #ECEBE6; --paper: #F5F4EF; --panel: #FFFFFF; --line: #CFCDC5; --line-2: #B5B5B5;
-    --ink: #1B1B1B; --ink-2: #5B5A55; --ink-3: #8C8B85;
-    --copper: #C83434; --copper-2: #A82B2B; --blue: #4D7FC4; --teal: #006464; --wire: #009600;
-    --warn: #D19200; --err: #E6090D; --shadow: 0 10px 30px #0003;
-    --font: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bench: #0C1522; --paper: #111D2C; --panel: #0A1421; --line: #24374E; --line-2: #2C425C;
-      --ink: #E9E7E0; --ink-2: #ABB1BA; --ink-3: #7B838D;
-      --copper: #DA4B4B; --copper-2: #C83434; --blue: #6F9EDD; --teal: #47B4B4; --wire: #3DBE3D;
-      --warn: #E5A800; --err: #F0393D; --shadow: 0 10px 30px #000a;
-    }
-  }
+{{THEME}}
   * { box-sizing: border-box; }
   html, body { margin: 0; }
   body { min-height: 100vh; color: var(--ink); font: 14.5px/1.5 var(--font); -webkit-font-smoothing: antialiased;
@@ -51,7 +36,7 @@
          border-radius: 3px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
          font: 500 13.5px var(--font); cursor: pointer; text-decoration: none; white-space: nowrap; }
   .btn:hover { border-color: var(--ink-3); text-decoration: none; }
-  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: #fff; }
+  .btn.primary { background: var(--copper); border-color: var(--copper-2); color: var(--on-accent, #fff); }
   .btn.primary:hover { background: var(--copper-2); }
   .btn.small { min-height: 28px; padding: 2px 10px; font-size: 12.5px; }
   .btn:disabled { opacity: .5; cursor: default; }
@@ -104,7 +89,7 @@
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
   .seg button { border: 0; background: var(--panel); color: var(--ink); padding: 5px 12px; font: 500 13px var(--font); cursor: pointer; min-height: 32px; }
   .seg button + button { border-left: 1px solid var(--line); }
-  .seg button.on { background: var(--blue); color: #fff; }
+  .seg button.on { background: var(--blue); color: var(--on-accent, #fff); }
   .commit { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; border-bottom: 1px solid var(--line); font-size: 13px; }
   .commit:last-child { border-bottom: 0; }
   .commit .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

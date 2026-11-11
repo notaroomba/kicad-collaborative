@@ -1545,7 +1545,35 @@ pub async fn pull(
 /// The GitHub page: `/github` (bring a repository online) and `/p/{id}/github`
 /// (one project's sync).  One self-contained document; github.js draws it.
 pub async fn page() -> Html<String> {
-    Html(include_str!("../static/github.html").replace("{{MARK}}", crate::pages::MARK))
+    Html(
+        include_str!("../static/github.html")
+            .replace("{{THEME}}", theme_tokens())
+            .replace("{{MARK}}", crate::pages::MARK),
+    )
+}
+
+/// The app's colour tokens (light, OS-dark and `data-theme="dark"`), lifted from
+/// app.html so this page can never drift from the editor's theme: everything in
+/// its `<style>` from the first `:root {` up to the first non-token rule.
+fn theme_tokens() -> &'static str {
+    static TOKENS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKENS.get_or_init(|| {
+        let app = include_str!("../static/app.html");
+        let found = app.find(":root {").and_then(|start| {
+            let rest = &app[start..];
+            rest.find("\n  * {").or_else(|| rest.find("\n  html")).or_else(|| rest.find("\n  body")).map(|end| &rest[..end])
+        });
+        match found {
+            Some(block) => format!("  {block}"),
+            // app.html was restructured: fall back to a plain palette rather than no colours.
+            None => "  :root { color-scheme: light dark; --bench: #ECEBE6; --paper: #F5F4EF; --panel: #FFFFFF; \
+                     --line: #CFCDC5; --line-2: #B5B5B5; --ink: #1B1B1B; --ink-2: #5B5A55; --ink-3: #8C8B85; \
+                     --copper: #C83434; --copper-2: #A82B2B; --blue: #4D7FC4; --teal: #006464; --wire: #009600; \
+                     --warn: #D19200; --err: #E6090D; --shadow: 0 10px 30px #0003; \
+                     --font: system-ui, sans-serif; --mono: ui-monospace, monospace; }"
+                .to_string(),
+        }
+    })
 }
 
 pub async fn page_js() -> Response {
@@ -1559,6 +1587,15 @@ pub async fn page_js() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_page_takes_its_colours_from_the_app() {
+        let t = theme_tokens();
+        assert!(t.contains("--bench:") && t.contains("--ink:") && t.contains("--copper:"), "{t}");
+        assert!(t.contains("[data-theme=\"dark\"]"), "explicit dark theme block is carried over");
+        assert_eq!(t.matches('{').count(), t.matches('}').count(), "balanced css");
+        assert!(!include_str!("../static/github.html").contains("--bench: #"), "no palette of its own");
+    }
 
     #[test]
     fn blob_ids_match_git() {

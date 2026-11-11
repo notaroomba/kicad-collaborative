@@ -178,6 +178,33 @@ try {
   check('phone: the import page fits the screen width', await fits(phone));
   await shot(phone, '09-phone-import');
 
+  // ---- dark theme: the editor's saved choice (kui.theme) and the OS preference both apply
+  const lum = (pg) => pg.evaluate(() => {
+    const rgb = (el) => getComputedStyle(el).backgroundColor.match(/\d+/g).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3;
+    return { page: rgb(document.body), box: rgb(document.querySelector('.box')), ink: getComputedStyle(document.body).color.match(/\d+/g).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3 };
+  });
+  const light = await lum(page);
+  check('light theme: light surfaces, dark text', light.page > 200 && light.box > 200 && light.ink < 80, JSON.stringify(light));
+  await page.evaluate(() => localStorage.setItem('kui.theme', 'dark'));
+  await page.reload();
+  await page.waitForSelector('table.files');
+  await page.click('[data-diff="preamp.kicad_sch"]');
+  await page.waitForSelector('ul.changes');
+  const dark = await lum(page);
+  check('the editor\'s dark theme choice carries over to this page', dark.page < 60 && dark.box < 60 && dark.ink > 180, JSON.stringify(dark));
+  await shot(page, '08b-dark');
+  await page.evaluate(() => localStorage.removeItem('kui.theme'));
+  await page.reload();
+  await page.waitForSelector('table.files');
+  const osDark = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: 'dark' });
+  const dp = await osDark.newPage();
+  await dp.goto(`${BASE}/auth/dev?jwt=${jwt}&next=/p/${pid}/github`);
+  await dp.waitForSelector('table.files');
+  const od = await lum(dp);
+  check('an OS in dark mode gets the dark theme without choosing', od.page < 60 && od.ink > 180, JSON.stringify(od));
+  await shot(dp, '08c-phone-dark');
+  await osDark.close();
+
   // ---- linking a project that is not linked yet; unlink
   await page.click('#unlink');
   await page.waitForSelector('#doLink');
