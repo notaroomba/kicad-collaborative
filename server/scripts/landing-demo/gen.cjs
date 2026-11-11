@@ -110,7 +110,7 @@ const WIRES = [
   [[86.36, 68.58], [99.06, 68.58]], [[99.06, 68.58], "U1.6"], [[99.06, 68.58], [99.06, 71.12], "U1.2"],
   ["U1.8", "P5b.1"], ["U1.1", "G7.1"],
   ["U1.5", [114.3, 45.72], [129.54, 45.72]], ["C4.2", "G8.1"],
-  ["U1.3", "R5.2"], ["R5.1", [147.32, 66.04], "D1.2"], ["D1.1", "G9.1"],
+  ["U1.3", "R5.1"], ["R5.2", [147.32, 66.04], "D1.2"], ["D1.1", "G9.1"],
 ];
 const JUNCTIONS = [[50.8, RAIL], [60.96, RAIL], [71.12, RAIL], [86.36, RAIL], [30.48, 81.28], [86.36, 55.88], [86.36, 68.58], [99.06, 68.58]];
 
@@ -126,6 +126,22 @@ WIRES.forEach((w, wi) => {
   }
   schWires.push({ ids, pts });
 });
+// No wire may run across a part: a pin may only ever sit on a wire's end (or on a junction).
+{
+  for (const w of schWires) for (let i = 1; i < w.pts.length; i++) {
+    const a = w.pts[i - 1], b = w.pts[i];
+    for (const [name, p] of Object.entries(PIN)) {
+      const inside = Math.abs(Math.hypot(a[0] - p[0], a[1] - p[1]) + Math.hypot(b[0] - p[0], b[1] - p[1]) - Math.hypot(a[0] - b[0], a[1] - b[1])) < 1e-6
+        && Math.hypot(a[0] - p[0], a[1] - p[1]) > 1e-6 && Math.hypot(b[0] - p[0], b[1] - p[1]) > 1e-6;
+      if (inside && !JUNCTIONS.some((j) => j[0] === p[0] && j[1] === p[1]) && name !== "C4.1") throw new Error(`a wire runs across pin ${name}: ${JSON.stringify(w.pts)}`);
+    }
+  }
+  // ...and never joins two pins of the same part.
+  for (const w of schWires) {
+    const ends = [w.pts[0], w.pts[w.pts.length - 1]].map((e) => Object.entries(PIN).filter(([, p]) => p[0] === e[0] && p[1] === e[1]).map(([k]) => k.split(".")[0]));
+    for (const r of ends[0]) if (ends[1].includes(r)) throw new Error(`a wire joins two pins of ${r}: ${JSON.stringify(w.pts)}`);
+  }
+}
 const junctionIds = JUNCTIONS.map(([x, y], i) => { const id = uuid("junction/" + i); schItems.push(`(junction (at ${x} ${y}) (diameter 0) (color 0 0 0 0) (uuid ${q(id)}))`); return id; });
 // C4's top pin sits on the wire's last corner.
 if (pin("C4.1")[0] !== 129.54 || pin("C4.1")[1] !== 45.72) throw new Error("C4.1 moved: " + pin("C4.1"));

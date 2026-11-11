@@ -11,24 +11,65 @@ import { Cam, boardTexture, drawBodies, drawFace, drawLed, drawSlab } from "./so
 import { MONO, SANS, Stage, makeStage, reducedMotion } from "./stage";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const DUR = [10, 8, 10, 4.2];                       // seconds each chapter takes to play
+const DUR = [15, 9, 12, 4.2];                       // seconds each chapter takes to play
 const FAST = 7;                                     // how much faster a chapter finishes once scrolled past
 const PCB_BG = "#001023";
 
-interface Line { ids: string[]; pts: Pt[]; len: number; at: number; who: number }
-const lengthOf = (pts: Pt[]): number => { let l = 0; for (let i = 1; i < pts.length; i++) l += dist(pts[i - 1], pts[i]); return l; };
+// ---- how a person draws: the pointer travels, stops and clicks, and the wire or track only
+// ever reaches as far as the last grid point under it, the way it does in KiCad.
+interface Step { t0: number; t1: number; from: Pt; to: Pt; line: number; seg: number; bow: number }
+interface Plan { steps: Step[]; total: number }
+interface Live { line: number; seg: number; from: Pt; to: Pt; near: boolean }
+const CLICK = 0.11;                                 // the pause on a point before the click lands
+const rnd = (i: number): number => { const v = Math.sin(i * 12.9898 + 4.1) * 43758.5453; return v - Math.floor(v); };
+const minJerk = (u: number): number => u <= 0 ? 0 : u >= 1 ? 1 : u * u * u * (10 - 15 * u + 6 * u * u);
+const snapTo = (p: Pt, g: number): Pt => [Math.round(p[0] / g) * g, Math.round(p[1] / g) * g];
 
-/** Split lines between two people, each drawing their own in order. */
-function schedule(lines: { ids: string[]; pts: Pt[]; who: number }[]): { lines: Line[]; total: [number, number] } {
-  const total: [number, number] = [0, 0], out: Line[] = [];
-  for (const l of lines) { const len = lengthOf(l.pts); out.push({ ids: l.ids, pts: l.pts, len, at: total[l.who], who: l.who }); total[l.who] += len; }
-  return { lines: out, total };
+/** One person's lines in order, as pointer moves with the time each takes. */
+function plan(lines: { pts: Pt[]; who: number }[], who: number, home: Pt, sway: number): Plan {
+  const steps: Step[] = []; let t = 0, at = home, n = 0;
+  const move = (to: Pt, line: number, seg: number) => {
+    const d = dist(at, to), dur = 0.2 + 0.15 * Math.sqrt(d), r = rnd(++n + who * 57);
+    steps.push({ t0: t, t1: t + dur, from: at, to, line, seg, bow: (r < 0.5 ? -1 : 1) * Math.min(sway, d * 0.1) * (0.35 + rnd(n + 9) * 0.65) });
+    t += dur + CLICK + (seg < 0 ? 0.05 : 0); at = to;
+  };
+  lines.forEach((l, li) => {
+    if (l.who !== who) return;
+    move(l.pts[0], li, -1);
+    for (let i = 1; i < l.pts.length; i++) move(l.pts[i], li, i - 1);
+    t += 0.12;
+  });
+  return { steps, total: t };
 }
-const WIRES = schedule(meta.sch.wires.map((w, i) => ({ ids: w.ids, pts: w.pts, who: i % 2 })));
-const ROUTES = schedule(meta.routes);
+/** Where a move's pointer is: quick in the middle, slow at both ends, never quite straight. */
+function along(st: Step, t: number): Pt {
+  const s = minJerk((t - st.t0) / (st.t1 - st.t0)), dx = st.to[0] - st.from[0], dy = st.to[1] - st.from[1], d = Math.hypot(dx, dy) || 1;
+  const off = Math.sin(Math.PI * s) * st.bow;
+  return [st.from[0] + dx * s - dy / d * off, st.from[1] + dy * s + dx / d * off];
+}
+/** The plan at time t: the pointer, the segment being pulled out, and every segment already clicked down. */
+function play(pl: Plan, t: number, fixed: (line: number, seg: number) => void): { ptr: Pt; live: Live | null } {
+  let ptr = pl.steps[0].from, live: Live | null = null;
+  for (const st of pl.steps) {
+    if (t < st.t0) break;
+    ptr = t < st.t1 ? along(st, t) : st.to;
+    if (st.seg < 0) { live = null; continue; }
+    if (t >= st.t1 + CLICK) { fixed(st.line, st.seg); live = null; }
+    else live = { line: st.line, seg: st.seg, from: st.from, to: st.to, near: t >= st.t1 || dist(ptr, st.to) < 0.45 };
+  }
+  return { ptr, live };
+}
+
+const SCH_WIRES = meta.sch.wires.map((w, i) => ({ ids: w.ids, pts: w.pts, who: i % 2 }));
+const WIRE_PLAN = [0, 1].map((who) => plan(SCH_WIRES, who, [SCH_WIRES[who].pts[0][0] - 9, SCH_WIRES[who].pts[0][1] + 7], 1.5));
+const SCH_GRID = 1.27, PCB_GRID = 0.25;
 
 // Placement: two people take turns pulling parts out of the pile.
 const PLACE = ["J1", "U1", "C1", "C2", "R1", "R3", "R2", "R4", "C4", "C3", "R5", "D1"].map((ref) => meta.parts.find((p) => p.ref === ref)!);
+
+const ROUTE_PLAN = [0, 1].map((who) => plan(meta.routes, who, [PLACE[10 + who].x, PLACE[10 + who].y], 0.5));
+// The order symbols are set down in, each carried from where the last one was dropped.
+const SYM_PLAN = (at: Pt[]): Plan => plan(at.map((p, i) => ({ pts: [i ? at[i - 1] : [p[0] + 16, p[1] - 12] as Pt, p], who: 0 })), 0, [at[0][0] + 16, at[0][1] - 12], 2.2);
 
 const same = (a: Pt, b: Pt): boolean => Math.abs(a[0] - b[0]) < 0.01 && Math.abs(a[1] - b[1]) < 0.01;
 function onLine(pts: Pt[], p: Pt): boolean {
@@ -38,8 +79,8 @@ function onLine(pts: Pt[], p: Pt): boolean {
   }
   return false;
 }
-const JUNCTION_WIRES = meta.sch.junctions.map((j) => WIRES.lines.map((w, i) => onLine(w.pts, j.at) ? i : -1).filter((i) => i >= 0));
-const POWER_WIRE = meta.sch.power.map((p) => WIRES.lines.findIndex((w) => same(w.pts[0], p.at) || same(w.pts[w.pts.length - 1], p.at)));
+const JUNCTION_WIRES = meta.sch.junctions.map((j) => SCH_WIRES.map((w, i) => onLine(w.pts, j.at) ? i : -1).filter((i) => i >= 0));
+const POWER_WIRE = meta.sch.power.map((p) => SCH_WIRES.findIndex((w) => same(w.pts[0], p.at) || same(w.pts[w.pts.length - 1], p.at)));
 
 export function startStory(root: HTMLElement): void {
   const canvas = root.querySelector("canvas")!;
@@ -52,7 +93,7 @@ export function startStory(root: HTMLElement): void {
   let turn = 0, turnTo = 0, drag: { x: number; from: number } | null = null;
 
   let sch: KDoc | null = null, pcb: KDoc | null = null, tex: HTMLCanvasElement | null = null, under: HTMLCanvasElement | null = null;
-  const frac = new Map<string, number>();            // how much of each wire / track segment is drawn
+  let symPlan: Plan | null = null;
   const placed = new Map<string, string>();          // where each footprint was last put
   let symAt: Pt[] = [], cam: Pt | null = null, ratKey = "", rats: Rat[] = [];
   let resting: HTMLCanvasElement | null = null, rest = "";
@@ -120,48 +161,64 @@ export function startStory(root: HTMLElement): void {
 
   // ------------------------------------------------------------------ drawing
 
-  /** Draw `d` millimetres of a person's lines; returns where their pen is. */
-  function drawOn(doc: KDoc, set: { lines: Line[]; total: [number, number] }, who: number, d: number, ids: Set<string>, isSch: boolean): { head: Pt; done: number[] } {
-    let head: Pt = [0, 0], seen = false; const done: number[] = [];
-    set.lines.forEach((l, li) => {
-      if (l.who !== who) return;
-      let left = d - l.at;
-      if (!seen) { head = l.pts[0]; seen = true; }
-      for (let i = 1; i < l.pts.length; i++) {
-        const a = l.pts[i - 1], b = l.pts[i], len = dist(a, b), f = clamp(left / len), id = l.ids[i - 1];
-        left -= len;
-        if (f > 0) { ids.add(id); head = [lerp(a[0], b[0], f), lerp(a[1], b[1], f)]; }
-        if (frac.get(id) === f) continue;
-        frac.set(id, f);
-        if (f <= 0) continue;
-        const it = doc.items.get(id)!, e: Pt = [lerp(a[0], b[0], f), lerp(a[1], b[1], f)];
-        if (isSch) K.setPts(it.node, [a, e]); else { const n = K.kid(it.node, "end"); n[1] = e[0]; n[2] = e[1]; }
-        K.buildGeom(doc, it);
+  /** The piece being pulled out from the last click to the grid point under the pointer, plus KiCad's crosshair there. */
+  function drawLive(ctx: CanvasRenderingContext2D, view: View, dpr: number, st: { ptr: Pt; live: Live | null }, who: number, board: boolean, show: number): void {
+    if (show <= 0) return;
+    const l = st.live, grid = board ? PCB_GRID : SCH_GRID;
+    const c: Pt = l && l.near ? l.to : snapTo(st.ptr, grid);
+    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = show; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    if (l) {
+      const a = l.from, dx = c[0] - a[0], dy = c[1] - a[1], path: Pt[] = [a];
+      const straight = Math.abs(l.to[0] - a[0]) < 1e-6 || Math.abs(l.to[1] - a[1]) < 1e-6;
+      if (!board) path.push(Math.abs(l.to[1] - a[1]) < 1e-6 ? [c[0], a[1]] : [a[0], c[1]]);
+      else {
+        const m = Math.min(Math.abs(dx), Math.abs(dy)), sx = Math.sign(dx) * m, sy = Math.sign(dy) * m;
+        path.push(straight ? [c[0] - sx, c[1] - sy] : [a[0] + sx, a[1] + sy]);
       }
-      if (d >= l.at + l.len - 1e-6) done.push(li);
-    });
-    return { head, done };
+      path.push(c);
+      let w = 0.1524, color: string = K.SCH.wire;
+      if (board) {
+        const r = meta.routes[l.line], n = K.kid(pcb!.items.get(r.ids[l.seg])!.node, "width");
+        w = n ? Number(n[1]) : 0.25; color = r.layer === "B.Cu" ? "#4D7FC4" : "#C83434";
+      }
+      ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, w * view.ppm * view.zoom);
+      ctx.beginPath(); path.forEach((p, i) => { const q = toPx(view, p[0], p[1]); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); }); ctx.stroke();
+    }
+    const q = toPx(view, c[0], c[1]), x = Math.round(q[0]) + 0.5, y = Math.round(q[1]) + 0.5;
+    ctx.strokeStyle = board ? "#ffffff" : "#1b1b1b"; ctx.globalAlpha = show * 0.85; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x - 9, y); ctx.lineTo(x + 9, y); ctx.moveTo(x, y - 9); ctx.lineTo(x, y + 9); ctx.stroke();
+    ctx.restore();
   }
 
   /** The schematic at progress q: returns the pointers to draw over it. */
   function drawSchematic(s: Stage, ctx: CanvasRenderingContext2D, q: number, dt: number): { view: View; cursors: [Pt, number, number][] } {
     if (!sch) { sch = loadSch(); symAt = meta.sch.symbols.map((m) => { const a = K.atOf(sch!.items.get(m.id)!.node); return [a[0], a[1]] as Pt; }); }
-    const ids = new Set<string>(), n = symAt.length;
-    // Symbols first, set down one after another.
-    const sp = span(q, 0.02, 0.3) * n, placedN = Math.min(n, Math.floor(sp));
-    for (let i = 0; i < placedN; i++) ids.add(meta.sch.symbols[i].id);
-    const from = symAt[Math.max(0, placedN - 1)], to = symAt[Math.min(n - 1, placedN)];
-    let ada: Pt = [lerp(from[0], to[0], ease(sp - placedN)) + 2, lerp(from[1], to[1], ease(sp - placedN)) + 2];
+    const doc = sch, ids = new Set<string>(), n = symAt.length;
+    if (!symPlan) symPlan = SYM_PLAN(symAt);
+    // Symbols first: each one hangs on the pointer, a grid step at a time, until it is clicked down.
+    const sp = span(q, 0.02, 0.34);
+    const down = new Set<number>(), carry = play(symPlan, sp * symPlan.total, (line) => down.add(line));
+    let ada: Pt = carry.ptr;
+    symAt.forEach((home, i) => {
+      const held = carry.live && carry.live.line === i && !down.has(i);
+      if (!held && !down.has(i)) return;
+      ids.add(meta.sch.symbols[i].id);
+      const at = held && !carry.live!.near ? snapTo(carry.ptr, SCH_GRID) : home, key = at[0].toFixed(3) + "," + at[1].toFixed(3);
+      const id = meta.sch.symbols[i].id;
+      if ((placed.get(id) || home[0].toFixed(3) + "," + home[1].toFixed(3)) !== key) { placed.set(id, key); K.moveItem(doc, doc.items.get(id), at[0], at[1], 1); }
+    });
     // Then the wiring, by two people at once.
-    const wp = span(q, 0.31, 0.96);
-    const a = drawOn(sch, WIRES, 0, wp * WIRES.total[0], ids, true), b = drawOn(sch, WIRES, 1, wp * WIRES.total[1], ids, true);
-    const done = new Set([...a.done, ...b.done]);
+    const wp = span(q, 0.35, 0.96), fixedLines = [new Map<number, number>(), new Map<number, number>()];
+    const hands = [0, 1].map((who) => play(WIRE_PLAN[who], wp * WIRE_PLAN[who].total, (line, seg) => { ids.add(SCH_WIRES[line].ids[seg]); fixedLines[who].set(line, seg); }));
+    const a = { head: hands[0].ptr }, b = { head: hands[1].ptr };
+    const done = new Set<number>();
+    for (const m of fixedLines) for (const [line, seg] of m) if (seg === SCH_WIRES[line].ids.length - 1) done.add(line);
     meta.sch.power.forEach((pw, i) => { if (done.has(POWER_WIRE[i])) ids.add(pw.id); });
     meta.sch.junctions.forEach((j, i) => { if (JUNCTION_WIRES[i].every((w) => done.has(w))) ids.add(j.id); });
     const notes = span(q, 0.955, 0.985);
     if (notes > 0) ids.add(meta.sch.notes[1]);
     if (notes >= 1) ids.add(meta.sch.notes[0]);
-    if (wp > 0) { const k = ease(span(q, 0.31, 0.4)); ada = [lerp(ada[0], 126, k), lerp(ada[1], 92, k)]; }
+    if (wp > 0) { const k = minJerk(span(q, 0.35, 0.42)); ada = [lerp(ada[0], 126, k), lerp(ada[1], 92, k)]; }
 
     // The view follows the work, then steps back to the whole sheet.
     const W = s.w, H = s.h, page: Box = [0, 0, sch.page[0], sch.page[1]];
@@ -179,8 +236,10 @@ export function startStory(root: HTMLElement): void {
     full[2] = full[0] + W / fullView.ppm; full[3] = full[1] + H / fullView.ppm;
     const view = fit(W, H, s.dpr, mixBox(near, full, out));
     K.render(sch, ctx, view, { ids, grid: 1.27 });
-    const show = q > 0 ? 1 : 0;
-    return { view, cursors: [[a.head, 0, show * span(q, 0.3, 0.33)], [b.head, 1, show * span(q, 0.3, 0.33)], [ada, 2, show]] };
+    const show = q > 0 ? 1 : 0, drawing = show * span(q, 0.33, 0.36) * (1 - span(q, 0.955, 0.975));
+    hands.forEach((h, who) => drawLive(ctx, view, s.dpr, h, who, false, drawing));
+    if (sp < 1) drawLive(ctx, view, s.dpr, { ptr: carry.ptr, live: null }, 2, false, show);
+    return { view, cursors: [[a.head, 0, show * span(q, 0.33, 0.36)], [b.head, 1, show * span(q, 0.33, 0.36)], [ada, 2, show]] };
   }
 
   /** The board with placement at q1 and routing at q2. */
@@ -196,27 +255,31 @@ export function startStory(root: HTMLElement): void {
     const hands: Pt[] = [[B.x + B.w + 8, B.y + 2], [B.x + B.w + 14, B.y + B.h - 2]].map((h) => pile(h as Pt));
     PLACE.forEach((part, i) => {
       const who = i % 2, turnN = (i - who) / 2, t = mp * per - turnN;
-      const home = pile(part.pile), k = ease(span(t, 0.38, 1));
-      const at: Pt = [lerp(home[0], part.x, k), lerp(home[1], part.y, k)];
+      const home = pile(part.pile), k = minJerk(span(t, 0.38, 0.94));
+      // A part being moved follows the grid, as it does on the end of a pointer in KiCad.
+      const free: Pt = [lerp(home[0], part.x, k), lerp(home[1], part.y, k)], at: Pt = k <= 0 ? home : k >= 1 ? [part.x, part.y] : snapTo(free, 0.5);
       const key = at[0].toFixed(3) + "," + at[1].toFixed(3);
       if (placed.get(part.id) !== key) { placed.set(part.id, key); K.moveItem(doc, doc.items.get(part.id), at[0], at[1], 1e6); }
       if (t > 0 && t <= 1) {
-        const prev: Pt = turnN > 0 ? [PLACE[i - 2].x, PLACE[i - 2].y] : hands[who], w = ease(span(t, 0, 0.36));
-        hands[who] = t < 0.38 ? [lerp(prev[0], home[0], w), lerp(prev[1], home[1], w)] : at;
+        const prev: Pt = turnN > 0 ? [PLACE[i - 2].x, PLACE[i - 2].y] : hands[who], w = minJerk(span(t, 0, 0.33));
+        hands[who] = t < 0.38 ? [lerp(prev[0], home[0], w), lerp(prev[1], home[1], w)] : free;
         if (t >= 0.36 && t < 1) selected.add(part.id);
       } else if (t > 1) hands[who] = [part.x, part.y];
     });
 
     // Routing.
     const rp = span(q2, 0.03, 0.9);
-    const a = drawOn(doc, ROUTES, 0, rp * ROUTES.total[0], ids, false), b = drawOn(doc, ROUTES, 1, rp * ROUTES.total[1], ids, false);
-    const done = new Set([...a.done, ...b.done]), whole = new Set<string>();
-    for (const li of done) { const r = meta.routes[li]; r.ids.forEach((id) => whole.add(id)); if (r.via) { ids.add(r.via); whole.add(r.via); } }
+    const whole = new Set<string>(), last = [new Map<number, number>(), new Map<number, number>()];
+    const pens = [0, 1].map((who) => play(ROUTE_PLAN[who], rp * ROUTE_PLAN[who].total, (line, seg) => { ids.add(meta.routes[line].ids[seg]); last[who].set(line, seg); }));
+    for (const m of last) for (const [line, seg] of m) {
+      const r = meta.routes[line];
+      if (seg === r.ids.length - 1) { r.ids.forEach((id) => whole.add(id)); if (r.via) { ids.add(r.via); whole.add(r.via); } }
+    }
     const poured = q2 >= 0.93;
     if (poured) ids.add(meta.zone);
-    if (q2 > 0) { hands[0] = rp > 0 ? a.head : hands[0]; hands[1] = rp > 0 ? b.head : hands[1]; }
+    if (rp > 0) { hands[0] = pens[0].ptr; hands[1] = pens[1].ptr; }
 
-    const key = [...placed.values()].join(";") + "|" + whole.size + "|" + poured;
+    const key = PLACE.map((pt) => placed.get(pt.id)).join(";") + "|" + whole.size + "|" + poured;
     if (key !== ratKey) { ratKey = key; rats = ratsnest(doc, { only: whole, poured: poured ? 1 : 0 }); }
 
     const tight: Box = [B.x - 3, B.y - 3, B.x + B.w + 3, B.y + B.h + 3];
@@ -224,6 +287,7 @@ export function startStory(root: HTMLElement): void {
     const view = fit(W, H, s.dpr, mixBox(loose, tight, ease(span(q1, 0.88, 1))));
     K.render(doc, ctx, view, { ids, hidden: HIDDEN, grid: 1, ratsnest: rats, selected: selected.size ? selected : null, zoneFill: poured, activeLayer: "F.Cu" });
     const show = q1 > 0 ? span(q1, 0, 0.04) : 0, away = 1 - span(q2, 0.95, 1) * 0;
+    if (rp > 0 && rp < 1) pens.forEach((pen, who) => drawLive(ctx, view, s.dpr, pen, who, true, 1));
     cursors.push([hands[0], 0, show * away], [hands[1], 1, show * away]);
     return { view, cursors };
   }
