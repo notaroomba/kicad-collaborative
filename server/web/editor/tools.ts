@@ -40,6 +40,10 @@ export function toolCtx(extra) {
 }
 
 // Local apply + broadcast, with an inverse recorded for undo.
+/**
+ * opts.amend folds the changes into the last undo step (a paste and the move that places it are one step, as in
+ * pcbnew's commit); with opts.discard as well the step is dropped (the paste was cancelled and the amend took it out).
+ */
 export function commitChanges(changes, label, opts) {
   if (!changes || !changes.length) return;
   const inverse = [];
@@ -51,8 +55,9 @@ export function commitChanges(changes, label, opts) {
   }
   applyChanges(changes);
   sendOp(changes);   // journalled and replayed on reconnect even when the socket is down
-  const prev = opts && opts.amend ? undoStack[undoStack.length - 1] : null;
-  if (prev) { prev.changes = prev.changes.concat(changes); prev.inverse = inverse.concat(prev.inverse); }   // undone newest first
+  const top = opts && opts.amend ? undoStack[undoStack.length - 1] : null;
+  if (top && opts.discard) undoStack.pop();
+  else if (top) { top.changes = top.changes.concat(changes); top.inverse = inverse.concat(top.inverse); }
   else { undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift(); }
   redoStack.length = 0; publishUndo();
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project

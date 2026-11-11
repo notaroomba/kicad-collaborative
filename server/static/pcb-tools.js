@@ -809,8 +809,13 @@ function selectMoveTo(ctx, mm) {
 function finishSelectMove(ctx, commit) {
   const m = S.move; S.move = null; if (!m) return;
   const [dx, dy] = m.last; moveApply(ctx, m, 0, 0);            // originals back first, so commit() records a true inverse
+  if (!commit && m.placing) {   // Escape on a paste / duplicate that still follows the cursor takes the new items out again
+    const gone = m.placing.filter((id) => ctx.doc.items.has(id)).map((id) => ctx.doc.items.get(id));
+    if (gone.length) ctx.commit(deleteChanges(ctx.doc, gone), "cancel", { amend: true, discard: true });
+    applySelection(ctx, []); ctx.requestRender(); return;
+  }
   if (!commit || !m.moved || (!dx && !dy)) { ctx.requestRender(); return; }
-  ctx.commit(moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node)), "move");
+  ctx.commit(moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node)), "move", m.placing ? { amend: true } : undefined);
   ctx.requestRender();
 }
 /**
@@ -820,13 +825,13 @@ function finishSelectMove(ctx, commit) {
  */
 function beginCarryMove(ctx, opts) {
   const doc = ctx.doc; if (!doc) return false; opts = opts || {};
-  const ids = Array.from(expandGroups(doc, selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
+  const ids = Array.from(expandGroups(doc, opts.placing ? new Set(opts.placing) : selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
   if (!ids.length) return false;
   const free = unlockedIds(ctx, ids);
   if (!free.length) return true;
   cancelOps();
   const at = opts.at ? (ctx.snapOn ? ctx.snap(opts.at.slice()) : opts.at.slice()) : cursorPoint(ctx);
-  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false };
+  const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
   S.move = m; ctx.requestRender(); return true;
 }
@@ -2050,7 +2055,8 @@ function pasteAt(ctx, opts) {
   clipGet(ctx, (text) => {
     if (!text) { ctx.toast("Nothing to paste"); return; }
     const r = pasteChanges(ctx.doc, text, cursorPoint(ctx), opts); if (!r.changes.length) { ctx.toast("The clipboard holds no board items"); return; }
-    ctx.commit(r.changes, "paste"); applySelection(ctx, r.ids); ctx.toast(`Pasted ${plural(r.ids.length, "item")}`);
+    // EDIT_TOOL::Paste: the pasted items hang on the cursor by their reference point until a click places them
+    ctx.commit(r.changes, "paste"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() });
   });
   return true;
 }
@@ -2058,7 +2064,8 @@ act("paste", "Paste", "Ctrl+V", (ctx) => canEdit(ctx) && pasteAt(ctx, { annotati
 act("pasteSpecial", "Paste Special…", "Ctrl+Shift+V", (ctx) => canEdit(ctx) && openForm({ title: "Paste Special", fields: [{ k: "annotations", label: "Reference designators", type: "select", value: "unique", options: [["unique", "Assign unique reference designators"], ["keep", "Keep existing (may duplicate)"], ["clear", "Clear reference designators"]] }], apply: (v) => { pasteAt(ctx, { annotations: v.annotations }); } }));
 act("duplicate", "Duplicate", "Ctrl+D", (ctx) => {
   const ids = needSel(ctx, "Select items to duplicate"); if (!ids || !canEdit(ctx)) return true;
-  const r = duplicateChanges(ctx.doc, Array.from(ids)); ctx.commit(r.changes, "duplicate"); applySelection(ctx, r.ids); ctx.toast(`Duplicated ${plural(r.ids.length, "item")} in place — drag them to their spot`); return true;
+  // EDIT_TOOL::Duplicate: the copies follow the cursor from where the originals are; a click places them, Escape drops them
+  const r = duplicateChanges(ctx.doc, Array.from(ids)); ctx.commit(r.changes, "duplicate"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() }); return true;
 });
 act("copyAsText", "Copy as Text", "", (ctx) => { const ids = needSel(ctx); if (!ids) return true; const t = Array.from(ids, (id) => textOfItem(ctx.doc.items.get(id))).filter(Boolean).join("\n"); clipSet(ctx, t); ctx.toast(t ? "Text copied" : "Nothing textual selected"); return true; });
 // selection
