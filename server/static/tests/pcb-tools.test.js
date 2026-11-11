@@ -1713,3 +1713,24 @@ test("Interactive Delete: a locked item stays and 'Item locked.' pops up; severa
   ctx.candidatesAt = () => ["v-1"]; pcb.onPointerMove(ev(), [118, 53], ctx); assert.equal(P.state.hover.del.id, "v-1");
   P.state.popup = null;
 });
+
+test("grid helper: BestDragOrigin takes the moved items' anchor nearest the mouse; the move snaps to other items' anchors (Shift: grid only, Alt: no grid)", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc);
+  // a footprint: the pad the mouse is in, else its position
+  assert.deepEqual(P.bestDragOrigin(doc, ["fp-1"], [100.1, 49.2], 0.25), [100, 49.1], "pad 1's centre under the mouse");
+  assert.deepEqual(P.bestDragOrigin(doc, ["fp-1"], [101.5, 50.2], 0.25), [100, 50], "the footprint position");
+  assert.deepEqual(P.bestDragOrigin(doc, ["s-4"], [134, 50.3], 0.25), [135, 50], "a track's nearer end");
+  // magnetic: a graphic line's end within 25 px (one grid step at most) wins over the grid; tracks do not capture outside the track tool
+  ctx.pxPerMm = 100; ctx.gridPitch = 0.25;
+  assert.deepEqual(P.snapCursor(ctx, [140.1, 40.05], null, {}).p, [140, 40], "Edge.Cuts line end");
+  assert.deepEqual(P.snapCursor(ctx, [140.1, 40.05], null, { shiftKey: true }).p, [140, 40], "Shift: the grid point (here the same)");
+  assert.deepEqual(P.snapCursor(ctx, [139.9, 40.12], null, { shiftKey: true }).p, [140, 40]);
+  assert.deepEqual(P.snapCursor(ctx, [139.93, 40.12], null, { shiftKey: true, altKey: true }).p, [139.93, 40.12], "Shift+Alt: free");
+  assert.equal(P.snapCursor(ctx, [110.05, 50.05], null, {}).anchor, null, "a track end does not capture the cursor in a move");
+  assert.deepEqual(P.snapCursor(ctx, [115.04, 40.02], null, {}).p, [115, 40], "the line's middle");
+  // M on the footprint grabbed near its position: the position follows the snapped cursor
+  ctx.snapOn = true; ctx.selection = new Set(["fp-1"]); ctx.cursor = [100.4, 50.3];
+  pcb.runAction("move", ctx); assert.deepEqual(P.state.move.start, [100, 50]);
+  P.selectMoveTo(ctx, [104.1, 52.4]); assert.deepEqual([doc.items.get("fp-1").x, doc.items.get("fp-1").y], [104, 52.5]);
+  pcb.cancel(); assert.deepEqual([doc.items.get("fp-1").x, doc.items.get("fp-1").y], [100, 50]);
+});

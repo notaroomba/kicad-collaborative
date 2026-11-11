@@ -1165,8 +1165,10 @@ function gfxLayers(doc) {
 }
 
 // ---------------------------------------------------------------- interactions
-function hoverPoint(ctx, mm, magnetic) {
-  const g = ctx.snap(mm); const out = { x: g[0], y: g[1], snap: null };
+function hoverPoint(ctx, mm, magnetic, mods) {
+  // the drawing tools resolve the cursor through the grid helper too (DRAWING_TOOL: grid.SetSnap( !Shift ), Alt = no grid)
+  const sn = magnetic ? { p: ctx.snap(mm), anchor: null } : snapCursor(ctx, mm, null, mods);
+  const g = sn.p; const out = { x: g[0], y: g[1], snap: sn.anchor ? { x: g[0], y: g[1], kind: "anchor" } : null };
   if (magnetic && ctx.doc) {
     const rt = S.route;
     // TOOL_BASE::updateEndItem: while routing only the routed net's items are end candidates (a route without a net has none)
@@ -2019,14 +2021,78 @@ function drawStatusNote(c, at, cpx, msg, hint) {
 // footprint hit-test found nothing on the footprint's geometry; the capture-phase stage listeners
 // below then drive the drag while app.js's select tool stays passive.
 function beginSelectDrag(ctx, it, mm) {
-  if (isLocked(it.node) && !overrideLocks()) { ctx.toast("Locked — tick Override locks to move it", 2500); return false; }
-  const m = { ids: [it.id], start: ctx.snapOn ? ctx.snap([mm[0], mm[1]]) : mm.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false };
+  if (isLocked(it.node) && !overrideLocks()) { ctx.toast(LOCKED_WARNING, 3500); return false; }
+  const m = { ids: [it.id], start: snapCursor(ctx, mm, new Set([it.id]), {}).p, orig: new Map(), ends: [], last: [0, 0], moved: false };   // a held-button drag: no warp, the cursor is the reference
   m.orig.set(it.id, clone(it.node));
   if (it.kind === "via") {                                        // tracks ending on the via stretch with it
     const at = pt(it.node, "at");
     for (const sg of ctx.doc.items.values()) { if (sg.kind !== "segment" && sg.kind !== "arc") continue; for (const key of ["start", "end"]) { const q = pt(sg.node, key); if (q && at && samePt(q, at)) { m.ends.push({ id: sg.id, key }); if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone(sg.node)); } } }
   }
   S.move = m; S.sel = new Set([it.id]); return true;
+}
+// ---------------------------------------------------------------- PCB_GRID_HELPER: drag origin and magnetic snapping
+const SNAP_SCREEN_RADIUS = 25;   // libs/snap snap_resolver.h: the magnetic range in screen pixels
+/**
+ * The snap points an item offers (PCB_GRID_HELPER::computeAnchors).  aFrom (the items being moved): a footprint's
+ * position and the middle of its box, and the centre of a pad the mouse is inside; otherwise (the items snapped to)
+ * a footprint's position and middle only — pads, tracks and vias capture the cursor in the track tool only
+ * (MAGNETIC_OPTIONS::CAPTURE_CURSOR_IN_TRACK_TOOL), graphics always (editing.magnetic_graphics): their ends, corners,
+ * centres and middles.  Text snaps by its position.
+ */
+function itemAnchors(it, from, mouse, gridPitch) {
+  const out = []; const n = it.node, k = it.kind;
+  const add = (p) => { if (p) out.push(p); };
+  if (k === "footprint") {
+    if (from && mouse) for (const p of padsOf(it)) if (padCovers(p, mouse[0], mouse[1])) add([p.x, p.y]);
+    const pos = anchorOf(it); add(pos);
+    if (it.bbox) { const c = [(it.bbox[0] + it.bbox[2]) / 2, (it.bbox[1] + it.bbox[3]) / 2]; const g = gridPitch || 0; if (Math.hypot(c[0] - pos[0], c[1] - pos[1]) > Math.hypot(g, g)) add(c); }
+    return out;
+  }
+  if ((k === "segment" || k === "arc" || k === "via") && !from) return out;
+  if (k === "via" || k === "gr_text" || k === "target" || k === "image") { add(K.atOf(n).slice(0, 2)); return out; }
+  if (k === "segment" || k === "arc" || k === "gr_line" || k === "gr_arc") {
+    const a = pt(n, "start"), b = pt(n, "end"); add(a); add(b);
+    if (k === "gr_line" && a && b) add([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+    if (k === "gr_arc" || k === "arc") add(pt(n, "mid"));
+    return out;
+  }
+  if (k === "gr_circle") { const c = pt(n, "center"), e = pt(n, "end"); add(c); if (c && e) { const r = Math.hypot(e[0] - c[0], e[1] - c[1]); for (const [dx, dy] of [[r, 0], [0, r], [-r, 0], [0, -r]]) add([c[0] + dx, c[1] + dy]); } return out; }
+  if (k === "gr_rect" || k === "gr_text_box") { const a = pt(n, "start"), b = pt(n, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); for (const p of [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [(x0 + x1) / 2, (y0 + y1) / 2]]) add(p); } return out; }
+  if (k === "gr_poly" || k === "zone" || k === "gr_curve") {
+    const P = K.kid(k === "zone" ? (K.kid(n, "polygon") || n) : n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])]);
+    return out;
+  }
+  if (k === "dimension") { const P = K.kid(n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])]); return out; }
+  return out;
+}
+/**
+ * PCB_GRID_HELPER::BestDragOrigin: the anchor of the moved items nearest the mouse (a pad centre under it, a
+ * footprint's position, a shape's end …); the mouse itself when they offer none.
+ */
+function bestDragOrigin(doc, ids, mouse, gridPitch) {
+  let best = null, bd = Infinity;
+  for (const id of ids) { const it = doc.items.get(id); if (!it) continue; for (const p of itemAnchors(it, true, mouse, gridPitch)) { const d = Math.hypot(p[0] - mouse[0], p[1] - mouse[1]); if (d < bd) { bd = d; best = p; } } }
+  return best ? [r6(best[0]), r6(best[1])] : mouse.slice();
+}
+/**
+ * PCB_GRID_HELPER::BestSnapAnchor / ResolveSnap: the cursor pulled onto an anchor of an item that is not moving
+ * within SNAP_SCREEN_RADIUS pixels (no further than one grid step when the grid is on), else onto the grid.  Shift
+ * held turns object snapping off (grid.SetSnap( !MD_SHIFT )), Alt the grid (DisableGridSnapping).  Returns
+ * { p, anchor } where anchor is the snapped-to point or null.
+ */
+function snapCursor(ctx, mm, skip, mods) {
+  mods = mods || {};
+  const gridOn = !!(ctx.snapOn && ctx.snap) && !mods.altKey;
+  const g = gridOn ? ctx.snap(mm.slice()) : mm.slice();
+  if (mods.shiftKey || !ctx.doc) return { p: g, anchor: null };
+  const scale = SNAP_SCREEN_RADIUS / Math.max(1e-6, ctx.pxPerMm || 4); const range = gridOn && ctx.gridPitch ? Math.min(scale, ctx.gridPitch) : scale;
+  let best = null, bd = range;
+  for (const it of ctx.doc.items.values()) {
+    if (skip && skip.has(it.id)) continue; const b = it.bbox;
+    if (b && (mm[0] < b[0] - range || mm[0] > b[2] + range || mm[1] < b[1] - range || mm[1] > b[3] + range)) continue;
+    for (const p of itemAnchors(it, false, null, ctx.gridPitch)) { const d = Math.hypot(p[0] - mm[0], p[1] - mm[1]); if (d <= bd) { bd = d; best = p; } }
+  }
+  return best ? { p: [r6(best[0]), r6(best[1])], anchor: best } : { p: g, anchor: null };
 }
 function moveNodesAt(m, dx, dy) {
   const out = [];
@@ -2072,14 +2138,17 @@ function moveTransform(ctx, how, arg) {
   }
   m.xformed = true; moveApply(ctx, m, m.last[0], m.last[1]); ctx.requestRender(); return true;
 }
-function selectMoveTo(ctx, mm) {
+function selectMoveTo(ctx, mm, mods) {
   const m = S.move; if (!m) return;
-  const sN = ctx.snapOn ? ctx.snap([mm[0], mm[1]]) : mm; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
+  // EDIT_TOOL::doMoveSelection: the cursor resolved through the grid helper (magnetic anchors of what is not moving,
+  // then the grid; Shift: grid only, Alt: no grid) less the drag origin
+  const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods); m.snapAt = sn.anchor;
+  const sN = sn.p; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
   if (dx === m.last[0] && dy === m.last[1]) return;
   m.last = [dx, dy]; m.moved = true; moveApply(ctx, m, dx, dy); ctx.requestRender();
 }
 function finishSelectMove(ctx, commit, force) {
-  const m = S.move; S.move = null; if (!m) return;
+  const m = S.move; S.move = null; if (!m) return; moveCursor(ctx, false);
   const [dx, dy] = m.last; moveRestore(ctx, m);            // originals back first, so commit() records a true inverse
   const unhover = () => { if (m.hover) applySelection(ctx, []); };   // a hover selection does not outlive the move
   if (!commit && m.placing) {   // Escape on a paste / duplicate that still follows the cursor takes the new items out again
@@ -2110,11 +2179,22 @@ function beginCarryMove(ctx, opts) {
   const free = unlockedIds(ctx, ids);
   if (!free.length) return true;
   cancelOps();
-  const at = opts.at ? (ctx.snapOn ? ctx.snap(opts.at.slice()) : opts.at.slice()) : cursorPoint(ctx);
+  // the drag origin (BestDragOrigin): the moved items' anchor nearest the mouse; a paste keeps its reference point,
+  // which already sits under the cursor
+  const mouse = opts.at ? opts.at.slice() : (ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+  // which already sits under the cursor.  A browser cannot warp the mouse onto the origin (GetMoveWarpsCursor), so a
+  // drag made with the button held keeps KiCad's no-warp behaviour: the reference is the cursor where the drag began.
+  const at = opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
   const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
   if (opts.drag) dragEnds(doc, m);
-  S.move = m; ctx.requestRender(); return true;
+  m.skip = new Set(m.orig.keys()); S.move = m; moveCursor(ctx, true); ctx.requestRender(); return true;
+}
+/** KICURSOR::MOVING on the canvas while a move runs (the tool's own cursor comes back afterwards). */
+function moveCursor(ctx, on) {
+  const st = ctx.stage && ctx.stage.style; if (!st) return;
+  if (on) { if (S.cursorBefore === undefined) S.cursorBefore = st.cursor; st.cursor = "move"; }
+  else if (S.cursorBefore !== undefined) { st.cursor = S.cursorBefore; S.cursorBefore = undefined; }
 }
 /**
  * Drag (D, EDIT_TOOL::Drag -> COMPONENT_DRAGGER on footprints): every line attached to a moving pad (ending on its
@@ -2219,7 +2299,7 @@ function onStagePointerMove(ev) {
     S.pending = null; startPendingDrag(ctx, pd);
   }
   if (S.drag && S.drag.bySelect) { dragMove(ctx, ctx.worldMm(ev)); ctx.requestRender(); }
-  else if (S.move) selectMoveTo(ctx, ctx.worldMm(ev));
+  else if (S.move) { S.move.mods = { shiftKey: !!ev.shiftKey, altKey: !!ev.altKey }; selectMoveTo(ctx, ctx.worldMm(ev)); }
 }
 function onStagePointerUp(ev) {
   const ctx = lastCtx; S.pending = null; if (!ctx) return;
@@ -5119,6 +5199,8 @@ function drawOverlay(c, view, ctx) {
     if (it.kind === "footprint" || it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") { const b = it.bbox; if (b) { c.lineWidth = 1.5 * px; c.setLineDash([4 * px, 3 * px]); c.strokeRect(b[0] - 0.2, b[1] - 0.2, b[2] - b[0] + 0.4, b[3] - b[1] + 0.4); c.setLineDash([]); } }
     else for (const g of it.geom) { if (it.kind === "zone" && g.fill) continue; c.lineWidth = (g.w || 0) + 3 * px; strokeGeom(c, g); }
   }
+  // a move's magnetic snap (the anchor the cursor was pulled onto)
+  if (S.move && S.move.snapAt) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, S.move.snapAt, 5 * px); }
   // cursor: the via about to be placed, and the magnetic snap marker
   const hv = S.hover;
   if (hv && S.modTool) {
@@ -5223,7 +5305,7 @@ const pcb = {
   onPointerDown(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || ev.button !== 0 || !ctx.doc) return false;
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
     if (t === "route") routeClick(ctx, hv, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
     else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
@@ -5278,7 +5360,7 @@ const pcb = {
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin"); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
     if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
@@ -5438,7 +5520,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   // the parity pass
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
-  selectionIds, applySelection, requestSelection, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
+  selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
