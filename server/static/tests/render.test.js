@@ -1104,6 +1104,182 @@ test("a rule area is keyed by the uuid inside its polyline, not a synthetic id",
   assert.strictEqual(doc.items.size, 0);
 });
 
+// ---------------------------------------------------------------- KiCad's stroke font (web/canvas/stroke-font.ts)
+test("stroke font: Newstroke glyphs decode to KiCad's advances and strokes", () => {
+  near(K.strokeGlyph(32).adv, 16 / 21, 1e-12, "space");                 // "JZ"
+  const A = K.strokeGlyph(65); near(A.adv, 18 / 21, 1e-12, "A");        // "I[MUWU RK[RFY["
+  assert.strictEqual(A.strokes.length, 2, "A: the bar and the two legs");
+  assert.deepStrictEqual(A.strokes[0].map((v) => Math.round(v * 21)), [4, -5, 14, -5], "bar: (M,U) → (W,U), left bearing I, FONT_OFFSET −8");
+  assert.deepStrictEqual(A.strokes[1].map((v) => Math.round(v * 21)), [2, 1, 9, -20, 16, 1]);
+  assert(K.strokeGlyph(0x3a9) && K.strokeGlyph(0xb5) && K.strokeGlyph(0x416) && K.strokeGlyph(0x2192), "Greek, Latin-1, Cyrillic and arrows are carried");
+  assert.strictEqual(K.strokeGlyph(0x4e2d), null, "glyphs outside the carried ranges draw as '?'");
+  near(K.strokeLineWidth("中"), K.strokeLineWidth("?"), 1e-12);
+  // the width KiCad reports: Σ advances − INTER_CHAR; textWidth adds the 3 pens of its plotted textLength
+  near(K.strokeLineWidth("GND"), (21 + 22 + 21) / 21 - 0.2, 1e-12);
+  near(K.textWidth("GND", 1.27, 0.1524), K.strokeLineWidth("GND") * 1.27 + 3 * 0.1524, 1e-9);
+});
+test("stroke font: markup — overbar, subscript, superscript, nesting, unclosed markers", () => {
+  const root = K.parseStrokeMarkup("a~{B_{c}}^{d}e");
+  assert.deepStrictEqual(root.children.map((n) => n.kind), ["", "~", "^", ""]);
+  assert.strictEqual(root.children[1].children[0].text, "B"); assert.strictEqual(root.children[1].children[1].kind, "_");
+  assert.deepStrictEqual(K.parseStrokeMarkup("x~{y").children.map((n) => [n.kind, n.text]), [["", "x~{y"]], "an unclosed marker is literal text");
+  // overbar: one extra stroke 1.23 above the baseline, trimmed 0.1 at each end of the run
+  const plain = K.strokeLine("AB"), barred = K.strokeLine("~{AB}");
+  assert.strictEqual(barred.strokes.length, plain.strokes.length + 1); near(barred.width, plain.width, 1e-12);
+  const bar = barred.strokes[barred.strokes.length - 1];
+  near(bar[1], -1.23, 1e-12); near(bar[3], -1.23, 1e-12); near(bar[0], 0.1, 1e-12); near(bar[2], plain.width + 0.2 - 0.1, 1e-12);
+  // sub / superscript: glyphs at 0.8, shifted 0.8·0.15 down / 0.8·0.35 up, advance scaled too
+  const sub = K.strokeLine("_{A}"), sup = K.strokeLine("^{A}"), A = K.strokeLine("A");
+  near(sub.width, A.width * 0.8 + 0.2 * 0.8 - 0.2, 1e-12);
+  const ys = (l) => l.strokes.reduce((a, st) => { for (let i = 1; i < st.length; i += 2) { a[0] = Math.min(a[0], st[i]); a[1] = Math.max(a[1], st[i]); } return a; }, [Infinity, -Infinity]);
+  near(ys(sub)[1], (1 / 21) * 0.8 + 0.8 * 0.15, 1e-12); near(ys(sup)[0], (-20 / 21) * 0.8 - 0.8 * 0.35, 1e-12);
+  // italic: x −= y·tilt (1/8): the top of a capital leans right by 20/21/8
+  const up = K.strokeLine("I"), it = K.strokeLine("I", true);
+  near(it.strokes[0][2] - up.strokes[0][2], (20 / 21) / 8, 1e-12, "top of the I"); near(it.strokes[0][0] - up.strokes[0][0], (-1 / 21) / 8, 1e-12, "foot of the I");
+});
+test("stroke font: anchor placement follows FONT::getLinePositions", () => {
+  // baseline = anchor + size·(1 − 1.17·{0, ½, 1}) − 0.052·pen; left edge + pen/1.52, right edge −(width + pen/1.52)
+  const [lx, ty] = K.strokeOrigin(3, "left", "top", 0.1, 0.1); near(lx, 0.1 / 1.52, 1e-12); near(ty, 1 - 0.0052, 1e-12);
+  const [cx, my] = K.strokeOrigin(3, "center", "middle", 0.1, 0.1); near(cx, -1.5, 1e-12); near(my, 1 - 0.585 - 0.0052, 1e-12);
+  const [rx, by] = K.strokeOrigin(3, "right", "bottom", 0.1, 0.1); near(rx, -(3 + 0.1 / 1.52), 1e-12); near(by, 1 - 1.17 - 0.0052, 1e-12);
+});
+test("stroke font: the painter strokes glyph paths in the text's own frame", () => {
+  const doc = K.parseDoc('(kicad_sch (version 20250114) (generator "t") (paper "A4") (text "AB" (at 10 20 0) (effects (font (size 2 2)) (justify left bottom)) (uuid "t1")) (text "V" (at 30 20 90) (effects (font (size 2 2) (bold yes)) (justify left bottom)) (uuid "t2")))');
+  const ctx = fullCtx(400, 300); const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: 0, y0: 0, dpr: 1 };
+  K.textMode = "stroke";
+  try { K.render(doc, ctx, view, { frame: false }); } finally { K.textMode = undefined; }
+  assert(!ctx.calls.fillText, "no canvas-font text in stroke mode");
+  const strokes = ctx.ops.filter((o) => o.op === "stroke" && o.stroke === K.SCH.notes);
+  assert.strictEqual(strokes.length, 2, "one stroke per text line");
+  // "AB": scale 2 (size) × 10 px/mm, unrotated; pen = the schematic default 0.1524 mm, in glyph units
+  const t1 = strokes[0].tf; near(t1[0], 20, 1e-9); near(t1[3], 20, 1e-9); near(t1[1], 0, 1e-9); near(t1[2], 0, 1e-9);
+  near(strokes[0].lw, 0.1524 / 2, 1e-9);
+  near(t1[4], (10 + 0.1524 / 1.52) * 10, 1e-6, "x: anchor + pen/1.52");
+  near(t1[5], (20 - 0.25 + 2 * (1 - 1.17) - 0.1524 * 0.052) * 10, 1e-6, "baseline: SCH_TEXT's 0.25 lift, then 0.17·size above the anchor");
+  // "V" at 90°: the glyph X axis points up the screen; bold pen = size / 5
+  const t2 = strokes[1].tf; near(t2[0], 0, 1e-9); near(t2[1], -20, 1e-9); near(t2[2], 20, 1e-9); near(t2[3], 0, 1e-9);
+  near(strokes[1].lw, (2 / 5) / 2, 1e-9);
+});
+test("text boxes wrap their words to the box (FONT::LinebreakText); escapes and text variables resolve", () => {
+  assert.strictEqual(K.linebreakText("aaa bbb ccc", K.strokeLineWidth("aaa bbb") * 1 + 0.3, 1, 0), "aaa bbb\nccc");
+  assert.strictEqual(K.linebreakText("one\ntwo three", 1.5, 1, 0), "one\ntwo\nthree", "existing line breaks are kept");
+  assert.strictEqual(K.linebreakText("unbreakable", 0.5, 1, 0), "unbreakable", "a single long word stays whole");
+  assert.strictEqual(K.unescapeText("VPP{slash}MCLR {colon} ~{RST}"), "VPP/MCLR : ~{RST}");
+  assert.strictEqual(K.displayNetName("/sheet/sub/VPP{slash}MCLR"), "VPP/MCLR"); assert.strictEqual(K.displayNetName("GND"), "GND");
+  const doc = K.parseDoc('(kicad_sch (version 20250114) (generator "t") (paper "A4") (title_block (title "My Title") (rev "B")) ' +
+    '(text_box "alpha beta gamma delta" (exclude_from_sim no) (at 10 10 0) (size 12 20) (margins 1 1 1 1) (stroke (width 0.1) (type solid)) (fill (type none)) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "tb")) ' +
+    '(text "${TITLE} rev ${REVISION} ${NOPE}" (at 10 50 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "tv")) ' +
+    '(label "A{slash}B" (at 10 60 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "lb")))');
+  const lines = texts(doc.items.get("tb")).map((g) => g.text);
+  assert(lines.length >= 2 && lines.join(" ") === "alpha beta gamma delta", "wrapped into lines: " + JSON.stringify(lines));
+  for (const l of lines) assert(K.strokeLineWidth(l) * 1.27 <= 10 + 1e-9, "each line fits the 12 mm box less its margins: " + l);
+  assert.strictEqual(texts(doc.items.get("tv"))[0].text, "My Title rev B ${NOPE}", "unknown variables stay as written");
+  assert.strictEqual(texts(doc.items.get("lb"))[0].text, "A/B");
+});
+// ---------------------------------------------------------------- symbols
+test("symbol graphics of body style 0 (common to all styles) are drawn; multi-unit references carry the unit letter", () => {
+  const lib = '(lib_symbols (symbol "t:G" (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) ' +
+    '(symbol "G_0_0" (pin power_in line (at 0 5.08 270) (length 2.54) (name "VCC" (effects (font (size 1.27 1.27)))) (number "14" (effects (font (size 1.27 1.27)))))) ' +
+    '(symbol "G_1_0" (polyline (pts (xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)) (stroke (width 0.254) (type default)) (fill (type background)))) ' +
+    '(symbol "G_1_1" (pin input line (at -7.62 0 0) (length 3.81) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))) ' +
+    '(symbol "G_1_2" (pin input inverted (at -7.62 0 0) (length 3.81) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))) ' +
+    '(symbol "G_2_0" (circle (center 0 0) (radius 2) (stroke (width 0.254) (type default)) (fill (type none))))))';
+  const sym = (id, unit, style) => `(symbol (lib_id "t:G") (at ${unit * 30} 30 0) (unit ${unit}) ${style ? `(body_style ${style})` : ""} (uuid "${id}") (property "Reference" "U7" (at ${unit * 30} 20 0) (effects (font (size 1.27 1.27)))))`;
+  const doc = K.parseDoc('(kicad_sch (version 20260101) (generator "t") (paper "A4") ' + lib + sym("a", 1) + sym("b", 1, 2) + sym("c", 2) + ")");
+  const body = (id) => doc.items.get(id).geom.filter((g) => g.layer === "Symbols");
+  assert(body("a").some((g) => g.t === "poly" && g.fill), "unit 1, style 1: the style-0 triangle is there");
+  assert(body("b").some((g) => g.t === "poly" && g.fill), "unit 1, style 2 (De Morgan): the same common triangle");
+  assert(!body("a").some((g) => g.t === "circle") && body("c").some((g) => g.t === "circle") && !body("c").some((g) => g.t === "poly" && g.fill), "unit 2 draws its own body only");
+  const pins = (id) => doc.items.get(id).geom.filter((g) => g.layer === "Pins");
+  assert(!pins("a").some((g) => g.t === "circle") && pins("b").some((g) => g.t === "circle"), "the inverted bubble belongs to body style 2 only");
+  for (const id of ["a", "b", "c"]) assert(texts(doc.items.get(id), (g) => g.text === "14").length === 1, "the unit-0 power pin is drawn on every unit");
+  assert.deepStrictEqual(["a", "c"].map((id) => texts(doc.items.get(id), (g) => g.field === "Reference")[0].text), ["U7A", "U7B"]);
+  assert.strictEqual(doc.items.get("a").ref, "U7", "the item keeps the plain reference");
+  assert.deepStrictEqual([1, 2, 26, 27, 52, 53].map(K.unitLetter), ["A", "B", "Z", "AA", "AZ", "BA"]);
+});
+// ---------------------------------------------------------------- board: nets by name, pad labels, draw order
+test("KiCad 10 boards name nets instead of numbering them: codes are assigned per document", () => {
+  const doc = K.parseDoc('(kicad_pcb (version 20260206) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) ' +
+    '(segment (start 0 0) (end 10 0) (width 1) (layer "F.Cu") (net "VCC") (uuid "s1")) (segment (start 0 2) (end 10 2) (width 1) (layer "F.Cu") (net "GND") (uuid "s2")) (segment (start 0 4) (end 10 4) (width 1) (layer "F.Cu") (net "VCC") (uuid "s3")) ' +
+    '(via (at 5 6) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "GND") (uuid "v1")) ' +
+    '(footprint "T:X" (layer "F.Cu") (uuid "fp") (at 5 10) (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net "/a/b/VPP{slash}MCLR") (uuid "p1")) (pad "2" smd rect (at 3 0) (size 2 2) (layers "F.Cu") (uuid "p2"))))');
+  const net = (id) => doc.items.get(id).net;
+  assert(net("s1") > 0 && net("s1") === net("s3") && net("s2") > 0 && net("s2") !== net("s1") && net("v1") === net("s2"));
+  assert.strictEqual(doc.nets.get(net("s1")), "VCC"); assert.strictEqual(doc.nets.get(net("s2")), "GND");
+  const fp = doc.items.get("fp"); const lbl = texts(fp, (g) => g.padNet);
+  assert.deepStrictEqual(lbl.map((g) => g.text), ["VPP/MCLR"], "the pad shows the short, unescaped net name; a pad without a net shows none");
+  assert(fp.geom.find((g) => g.pad && g.padNumber === "1" && g.t === "pad").net > 0);
+  // old files keep their numbers
+  const old = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 1) (layer "F.Cu") (net 2) (uuid "s1")))');
+  assert.strictEqual(old.items.get("s1").net, 2);
+});
+test("pad labels follow PCB_PAINTER: box-based size and direction, netname colours, LOD and visibility", () => {
+  const pad = (n, rest) => `(footprint "T:X" (layer "F.Cu") (uuid "fp${n}") (at ${n * 10} 0) ${rest})`;
+  const doc = K.parseDoc(NET_HEAD +
+    pad(1, '(pad "1" smd rect (at 0 0) (size 2 4) (layers "F.Cu") (net 1 "GND") (uuid "p1"))') +
+    pad(2, '(pad "1" smd rect (at 0 0 90) (size 2 4) (layers "F.Cu") (net 1 "GND") (uuid "p2"))') +
+    pad(3, '(pad "12" thru_hole circle (at 0 0) (size 2 2) (drill 1) (layers "*.Cu") (net 2 "VCC") (uuid "p3"))') +
+    pad(4, '(pad "1" smd rect (at 0 0) (size 2 2) (layers "B.Cu") (net 0 "") (pintype "passive+no_connect") (uuid "p4"))') +
+    pad(5, '(pad "7" smd rect (at 0 0 45) (size 2 2) (layers "F.Cu") (uuid "p5"))'));
+  const lab = (n, tag) => texts(doc.items.get("fp" + n), (g) => g[tag])[0];
+  // 2×4 pad: the box is taller than wide → read along the long side, sized from the short one
+  const n1 = lab(1, "padNum"), t1 = lab(1, "padNet");
+  assert.strictEqual(n1.rot, 90); assert.strictEqual(t1.rot, 90);
+  const size = 2 / 2.5; near(n1.size, Math.min(1.5 * 4 / 3, size) * 0.85, 1e-9); near(t1.size, Math.min(1.5 * 4 / 5, size) * 0.85, 1e-9);
+  near(n1.sizeX, n1.size * 0.9, 1e-12); near(n1.w, n1.size * 0.9 / 6, 1e-12);
+  near(n1.x, 10 - size / 1.7, 1e-9, "the number sits size/1.7 toward the text's top (−x for a text reading upward)"); near(t1.x, 10 + Math.min(t1.size * 1.4, size / 1.4), 1e-9);
+  // the same pad turned 90°: its box is wide → horizontal labels
+  assert.strictEqual(lab(2, "padNum").rot, 0); near(lab(2, "padNum").y, -size / 1.7, 1e-9);
+  // through-hole: white @ 0.7 above the holes; round pads shrink the net name by 0.9
+  const n3 = lab(3, "padNum"), t3 = lab(3, "padNet");
+  assert.strictEqual(n3.color, "rgba(255,255,255,0.7)"); assert.strictEqual(n3.z, K.pcbZ("holes") + 1);
+  near(t3.size, Math.min(1.5 * 2 / 5, 2 / 2.5) * 0.85 * 0.9, 1e-9);
+  assert.deepStrictEqual(n3.padLayers, ["F.Cu", "In1.Cu", "B.Cu"]);
+  // SMD: on its copper layer, just above the pads; a no-connect pad shows "x"
+  const t4 = lab(4, "padNet"); assert.strictEqual(t4.text, "x"); assert.strictEqual(t4.z, K.pcbZ("B.Cu") + 3.6); assert.strictEqual(t4.color, "rgba(255,255,255,0.7)");
+  // a 45° pad's box is not allowed to bloat the label: clamped to 1.1 × the pad
+  near(lab(5, "padNum").size, Math.min(1.5 * 2.2 / 3, 2.2) * 0.85, 1e-9);
+  // LOD: PAD::ViewGetLOD shows the label once the pad's smaller side is 0.5 mm at zoom 1 (≈ 1.8 px); tiny text is skipped
+  const view = (ppm) => ({ ppm, zoom: 1, panX: 300, panY: 300, x0: 0, y0: 0, dpr: 1 });
+  const shown = (ppm, opts) => { const c = fullCtx(1600, 600); K.render(doc, c, view(ppm), Object.assign({ frame: false }, opts)); return textOps(c).map((o) => o.args[0]).sort(); };
+  assert.deepStrictEqual(shown(20), ["1", "1", "1", "12", "7", "GND", "GND", "VCC", "x"]);
+  assert.deepStrictEqual(shown(0.5), [], "far out: nothing");
+  assert.deepStrictEqual(shown(20, { netNames: false }), ["1", "1", "1", "12", "7"]);
+  assert.deepStrictEqual(shown(20, { padNumbers: false }), ["GND", "GND", "VCC", "x"]);
+  assert.deepStrictEqual(shown(20, { hidden: new Set(["F.Cu"]) }), ["1", "12", "VCC", "x"], "a through-hole pad keeps its label while any of its layers shows");
+  assert.deepStrictEqual(shown(20, { hidden: new Set(["F.Cu", "In1.Cu", "B.Cu"]) }), []);
+  assert.deepStrictEqual(shown(20, { highContrast: true, activeLayer: "B.Cu" }), ["1", "12", "VCC", "x"], "high contrast: only pads on the active layer are labelled");
+});
+test("the active layer and its side are drawn on top; zone fills are translucent; via hole walls", () => {
+  const doc = K.parseDoc(NET_HEAD + '(segment (start 0 0) (end 10 0) (width 1) (layer "F.Cu") (net 1) (uuid "f")) (segment (start 0 0) (end 10 0) (width 1) (layer "B.Cu") (net 2) (uuid "b")) ' +
+    '(gr_line (start 0 0) (end 10 0) (stroke (width 0.2) (type default)) (layer "Dwgs.User") (uuid "d")) (gr_line (start 0 0) (end 10 0) (stroke (width 0.2) (type default)) (layer "F.SilkS") (uuid "s")) ' +
+    '(via (at 5 0) (size 2) (drill 1) (layers "F.Cu" "B.Cu") (net 1) (uuid "v")))');
+  const order = (opts) => { const c = fullCtx(1000, 800); K.render(doc, c, V40, Object.assign({ frame: false, netNames: false }, opts)); return c.ops.filter((o) => o.op === "stroke").map((o) => o.stroke); };
+  const F = K.pcbColor("F.Cu"), B = K.pcbColor("B.Cu"), D = K.pcbColor("Dwgs.User"), S = K.pcbColor("F.SilkS");
+  assert.deepStrictEqual(order({}), [B, S, F, D], "no active layer: the stack order, user drawings on top");
+  assert.deepStrictEqual(order({ activeLayer: "F.Cu" }), [B, D, S, F], "F.Cu active: the front layers go above everything else");
+  assert.deepStrictEqual(order({ activeLayer: "B.Cu" }), [S, F, D, B], "B.Cu active: back copper on top");
+  assert.deepStrictEqual(order({ activeLayer: "In1.Cu" }), [B, S, F, D], "an inner layer only raises itself");
+  // the holes stay above the raised layer: the via hole wall, then the hole, are the last fills
+  const c = fullCtx(1000, 800); K.render(doc, c, V40, { frame: false, netNames: false, activeLayer: "B.Cu" });
+  const fills = c.ops.filter((o) => o.op === "fill").map((o) => o.fill);
+  assert.deepStrictEqual(fills.slice(-2), ["#ECECEC", "#E3B72E"], "LAYER_VIA_HOLEWALLS under LAYER_VIA_HOLES: " + fills.join(","));
+  const hole = doc.items.get("v").geom.find((g) => g.hole); near(hole.wallR, 0.5 + 0.03, 1e-12, "plating 0.020 mm × 1.5");
+});
+test("grid: KiCad's dots / lines / crosses, thinned by the coarse tick until marks are over 10 px apart", () => {
+  const doc = K.parseDoc(NET_HEAD + ")");
+  const draw = (ppm, opts) => { const c = fullCtx(200, 100); K.render(doc, c, { ppm, zoom: 1, panX: 0, panY: 0, x0: 0, y0: 0, dpr: 1 }, Object.assign({ frame: false, grid: 1 }, opts)); return c; };
+  // 20 px/mm: a 1 mm grid is 20 px apart → drawn as is: 11 × 6 dots over 200 × 100 px
+  assert.strictEqual(draw(20, {}).calls.rect, 11 * 6);
+  // 10 px/mm: 10 px is not more than the minimum → ×10: 10 mm pitch → 3 × 2 dots
+  assert.strictEqual(draw(10, {}).calls.rect, 3 * 2);
+  assert.strictEqual(draw(20, { gridMinSpacing: 30 }).calls.rect, 2 * 2, "the minimum spacing is an option");
+  const lines = draw(20, { gridStyle: "lines" }); assert.strictEqual(lines.calls.rect || 0, 0); assert.strictEqual(lines.calls.moveTo, 11 + 6);
+  assert.deepStrictEqual(lines.ops.filter((o) => o.op === "stroke").map((o) => +(o.lw * 20).toFixed(3)), [1, 2], "minor lines 1 px, every 10th 2 px");
+  // small crosses double the minimum spacing: 20 px is not enough → 10 mm (200 px) pitch → 2 × 2 crosses, two strokes each
+  assert.strictEqual(draw(20, { gridStyle: "crosses" }).calls.moveTo, 2 * 2 * 2);
+});
+
 Promise.all(PENDING).then(() => {
   console.log(`${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

@@ -36,7 +36,11 @@ import { HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE,
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
-import { TEXT_INTERLINE, lineOffsets, parseMarkup, textWidth } from "./text";
+import { TEXT_INTERLINE, lineOffsets, parseMarkup, textWidth, unescapeText } from "./text";
+import { drawStrokeText, linebreakText, parseStrokeMarkup, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin } from "./stroke-font";
+import { displayNetName, netCode } from "./geom-pcb";
+import { unitLetter } from "./geom-sch";
+import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } from "./render";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
@@ -54,5 +58,9 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, setVie
   bboxOf, padAt, padGeomHit, markerAt, markerPolygon, markerScale, zoomFactor, flipX, unflipX, flipCentre, dashPattern, trackNameColor,
   MARKER_CORNERS, MARKER_SCALE, MARKER_COLORS, RATSNEST_COLOR, ZONE_OPACITY, HIDDEN_TEXT_ALPHA, PX_PER_MM_ZOOM1, VIA_NETNAME_COLOR,
   // export: SVG / PNG of the whole document or a subset; createCanvas is the offscreen-canvas factory (replaceable for tests / workers)
-  renderSvg, renderPng, SvgPath, createCanvas: defaultCreateCanvas, pointInPoly };
+  renderSvg, renderPng, SvgPath, createCanvas: defaultCreateCanvas, pointInPoly,
+  // KiCad's stroke font (web/canvas/stroke-font.ts): glyphs, markup, line layout, word wrap and the painter.
+  // textMode: undefined = stroke font wherever Path2D exists, canvas fonts otherwise; "stroke" / "native" force one
+  textMode: undefined, currentTextMode: textMode, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin, parseStrokeMarkup, linebreakText, drawStrokeText, drawTextStroke,
+  unescapeText, displayNetName, netCode, unitLetter, GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX };
 root.KiCadCanvas = api;
