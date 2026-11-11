@@ -1674,7 +1674,7 @@ pub async fn pull(
 // ------------------------------------------------------------------ page
 
 /// The GitHub page: `/github` (bring a repository online) and `/p/{id}/github`
-/// (one project's sync).  One self-contained document; github.js draws it.
+/// (one project's sync).  One self-contained document; web/github/index.ts draws it.
 pub async fn page() -> Html<String> {
     Html(
         include_str!("../static/github.html")
@@ -1710,7 +1710,7 @@ pub(crate) fn theme_tokens() -> &'static str {
 pub async fn page_js() -> Response {
     (
         [(header::CONTENT_TYPE, "application/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
-        include_str!("../static/github.js"),
+        include_str!("../static/dist/github.js"),
     )
         .into_response()
 }

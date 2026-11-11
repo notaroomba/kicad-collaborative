@@ -260,7 +260,7 @@ try {
   await page.goto(`${BASE}/p/${pid}/edit`);
   await page.waitForSelector('#ui-menubar');
   await page.getByText('File', { exact: true }).first().click();
-  const item = page.getByText('GitHub Sync…', { exact: true }).first();
+  const item = page.getByText(/^GitHub Sync(…|\.\.\.)$/).first();
   check('the editor\'s File menu has "GitHub Sync…"', await item.isVisible().catch(() => false));
   await shot(page, '13-editor-menu');
   await item.click();
