@@ -2,7 +2,7 @@
 // A modeless dialog: Find walks the hits (left to right, top to bottom, then on to the project's other sheets unless
 // "Search the current sheet only" is ticked), selecting and centring each; Replace / Replace All edit references
 // (when allowed), values, fields, labels and text as ordinary collab changes.
-import { E, appState, applyView, centerOn, openDocId, toolCtx, cloneNode } from "./editor";
+import { E, appState, applyView, centerOn, openDocId, pushUndoFor, toolCtx, cloneNode } from "./editor";
 import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { findHits, replaceInNode, str, type FindHit, type FindOpts } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
@@ -78,7 +78,11 @@ export async function replaceAll(): Promise<void> {
   let total = here.length, sheets = here.length ? 1 : 0;
   if (!F.currentSheetOnly && !F.selectionOnly) {
     for (const d of projectDocs().filter((x) => x.docType === "kicad_sch" && x.docId !== S.docId)) {
-      try { const od = await readDoc(d.docId, "kicad_sch"); otherDocs.delete(d.docId); const ch = replaceChanges(od, findHits(od, F, null, resolveLib)); if (ch.length) { await submitDocOp(d.docId, ch); total += ch.length; sheets++; } }
+      try { const od = await readDoc(d.docId, "kicad_sch"); otherDocs.delete(d.docId); const ch = replaceChanges(od, findHits(od, F, null, resolveLib)); if (ch.length) {
+          // the step is undoable on that sheet: its Ctrl+Z puts the texts back (KiCad undoes all sheets at once; here each sheet has its own list)
+          const inverse = ch.map((c) => { const it = od.items.get(c.id); return it ? KiCadCanvas.replaceChange(od, it) : null; }).filter(Boolean) as KChange[];
+          await submitDocOp(d.docId, ch); pushUndoFor(d.docId, { label: "replace all", changes: ch, inverse }); total += ch.length; sheets++;
+        } }
       catch (e) { setStatus(`Could not replace in ${d.path}: ${(e as Error).message}`, true); return; }
     }
   }

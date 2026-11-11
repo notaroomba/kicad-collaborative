@@ -58,6 +58,25 @@ export function commitChanges(changes, label, opts) {
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
 }
 
+// One undo list per document.  The stacks used to be global: Ctrl+Z after entering another sheet applied the
+// previous sheet's inverse to the sheet now open (its items were written into the wrong file, for everyone).
+// The exported arrays stay the same objects (other modules push onto them); their contents follow the open document.
+const undoByDoc = new Map(); let undoDocId = null;
+export function bindUndoDoc(docId) {
+  docId = docId || null; if (docId === undoDocId) return;
+  if (undoDocId) undoByDoc.set(undoDocId, { undo: undoStack.slice(), redo: redoStack.slice() });
+  const next = docId ? undoByDoc.get(docId) : null;
+  undoStack.length = 0; redoStack.length = 0;
+  if (next) { undoStack.push(...next.undo); redoStack.push(...next.redo); }
+  undoDocId = docId; publishUndo();
+}
+
+/** Record an undo step for a document that is not the open one (an edit made there from here: Replace All, Sync Sheet Pins). */
+export function pushUndoFor(docId, entry) {
+  if (!docId || docId === undoDocId) { undoStack.push(entry); redoStack.length = 0; publishUndo(); return; }
+  const st = undoByDoc.get(docId) || { undo: [], redo: [] }; st.undo.push(entry); st.redo = []; undoByDoc.set(docId, st);
+}
+
 export function publishUndo() { store.set({ undo: { undo: undoStack.length, redo: redoStack.length } }); }
 
 export function undoLast() {

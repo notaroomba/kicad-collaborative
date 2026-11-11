@@ -149,7 +149,7 @@ export const MENU_CHECKS = new Set(["showProperties", "showSearch", "showHierarc
  */
 export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
   sch: { rotateCCW: "rotateSelection", rotateCW: "rotateSelectionCW", mirrorH: "mirrorSelectionX", mirrorV: "mirrorSelectionY", repeatDrawItem: "repeatLast", autoplaceFields: "autoplace",
-    editSymbolFields: "fieldsTable", syncAllSheetsPins: "syncSheetPins" },
+    editSymbolFields: "fieldsTable" },   // syncAllSheetsPins is the dialog (dialogs/sync-pins.ts), not the module's quick sync of the selected sheet
   pcb: { flip: "flipSelection", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", moveExact: "moveExactly", editTracksAndVias: "changeTrackWidth", showNetInspector: "netInspector",
     distributeHorizontallyGaps: "distributeH", distributeVerticallyGaps: "distributeV", distributeHorizontallyCenters: "distributeHCenters", distributeVerticallyCenters: "distributeVCenters" },
 };

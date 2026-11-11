@@ -11,7 +11,7 @@ import { setupEditorChrome } from "./panes";
 import { renderPeers, stopPresenceKeepalive } from "./peers";
 import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
-import { activeModule, renderModuleTools, toolCtx } from "./tools";
+import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
 import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
 export const docNav = { list: [], idx: -1, lock: false };
@@ -301,7 +301,7 @@ export function leaveDoc() {
 
 export async function openDoc(doc) {
   leaveDoc();
-  state.doc = doc; state.docId = doc.docId;
+  state.doc = doc; state.docId = doc.docId; bindUndoDoc(doc.docId);
   E.DOC_TYPE = doc.docType;
   E.IU = isSch() ? 1e4 : 1e6;
   E.ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";

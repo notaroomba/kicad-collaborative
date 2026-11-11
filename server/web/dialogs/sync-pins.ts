@@ -2,7 +2,7 @@
 // per hierarchical sheet on this page, the sheet's unmatched hierarchical labels on the left and the unmatched sheet
 // pins on the right.  As on the desktop the changes happen at once: sheet pins change the sheet symbol here, labels
 // change the sub-sheet's own document.
-import { E, appState, toast, toolCtx, cloneNode } from "./editor";
+import { E, appState, pushUndoFor, toast, toolCtx, cloneNode } from "./editor";
 import { KD, h } from "./dom";
 import { kids, str } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
@@ -50,9 +50,11 @@ export function openSyncSheetPins(): void {
             const changes: KChange[] = orphanPins.map((name, i) => { const node = I.labelNode("hierarchical_label", name, [25.4, r4(Math.ceil((ymax + 5.08) / 2.54) * 2.54 + i * 2.54)], 0);
               const pin = pins.find((p) => str(p[1]) === name), sh2 = KiCadCanvas.kid(node, "shape"); if (pin && sh2) sh2[1] = str(pin[2]);
               return { id: KiCadCanvas.uuidOf(node), kind: "ADDED", typeName: I.typeNameFor({ kind: "hierarchical_label" }), sexpr: I.itemSexpr(sub, "hierarchical_label", node) }; });
+            pushUndoFor(entry.docId, { label: "add hierarchical labels", changes, inverse: changes.map((c) => ({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] })) });
             void submitDocOp(entry.docId, changes).then(() => readDoc(entry.docId, "kicad_sch")).then((d) => { subs.set(entry.docId, d); render(); toast(`Added ${changes.length} hierarchical label${changes.length === 1 ? "" : "s"} to ${entry.path}`); }, (e: Error) => toast("Could not add the labels: " + e.message, 4000));
           };
-          const rmLabels = () => { const changes: KChange[] = labels.filter((l) => missingPins.includes(str(l.node[1]))).map((l) => KiCadCanvas.removeChange(l));
+          const rmLabels = () => { const gone = labels.filter((l) => missingPins.includes(str(l.node[1]))); const changes: KChange[] = gone.map((l) => KiCadCanvas.removeChange(l));
+            pushUndoFor(entry.docId, { label: "delete hierarchical labels", changes, inverse: gone.map((l) => ({ id: l.id, kind: "ADDED", typeName: I.typeNameFor(l), sexpr: I.itemSexpr(sub, l.kind, l.node) })) });
             void submitDocOp(entry.docId, changes).then(() => readDoc(entry.docId, "kicad_sch")).then((d) => { subs.set(entry.docId, d); render(); }, (e: Error) => toast("Could not delete the labels: " + e.message, 4000)); };
           const head = (t: string, sub2: string) => h("div", { style: "text-align:center;margin-bottom:4px" }, h("div", { style: "color:var(--ink-2);font-size:11px" }, t), h("div", { style: "font-weight:600" }, sub2));
           page.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:14px" },
