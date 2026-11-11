@@ -128,9 +128,13 @@ fn asset_version() -> &'static str {
     })
 }
 
-pub async fn app_page() -> Html<String> {
+/// `frame-src 'none'` is the outer wall of the plugin sandbox (web/plugins/sandbox.ts).  Plugins
+/// run in `srcdoc` frames, which this does not affect; what it forbids is such a frame
+/// navigating itself to a real address — the one way left for sandboxed code to carry what
+/// it has read off the page, in a URL.  The app embeds no other frames.
+pub async fn app_page() -> Response {
     let v = asset_version();
-    Html(
+    let page = Html(
         include_str!("../static/app.html")
             .replace("/static/dist/editor.js\"", &format!("/static/dist/editor.js?v={v}\""))
             .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\""))
@@ -140,7 +144,8 @@ pub async fn app_page() -> Html<String> {
             .replace("/static/kicad-dialogs.js\"", &format!("/static/kicad-dialogs.js?v={v}\""))
             .replace("/static/dist/ui.js\"", &format!("/static/dist/ui.js?v={v}\""))
             .replace("/static/dist/ui.css\"", &format!("/static/dist/ui.css?v={v}\"")),
-    )
+    );
+    ([(header::CONTENT_SECURITY_POLICY, "frame-src 'none'")], page).into_response()
 }
 
 pub async fn canvas_js() -> Response {

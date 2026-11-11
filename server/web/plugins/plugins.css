@@ -1,0 +1,87 @@
+/* plugins.css — the plugin dock, toolbar buttons, host-drawn dialogs and the Plugin Manager
+   (web/plugins/PluginUi.tsx).  Plain rules on the app.html colour tokens, so all of it follows
+   the light and dark themes with the rest of the chrome. */
+#dockPlugins { grid-column: 7; position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bench); border-left: 1px solid var(--line); font-size: 12px; }
+#dockPlugins.closed { display: none; }
+#dockPlugins.drag .plg-frames { pointer-events: none; }     /* a frame under the pointer would swallow the resize drag */
+.plg-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
+.plg-grip:hover, .plg-grip.on { background: color-mix(in srgb, var(--blue) 45%, transparent); }
+.plg-head { display: flex; flex: none; align-items: center; gap: 2px; height: 22px; padding: 0 4px 0 2px; color: var(--ink); background: linear-gradient(var(--paper), var(--bench)); border-bottom: 1px solid var(--line); user-select: none; }
+.plg-tabs { display: flex; flex: 1; min-width: 0; overflow: hidden; align-self: stretch; }
+.plg-tab { flex: 0 1 auto; min-width: 0; padding: 0 8px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--ink-2); font: inherit; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.plg-tab:hover { color: var(--ink); }
+.plg-tab.on { color: var(--ink); background: var(--paper); box-shadow: inset 0 -2px 0 var(--blue); }
+.plg-ib { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--ink-2); cursor: pointer; font: inherit; font-size: 15px; line-height: 1; }
+.plg-ib:hover { background: var(--paper); color: var(--ink); }
+.plg-ib.x:hover { background: var(--copper); color: #fff; }
+.plg-ib svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.plg-note { flex: none; padding: 6px 10px; color: var(--ink-2); border-bottom: 1px solid var(--line); }
+.plg-note.err { color: var(--err); }
+.plg-frames { flex: 1 1 0; min-height: 0; position: relative; background: var(--paper); }
+.plg-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--paper); }
+.plg-frame[hidden] { display: none; }
+
+
+.plg-tb-sep { flex: none; width: 1px; height: 22px; margin: 0 3px; background: var(--line); }
+.plg-tb-btn { flex: none; width: 30px; height: 30px; padding: 2px; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.plg-tb-btn:hover { background: var(--paper); border-color: var(--line); color: var(--ink); }
+.plg-tb-btn.busy { color: var(--blue); border-color: var(--blue); }
+.plg-tb-btn svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.plg-overlay { z-index: 80; }
+.plg-from { margin-left: 10px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); font-size: 10px; font-weight: 400; white-space: nowrap; }
+.plg-prompt { width: 440px; }
+.plg-prompt .kd-title { cursor: default; }
+.plg-msg { margin: 0 0 10px; white-space: pre-wrap; line-height: 1.45; }
+.plg-check { display: flex; gap: 6px; align-items: center; color: var(--ink); }
+.plg-check input { width: auto; margin: 0; }
+.plg-file { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.plg-muted { color: var(--ink-2); }
+.plg-err { color: var(--err); margin: 0 0 8px; }
+
+.plg-manager { width: 780px; max-width: 94vw; height: min(620px, 88vh); display: flex; flex-direction: column; outline: 0; }
+.plg-manager .kd-title { cursor: default; flex: none; }
+.plg-manager .kd-body { flex: 1 1 0; min-height: 0; overflow: auto; font-size: 12px; line-height: 1.45; }
+.plg-manager .kd-body p { margin: 0 0 8px; }
+.plg-manager h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.plg-manager code { font-family: var(--mono); font-size: 11px; background: var(--panel); border: 1px solid var(--line); border-radius: 2px; padding: 0 3px; }
+.plg-manager a { color: var(--blue); }
+.plg-mtabs { display: flex; flex: none; gap: 0; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--bench); }
+.plg-mtabs button { padding: 7px 12px; border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.plg-mtabs button:hover { color: var(--ink); }
+.plg-mtabs button.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--blue); }
+.plg-row { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.plg-row.end { justify-content: flex-end; margin-top: 10px; }
+.plg-row .grow { flex: 1; min-width: 0; }
+.plg-row input[type=text] { min-width: 0; }
+.plg-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; color: var(--ink-2); text-align: center; }
+.plg-split { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; height: 100%; }
+.plg-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); overflow: auto; }
+.plg-list li { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.plg-list li:hover { background: var(--paper); }
+.plg-list li.on { background: color-mix(in srgb, var(--blue) 18%, var(--panel)); }
+.plg-list .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.plg-list .ver { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+.plg-list .state { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+.plg-list .state.run { background: var(--wire); } .plg-list .state.wait { background: var(--warn); } .plg-list .state.bad { background: var(--err); }
+.plg-list .state.off { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+.plg-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.plg-detail .plg-log { flex: 1 1 90px; }
+.plg-switch { display: flex; align-items: center; gap: 5px; color: var(--ink); white-space: nowrap; }
+.plg-switch input { width: auto; margin: 0; }
+.plg-perms { list-style: none; margin: 0 0 8px; padding: 0; }
+.plg-perms li { display: flex; gap: 8px; padding: 4px 0; }
+.plg-perms li p { margin: 1px 0 0; color: var(--ink-2); }
+.plg-perms .dot { flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--wire); }
+.plg-perms li.medium .dot { background: var(--warn); } .plg-perms li.high .dot { background: var(--err); }
+.plg-perms .tag { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); font-size: 10px; font-weight: 400; }
+.plg-perms .tag.new { border-color: var(--warn); color: var(--warn); }
+.plg-adds { margin: 0 0 8px; padding-left: 18px; color: var(--ink); }
+.plg-log { min-height: 70px; max-height: 190px; overflow: auto; padding: 5px 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); font-family: var(--mono); font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plg-log time { margin-right: 7px; color: var(--ink-3); }
+.plg-log .warn { color: var(--warn); } .plg-log .error { color: var(--err); } .plg-log .host { color: var(--ink-2); }
+.plg-catalog { display: flex; flex-direction: column; gap: 8px; }
+.plg-card { padding: 9px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.plg-card .perms { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.plg-consent h2 { margin-bottom: 4px; }
+.plg-manager .btn.danger:hover { border-color: var(--err); color: var(--err); }

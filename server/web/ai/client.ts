@@ -180,8 +180,19 @@ const TOOLS: Record<string, { run: ToolFn; label: (input: any) => string; summar
   find_datasheets: { run: (i) => design.findDatasheets(i), label: () => "Looked up datasheet links", summary: (o) => `${o.with_datasheet_link} linked, ${o.without} without` },
   focus_view: { run: (i) => design.focusView(i), label: (i) => `Showed ${i.refs && i.refs.length ? i.refs.join(", ") : "a point"} on the canvas` },
   open_document: { run: (i) => design.openDocument(i), label: (i) => `Opened ${i.doc}` },
+  // Tools of the plugins this person installed (web/plugins/host.ts): the tool list the model is given never
+  // changes, so plugin tools are reached through these two rather than being added to it.
+  list_plugin_tools: { run: () => ({ tools: pluginTools() }), label: () => "Looked at the plugin tools", summary: (o) => `${o.tools.length} available` },
+  call_plugin_tool: { run: (i) => callPluginTool(i), label: (i) => `Ran the plugin tool ${i.tool || ""}` },
   propose_changes: { run: () => { throw new Error("handled by the loop"); }, label: (i) => `Prepared a proposal: ${i.title || "changes"}` },
 };
+
+const pluginTools = (): unknown[] => { const h = (window as any).KcPlugins; return h ? h.tools() : []; };
+async function callPluginTool(i: { plugin?: string; tool?: string; input?: unknown }): Promise<unknown> {
+  const h = (window as any).KcPlugins; if (!h) throw new ToolError("No plugins are available.");
+  try { return { plugin: i.plugin, tool: i.tool, result: await h.callTool(String(i.plugin || ""), String(i.tool || ""), i.input) }; }
+  catch (e) { throw new ToolError(e instanceof Error ? e.message : String(e)); }
+}
 
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
 function serverToolLabel(name: string, input: any): string | null {

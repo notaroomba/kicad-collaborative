@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { actionMeta } from "./spec";
 import { LINKS, LOCAL_KEYS, LOCAL_LABELS, PANE_ACTION, toolFor } from "./tables";
 import { anchorOf, dispatch, useApp, type Editor, type ModuleAction, type ModuleTool } from "./store";
+import { isPluginUiId, pluginUiKey, pluginUiLabel, runPluginUi } from "./plugins/host";
 
 export interface Avail {
   editor: Editor | null;
@@ -41,7 +42,7 @@ export function moduleActionFor(a: Avail, id: string): ModuleAction | undefined 
 
 /** Why an action is dimmed; null when it works here. */
 export function unavailable(a: Avail, id: string): string | null {
-  if (a.handled.has(id) || LINKS[id]) return null;
+  if (a.handled.has(id) || LINKS[id] || isPluginUiId(id)) return null;   // a plugin entry is listed only while its plugin is enabled
   if (moduleActionFor(a, id)) return null;
   if (isModuleAction(id)) return "not available in the web editor yet";
   const tid = toolFor(a.editor, id);
@@ -50,6 +51,7 @@ export function unavailable(a: Avail, id: string): string | null {
 }
 
 export function keyFor(a: Avail, id: string): string {
+  if (isPluginUiId(id)) return pluginUiKey(id);
   const ma = moduleActionFor(a, id);
   if (ma) return ma.key || (isModuleAction(id) ? "" : actionMeta(id)?.key || "");
   const tid = toolFor(a.editor, id);
@@ -58,6 +60,7 @@ export function keyFor(a: Avail, id: string): string {
 }
 
 export function labelFor(a: Avail, id: string): string {
+  if (isPluginUiId(id)) return pluginUiLabel(id) || id;
   if (isModuleAction(id)) return a.moduleActions.get(id.slice(7))?.label || id.slice(7);
   if (LOCAL_LABELS[id]) return LOCAL_LABELS[id];
   const m = actionMeta(id);
@@ -82,6 +85,7 @@ export function isOn(id: string, toggles: Record<string, boolean>, panes: Record
 
 /** Run an action from a click: handled → app.js; a tool → activate it; otherwise explain the desktop. */
 export function runUiAction(a: Avail, id: string, el?: Element | null): void {
+  if (isPluginUiId(id)) { runPluginUi(id); return; }
   const anchor = anchorOf(el);
   if (a.handled.has(id) || isModuleAction(id)) { dispatch({ type: "action", id, anchor }); return; }
   if (moduleActionFor(a, id)) { dispatch({ type: "action", id: "module:" + id, anchor }); return; }

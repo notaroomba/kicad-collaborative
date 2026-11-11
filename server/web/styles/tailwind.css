@@ -21,6 +21,7 @@
 @source "../main.tsx";
 @source "../components/**/*.tsx";
 @source "../ai/**/*.tsx";
+@source "../plugins/**/*.tsx";
 @source "../*.ts";
 @source not "../generated";
 
@@ -121,6 +122,8 @@
 
 /* The Assistant dock keeps its rules in one plain stylesheet (web/ai/assistant.css). */
 @import "../ai/assistant.css" layer(components);
+/* Plugins: the dock, toolbar buttons, host dialogs and the manager (web/plugins/plugins.css). */
+@import "../plugins/plugins.css" layer(components);
 
 @tailwind utilities source(none);
 

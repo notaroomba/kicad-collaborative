@@ -3,6 +3,7 @@
 // press-and-hold, like wx), separators and the aux bar's controls.  The vertical bars are a single
 // scrolling column.  The right bar also carries the collab tools app.js keeps in its File menu on
 // the desktop, and a hidden `#ltools` marker that tells sch-tools which tool is active.
+import { usePluginBarEntries } from "../plugins/PluginUi";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
@@ -183,7 +184,8 @@ function useBar(loc: ToolbarLoc): ToolbarItem[] {
 export function TopToolbar() {
   const a = useAvail(); const items = useBar("top");
   const groupCurrent = useApp((s) => s.groupCurrent);
-  return <OverflowBar id="tbTop" cls="min-h-8.5" a={a} entries={barEntries(items, a, groupCurrent)} />;
+  const plugins = usePluginBarEntries();   // actions of enabled plugins that ask for a button, as KiCad shows them
+  return <OverflowBar id="tbTop" cls="min-h-8.5" a={a} entries={[...barEntries(items, a, groupCurrent), ...plugins]} />;
 }
 export function AuxToolbar() {
   const a = useAvail(); const items = useBar("aux");

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "dev.notaroomba.kicad-collab.bom-export",
+  "name": "BOM Export",
+  "description": "Exports a grouped bill of materials as CSV: one line per value and footprint, with quantity and references. On a schematic it covers every sheet of the project.",
+  "version": "1.0.0",
+  "author": "KiCad Collaborative",
+  "license": "GPL-3.0-or-later",
+  "runtime": { "type": "web", "entrypoint": "main.js" },
+  "permissions": ["design:read", "files:export"],
+  "actions": [
+    {
+      "identifier": "export-bom",
+      "name": "Export BOM (CSV)",
+      "description": "Save a grouped bill of materials for this design",
+      "show-button": true,
+      "scopes": ["schematic", "pcb"],
+      "icon": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M15 3v4h4\"/><path d=\"M9 12h7M9 15h7M9 18h4\"/>"
+    }
+  ],
+  "exporters": [
+    { "identifier": "bom-csv", "name": "Bill of Materials (CSV)…", "scopes": ["schematic", "pcb"] }
+  ]
+}

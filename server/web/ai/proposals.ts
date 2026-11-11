@@ -49,19 +49,19 @@ const nameOf = (it: any) => it.ref || `${it.kind} ${String(it.id).slice(0, 8)}`;
 
 // ---------------------------------------------------------------- change records
 
-function modified(doc: any, it: any, node: any): any {
+export function modified(doc: any, it: any, node: any): any {
   if (doc.type === "sch") { const s = SCH(); return { id: it.id, kind: "MODIFIED", typeName: s._.typeNameFor(it), sexpr: s._.itemSexpr(doc, it.kind, node) }; }
   const P = PCB(); const shell = { id: it.id, kind: it.kind, node, docType: "pcb" };
   return K().boardChangeExtras(doc, shell, { id: it.id, kind: "MODIFIED", typeName: P.typeNameOf(shell), sexpr: P.wrapBoard(node) });
 }
-function added(doc: any, node: any): any {
+export function added(doc: any, node: any): any {
   const k = K(); if (!k.uuidOf(node)) node.push(["uuid", k.newUuid()]);
   const id = k.uuidOf(node); const shell = { id, kind: node[0], node, docType: doc.type };
   if (doc.type === "sch") { const s = SCH(); return { id, kind: "ADDED", typeName: s._.typeNameFor(shell), sexpr: s._.itemSexpr(doc, node[0], node) }; }
   const P = PCB();
   return k.boardChangeExtras(doc, shell, { id, kind: "ADDED", typeName: P.typeNameOf(shell), sexpr: P.wrapBoard(node) });
 }
-function removed(doc: any, it: any): any {
+export function removed(doc: any, it: any): any {
   const typeName = doc.type === "sch" ? SCH()._.typeNameFor(it) : PCB().typeNameOf(it);
   return { id: it.id, kind: "REMOVED", typeName, properties: [] };
 }

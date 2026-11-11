@@ -9,6 +9,7 @@ mod merge;
 mod pages;
 mod parts;
 mod persist;
+mod plugins;
 mod registry;
 mod ws;
 
@@ -294,6 +295,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/libraries/{id}/items/{item}", axum::routing::patch(parts::update_item).delete(parts::remove_item))
         .route("/api/libraries/{id}/refresh", post(parts::refresh_library))
         .route("/api/libraries/{id}/export.zip", get(parts::export_library))
+        // web editor plugins (the per-account store and the built-in catalog)
+        .route("/api/plugins", get(plugins::list))
+        .route("/api/plugins/catalog", get(plugins::catalog))
+        .route("/api/plugins/{identifier}", axum::routing::put(plugins::install).delete(plugins::uninstall))
+        .route("/api/plugins/{identifier}/state", post(plugins::set_state))
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())

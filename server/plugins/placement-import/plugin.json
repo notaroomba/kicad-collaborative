@@ -1,0 +1,17 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "dev.notaroomba.kicad-collab.placement",
+  "name": "Footprint Placement CSV",
+  "description": "Exports footprint positions to CSV and places footprints from one: edit positions in a spreadsheet, or carry a layout from another tool. Columns: Ref, X, Y, Rot.",
+  "version": "1.0.0",
+  "author": "KiCad Collaborative",
+  "license": "GPL-3.0-or-later",
+  "runtime": { "type": "web", "entrypoint": "main.js" },
+  "permissions": ["design:read", "design:write", "files:import", "files:export"],
+  "importers": [
+    { "identifier": "placement-csv", "name": "Footprint Placement (CSV)…", "scopes": ["pcb"], "extensions": [".csv", ".pos", ".txt"] }
+  ],
+  "exporters": [
+    { "identifier": "placement-csv", "name": "Footprint Placement (CSV)…", "scopes": ["pcb"] }
+  ]
+}

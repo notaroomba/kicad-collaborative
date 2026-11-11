@@ -8,6 +8,7 @@ import { useApp, type ModuleAction } from "../store";
 import { isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
 import { AssistantToggle } from "../ai/Assistant";
+import { usePluginMenus } from "../plugins/PluginUi";
 import { PRODUCT_VERSION } from "../generated/product-version";
 
 // A menu entry (button or link): a full-width row with KiCad's blue hover, its shortcut at the right.
@@ -110,9 +111,9 @@ export function MenuBar() {
   useEffect(() => { setOpenRaw(null); }, [view, editor]);
   const inEditor = view === "editor" && !!editor;
   const taken = inEditor ? staticIds(MENUS[editor]) : new Set<string>();
-  const menus: [string, MenuEntry[]][] = inEditor
+  const menus: [string, MenuEntry[]][] = usePluginMenus(inEditor
     ? MENUS[editor].map(([title, entries]) => [title, [...entries, ...moduleEntries(moduleActions, title, taken)]] as [string, MenuEntry[]])
-    : HOME_MENUS;
+    : HOME_MENUS, inEditor ? editor : null);
   const next = encodeURIComponent(location.pathname);
   return (
     <div id="menubar" className="flex items-center gap-0.5 px-2 bg-bench border-b border-line select-none">

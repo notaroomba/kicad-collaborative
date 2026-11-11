@@ -110,8 +110,8 @@
   /* ---- editor: the page grid the React chrome (static/dist/ui.js) renders into.  The #ui-* hosts are
        display:contents wrappers, so the rendered #tbTop/#dockL/… are the grid's own children. ---- */
   #editor.active { display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: 1fr; }
-  #ui-tbTop, #ui-tbAux, #ui-menubar, #ui-statusbar, #ui-dockL, #ui-dockR, #ui-dockAI, #ui-tbLeft, #ui-tbRight { display: contents; }
-  #editorBody { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto; min-height: 0; min-width: 0; }
+  #ui-tbTop, #ui-tbAux, #ui-menubar, #ui-statusbar, #ui-dockL, #ui-dockR, #ui-dockAI, #ui-dockPlugins, #ui-tbLeft, #ui-tbRight { display: contents; }
+  #editorBody { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto; min-height: 0; min-width: 0; }
   #dockL { grid-column: 1; } #tbLeft { grid-column: 2; } #stage { grid-column: 3; } #tbRight { grid-column: 4; } #dockR { grid-column: 5; }
   #stage { position: relative; background: var(--canvas); overflow: hidden; touch-action: none; cursor: crosshair; min-width: 0; }
   #stage.pan { cursor: grab; } #stage.comment { cursor: cell; } #stage.zoomtool { cursor: zoom-in; } #stage.measure { cursor: crosshair; }
@@ -164,6 +164,7 @@
       <div id="ui-tbRight"></div>
       <div id="ui-dockR"></div>
       <div id="ui-dockAI"></div>
+      <div id="ui-dockPlugins"></div>
     </div>
   </section>
 

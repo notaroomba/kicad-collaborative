@@ -1,0 +1,18 @@
+<!-- The panel's markup.  It is placed in the plugin's own sandboxed frame; the page's colour
+     tokens (--ink, --paper, --line, …) are provided there and follow the light and dark themes. -->
+<style>
+  .stat { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
+  .stat b { font-family: var(--mono); font-weight: 600; text-align: right; }
+  section { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  #sel td:first-child { font-family: var(--mono); white-space: nowrap; }
+</style>
+<section>
+  <h3 id="title">Statistics</h3>
+  <div class="stat" id="counts"><span class="muted">Open a document.</span></div>
+</section>
+<section>
+  <h3>Selection</h3>
+  <p class="muted" id="selNote">Nothing selected.</p>
+  <table id="sel" hidden><thead><tr><th>Ref</th><th>Value</th><th>Kind</th></tr></thead><tbody></tbody></table>
+  <div class="row" style="margin-top:8px"><button id="zoom" disabled>Zoom to selection</button></div>
+</section>

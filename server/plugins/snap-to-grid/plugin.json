@@ -1,0 +1,21 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "dev.notaroomba.kicad-collab.snap-to-grid",
+  "name": "Snap to Grid",
+  "description": "Moves the selected symbols or footprints (or all of them) onto a grid you choose. One undo step.",
+  "version": "1.0.0",
+  "author": "KiCad Collaborative",
+  "license": "GPL-3.0-or-later",
+  "runtime": { "type": "web", "entrypoint": "main.js" },
+  "permissions": ["design:read", "design:write"],
+  "actions": [
+    {
+      "identifier": "snap",
+      "name": "Snap to Grid…",
+      "description": "Move components onto a grid",
+      "show-button": true,
+      "scopes": ["schematic", "pcb"],
+      "icon": "<path d=\"M4 4h16v16H4z\"/><path d=\"M4 12h16M12 4v16\"/><circle cx=\"12\" cy=\"12\" r=\"2.2\"/>"
+    }
+  ]
+}

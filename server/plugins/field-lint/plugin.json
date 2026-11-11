@@ -1,0 +1,31 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "dev.notaroomba.kicad-collab.field-lint",
+  "name": "Field Check",
+  "description": "Finds components with a missing value, footprint or datasheet link and marks them on the canvas. Also gives the design assistant a tool to run the same check.",
+  "version": "1.0.0",
+  "author": "KiCad Collaborative",
+  "license": "GPL-3.0-or-later",
+  "runtime": { "type": "web", "entrypoint": "main.js" },
+  "permissions": ["design:read", "view", "assistant"],
+  "actions": [
+    {
+      "identifier": "check",
+      "name": "Check Component Fields",
+      "description": "Mark components with missing fields",
+      "scopes": ["schematic", "pcb"],
+      "menu": "inspect"
+    }
+  ],
+  "assistant_tools": [
+    {
+      "name": "check_component_fields",
+      "description": "List the components of the open document whose value, footprint or datasheet link is missing or a placeholder. Returns each component's reference, position and what is missing.",
+      "input_schema": {
+        "type": "object",
+        "properties": { "require_datasheet": { "type": "boolean", "description": "Also report components without a datasheet link (default false)." } },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "dev.notaroomba.kicad-collab.design-stats",
+  "name": "Design Statistics",
+  "description": "A docked panel with live counts for the open document and details of what is selected. It updates as you and your collaborators edit.",
+  "version": "1.0.0",
+  "author": "KiCad Collaborative",
+  "license": "GPL-3.0-or-later",
+  "runtime": { "type": "web", "entrypoint": "main.js" },
+  "permissions": ["design:read", "view"],
+  "panel": { "name": "Statistics", "html": "panel.html", "scopes": ["schematic", "pcb"] },
+  "actions": [
+    {
+      "identifier": "show",
+      "name": "Design Statistics",
+      "description": "Show the statistics panel",
+      "scopes": ["schematic", "pcb"],
+      "key": "Ctrl+Shift+I"
+    }
+  ]
+}
