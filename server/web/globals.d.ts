@@ -138,6 +138,10 @@ interface ToolModule {
   onPointerMove?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): void;
   onPointerUp?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): void;
   onSelectDown?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): boolean;
+  /** Board: a click on a pad selects the pad ("box" when it was not selected yet, true when it was, false off a pad). */
+  selectPadAt?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): boolean | "box";
+  selectedPad?(doc: KDoc): { item: KItem; index: number } | null;
+  padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
   onKey?(key: string, ev: KeyboardEvent | Record<string, never>, ctx: ToolCtx): boolean;
   drawOverlay?(ctx2d: CanvasRenderingContext2D, view: KView, ctx: ToolCtx): void;
   onDocChanged?(ctx: ToolCtx): void;

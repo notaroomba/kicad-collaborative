@@ -283,6 +283,8 @@ export function render(doc, ctx, view, opts) {
   if (hl && isPcb) for (const k of hl) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (hlPadFps || (hlPadFps = new Set())).add(k.slice(0, i)); }
   const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;   // board selection: repainted, not haloed
   const selGeoms = selPcb ? new Set() : null;
+  let selPadFps = null;   // a pad selected on its own ("footprintId#padIndex"): only that pad is repainted
+  if (selPcb) for (const k of selPcb) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (selPadFps || (selPadFps = new Set())).add(k.slice(0, i)); }
   const hlColor = (c) => highlightColor(c, isPcb);
   const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
   const skip = opts.skip && opts.skip.size ? opts.skip : null;   // items a peer is dragging: drawn as ghosts elsewhere
@@ -405,6 +407,7 @@ export function render(doc, ctx, view, opts) {
     const isHl = hl ? hl.has(it.id) : false;
     const padHl = !isHl && hlPadFps && hlPadFps.has(it.id) ? it.id + "#" : null;   // highlighted pads of this footprint
     const isSel = selPcb ? selPcb.has(it.id) : false;
+    const padSel = !isSel && selPadFps && selPadFps.has(it.id) ? it.id + "#" : null;
     const itemTint = itemColors ? itemColors.get(it.id) : null;
     const isFp = objHide && it.kind === "footprint";
     if (isFp && objHide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
@@ -437,7 +440,7 @@ export function render(doc, ctx, view, opts) {
       bucket(BUCKETS, z).push(g);
       if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex]; if (tc) tint.set(g, tc); }
       if (isHl || (padHl && g.padIndex !== undefined && hl.has(padHl + g.padIndex))) hlGeoms.add(g);
-      if (isSel) selGeoms.add(g);
+      if (isSel || (padSel && g.padIndex !== undefined && selPcb.has(padSel + g.padIndex))) selGeoms.add(g);
       if (netNames && g.net > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);

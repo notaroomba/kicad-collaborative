@@ -24,7 +24,7 @@
 let K = root.KiCadCanvas;                 // re-bound from ctx.K on every hook
 const WIDTHS = [0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
 const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
-const RATSNEST = "rgba(0, 248, 255, 0.35)", MARKER = "#FF3C3C", MARKER_WARN = "#FFB43A";   // KiCad's ratsnest and marker colours
+const RATSNEST = "rgba(0, 248, 255, 0.35)";   // LAYER_RATSNEST (builtin_color_themes.h)
 // the router's preview colours: the ratsnest Brightened(0.8) with alpha + 0.4 for the routed net, Brightened(0.5) for
 // the leading line from the head (DisplayRatline), and DARKDARKGRAY clearance halos
 const RATSNEST_BRIGHT = "rgba(204, 250, 255, 0.95)", RATSNEST_LEAD = "rgba(128, 252, 255, 0.95)", HALO_COLOR = "rgb(72, 72, 72)";
@@ -46,7 +46,8 @@ const BOARD_VERSION = 20260728;
 
 const S = {
   layer: "F.Cu", gfxLayer: "F.Cu",   // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
-  sel: new Set(), route: null, drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
+  sel: new Set(), padSel: null, route: null,   // padSel: a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T)
+  drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
   markers: [],                            // the last DRC run's markers [{ x, y, severity, text, ids, code }]
@@ -3391,12 +3392,16 @@ function onStagePointerDown(ev) {
   if (ev.target.closest && (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay"))) return;
   const ctx = lastCtx, doc = liveDoc(); if (!ctx || !doc) return;
   const [x, y] = ctx.worldMm(ev);
-  if (K.hitTest(doc, x, y, Math.min(5 / Math.max(1, liveZoom() * 0.6), 0.5))) { if (S.sel.size) { S.sel.clear(); ctx.requestRender(); } return; }   // app.js took the footprint
+  if (K.hitTest(doc, x, y, Math.min(5 / Math.max(1, liveZoom() * 0.6), 0.5))) { if (S.sel.size && !selMode(ev)) { S.sel.clear(); ctx.requestRender(); } return; }   // app.js took the footprint (a modifier keeps the module's picks)
   const it = hitTestItem(doc, x, y, HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1));
-  if (it) { if (ev.shiftKey) { if (S.sel.has(it.id)) S.sel.delete(it.id); else S.sel.add(it.id); } else S.sel = new Set([it.id]); }
-  else if (!ev.shiftKey) S.sel.clear();
+  const mode = selMode(ev);
+  if (it) { if (mode) applySelMode(S.sel, it.id, mode); else S.sel = new Set([it.id]); }
+  else if (!mode) S.sel.clear();
   ctx.requestRender();
 }
+/** SELECTION_TOOL::setModifiersState: Shift adds, Ctrl (Cmd on macOS) toggles, Ctrl+Shift removes; null replaces. */
+function selMode(ev) { const c = !!(ev && (ev.ctrlKey || ev.metaKey)), sh = !!(ev && ev.shiftKey); return c && sh ? "remove" : c ? "toggle" : sh ? "add" : null; }
+function applySelMode(set, id, mode) { if (mode === "add") set.add(id); else if (mode === "remove") set.delete(id); else if (mode === "toggle") { if (set.has(id)) set.delete(id); else set.add(id); } }
 // KiCad's Ctrl+Shift chords (app.js swallows every Ctrl combo) and Alt+Z, the macOS zone hotkey — Ctrl+Shift+Z is
 // the web's redo — are re-posted under names of our own.
 const CTRL_SHIFT_KEYS = { a: "Arc", p: "Polygon", b: "Bezier", h: "Ortho", k: "RuleArea", c: "Circle", v: "PasteSpecial" };
@@ -3422,7 +3427,7 @@ function onCaptureKey(ev) {
       cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
       if (dragTool && lastCtx) lastCtx.setTool("select");   // Escape ends InlineDrag: back to the selection tool
       if (lastCtx) { refreshChip(lastCtx); lastCtx.requestRender(); }   // Esc cancels silently
-    } else if (S.sel.size) { S.sel.clear(); if (lastCtx) lastCtx.requestRender(); }
+    } else if (S.sel.size || S.padSel) { S.sel.clear(); S.padSel = null; if (lastCtx) lastCtx.requestRender(); }
     return;
   }
   let remap = null;
@@ -3474,6 +3479,37 @@ let pickerImpl = function (done) {
 function ratsnestLines(doc) {
   if (!S.rats || S.rats.doc !== doc || S.ratsDirty) { S.rats = { doc, lines: ratsnest(doc) }; S.ratsDirty = false; }
   return S.rats.lines;
+}
+/**
+ * CONNECTIVITY_DATA::ComputeLocalRatsnest: while items move, one line per net from the moving copper to the nearest
+ * stationary anchor of the same net (RN_NET::NearestBicoloredPair) -- the old tracks stay, so the line runs from the
+ * moved pad back to where its track ends.  `moving` is a set of item ids; nets whose anchors all move draw nothing.
+ */
+function dynamicRatsnest(doc, moving) {
+  if (!moving || !moving.size) return [];
+  const NT = netTable(doc), dyn = new Map(), stat = new Map();
+  const put = (m, net, p, id) => { if (!net) return; let a = m.get(net); if (!a) m.set(net, a = []); a.push({ p, id }); };
+  for (const it of doc.items.values()) {
+    const mv = moving.has(it.id);
+    if (it.kind === "footprint") { for (const p of padsOf(it)) if (p.type !== "np_thru_hole") put(mv ? dyn : stat, NT.key(p.net), [p.x, p.y], it.id); }
+    else if (it.kind === "via") { const a = pt(it.node, "at"); if (a) put(mv ? dyn : stat, NT.key(netOf(it.node)), a, it.id); }
+    else if (it.kind === "segment" || it.kind === "arc") { const k = NT.key(netOf(it.node)); for (const key of ["start", "end"]) { const a = pt(it.node, key); if (a) put(mv ? dyn : stat, k, a, it.id); } }
+  }
+  const out = [];
+  for (const [net, ds] of dyn) {
+    const ss = stat.get(net); if (!ss || !ss.length) continue;
+    let best = null, bd = Infinity;
+    for (const d of ds) for (const t of ss) { const dd = (d.p[0] - t.p[0]) ** 2 + (d.p[1] - t.p[1]) ** 2; if (dd < bd) { bd = dd; best = { a: d.p, b: t.p, net, ids: [d.id, t.id] }; } }
+    if (best && bd > 1e-12) out.push(best);
+  }
+  return out;
+}
+/** Ids moving right now: the app's footprint drag / Move (M) and the module's own select-tool move. */
+function movingIds() {
+  const out = new Set(); const E = editorState();
+  const d = E && E.drag; if (d && d.moved) { if (d.group) for (const g of d.group) out.add(g.fp.id); else if (d.fp) out.add(d.fp.id); }
+  if (S.move && S.move.moved) { for (const id of S.move.ids || []) out.add(id); for (const c of S.move.conns || []) for (const id of c.l.ids) out.add(id); }   // a D drag's attached lines go with it
+  return out;
 }
 function strokeGeom(c, g) {
   if (g.t === "line") { c.beginPath(); c.moveTo(g.x1, g.y1); c.lineTo(g.x2, g.y2); c.stroke(); }
@@ -3529,20 +3565,23 @@ function drawOverlay(c, view, ctx) {
     const tinted = S.ratsnestColors && S.ratsnestColors.size ? [] : null;   // net name -> colour, set by the Appearance pane's Nets tab
     const hlNet = S.route && S.route.netKey ? S.route.netKey : null, bright = hlNet ? [] : null;   // while routing: the rest at half alpha, the routed net brightened 0.8, alpha + 0.4
     if (hlNet) c.globalAlpha = 0.5;
-    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (bright && l.net === hlNet) { bright.push(l); continue; } if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
+    const moving = movingIds();   // RATSNEST_VIEW_ITEM: the static lines of moving items give way to the dynamic ones
+    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id) => sel.has(id))) continue; if (moving.size && l.ids.some((id) => moving.has(id))) continue; if (bright && l.net === hlNet) { bright.push(l); continue; } if (tinted && S.ratsnestColors.has(l.net)) { tinted.push(l); continue; } trace(l); }
     c.stroke();
     if (tinted) for (const l of tinted) { c.strokeStyle = S.ratsnestColors.get(l.net); c.beginPath(); trace(l); c.stroke(); }
     if (bright && bright.length) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_BRIGHT; c.beginPath(); for (const l of bright) trace(l); c.stroke(); }
+    if (moving.size) { c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.beginPath(); for (const l of dynamicRatsnest(doc, moving)) { if (!S.hiddenNets.has(l.net)) trace(l); } c.stroke(); }
   }
   // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
   { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
     const g = S.modTool === "gridorigin" && S.hover ? [S.hover.x, S.hover.y] : R.gridOrigin, d = S.modTool === "drillorigin" && S.hover ? [S.hover.x, S.hover.y] : R.auxOrigin;
     if (g[0] || g[1]) { c.strokeStyle = "#C2C2C2"; ring(c, g, r); line(c, [g[0] - r, g[1] - r], [g[0] + r, g[1] + r]); line(c, [g[0] - r, g[1] + r], [g[0] + r, g[1] - r]); }
     if (d[0] || d[1]) { c.strokeStyle = "#CC0000"; ring(c, d, r); line(c, [d[0] - r, d[1]], [d[0] + r, d[1]]); line(c, [d[0], d[1] - r], [d[0], d[1] + r]); } }
-  // DRC markers: KiCad's red pins, an X in a ring
-  if (S.markers.length) {
-    const r = 6 * px; c.lineWidth = 1.5 * px;
-    for (const m of S.markers) { if (S.hiddenSeverities && S.hiddenSeverities.has(m.severity)) continue; c.strokeStyle = m.severity === "error" ? MARKER : MARKER_WARN; c.globalAlpha = 0.95; ring(c, [m.x, m.y], r); line(c, [m.x - r * 0.6, m.y - r * 0.6], [m.x + r * 0.6, m.y + r * 0.6]); line(c, [m.x + r * 0.6, m.y - r * 0.6], [m.x - r * 0.6, m.y + r * 0.6]); }
+  // DRC markers: PCB_PAINTER::draw(PCB_MARKER) -- MARKER_BASE's pin polygon scaled by 1/sqrt(zoom), filled in
+  // LAYER_DRC_ERROR / LAYER_DRC_WARNING over the LAYER_MARKER_SHADOWS outline
+  if (S.markers.length && K.drawMarkers) {
+    const shown = S.hiddenSeverities && S.hiddenSeverities.size ? S.markers.filter((m) => !S.hiddenSeverities.has(m.severity)) : S.markers;
+    if (shown.length) K.drawMarkers(c, shown, "pcb", K.markerScale("pcb", view), K.PCB_BG);
   }
   // drag in progress (ROUTER::moveDragging): the rebuilt lines over the hidden originals
   drawDragPreview(c, ctx, view, px);
@@ -3707,6 +3746,23 @@ const pcb = {
     return true;
   },
   /** Select tool, nothing on a footprint's own geometry under the cursor: pick a track / via / graphic and arm its drag. */
+  /**
+   * A click on a pad selects the pad (PCB_SELECTION_TOOL treats PCB_PAD_T as a selectable item; the Selection Filter's
+   * Pads box gates it).  Returns "box" for a press on a pad that was not selected (DRAG_SELECTED: a drag draws a box),
+   * true when it already was, false when no pad is under the cursor or pads are filtered out.
+   */
+  selectPadAt(ev, mm, ctx) {
+    bind(ctx); if (!ctx.doc || (ev.button !== undefined && ev.button !== 0)) return false;
+    if ((ctx.selFilter || {}).pads === false) return false;
+    let pad = null; try { pad = K.padAt ? K.padAt(ctx.doc, mm[0], mm[1]) : null; } catch (e) { pad = null; }
+    if (!pad || !pad.item || pad.index === undefined) return false;
+    const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(pad.item)) return false;
+    const key = pad.item.id + "#" + pad.index, was = S.padSel === key;
+    S.sel.clear(); S.padSel = key; S.downHandled = ev; ctx.requestRender();
+    return was ? true : "box";
+  },
+  /** The selected pad as { item, index }, or null. */
+  selectedPad(doc) { const k = S.padSel; if (!k || !doc) return null; const i = k.lastIndexOf("#"); const it = doc.items.get(k.slice(0, i)); return it ? { item: it, index: +k.slice(i + 1) } : null; },
   onSelectDown(ev, mm, ctx) {
     bind(ctx); if (!ctx.doc || (ev.button !== undefined && ev.button !== 0)) return false;
     const it = hitTestItem(ctx.doc, mm[0], mm[1], HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1));
@@ -3721,12 +3777,13 @@ const pcb = {
     S.downHandled = ev;
     // MOUSE_DRAG_ACTION::DRAG_SELECTED (KiCad's default left drag): a drag that starts on the selection drags it; on
     // anything not selected it draws a selection box.  The press still picks the item, as the click would.
-    const wasSelected = S.sel.has(it.id);
-    if (ev.shiftKey) { if (S.sel.has(it.id)) S.sel.delete(it.id); else S.sel.add(it.id); }
+    const wasSelected = S.sel.has(it.id), mode = selMode(ev);   // Shift adds, Ctrl toggles, Ctrl+Shift removes
+    S.padSel = null;
+    if (mode) applySelMode(S.sel, it.id, mode);
     else if (!wasSelected) S.sel = new Set([it.id]);
-    if (ctx.setSelection && !ev.shiftKey && !wasSelected) ctx.setSelection([]);   // the module owns this pick; app.js's selection empties
-    S.pending = (!ctx.viewOnly && ctx.live && !ev.shiftKey && wasSelected) ? { ids: Array.from(S.sel), item: it, mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0] } : null;
-    ctx.requestRender(); return (wasSelected || ev.shiftKey) ? true : "box";
+    if (ctx.setSelection && !mode && !wasSelected) ctx.setSelection([]);   // the module owns this pick; app.js's selection empties
+    S.pending = (!ctx.viewOnly && ctx.live && !mode && wasSelected) ? { ids: Array.from(S.sel), item: it, mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0] } : null;
+    ctx.requestRender(); return (wasSelected || mode) ? true : "box";
   },
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
@@ -3817,7 +3874,7 @@ const pcb = {
   onDocChanged(ctx) {
     bind(ctx); S.ratsDirty = true; S.docVer++;
     if (S.route && ctx.doc === S.doc) { routeHighlight(ctx, S.route); if (S.route.cursor) updateHead(ctx); }   // the routed net stays bright as legs are fixed (or a peer edits)
-    if (ctx.doc !== S.doc) { S.doc = ctx.doc; cancelOps(); S.sel.clear(); S.hover = null; S.markers = []; S.hiddenNets.clear(); S.highlightNet = null; }
+    if (ctx.doc !== S.doc) { S.doc = ctx.doc; cancelOps(); S.sel.clear(); S.padSel = null; S.hover = null; S.markers = []; S.hiddenNets.clear(); S.highlightNet = null; }
     else if (ctx.doc) {
       for (const id of Array.from(S.sel)) if (!ctx.doc.items.has(id)) S.sel.delete(id);
       if (S.drag && S.drag.subs.some((d) => Array.from(d.ids).some((id) => !ctx.doc.items.has(id)))) { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }   // a peer removed what is being dragged
@@ -3848,7 +3905,7 @@ const pcb = {
   setRoutingDialogs(d) { routingDialogs = d || {}; },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
-  clipboardText, pasteChanges, cursorPoint, selectionIds,
+  clipboardText, pasteChanges, cursorPoint, selectionIds, selMode,
   get markers() { return S.markers; },
   runDRC(ctx) { return runAction("runDRC", ctx); },
   setDesignSettings(src) { S.settings = src ? designSettings(src) : null; S.settingsSrc = null; },
@@ -3869,7 +3926,7 @@ root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
-  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, connectedCopperIds,
+  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, dynamicRatsnest, selMode, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

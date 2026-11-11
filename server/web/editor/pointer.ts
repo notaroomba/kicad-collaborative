@@ -14,6 +14,9 @@ export function openSelectionProperties() {
   if (!E.kdoc || !window.KDialogs) return false;
   const ctx = toolCtx();
   if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (it) { KDialogs.openField(ctx, it, E.selField.name); return true; } }
+  if (!isSch() && CollabTools.pcb && CollabTools.pcb.selectedPad && CollabTools.pcb.padProperties) {   // a pad picked on its own: Pad Properties
+    const p = CollabTools.pcb.selectedPad(E.kdoc); if (p) { CollabTools.pcb.padProperties(ctx, p.item, p.index); return true; }
+  }
   const modSel = isSch() ? (CollabTools.sch && CollabTools.sch.state && CollabTools.sch.state.sel) : (CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel);
   // the board module keeps a Set of ids (tracks, vias, graphics, zones), the schematic module one id
   const first = (s) => (s && typeof s === "object" && typeof s[Symbol.iterator] === "function" ? s.values().next().value : s) || null;

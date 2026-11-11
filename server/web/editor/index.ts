@@ -141,7 +141,7 @@ window.addEventListener("pointerdown", (ev) => {
 }, true);
 
 stage.addEventListener("pointerdown", (ev) => {
-  if (ev.button !== 0 || E.tool !== "select" || !E.kdoc || E.selection.size < 2 || E.viewOnly || ev.shiftKey) return;
+  if (ev.button !== 0 || E.tool !== "select" || !E.kdoc || E.selection.size < 2 || E.viewOnly || ev.shiftKey || ev.ctrlKey || ev.metaKey) return;   // a modifier edits the selection
   if (isSch() && CollabTools.sch && CollabTools.sch.state.drag) return;   // a Move / paste is following the cursor: this click drops it (sch-tools)
   const mm = worldMm(ev); const hit = hitAny(mm);
   if (!hit || !E.selection.has(hit.id)) return;
@@ -177,26 +177,39 @@ stage.addEventListener("pointerdown", (ev) => {
     }
   }
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
+  // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
+  let padWasSelected = false;
+  if (!isSch() && E.tool === "select" && mod && mod.selectPadAt) {
+    const ps = CollabTools.pcb && CollabTools.pcb.state;
+    let r: unknown = false;
+    if (!smodeOf(ev)) { try { r = mod.selectPadAt(ev, [x, y], toolCtx()); } catch (e) { console.warn(e); } }
+    if (r === "box") { E.selection.clear(); E.selected = null; E.selField = null; drawSelection(); renderProps(); renderObjects(); requestRender(); startModuleBox(ev, x, y); return; }
+    // a press on the selected pad: a move promotes it to its footprint (FilterCollectorForFreePads, allow free pads off)
+    padWasSelected = r === true;
+    if (ps) ps.padSel = null;
+  }
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
   if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
     try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { E.selection.clear(); E.selected = null; E.selField = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); }
   }
   if (!best && mod && mod.onSelectDown) { try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); } }
+  const smode = selModifier(ev);
   if (!best) {
-    if (!ev.shiftKey) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
-    if (E.tool === "select" && E.kdoc) { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: ev.shiftKey, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
+    if (!smode) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
+    if (E.tool === "select" && E.kdoc) { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: !!smode, mode: smode, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
     return;
   }
-  if (ev.shiftKey) {                                   // KiCad: Shift+click adds to / removes from the selection
+  if (smode) {                                         // KiCad: Shift+click adds, Ctrl+click toggles, Ctrl+Shift+click removes
     if (E.selected) E.selection.add(E.selected.id);   // the single selection joins the set it is being extended to
-    if (E.selection.has(best.id)) E.selection.delete(best.id); else E.selection.add(best.id);
+    if (smode === "add") E.selection.add(best.id); else if (smode === "remove") E.selection.delete(best.id); else if (E.selection.has(best.id)) E.selection.delete(best.id); else E.selection.add(best.id);
     E.selected = E.selection.has(best.id) ? best : (E.selected && E.selected.id === best.id ? null : E.selected);
-    drawSelection(); renderProps(); renderObjects(); return;
+    if (!E.selected) for (const id of E.selection) { const f = E.items.find((q) => q.id === id); if (f) { E.selected = f; break; } }
+    drawSelection(); renderProps(); renderObjects(); requestRender(); return;
   }
   // KiCad's default left drag (MOUSE_DRAG_ACTION::DRAG_SELECTED): with nothing selected a drag draws a selection
   // box even when it starts on a part; only an existing selection moves.  The press still selects, as the click would.
-  const hadSelection = !!selectedSet();
+  const hadSelection = !!selectedSet() || padWasSelected;
   if (!E.selection.has(best.id)) E.selection.clear();
   E.selected = best;
   { const g = groupExpand([best.id]); if (g.size > 1) for (const id of g) E.selection.add(id); }   // a click on a group member selects its group (KiCad)
@@ -215,6 +228,11 @@ stage.addEventListener("pointerdown", (ev) => {
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
 
+/** SELECTION_TOOL::setModifiersState: Shift adds, Ctrl (Cmd on macOS) toggles, Ctrl+Shift removes; null replaces. */
+const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => selModifier(ev);
+function selModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): "add" | "toggle" | "remove" | null {
+  const c = ev.ctrlKey || ev.metaKey; return c && ev.shiftKey ? "remove" : c ? "toggle" : ev.shiftKey ? "add" : null;
+}
 /** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
 function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   if (E.tool !== "select" || !E.kdoc) return;

@@ -62,9 +62,9 @@ export function sizeCanvas() {
 
 /** The app's selection plus the board module's own picks (tracks, vias, graphics, zones): all repainted brightened. */
 function boardSelected(): Set<string> | null {
-  const base = selectedSet(); const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> });
-  if (isSch() || !pcb || !pcb.sel || !pcb.sel.size) return base;
-  const out = new Set<string>(base || []); for (const id of pcb.sel) out.add(id); return out;
+  const base = selectedSet(); const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string>; padSel?: string | null });
+  if (isSch() || !pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
+  const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel); return out;
 }
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();

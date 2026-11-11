@@ -21,7 +21,7 @@ export function selectedSet() { const s = new Set(E.selection); if (E.selected) 
 export function clearSelection() {
   E.selection.clear(); E.selected = null; E.selField = null;
   if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
-  const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear();   // the board module's own picks (tracks, vias, graphics) clear with everything else
+  const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear(); if (pcb) pcb.padSel = null;   // the board module's own picks (tracks, vias, graphics) clear with everything else
 }
 
 /** World-space delta → the field's own coordinate frame (schematic fields are absolute; footprint fields ride the footprint's rotation/scale). */
@@ -189,7 +189,18 @@ export function finishBoxSel(ev) {
       if (touches && !inside && board && it.kind !== "footprint" && it.geom && it.geom.length) touches = KiCadCanvas.itemTouchesRect(it, x0, y0, x1, y1, E.hiddenLayers);
       if (enclose ? inside : touches) picked.push(it); }
   }
-  if (!b.add) { E.selection.clear(); const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear(); }   // a box replaces the board module's own pick too
+  const pcbSel = CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel;
+  if (!b.add) { E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
+  // SelectMultiple(area, subtractive, exclusive_or): Ctrl+Shift takes the boxed items out, Ctrl toggles them, Shift adds
+  if (b.mode === "remove" || b.mode === "toggle") {
+    if (E.selected) E.selection.add(E.selected.id);
+    for (const it of picked) { const was = E.selection.has(it.id) || (pcbSel && pcbSel.has(it.id)); E.selection.delete(it.id); if (pcbSel) pcbSel.delete(it.id); if (b.mode === "toggle" && !was) E.selection.add(it.id); }
+    if (E.selected && !E.selection.has(E.selected.id)) E.selected = null;
+    if (!E.selected) { for (const id of E.selection) { const f = E.items.find((x) => x.id === id); if (f) { E.selected = f; break; } } }
+    drawSelection(); renderProps(); renderObjects(); requestRender();
+    setStatusBar({ message: "" });
+    return;
+  }
   for (const it of picked) E.selection.add(it.id);
   const prim = picked.find((it) => it.kind === "symbol" || it.kind === "footprint");
   E.selected = prim ? (E.items.find((f) => f.id === prim.id) || E.selected) : (b.add ? E.selected : null);

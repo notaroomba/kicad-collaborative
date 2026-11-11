@@ -1100,7 +1100,7 @@ test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / dup
   ctx.viewOnly = true; ctx.selection = new Set(["s-4"]); const n = log.commits.length; assert.equal(pcb.runAction("duplicate", ctx), true); assert.equal(log.commits.length, n); assert.ok(log.toasts.at(-1).includes("View-only"));
   ctx.viewOnly = false; pcb.setForm(null);
   // the overlay draws the ratsnest and the markers without a DOM
-  P.state.showRatsnest = true; pcb.runDRC(ctx); const c2 = stubCtx(800, 600); pcb.drawOverlay(c2, VIEW, ctx); assert.ok(c2.calls.stroke > 0 && c2.calls.arc > 0);
+  P.state.showRatsnest = true; pcb.runDRC(ctx); const c2 = stubCtx(800, 600); pcb.drawOverlay(c2, VIEW, ctx); assert.ok(c2.calls.stroke > 0 && c2.calls.fill > 0, "ratsnest strokes, marker pins filled");
 });
 
 // The three things a board fragment cannot carry inside its s-expression, plus the one
@@ -1315,4 +1315,31 @@ test("message panel: a highlighted net with nothing selected shows NETINFO_ITEM'
   assert.equal(cols[0].value, "GND"); assert.equal(cols[2].value, "1"); assert.equal(cols[3].value, "1");
   assert.equal(cols.find((c) => c.title === "On Board").value, (5 + 3 * Math.SQRT2 + 7).toFixed(4) + " mm");
   assert.equal(P.msgPanelInfo(doc, ["s-1"], { net: "GND" })[0].value, "Track", "a selection wins");
+});
+
+test("dynamic ratsnest: one line per net from the moving pads to the nearest stationary anchor (ComputeLocalRatsnest)", () => {
+  const doc = fixture();
+  // the footprint at its place: its GND pad sits away from s-1's start, so a line runs from the pad to the nearest GND anchor
+  const lines = P.dynamicRatsnest(doc, new Set(["fp-1"]));
+  assert.equal(lines.length, 1, "GND only: /SIG has no stationary anchor");
+  const pad = P.padsOf(doc.items.get("fp-1")).find((p) => p.net.name === "GND");
+  assert.deepEqual(lines[0].a, [pad.x, pad.y]); assert.deepEqual(lines[0].b, [110, 50], "the nearest GND anchor is s-1's start");
+  assert.equal(lines[0].net, "GND");
+  // moving every GND item: nothing left to connect to
+  assert.equal(P.dynamicRatsnest(doc, new Set(["fp-1", "s-1", "s-2", "s-3", "s-4", "a-1", "v-1"])).length, 0);
+  assert.equal(P.dynamicRatsnest(doc, new Set()).length, 0);
+});
+
+test("selection modifiers as SELECTION_TOOL::setModifiersState: Shift adds, Ctrl toggles, Ctrl+Shift removes", () => {
+  assert.equal(P.selMode(ev()), null); assert.equal(P.selMode(ev({ shiftKey: true })), "add");
+  assert.equal(P.selMode(ev({ ctrlKey: true })), "toggle"); assert.equal(P.selMode(ev({ metaKey: true })), "toggle", "Cmd on macOS");
+  assert.equal(P.selMode(ev({ ctrlKey: true, shiftKey: true })), "remove");
+  const doc = fixture(); const { ctx } = fakeCtx(doc); pcb.onDocChanged(ctx); P.state.sel.clear();
+  pcb.onSelectDown(ev(), [112, 50], ctx); assert.deepEqual([...P.state.sel], ["s-1"]);
+  pcb.onSelectDown(ev({ ctrlKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel].sort(), ["s-1", "s-4"], "Ctrl+click adds an unselected item");
+  pcb.onSelectDown(ev({ ctrlKey: true }), [112, 50], ctx); assert.deepEqual([...P.state.sel], ["s-4"], "Ctrl+click on a selected item takes it out");
+  pcb.onSelectDown(ev({ shiftKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel], ["s-4"], "Shift+click only adds");
+  pcb.onSelectDown(ev({ shiftKey: true }), [112, 50], ctx); assert.deepEqual([...P.state.sel].sort(), ["s-1", "s-4"]);
+  pcb.onSelectDown(ev({ ctrlKey: true, shiftKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel], ["s-1"], "Ctrl+Shift+click removes");
+  pcb.onSelectDown(ev({ ctrlKey: true, shiftKey: true }), [132, 50], ctx); assert.deepEqual([...P.state.sel], ["s-1"], "and never adds");
 });
