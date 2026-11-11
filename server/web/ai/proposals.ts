@@ -117,6 +117,18 @@ function nextRef(doc: any, prefix: string, taken: Set<string>): string {
   taken.add(prefix + n); return prefix + n;
 }
 
+/** Project name and sheet path a new symbol records: what the sheet's other items say, else the root sheet's own uuid. */
+function instanceHome(doc: any): { project: string; path: string } | null {
+  let found: { path: string | null; project: string | null } = { path: null, project: null };
+  try { found = SCH()._.sheetPathHere(doc); } catch { /* older tool module */ }
+  // KiCad's project name is the .kicad_pro's base name; the editor lists only sheets and boards, so read it from the project's own docs
+  const st = ED()?.api?.state || {}; const all: any[] = (st.project && st.project.docs) || projectDocs();
+  const pro = all.find((d: any) => d && (d.docType === "kicad_pro" || /\.kicad_pro$/.test(d.path || "")));
+  const project = found.project || (pro ? String(pro.path).split("/").pop()!.replace(/\.kicad_pro$/, "") : String((st.project && st.project.name) || ""));
+  const path = found.path || (doc.uuid ? "/" + doc.uuid : "");
+  return project && path ? { project, path } : null;
+}
+
 function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: string } {
   const s = SCH(); const k = K(); const got = e.__lib as { libId: string; node: any; fields?: Record<string, string>; value?: string } | undefined;
   const libId = got ? got.libId : text(e.lib_id, "lib_id");
@@ -138,6 +150,11 @@ function addSymbol(doc: any, e: Edit, taken: Set<string>): { change: any; ref: s
     if (p) p[2] = String(value);
     else { const [x, y] = k.atOf(node); const np = ["property", name, String(value), ["at", r4(x), r4(y), 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]]; const at = node.findIndex((c: any) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, np); else node.push(np); }
   }
+  // where it sits in the hierarchy, as KiCad writes it: without (instances …) desktop KiCad annotates the symbol
+  // afresh and its schematic parity check no longer finds the pins of the board's footprints
+  const home = instanceHome(doc);
+  if (home) { const old = node.findIndex((c: any) => Array.isArray(c) && c[0] === "instances"); if (old >= 0) node.splice(old, 1);
+    node.push(["instances", ["project", home.project, ["path", home.path, ["reference", ref], ["unit", unit]]]]); }
   // a turned symbol keeps its library's field positions turned with it, which lays text over its
   // own wires; KiCad's field autoplace puts them beside the body instead
   let out = node;
@@ -184,11 +201,20 @@ const VENDOR_FIELDS: [string, string][] = [["LCSC", "lcsc"], ["Mouser", "mouser"
  * on the board and is not gets its footprint, with each pad on its pin's net; a part that is there
  * gets its pad nets and value brought into line.  Nothing is removed.
  */
+/** A placed symbol's path as a board footprint records it: the sheet path below the root, then the symbol's uuid. */
+function symbolPath(doc: any, node: any): string {
+  const k = K(); const u = k.kid(node, "uuid"); if (!u) return "";
+  let sheet = "";
+  for (const inst of k.kids(node, "instances")) for (const pr of k.kids(inst, "project")) for (const pa of k.kids(pr, "path")) { sheet = k.str(pa[1]); break; }
+  const below = sheet.split("/").filter(Boolean).slice(1);   // drop the root sheet's uuid
+  return "/" + [...below, k.str(u[1])].join("/");
+}
+
 async function planSync(board: any, e: Edit): Promise<SyncPlan> {
   const k = K(); const P = PCB(); const s = SCH(); if (!s) throw new ToolError("The schematic tools are not loaded.");
   const sheets = projectDocs().filter((d) => d.docType === "kicad_sch" && (!e.schematic || d.path === e.schematic || d.path.endsWith("/" + e.schematic)));
   if (!sheets.length) throw new ToolError(e.schematic ? `there is no schematic ${e.schematic} in this project` : "this project has no schematic");
-  const parts = new Map<string, { ref: string; value: string; fpid: string; fields: Record<string, string>; pins: Map<string, string> }>(); const netNames = new Set<string>(); const problems: string[] = [];
+  const parts = new Map<string, { ref: string; value: string; fpid: string; fields: Record<string, string>; pins: Map<string, string>; path: string; sheetfile: string }>(); const netNames = new Set<string>(); const problems: string[] = [];
   for (const sh of sheets) {
     const { doc } = await resolveDoc(sh.path);
     const multi = sheets.length > 1; const nets = schNets(doc);
@@ -199,7 +225,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
       if (it.kind !== "symbol" || !it.ref || /^#/.test(it.ref)) continue;
       const ob = k.kid(it.node, "on_board"); if (ob && k.str(ob[1]) === "no") continue;
       const f = fieldsOf(it.node); let part = parts.get(it.ref);
-      if (!part) { part = { ref: it.ref, value: f.Value || "", fpid: f.Footprint || "", fields: f, pins: new Map() }; parts.set(it.ref, part); }
+      if (!part) { part = { ref: it.ref, value: f.Value || "", fpid: f.Footprint || "", fields: f, pins: new Map(), path: symbolPath(doc, it.node), sheetfile: sh.path.split("/").pop() || sh.path }; parts.set(it.ref, part); }
       for (const p of s._.symbolPins(doc, it)) { const net = pinNet.get(`${it.ref}\u0000${p.number}`); if (net && netNames.has(net)) part.pins.set(String(p.number), net); }
     }
   }
@@ -251,6 +277,9 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
         if (cx > x0 && cx + w > x0 + 90) { cx = x0; cy += rowH + 2; rowH = 0; }
         x = r4(cx - b[0]); y = r4(cy - b[1]); cx += w + 2; rowH = Math.max(rowH, h);
       }
+      // tie the footprint to its symbol the way KiCad does, by the symbol's uuid path, so update and parity match on it
+      if (part.path) { const at = node.findIndex((c: any) => Array.isArray(c) && (c[0] === "attr" || c[0] === "fp_line" || c[0] === "fp_text" || c[0] === "pad"));
+        const tie = [["path", part.path], ["sheetname", "/"], ["sheetfile", part.sheetfile]]; if (at >= 0) node.splice(at, 0, ...tie); else node.push(...tie); }
       P.translateNode(node, x, y);
       adds.push({ ref, value: part.value, fpid, x, y, node, padNets });
     } catch (err) { problems.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`); }
