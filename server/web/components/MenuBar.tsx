@@ -268,7 +268,7 @@ export function MenuBar() {
 
   // click-away and the keyboard
   useEffect(() => {
-    const away = (ev: PointerEvent) => { if ((stRef.current || focusRef.current !== null) && barRef.current && !barRef.current.contains(ev.target as Node)) close(); };
+    const away = (ev: PointerEvent) => { altAlone = false; /* Alt+click (Clarify Selection) is not a menu-bar Alt */ if ((stRef.current || focusRef.current !== null) && barRef.current && !barRef.current.contains(ev.target as Node)) close(); };
     let altAlone = false;
     const typing = (ev: KeyboardEvent) => { const t = ev.target as HTMLElement | null; return !!t && !!t.tagName && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || !!(t.closest && t.closest(".kd-overlay"))); };
     const key = (ev: KeyboardEvent) => {

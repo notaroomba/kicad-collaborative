@@ -200,6 +200,24 @@ function clarifyRows(mm: Mm): CtxItem | null {
   })) };
 }
 
+/**
+ * Alt+click in the select tool (SELECTION_TOOL::setModifiersState: m_skip_heuristics off Windows): every item under
+ * the cursor in KiCad's "Clarify Selection" popup (doSelectionMenu) — numbered rows, then Select All.  False when the
+ * click is not ambiguous, and the click selects as usual.
+ */
+export function openClarifyMenu(ev: { clientX: number; clientY: number }): boolean {
+  if (!E.kdoc || state.view !== "editor" || (E.tool !== "select" && E.tool !== "highlight") || interactionBusy()) return false;
+  const mm = worldMm(ev); E.lastCursorMm = mm;
+  const hits = hitsAt(mm).slice(0, 100); if (hits.length < 2) return false;
+  runners = new Map(); anchor = null;
+  const pick = (ids: string[]): void => { clearAllSelection(false); for (const id of ids) selectItemId(id); selectionChanged(); };
+  const items: CtxItem[] = hits.map((it, i): CtxItem => ({ label: describe(it), key: i < 9 ? String(i + 1) : undefined, hover: it.id, run: runRow(() => pick([it.id])) }));
+  items.push({ sep: true }, { label: "Select All", key: "A", run: runRow(() => pick(hits.map((it) => it.id))) });
+  E.contextMenuOpen = true; E.hoverId = null; stage.classList.remove("over-sel");
+  store.set({ contextMenu: { id: ++menuId, x: ev.clientX, y: ev.clientY, items } });
+  requestRender(); return true;
+}
+
 // ---------------------------------------------------------------- open / close
 function show(x: number, y: number, mm: Mm, clarify: boolean): void {
   runners = new Map(); anchor = { x, y, mm };

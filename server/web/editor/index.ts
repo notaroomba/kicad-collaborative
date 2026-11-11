@@ -22,7 +22,7 @@ import { state, store } from "./appstore";
 import { placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus } from "./doc";
 import { $ } from "./dom";
-import { openContextMenu } from "./contextmenu";
+import { openClarifyMenu, openContextMenu } from "./contextmenu";
 import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, registerPointerUp, selectionChanged, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
@@ -137,6 +137,13 @@ stage.addEventListener("dblclick", (ev) => {
   const other = hitAny([x, y]); const it = other && E.kdoc.items.get(other.id);
   if (it) KDialogs.openItem(ctx, it);
 });
+
+// Alt+click: KiCad's Clarify Selection popup when more than one item is under the cursor (window capture, ahead of the
+// tool modules' own stage listeners)
+window.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
+  if (openClarifyMenu(ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+}, true);
 
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0 || E.tool !== "select" || !E.kdoc || E.selection.size < 2 || E.viewOnly || ev.shiftKey) return;
