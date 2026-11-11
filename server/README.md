@@ -74,6 +74,45 @@ The server brokers GitHub OAuth so no client secret ships in KiCad.
 | DELETE | `/api/links/{token}` | revoke a share link |
 | GET | `/ws` | the sync WebSocket |
 
+## GitHub repository sync
+
+An online project can be linked to one folder of one branch of a GitHub
+repository (`src/github.rs`, page at `/github` and `/p/{id}/github`, also under
+File → GitHub Sync… in the web editor).
+
+- **Connecting.** Sign-in asks GitHub for identity only. Repository access is a
+  separate grant (`/auth/github/connect`, same OAuth app and callback, `repo`
+  or `public_repo` scope) that a user gives when they want sync and can drop
+  again. The token is stored AES-GCM encrypted under a key derived from
+  `JWT_SECRET`; every GitHub call is made as the user doing the action.
+- **Comparing.** The server remembers the git blob id each file had the last
+  time both sides agreed. That tells a file changed online (push) from one
+  changed on GitHub (pull) from one changed on both.
+- **Push** commits the files that changed online on top of the branch head —
+  never forced, and files GitHub changed are left alone. It can instead go to a
+  new branch with a pull request. A missing branch is created from the default
+  branch; an empty repository gets its first commit.
+- **Pull** brings GitHub's changes in. A file changed on both sides is merged
+  item by item (`src/merge.rs`): items are matched by their `uuid`, each side's
+  changes are kept, and only an item both sides changed differently needs a
+  side picked (the page says which items, and which side was kept). The result
+  is assembled from exact byte spans of the two files — nothing is
+  re-serialised. What a pull replaces is kept as a named checkpoint.
+- **Live sessions.** A project's file is its latest snapshot. Before reading
+  it, a connected desktop client is asked to save; a pull will not replace a
+  document that still has unsaved edits unless told to.
+
+| Endpoint | |
+|---|---|
+| `GET/DELETE /api/github` | connection state / forget the token |
+| `GET /api/github/repos`, `GET /api/github/scan?repo=&branch=` | repositories; KiCad project folders in one |
+| `POST /api/github/import` | create a project from a repository folder, linked |
+| `GET/PUT/DELETE /api/projects/{id}/github` | sync state / link (owner) / unlink (owner) |
+| `POST /api/projects/{id}/github/push`, `…/pull` | editors |
+
+`GITHUB_API_URL` / `GITHUB_WEB_URL` point the server at another GitHub
+(Enterprise, or the test stand-in).
+
 ## Running
 
 ```bash
@@ -110,6 +149,12 @@ rejections) can be smoke-tested with:
 ```bash
 node server/scripts/smoke.mjs
 ```
+
+`server/scripts/github-e2e.mjs` (API) and `github-ui.mjs` (the page, in
+Chromium, desktop and phone sizes) test repository sync against
+`fake-github.mjs`, an in-memory stand-in for GitHub's OAuth and git database
+API, so no real repository is touched. `KICAD_FILES_DIR=.. cargo test --
+--ignored real_files` runs the merge over every KiCad file in the source tree.
 
 `server/scripts/e2e.mjs` goes further: it drives two WebSocket clients through
 the real join → op → ack → broadcast flow and checks sharing, role enforcement,

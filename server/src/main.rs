@@ -1,8 +1,10 @@
 mod auth;
 mod doc_actor;
 mod error;
+mod github;
 mod http;
 mod lenient_json;
+mod merge;
 mod pages;
 mod persist;
 mod registry;
@@ -28,6 +30,10 @@ pub struct Config {
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
+    /// GitHub's REST API and web (OAuth) hosts.  Overridable so the repo-sync tests can
+    /// run against a local stand-in, and for GitHub Enterprise.
+    pub github_api_url: String,
+    pub github_web_url: String,
     /// Path to kicad-cli for SVG previews; previews are disabled when unset.
     pub kicad_cli: Option<String>,
     pub render_cache_dir: String,
@@ -76,6 +82,18 @@ async fn main() -> anyhow::Result<()> {
         }),
         github_client_id: std::env::var("GITHUB_CLIENT_ID").ok().filter(|s| !s.is_empty()),
         github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok().filter(|s| !s.is_empty()),
+        github_api_url: std::env::var("GITHUB_API_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "https://api.github.com".into())
+            .trim_end_matches('/')
+            .to_string(),
+        github_web_url: std::env::var("GITHUB_WEB_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "https://github.com".into())
+            .trim_end_matches('/')
+            .to_string(),
         kicad_cli: std::env::var("KICAD_CLI").ok().filter(|s| !s.is_empty()),
         render_cache_dir: std::env::var("RENDER_CACHE_DIR")
             .unwrap_or_else(|_| "./render-cache".into()),
@@ -213,6 +231,21 @@ async fn main() -> anyhow::Result<()> {
             post(http::create_checkpoint).get(http::list_checkpoints),
         )
         .route("/api/projects/{id}/restore", post(http::restore_checkpoint))
+        // GitHub repository sync (github.rs)
+        .route("/auth/github/connect", get(auth::github_connect))
+        .route("/github", get(github::page))
+        .route("/p/{id}/github", get(github::page))
+        .route("/static/github.js", get(github::page_js))
+        .route("/api/github", get(github::connection).delete(github::disconnect))
+        .route("/api/github/repos", get(github::list_repos))
+        .route("/api/github/scan", get(github::scan_repo))
+        .route("/api/github/import", post(github::import_project))
+        .route(
+            "/api/projects/{id}/github",
+            get(github::project_status).put(github::link_project).delete(github::unlink_project),
+        )
+        .route("/api/projects/{id}/github/push", post(github::push))
+        .route("/api/projects/{id}/github/pull", post(github::pull))
         .route("/ws", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())

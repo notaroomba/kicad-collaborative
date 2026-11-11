@@ -16,6 +16,8 @@ jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rand = "0.8"
 sha2 = "0.10"
+sha1 = "0.10"
+aes-gcm = "0.10"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

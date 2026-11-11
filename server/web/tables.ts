@@ -38,7 +38,7 @@ export const RADIO: Record<string, string[]> = {
 export type MenuEntry = string | [string, MenuEntry[]];
 export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
-    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "-", "openInKicad", "home"]],
+    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "findAndReplace", "-", "deleteTool"]],
     ["View", [["Panels", ["showProperties", "showHierarchy", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance"]], "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "navigateBack", "navigateUp", "navigateForward", "-", "toggleHiddenPins", "toggleGrid", "-", "showHiddenText"]],
     ["Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea", "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],
@@ -48,7 +48,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["Help", ["help", "gettingStarted", "-", "downloadDesktop", "sourceCode", "-", "about"]],
   ],
   pcb: [
-    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "-", "openInKicad", "home"]],
+    ["File", ["save", "-", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "archive", "clone", "github", "-", "openInKicad", "home"]],
     ["Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "-", "selectAll", "-", "find", "-", "deleteTool"]],
     ["View", [["Panels", ["showLayersManager", "showProperties", "showSelectionFilter", "showHistory", "showPeers", "showComments"]], "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomTool", "zoomRedraw", "-", "toggleGrid", "togglePolarCoords", "-", "showRatsnest", "highContrastMode", "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview", "flipBoard"]],
     ["Place", ["placeFootprint", "drawVia", "drawZone", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawPolygon", "drawBezier", "placeText", "drawTextBox", "drawTable", "-", "drawAlignedDimension", "drawOrthogonalDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "placeReferenceImage", "-", "gridSetOrigin", "drillOrigin"]],
@@ -64,7 +64,7 @@ export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
 
 /** The project manager's bar (home view): the same entries the old markup carried. */
 export const HOME_MENUS: [string, MenuEntry[]][] = [
-  ["File", ["home", "share", "checkpoint", "-", "archive", "clone", "-", "kicad"]],
+  ["File", ["home", "share", "checkpoint", "-", "archive", "clone", "github", "-", "kicad"]],
   ["View", ["zoomin", "zoomout", "fit", "-", "tab-appearance", "tab-props", "tab-peers", "tab-comments", "tab-history"]],
   ["Help", ["downloadDesktop", "sourceCode", "-", "about"]],
 ];
@@ -72,7 +72,7 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [
 /** Labels for entries that are ours rather than KiCad TOOL_ACTIONs. */
 export const LOCAL_LABELS: Record<string, string> = {
   save: "Save Checkpoint…", collabCopyLink: "Copy Share Link", collabComments: "Comments…", collabFollow: "Follow Next Peer", collabHistory: "History",
-  collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative…", home: "Back to Projects",
+  collabLeave: "Leave Session", archive: "Download Project (.zip)", github: "GitHub Sync…", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative…", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
   theme: "Toggle Dark Theme", downloadDesktop: "Download Desktop App ↗", sourceCode: "Source on GitHub ↗", about: "About KiCad Collaborative", help: "Help ↗", gettingStarted: "Getting Started with KiCad ↗",

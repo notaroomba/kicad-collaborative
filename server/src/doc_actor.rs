@@ -79,6 +79,9 @@ pub enum DocMsg {
     Reset {
         seq: i64,
     },
+    /// Something is about to read the document's file (a GitHub push or pull): ask a
+    /// client that can write one for a snapshot now, whatever the cooldown says.
+    SnapshotNow,
 }
 
 struct ClientState {
@@ -219,6 +222,18 @@ async fn run(pool: PgPool, doc: Document, mut rx: mpsc::Receiver<DocMsg>) {
                         head_seq = head_seq.max(seq);
                         let msg = json!({ "type": "reset", "docId": doc_id, "seq": seq }).to_string();
                         broadcast_all(&mut clients, &mut presence_dirty, doc_id, &msg);
+                    }
+                    DocMsg::SnapshotNow => {
+                        let editor = clients
+                            .iter()
+                            .filter(|(_, c)| c.role == "editor" && c.can_snapshot)
+                            .min_by(|a, b| a.0.cmp(b.0));
+                        if let Some((_, c)) = editor {
+                            last_snapshot_request = Instant::now();
+                            let _ = c.tx.try_send(
+                                json!({ "type": "snapshot_request", "docId": doc_id }).to_string(),
+                            );
+                        }
                     }
                     DocMsg::Resync { client_id } => {
                         touch(&mut clients, &client_id);

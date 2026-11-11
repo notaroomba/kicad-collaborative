@@ -13,6 +13,10 @@ pub enum AppError {
     Forbidden,
     #[error("{0}")]
     BadRequest(String),
+    /// A failure with its own status and machine code (`github_not_connected`, …) so a
+    /// client can react to it rather than parse the message.
+    #[error("{2}")]
+    Api(StatusCode, &'static str, String),
     #[error("auth is not configured on this server")]
     AuthNotConfigured,
     #[error(transparent)]
@@ -28,6 +32,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            AppError::Api(status, code, _) => (*status, *code),
             AppError::AuthNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, "auth_not_configured"),
             AppError::Db(e) => {
                 tracing::error!("db error: {e}");

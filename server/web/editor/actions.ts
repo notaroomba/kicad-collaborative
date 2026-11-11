@@ -31,6 +31,7 @@ export async function runAction(act, el) {
     case "refreshHistory": loadHistory(); break;
     case "about": showPopover("about", null, el); break;
     case "archive": if (id) location.href = `/api/projects/${id}/archive`; break;
+    case "github": location.href = id ? `/p/${id}/github` : "/github"; break;
     case "clone": if (!id) break; if (!state.me) { toast("Sign in to clone"); break; }
       try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + e.message, 4000); } break;
     case "share": if (!id) break; if (!state.me || !state.role || state.role === "viewer") { toast("Only editors can create share links"); break; }
@@ -132,7 +133,7 @@ export const HANDLERS = {
   showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
   showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
   collabCopyLink: (a) => runAction("share", a), collabComments: () => showPane("comments", true), collabFollow: () => cycleFollow(), collabHistory: () => showPane("history", true),
-  collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
+  collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   theme: () => toggleTheme(), about: (a) => runAction("about", a),
   // the home view's menu entries
   share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),

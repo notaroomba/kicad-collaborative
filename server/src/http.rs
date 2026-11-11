@@ -15,13 +15,13 @@ use crate::lenient_json::LenientJson;
 use crate::persist;
 use crate::AppState;
 
-const MAX_FILES: usize = 200;
-const MAX_FILE_BYTES: u64 = 30 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
+pub(crate) const MAX_FILES: usize = 200;
+pub(crate) const MAX_FILE_BYTES: u64 = 30 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 
 /// File names KiCad projects legitimately contain: design files, project-local
 /// libraries, 3D models and library tables.
-fn allowed_file(name: &str) -> bool {
+pub(crate) fn allowed_file(name: &str) -> bool {
     let base = name.rsplit('/').next().unwrap_or(name);
     if matches!(base, "sym-lib-table" | "fp-lib-table" | "design-block-lib-table") {
         return true;
@@ -36,7 +36,7 @@ fn allowed_file(name: &str) -> bool {
 
 /// Auto-detected document class, from the file name.  Editors join only the types
 /// they know; everything else just rides along in the archive.
-fn doc_type_for(path: &str) -> &'static str {
+pub(crate) fn doc_type_for(path: &str) -> &'static str {
     let base = path.rsplit('/').next().unwrap_or(path);
     if matches!(base, "sym-lib-table" | "fp-lib-table" | "design-block-lib-table") {
         return "lib_table";
@@ -56,13 +56,13 @@ fn doc_type_for(path: &str) -> &'static str {
 
 /// A path inside a project's own bookkeeping: `<name>.collab/` (sync bases, journals),
 /// `<name>-backups/`, `.history/` or `.git/`.  Never project content.
-fn is_local_state_path(name: &str) -> bool {
+pub(crate) fn is_local_state_path(name: &str) -> bool {
     name.split('/').any(|dir| {
         dir.ends_with(".collab") || dir.ends_with("-backups") || dir == ".history" || dir == ".git"
     })
 }
 
-fn safe_zip_name(name: &str) -> Option<String> {
+pub(crate) fn safe_zip_name(name: &str) -> Option<String> {
     let name = name.replace('\\', "/");
     if name.is_empty()
         || name.ends_with('/')

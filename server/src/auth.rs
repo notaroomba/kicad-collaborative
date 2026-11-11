@@ -43,7 +43,18 @@ pub struct PendingLogin {
     /// session back to via a one-time adopt code, when the browser started the
     /// flow somewhere other than public_url.
     pub return_origin: Option<String>,
+    /// Set when this is not a sign-in at all but a signed-in user granting
+    /// repository access (github.rs): the token is stored, no session is minted.
+    pub connect: Option<PendingConnect>,
     pub created: Instant,
+}
+
+/// A signed-in user adding repository access to their account.
+pub struct PendingConnect {
+    pub user_id: i64,
+    pub github_id: i64,
+    /// Where to send the browser afterwards (an allowed origin + a relative path).
+    pub return_to: String,
 }
 
 /// One-time code that hands a finished browser session to a non-canonical
@@ -239,7 +250,53 @@ pub async fn github_login(
         .filter(|o| *o != canonical && is_allowed_origin(&state, o))
         .map(str::to_string);
 
-    Ok(start_github_flow(&state, client_id, next, None, return_origin))
+    Ok(start_github_flow(&state, client_id, next, None, return_origin, None, SIGN_IN_SCOPE))
+}
+
+const SIGN_IN_SCOPE: &str = "read:user user:email";
+
+#[derive(Deserialize)]
+pub struct ConnectQuery {
+    pub next: Option<String>,
+    /// `public` asks for public repositories only; anything else for private ones too.
+    pub access: Option<String>,
+}
+
+/// Grant repository access: the same OAuth app and callback as sign-in, asked for
+/// the `repo` scope, by someone already signed in here.  Sign-in itself keeps
+/// asking for nothing but identity, so nobody hands over their repositories just
+/// to open a share link.
+pub async fn github_connect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Query(q): Query<ConnectQuery>,
+) -> AppResult<Response> {
+    let (client_id, _) = github_configured(&state)?;
+    let next = sanitize_next(q.next.as_deref());
+    let Some(user) = user_from_jar(&state, &jar).await else {
+        let back = format!("/auth/github/connect?next={}", urlencode(&next));
+        return Ok(Redirect::to(&format!("/auth/github/login?next={}", urlencode(&back))).into_response());
+    };
+
+    // Unlike sign-in this may start on any allowed host: the callback needs no
+    // cookie from this browser (see github_callback), so nothing has to be
+    // brokered through public_url first.
+    let canonical = state.cfg.public_url.trim_end_matches('/');
+    let origin = request_origin(&headers)
+        .filter(|o| is_allowed_origin(&state, o))
+        .unwrap_or_else(|| canonical.to_string());
+    let scope = if q.access.as_deref() == Some("public") {
+        "read:user user:email public_repo"
+    } else {
+        "read:user user:email repo"
+    };
+    let connect = PendingConnect {
+        user_id: user.id,
+        github_id: user.github_id,
+        return_to: format!("{origin}{next}"),
+    };
+    Ok(start_github_flow(&state, client_id, next, None, None, Some(connect), scope))
 }
 
 fn start_github_flow(
@@ -248,17 +305,21 @@ fn start_github_flow(
     next: String,
     desktop: Option<PendingDesktop>,
     return_origin: Option<String>,
+    connect: Option<PendingConnect>,
+    scope: &str,
 ) -> Response {
     state.auth_pending.purge();
     let oauth_state = random_token();
     state.auth_pending.logins.lock().unwrap().insert(
         oauth_state.clone(),
-        PendingLogin { next, desktop, return_origin, created: Instant::now() },
+        PendingLogin { next, desktop, return_origin, connect, created: Instant::now() },
     );
     let url = format!(
-        "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=read%3Auser%20user%3Aemail&state={}",
+        "{}/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&state={}",
+        state.cfg.github_web_url,
         urlencode(client_id),
         urlencode(&format!("{}/auth/github/callback", state.cfg.public_url)),
+        urlencode(scope),
         urlencode(&oauth_state),
     );
 
@@ -302,6 +363,9 @@ pub struct CallbackQuery {
 #[derive(Deserialize)]
 struct GithubTokenResponse {
     access_token: Option<String>,
+    /// Comma-separated scopes actually granted (the user can untick some).
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -326,7 +390,18 @@ pub async fn github_callback(
 ) -> AppResult<Response> {
     let (client_id, client_secret) = github_configured(&state)?;
 
-    if jar.get(OAUTH_STATE_COOKIE).map(|c| c.value()) != Some(q.state.as_str()) {
+    // A sign-in must come back to the browser that started it (the state cookie).
+    // A repository grant is bound differently: its state names the account it is
+    // for, and the token is refused below unless it belongs to that very GitHub
+    // user — so a state in the wrong browser can attach nothing to anyone.
+    let is_connect = state
+        .auth_pending
+        .logins
+        .lock()
+        .unwrap()
+        .get(&q.state)
+        .is_some_and(|p| p.connect.is_some());
+    if !is_connect && jar.get(OAUTH_STATE_COOKIE).map(|c| c.value()) != Some(q.state.as_str()) {
         return Err(AppError::BadRequest("oauth state mismatch".into()));
     }
 
@@ -345,7 +420,7 @@ pub async fn github_callback(
 
     let http = reqwest::Client::new();
     let token: GithubTokenResponse = http
-        .post("https://github.com/login/oauth/access_token")
+        .post(format!("{}/login/oauth/access_token", state.cfg.github_web_url))
         .header(reqwest::header::ACCEPT, "application/json")
         .form(&[
             ("client_id", client_id),
@@ -362,9 +437,29 @@ pub async fn github_callback(
         .access_token
         .ok_or_else(|| AppError::BadRequest("github rejected the authorization code".into()))?;
 
-    let gh_user: GithubUser = github_api(&http, &access, "https://api.github.com/user").await?;
+    let api = &state.cfg.github_api_url;
+    let gh_user: GithubUser = github_api(&http, &access, &format!("{api}/user")).await?;
+
+    if let Some(connect) = pending.connect {
+        if gh_user.id != connect.github_id {
+            return Err(AppError::BadRequest(format!(
+                "GitHub is signed in as {}, which is not the account you use here. \
+                 Switch accounts on github.com and connect again.",
+                gh_user.login
+            )));
+        }
+        crate::github::store_token(
+            &state,
+            connect.user_id,
+            &access,
+            token.scope.as_deref().unwrap_or(""),
+        )
+        .await?;
+        return Ok((jar, Redirect::to(&connect.return_to)).into_response());
+    }
+
     let emails: Vec<GithubEmail> =
-        github_api(&http, &access, "https://api.github.com/user/emails").await.unwrap_or_default();
+        github_api(&http, &access, &format!("{api}/user/emails")).await.unwrap_or_default();
     let primary_email = emails
         .iter()
         .find(|e| e.primary && e.verified)
@@ -660,12 +755,12 @@ pub async fn desktop_authorize(
     {
         if let Some(user) = persist::get_user(&state.pool, claims.sub).await? {
             let pending =
-                PendingLogin { next: "/".into(), desktop: Some(desktop), return_origin: None, created: Instant::now() };
+                PendingLogin { next: "/".into(), desktop: Some(desktop), return_origin: None, connect: None, created: Instant::now() };
             return finish_login(&state, jar, user, pending).await;
         }
     }
 
-    Ok(start_github_flow(&state, client_id, "/".into(), Some(desktop), None).into_response())
+    Ok(start_github_flow(&state, client_id, "/".into(), Some(desktop), None, None, SIGN_IN_SCOPE).into_response())
 }
 
 #[derive(Deserialize)]
