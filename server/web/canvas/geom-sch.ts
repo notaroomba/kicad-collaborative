@@ -2,7 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, bboxAdd, boxUnion, textGeom, textLines, transformedText } from "./geom";
-import { arcFrom3, atOf, bezierPts, colorOf, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
+import { arcFrom3, atOf, bezierPts, colorOf, ellipsePts, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
@@ -122,7 +122,7 @@ export function buildSchGeom(doc, item) {
     // SCH_TEXTBOX::GetShownText: wrapped to the box's inner width (its height when the text runs vertically)
     const col = vert ? (y1 - y0) - tm - bm : (x1 - x0) - lm - rm;
     textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, sizeX: ef.sizeX });
-  } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier") {
+  } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier" || k === "ellipse" || k === "ellipse_arc") {
     shapeGeom(item, n, k, (x, y) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
   } else if (k === "rule_area") {
     for (const pl of kids(n, "polyline")) {
@@ -141,7 +141,7 @@ export function buildSchGeom(doc, item) {
 }
 
 /** Graphic shape shared by sheet-level notes and library bodies (tf maps node coords to screen). */
-export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill) {
+export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill, invertY) {
   const f = fillOf(g); const sc = strokeColorOf(g) || color;
   const fill = f.type === "background" ? SCH.body : f.type === "outline" ? sc : f.type === "color" ? f.color : f.type === "solid" ? sc : null;
   const fz = f.type === "outline" || f.type === "solid" ? z : zBg;   // KiCad fills device-coloured shapes in the foreground
@@ -162,6 +162,10 @@ export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill) {
     const rad = r ? num(r[1]) : 1;
     if (fill) G(item, { t: "circle", x: cx, y: cy, r: rad, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
     G(item, Object.assign({ t: "circle", x: cx, y: cy, r: rad, w, color: sc, layer, z }, ds));
+  } else if (gk === "ellipse" || gk === "ellipse_arc") {
+    const e = ellipsePts(g, invertY); if (!e) return; const p = e.pts.map(([x, y]) => tf(x, y));
+    if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
+    G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color: sc, layer, z }, ds));
   } else if (gk === "arc") {
     const s0 = kid(g, "start"), m0 = kid(g, "mid"), e0 = kid(g, "end"); if (!s0 || !m0 || !e0) return;
     const a = arcFrom3(tf(num(s0[1]), num(s0[2])), tf(num(m0[1]), num(m0[2])), tf(num(e0[1]), num(e0[2])));
@@ -298,8 +302,8 @@ export function buildSymbolGeom(doc, item) {
         const gk = g[0];
         if (yesNo(g, "private")) continue;
         const before = item.bbox ? item.bbox.slice() : null; item.bbox = null;
-        if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc") {
-          shapeGeom(item, g, gk, tf, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g, 0) || SCH_PEN);
+        if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc") {
+          shapeGeom(item, g, gk, tf, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g, 0) || SCH_PEN, undefined, true);
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g);

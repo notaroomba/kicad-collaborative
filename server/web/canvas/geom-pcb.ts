@@ -3,7 +3,7 @@
 import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { expandDocVars } from "./geom-sch";
-import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
+import { arcFrom3, atOf, bezierPts, dashOf, ellipsePts, effectsOf, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
@@ -89,7 +89,7 @@ export function buildPcbGeom(doc, item) {
     buildViaGeom(doc, item, n);
   } else if (k === "zone") {
     buildZoneGeom(doc, item, n);
-  } else if (k === "gr_line" || k === "gr_rect" || k === "gr_circle" || k === "gr_arc" || k === "gr_poly" || k === "gr_curve") {
+  } else if (k === "gr_line" || k === "gr_rect" || k === "gr_circle" || k === "gr_arc" || k === "gr_poly" || k === "gr_curve" || k === "gr_ellipse" || k === "gr_ellipse_arc") {
     graphicGeom(item, n, k.replace("gr_", ""), (x, y) => [x, y], layerOf(n, "Dwgs.User"));
   } else if (k === "gr_text") {
     const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
@@ -104,6 +104,11 @@ export function buildPcbGeom(doc, item) {
     const arm = xShape ? 2 * size / 3 : size / 2, r = xShape ? size / 2 : size / 3;
     for (const [a, b] of [[[-arm, 0], [arm, 0]], [[0, -arm], [0, arm]]]) { const p = R(a[0], a[1]), q = R(b[0], b[1]); G(item, { t: "line", x1: x + p[0], y1: y + p[1], x2: x + q[0], y2: y + q[1], w, color, layer, z }); }
     G(item, { t: "circle", x, y, r, w, color, layer, z });
+  } else if (k === "point") {
+    // PCB_PAINTER::draw( PCB_POINT ): an X of the size in LAYER_POINTS' colour and a ring of half that in the layer's
+    const [x, y] = atOf(n); const layer = layerOf(n, "F.Cu"); const sizeN = kid(n, "size"); const h = (sizeN ? num(sizeN[1]) : 1) / 2; const z = pcbZ(layer);
+    for (const [a, b] of [[[-h, -h], [h, h]], [[h, -h], [-h, h]]]) G(item, { t: "line", x1: x + a[0], y1: y + a[1], x2: x + b[0], y2: y + b[1], w: 0, color: POINT_COLOR, layer, z });
+    G(item, { t: "circle", x, y, r: h / 2, w: 0, color: pcbColor(layer), layer, z });
   } else if (k === "footprint") {
     buildFootprintGeom(doc, item);
   } else if (k === "table") {
@@ -113,6 +118,9 @@ export function buildPcbGeom(doc, item) {
   }
   // groups, gr_bbox, generated items: nothing to draw
 }
+
+// LAYER_POINTS in the KiCad default colour theme
+const POINT_COLOR = "#FF26E2";
 
 // m_HoleWallThickness (0.020 mm) × m_HoleWallPaintingMultiplier (1.5): how wide the plating is painted
 export const HOLE_WALL = 0.020 * 1.5;
@@ -231,6 +239,9 @@ export function graphicGeom(item, g, shape, tf, layer, z) {
     const a = arcFrom3(tf(num(s[1]), num(s[2])), tf(num(m[1]), num(m[2])), tf(num(e[1]), num(e[2])));
     if (a) G(item, Object.assign({ t: "arc", w, color, layer, z, cap: "round" }, a, ds));
     else { const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2])); G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }, ds)); }
+  } else if (shape === "ellipse" || shape === "ellipse_arc") {
+    const e = ellipsePts(g, false); if (!e) return; const p = e.pts.map(([x, y]) => tf(x, y));
+    G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color, fill: e.closed ? fillColor : null, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "poly" || shape === "curve") {
     let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (shape === "curve") p = bezierPts(p);
@@ -348,7 +359,7 @@ export function buildFootprintGeom(doc, item) {
   let padIndex = 0;   // index among the footprint's (pad …) children: padAt() reports it and pcb-tools can map it back
   for (let j = 2; j < n.length; j++) {
     const g = n[j]; if (!isList(g)) continue; const gk = g[0];
-    if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve") {
+    if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve" || gk === "fp_ellipse" || gk === "fp_ellipse_arc") {
       graphicGeom(item, g, gk.replace("fp_", ""), tf, layerOf(g, "F.SilkS"));
     } else if (gk === "fp_text") {
       textAt(g, str(g[2]));

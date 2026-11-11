@@ -230,6 +230,32 @@ export function bezierPts(p, segs) {
   return out;
 }
 
+/**
+ * (ellipse …) / (ellipse_arc …) / (gr_ellipse …) / (fp_ellipse …) flattened, in the node's own coordinates.  The
+ * angles are KiCad's internal (Y down) ones in every file — SHAPE_ELLIPSE's eval, an arc swept from start_angle up to
+ * end_angle (sweepRange) — while a symbol library writes the centre with Y up, so `invertY` maps through that.
+ */
+export function ellipsePts(g, invertY, segs) {
+  const c = kid(g, "center"); if (!c) return null;
+  const a = num((kid(g, "major_radius") || [])[1], 0), b = num((kid(g, "minor_radius") || [])[1], 0);
+  const phi = num((kid(g, "rotation_angle") || [])[1], 0) * Math.PI / 180, cr = Math.cos(phi), sr = Math.sin(phi);
+  const arc = /ellipse_arc$/.test(String(g[0]));
+  let t0 = 0, t1 = 2 * Math.PI;
+  if (arc) {
+    t0 = num((kid(g, "start_angle") || [])[1], 0) * Math.PI / 180; t1 = num((kid(g, "end_angle") || [])[1], 0) * Math.PI / 180;
+    if (t1 - t0 >= 2 * Math.PI || t1 - t0 <= -2 * Math.PI) t1 = t0 + 2 * Math.PI; else if (t1 < t0) t1 += 2 * Math.PI;
+  }
+  const cx = num(c[1]), cy = invertY ? -num(c[2]) : num(c[2]);
+  const n = Math.max(8, segs || Math.ceil(64 * (t1 - t0) / (2 * Math.PI))), out = [];
+  for (let i = 0; i <= n; i++) {
+    if (!arc && i === n) break;
+    const t = t0 + (t1 - t0) * i / n, lx = a * Math.cos(t), ly = b * Math.sin(t);
+    const x = cx + lx * cr - ly * sr, y = cy + lx * sr + ly * cr;
+    out.push([x, invertY ? -y : y]);
+  }
+  return { pts: out, closed: !arc };
+}
+
 // KiCad's RotatePoint: positive angles turn counter-clockwise on the (Y down) screen
 export function rotPt(x, y, deg) { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return [x * c + y * s, -x * s + y * c]; }
 

@@ -1301,6 +1301,32 @@ test("appearance options: layer colours, object visibility and opacity, per-item
 });
 
 
+test("ellipses (sheet, symbol body, board, footprint) and board points: KiCad's SHAPE_ELLIPSE sampling and PCB_POINT marker", () => {
+  const sch = K.parseDoc(`(kicad_sch (version 20260306) (generator "eeschema") (uuid "e0000000-0000-0000-0000-000000000001") (paper "A4")
+    (lib_symbols (symbol "T:E" (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "E" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "E_0_1" (ellipse (center 0 2) (major_radius 4) (minor_radius 1) (rotation_angle 0) (stroke (width 0) (type default)) (fill (type background))))))
+    (ellipse (center 50 50) (major_radius 10) (minor_radius 5) (rotation_angle 90) (stroke (width 0) (type default)) (fill (type none)) (uuid "e0000000-0000-0000-0000-000000000002"))
+    (ellipse_arc (center 80 50) (major_radius 10) (minor_radius 5) (rotation_angle 0) (start_angle 0) (end_angle 90) (stroke (width 0) (type default)) (fill (type none)) (uuid "e0000000-0000-0000-0000-000000000003"))
+    (symbol (lib_id "T:E") (at 100 100 0) (unit 1) (uuid "e0000000-0000-0000-0000-000000000004") (property "Reference" "U1" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "E" (at 0 0 0) (effects (font (size 1.27 1.27))))))`);
+  const e = sch.items.get("e0000000-0000-0000-0000-000000000002"), ea = sch.items.get("e0000000-0000-0000-0000-000000000003");
+  const poly = (it) => it.geom.find((g) => g.t === "poly" && !g.noStroke);
+  const pe = poly(e); assert.ok(pe && pe.close, "a closed outline");
+  near(pe.pts[0][0], 50, 1e-6); near(pe.pts[0][1], 60, 1e-6, "rotated 90: the major axis runs down the sheet (Y down)");
+  near(e.bbox[2] - e.bbox[0], 10, 0.2); near(e.bbox[3] - e.bbox[1], 20, 0.2);
+  const pa = poly(ea); assert.ok(pa && !pa.close); near(pa.pts[0][0], 90, 1e-6); near(pa.pts[pa.pts.length - 1][1], 55, 1e-6, "end_angle 90 is below the centre");
+  const sym = findSym(sch, () => true); const body = sym.geom.filter((g) => g.t === "poly" && g.pts && g.pts.length > 30);
+  assert.ok(body.length >= 1, "the library body's ellipse is drawn"); const ys = body[0].pts.map((p) => p[1]); near((Math.min(...ys) + Math.max(...ys)) / 2, 98, 1e-3, "the library centre is Y up");
+  const pcb = K.parseDoc(`(kicad_pcb (version 20260206) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user "F.Silkscreen") (25 "Edge.Cuts" user))
+    (gr_ellipse (center 10 10) (major_radius 3) (minor_radius 2) (rotation_angle 0) (stroke (width 0.1) (type default)) (fill no) (layer "F.SilkS") (uuid "e1000000-0000-0000-0000-000000000001"))
+    (point (at 20 20) (size 2) (layer "F.Cu") (uuid "e1000000-0000-0000-0000-000000000002"))
+    (footprint "T:F" (layer "F.Cu") (uuid "e1000000-0000-0000-0000-000000000003") (at 40 40 90)
+      (fp_ellipse_arc (center 0 0) (major_radius 2) (minor_radius 1) (rotation_angle 0) (start_angle 0) (end_angle 180) (stroke (width 0.1) (type default)) (layer "F.SilkS") (uuid "e1000000-0000-0000-0000-000000000004"))))`);
+  const ge = pcb.items.get("e1000000-0000-0000-0000-000000000001"); near(ge.bbox[2] - ge.bbox[0], 6.1, 0.05); near(ge.bbox[3] - ge.bbox[1], 4.1, 0.05);
+  const pt = pcb.items.get("e1000000-0000-0000-0000-000000000002"); assert.deepStrictEqual(pt.geom.map((g) => g.t), ["line", "line", "circle"]); near(pt.geom[2].r, 0.5, 1e-9);
+  const fp = [...pcb.items.values()].find((i) => i.kind === "footprint"); const arc = fp.geom.find((g) => g.t === "poly" && g.layer === "F.SilkS");
+  assert.ok(arc && !arc.close); near(arc.pts[0][0], 40, 1e-6); near(arc.pts[0][1], 38, 1e-6, "the footprint's 90 degree turn carries the arc's start");
+});
+
 Promise.all(PENDING).then(() => {
   console.log(`${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
