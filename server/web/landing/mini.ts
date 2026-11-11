@@ -17,8 +17,9 @@ const GRID = 0.25, VIA = { size: 0.6, drill: 0.3 };
 const CLEARANCE = 0.2;
 const LAYER_COLOR: Record<Layer, string> = { "F.Cu": "#C83434", "B.Cu": "#4D7FC4" };
 const HOME: Box = [BOARD.x - 3, BOARD.y - 3, BOARD.x + BOARD.w + 3, BOARD.y + BOARD.h + 3];
-/** Routes left for the visitor: the back-layer jumper, the output, the LED and its ground. */
-const OPEN = [20, 26, 27, 28];
+/** Routes the board starts without, in the order the teammates lay them while the visitor
+ *  watches: the output, the LED, its ground, and the back-layer jumper. */
+const OPEN = [26, 27, 28, 20];
 const PARTS = new Set(meta.parts.map((p) => p.id));
 const snap = (v: number, o: number): number => o + Math.round((v - o) / GRID) * GRID;
 
@@ -60,8 +61,12 @@ export function startMini(root: HTMLElement): void {
   let lastAct = 0, nextJob = 0, stillTimer = 0, blocked: number | null = null;
   let base: HTMLCanvasElement | null = null, t0 = 0, serial = 0;
 
+  /** The tracks and vias taken off the board at the start, for the teammates to lay again. */
+  const spare = new Map<string, any>();
   function open(): void {
-    for (const i of OPEN) { const r = meta.routes[i]; for (const id of r.ids) doc.items.delete(id); if (r.via) doc.items.delete(r.via); }
+    spare.clear();
+    if (still) return;                                   // without motion the board is simply complete
+    for (const i of OPEN) { const r = meta.routes[i]; for (const id of [...r.ids, ...(r.via ? [r.via] : [])]) { const it = doc.items.get(id); if (it) { spare.set(id, it); doc.items.delete(id); } } }
   }
   open();
 
@@ -189,6 +194,31 @@ export function startMini(root: HTMLElement): void {
     steps.push({ dur: 0.25, to: at });
     job = { who, steps, i: 0, t0: now, from, at: from, move };
   }
+  /** A teammate routes one of the open connections, as the router does it: click on the pad,
+   *  pull the track out along the grid, click at each corner, and drop the via where it ends. */
+  function startRoute(now: number, r: (typeof meta.routes)[number]): void {
+    const who = r.who === 0 ? 0 : 1, steps: Step[] = [], pts = r.pts as Pt[];
+    const from = walkAt(who, now).at, on = r.layer as Layer;
+    const pull = (i: number): void => { const it = spare.get(r.ids[i]); redo = it ? { a: pts[i], b: pts[i + 1], at: pts[i], layer: on, w: (it.geom as any[])[0].w } : null; };
+    steps.push({ dur: travel(from, pts[0]), to: pts[0] });
+    steps.push({ dur: CLICK, to: pts[0], end: () => pull(0) });
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], id = r.ids[i - 1], last = i === pts.length - 1;
+      steps.push({ dur: clamp(dist(a, b) / 6, 0.45, 1.4), to: b, straight: true, tick: (c) => { if (redo) redo.at = [snap(c[0], a[0]), snap(c[1], a[1])]; } });
+      steps.push({ dur: CLICK + (last ? 0 : 0.06), to: b, end: () => {
+        const it = spare.get(id); if (it) doc.items.set(id, it);
+        if (last) { redo = null; const v = r.via ? spare.get(r.via) : null; if (v) doc.items.set(v.id, v); } else pull(i);
+        redraw();
+      } });
+    }
+    steps.push({ dur: 0.35, to: pts[pts.length - 1] });
+    job = { who, steps, i: 0, t0: now, from, at: from, move: null };
+  }
+  /** The next connection still missing from the board, if the teammates have one left to lay. */
+  function missing(): (typeof meta.routes)[number] | null {
+    for (const i of OPEN) { const r = meta.routes[i]; if (r.ids.some((id) => spare.has(id) && !doc.items.has(id))) return r; }
+    return null;
+  }
   /** Moves the job along to `now`, running whatever its steps do on the way. */
   function runJob(now: number): void {
     while (job) {
@@ -287,7 +317,7 @@ export function startMini(root: HTMLElement): void {
   function endRoute(): void { if (route) { remember(route.made); route = null; change(); } }
   function reset(): void {
     doc = loadPcbOpen(); open(); edits.length = 0; job = null; walks[0] = walks[1] = null; mark = null; redo = null; clearTimeout(stillTimer); route = null; drag = null; selected = null; box = HOME.slice() as Box; tool = "select"; layer = "F.Cu";
-    dirty = true; touched = false; sync(); stage.invalidate();
+    dirty = true; touched = false; nextJob = performance.now() + 1800; sync(); stage.invalidate();
   }
   function zoom(k: number, about?: Pt): void {
     const cx = about ? about[0] : (box[0] + box[2]) / 2, cy = about ? about[1] : (box[1] + box[3]) / 2;
@@ -323,7 +353,7 @@ export function startMini(root: HTMLElement): void {
   }
 
   const stage: Stage = makeStage(canvas, (s, now) => {
-    if (!t0) t0 = now;
+    if (!t0) { t0 = now; nextJob = now + 1800; }
     const { ctx, w: W, h: H, dpr } = s;
     view = fit(W, H, dpr, box);
     if (!base) base = document.createElement("canvas");
@@ -360,6 +390,7 @@ export function startMini(root: HTMLElement): void {
     // The scripted collaborators: a pointer each, and an outline on what they hold.
     if (!still) {
       if (!job && edits.length && !drag && !route && !pan && now - lastAct > IDLE && now > nextJob) startJob(now);
+      else if (!job && !edits.length && !drag && !route && !pan && now - lastAct > IDLE && now > nextJob) { const r = missing(); if (r) startRoute(now, r); }
       runJob(now);
     }
     if (mark) {
