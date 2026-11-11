@@ -117,7 +117,7 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
 function clearHighlight(): void { if (!runModuleAction("clearHighlight")) { E.highlightIds = null; } requestRender(); }
 function dragTrack(): Run | string {
   const it = selectionItems()[0]; if (!it) return NOT_YET;
-  if (it.kind === "footprint") return () => { startMove("move"); };
+  if (it.kind === "footprint") return () => { const m = CollabTools.pcb as unknown as { dragSelection?: (c: unknown) => boolean }; if (!(m.dragSelection && m.dragSelection(toolCtx()))) startMove("move"); };   // attached tracks follow
   if (it.kind !== "segment" || !moduleTool("drag")) return NOT_YET;
   return () => { const p = pcbState(); clearAllSelection(false); if (p) p.sel = new Set([it.id]); setTool("drag"); selectionChanged(); };
 }

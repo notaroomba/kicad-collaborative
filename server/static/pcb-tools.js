@@ -833,7 +833,31 @@ function beginCarryMove(ctx, opts) {
   const at = opts.at ? (ctx.snapOn ? ctx.snap(opts.at.slice()) : opts.at.slice()) : cursorPoint(ctx);
   const m = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
+  if (opts.drag) dragEnds(doc, m);
   S.move = m; ctx.requestRender(); return true;
+}
+/**
+ * Drag (D / G, EDIT_TOOL::Drag on footprints and vias): the tracks that end on a moving footprint's pad or a moving via
+ * stay attached — their end follows the item (the router's free-angle drag of the last segment).  Tracks that are
+ * themselves moving, and arcs (whose middle would not follow), are left alone.
+ */
+function dragEnds(doc, m) {
+  const anchors = [];
+  for (const id of m.ids) {
+    const it = doc.items.get(id); if (!it) continue;
+    if (it.kind === "footprint") for (const p of padsOf(it)) anchors.push({ p: [p.x, p.y], layers: p.layers });
+    else if (it.kind === "via") { const at = pt(it.node, "at"); if (at) anchors.push({ p: at, layers: null }); }
+  }
+  if (!anchors.length) return;
+  const onLayer = (layers, l) => !layers || layers.some((x) => x === l || (x === "*.Cu" && /\.Cu$/.test(l)) || (x === "F&B.Cu" && (l === "F.Cu" || l === "B.Cu")));
+  for (const sg of doc.items.values()) {
+    if (sg.kind !== "segment" || m.ids.includes(sg.id)) continue;
+    const l = layerOf(sg.node);
+    for (const key of ["start", "end"]) {
+      const q = pt(sg.node, key); if (!q || !anchors.some((a) => samePt(q, a.p) && onLayer(a.layers, l))) continue;
+      m.ends.push({ id: sg.id, key }); if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone(sg.node));
+    }
+  }
 }
 /** A press while the selection follows the cursor: the left button drops it there (and the click goes no further). */
 function onStickyPointerDown(ev) {
@@ -2641,6 +2665,8 @@ function ghostSegs() {
 
 const pcb = {
   id: "pcb", tools: TOOLS, state: S, ghostSegs,
+  /** Drag (D / G) of the selected footprints and vias with their tracks attached; false when nothing can be dragged. */
+  dragSelection(ctx) { bind(ctx); if (ctx.viewOnly || !ctx.doc) return false; return beginCarryMove(ctx, { drag: true }); },
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
@@ -2705,7 +2731,11 @@ const pcb = {
     switch (k) {
     case "x": case "X": if (!shift) { ctx.setTool("route"); return true; } return false;
     case "v": case "V": if (shift) return false; if (S.route) { if (editing()) routeVia(ctx); } else ctx.setTool("via"); return true;
-    case "d": case "D": if (shift || !S.sel.size) return false; if (editing()) ctx.setTool("drag"); return true;
+    case "d": case "D": case "g": case "G":
+      if (shift) return false;
+      if (!S.sel.size) { const it = liveSelected(); if (!it || selectionIds(ctx).size !== 1 || ctx.doc.items.get(it.id)?.kind !== "footprint") return false; return editing() && beginCarryMove(ctx, { drag: true }); }
+      if (k === "g" || k === "G") return false;
+      if (editing()) ctx.setTool("drag"); return true;
     case "t": case "T": if (!shift) { ctx.setTool("gtext"); return true; } return false;
     case "L": if (shift) { ctx.setTool("gline"); return true; } return false;
     case "R": if (shift) { ctx.setTool("grect"); return true; }
