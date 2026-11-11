@@ -83,13 +83,82 @@ export function plotDialog() {
     } });
 }
 
-/** File → Print: the document as SVG in a print window. */
-export function printDocument() {
+/**
+ * File → Print: KiCad's Print dialog (eeschema DIALOG_PRINT / pcbnew DIALOG_PRINT_PCBNEW on
+ * DIALOG_PRINT_GENERIC): output mode, drawing sheet, scale (and the board's included layers), then
+ * Print Preview / Print / Close.  Printing renders the document as SVG into a window the browser prints.
+ */
+export function printDialog() {
   if (!E.kdoc) return;
-  let svg; try { svg = KiCadCanvas.renderSvg(E.kdoc, { hidden: E.hiddenLayers, background: false, zoneOutline: !!E.renderOpts.zoneOutline }); } catch (e) { toast("Print failed: " + (e.message || e)); return; }
+  if (!window.KDialogs) { printDocument({}); return; }
+  const sch = isSch();
+  const P = E.printOpts || (E.printOpts = { mono: false, frame: true, background: false, scale: "fit", custom: 1, layers: null });
+  const layerNames = sch || !E.kdoc.layers ? [] : [...E.kdoc.layers.keys()];
+  const included = new Set(P.layers || layerNames.filter((l) => !(E.hiddenLayers && E.hiddenLayers.has(l))));
+  const cb = (id, on, label, dis) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
+  const radio = (name, value, on, label) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="radio" name="${name}" value="${value}" style="width:auto;margin:0"${on ? " checked" : ""}> ${esc(label)}</label>`;
+  const read = () => {
+    const g = (id) => document.querySelector("#" + id);
+    P.mono = g("kd-pr-mode").value === "bw"; P.frame = !!g("kd-pr-frame").checked;
+    if (sch) P.background = !!g("kd-pr-bg").checked;
+    else {
+      const r = document.querySelector('input[name="kd-pr-scale"]:checked'); P.scale = r ? r.value : "fit";
+      P.custom = Math.max(0.01, Math.min(100, +g("kd-pr-custom").value || 1));
+      P.layers = [...document.querySelectorAll(".kd-pr-layer")].filter((c) => c.checked).map((c) => c.dataset.layer);
+    }
+  };
+  KDialogs.open({ title: "Print", width: sch ? 420 : 560,
+    build(body) {
+      const options = `<h3>Options</h3>
+        <div class="kv"><label>Output mode:</label><select id="kd-pr-mode"><option value="color"${P.mono ? "" : " selected"}>Color</option><option value="bw"${P.mono ? " selected" : ""}>Black and White</option></select></div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${cb("kd-pr-frame", P.frame, "Print drawing sheet")}${sch ? cb("kd-pr-bg", P.background, "Print background color") : ""}</div>`;
+      if (sch) { body.innerHTML = options; return; }
+      const layers = layerNames.map((l) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input class="kd-pr-layer" data-layer="${esc(l)}" type="checkbox" style="width:auto;margin:0"${included.has(l) ? " checked" : ""}> ${esc(l)}</label>`).join("");
+      body.innerHTML = `<div class="kd-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div><h3>Included Layers</h3><div style="max-height:260px;overflow:auto;border:1px solid var(--line);padding:4px 6px;display:flex;flex-direction:column;gap:2px">${layers}</div></div>
+        <div>${options}<h3>Scale</h3><div style="display:flex;flex-direction:column;gap:6px">${radio("kd-pr-scale", "1", P.scale === "1", "1:1")}${radio("kd-pr-scale", "fit", P.scale === "fit", "Fit to page")}
+          <div style="display:flex;gap:6px;align-items:center">${radio("kd-pr-scale", "custom", P.scale === "custom", "Custom:")}<input id="kd-pr-custom" type="number" min="0.01" max="100" step="0.1" value="${P.custom}" style="width:80px"></div></div></div></div>`;
+    },
+    buttons: [
+      { label: "Print Preview", fn: () => { read(); printDocument(P, true); } },
+      { label: "Print", primary: true, isDefault: true, fn: () => { read(); printDocument(P, false); } },
+      { label: "Close", close: true },
+    ] });
+}
+
+/** Black and White: KiCad prints every item in black on white paper; pale fills (a symbol body) stay paper white. */
+function monochrome(svg) {
+  const lum = (r, g, b) => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const map = (c) => {
+    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r, g, b;
+    if (m) { let h = m[1]; if (h.length === 3) h = h.replace(/./g, "$&$&"); r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
+    else if ((m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/i.exec(c))) { r = +m[1]; g = +m[2]; b = +m[3]; }
+    else return c;
+    return lum(r, g, b) > 0.85 ? "#ffffff" : "#000000";
+  };
+  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all, k, c) => (c === "none" ? all : `${k}="${map(c)}"`));
+}
+
+/** Render the document for printing and open it in a print window (preview: shown, not printed). */
+export function printDocument(P, preview) {
+  if (!E.kdoc) return;
+  P = P || {}; const sch = isSch();
+  const hidden = new Set(E.hiddenLayers || []);
+  if (!sch && P.layers) for (const l of E.kdoc.layers ? E.kdoc.layers.keys() : []) { if (P.layers.includes(l)) hidden.delete(l); else hidden.add(l); }
+  const frame = P.frame !== false;
+  const opts = { hidden, background: sch && P.background ? undefined : false, zoneOutline: !!E.renderOpts.zoneOutline, frame };
+  if (!sch && frame && E.kdoc.page) opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
+  let svg; try { svg = KiCadCanvas.renderSvg(E.kdoc, opts); } catch (e) { toast("Print failed: " + (e.message || e)); return; }
+  if (P.mono) svg = monochrome(svg);
+  // 1:1 keeps the SVG's own millimetre size; Custom scales it; Fit to page (and a schematic page) fills the paper
+  const m = /width="([\d.]+)mm" height="([\d.]+)mm"/.exec(svg);
+  const k = !sch && P.scale === "1" ? 1 : !sch && P.scale === "custom" ? (P.custom || 1) : 0;
+  const size = k && m ? `svg{width:${(+m[1] * k).toFixed(2)}mm;height:${(+m[2] * k).toFixed(2)}mm}` : "svg{width:100%;height:auto;max-height:100vh}";
   const w = window.open("", "_blank"); if (!w) { toast("Allow pop-ups to print"); return; }
-  w.document.write(`<!doctype html><title>Print</title><style>html,body{margin:0;background:#fff}svg{width:100%;height:auto;max-height:100vh}@page{margin:10mm}</style>${svg}`); w.document.close();
-  w.addEventListener("load", () => setTimeout(() => w.print(), 200)); setTimeout(() => { try { w.print(); } catch (e) { /* already printed */ } }, 800);
+  w.document.write(`<!doctype html><title>${preview ? "Print Preview" : "Print"}</title><style>html,body{margin:0;background:#fff}${size}@page{margin:10mm}</style>${svg}`); w.document.close();
+  if (preview) return;
+  let printed = false; const go = () => { if (printed) return; printed = true; try { w.print(); } catch (e) { /* the window was closed */ } };
+  w.addEventListener("load", () => setTimeout(go, 200)); setTimeout(go, 800);
 }
 
 export function toggleRenderOpt(key, id) { E.renderOpts[key] = !E.renderOpts[key]; setToggle(id, !!E.renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); }
@@ -138,7 +207,7 @@ export const HANDLERS = {
   clearMarkers: () => { E.markers = []; E.renderOpts.markers = undefined; const m = activeModule(); if (m && m.actions && m.actions.clearMarkers) { try { m.actions.clearMarkers.run(toolCtx()); } catch (e) { /* module without markers */ } } store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
   plot: () => plotDialog(),
   show3DViewer: () => show3DViewer(),
-  print: () => printDocument(),
+  print: () => printDialog(),
   lineModeFree: () => { CollabTools.sch.setLineMode(toolCtx(), "free"); syncSchModes(); }, lineMode90: () => { CollabTools.sch.setLineMode(toolCtx(), "90"); syncSchModes(); }, lineMode45: () => { CollabTools.sch.setLineMode(toolCtx(), "45"); syncSchModes(); },
   showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
   showSearch: () => showPane("search"), showNetNavigator: () => showPane("netnav"),
