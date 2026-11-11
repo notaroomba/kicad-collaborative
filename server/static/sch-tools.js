@@ -2121,7 +2121,8 @@ function splitRef(ref) {
   const m = ref.match(/^(.*?)(\d+)$/); if (!m) return { prefix: ref, num: -1, isNew: true };
   return { prefix: m[1], num: +m[2], isNew: false };
 }
-// opts: { order: "x" | "y", keep: true (incremental) | false (renumber everything), start: 0, sheetInterval: 0 | 100 | 1000, sheetNumber: 1, only: Set of ids }
+// opts: { order: "x" | "y", keep: true (incremental) | false (renumber everything), start: 0, sheetInterval: 0 | 100 | 1000, sheetNumber: 1, only: Set of ids,
+//         reserved: references in use on the project's other sheets (KiCad annotates against the whole hierarchy's reference list) }
 function annotateChanges(doc, opts) {
   opts = opts || {};
   const order = opts.order === "y" ? "y" : "x", keep = opts.keep !== false, start = opts.start | 0, interval = opts.sheetInterval | 0, sheetNum = opts.sheetNumber || 1;
@@ -2136,6 +2137,7 @@ function annotateChanges(doc, opts) {
   const used = new Map();       // prefix -> Set of numbers in use
   const take = (prefix, n) => { if (!used.has(prefix)) used.set(prefix, new Set()); used.get(prefix).add(n); };
   for (const r of refs) if (!r.isNew && r.num >= 0) take(r.prefix, r.num);
+  for (const ref of opts.reserved || []) { const r = splitRef(ref); if (!r.isNew) take(r.prefix, r.num); }
   const minRef = interval ? sheetNum * interval + 1 : start + 1;
   const assigned = new Map();   // old full reference of a multi-unit package -> its new number
   const changes = [];

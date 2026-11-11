@@ -1054,6 +1054,9 @@ test("annotate: X-then-Y numbering per prefix, incremental keeps existing refere
   assert.ok(sch.runAction("clearAnnotation", c)); assert.ok(sch.runAction("annotate", c, { start: 10 })); assert.strictEqual(refOf("s1"), "R11");
   const only = sch.annotateChanges(d, { only: new Set([a.id]), keep: false }); assert.strictEqual(only.length, 1);
   assert.deepStrictEqual(sch.clearAnnotationChanges(d, new Set(["s1"])).map((x) => x.id), ["s1"]);
+  // references used on the project's other sheets are skipped (one reference list over the whole hierarchy)
+  assert.ok(sch.runAction("clearAnnotation", c)); assert.ok(sch.runAction("annotate", c, { reserved: ["R1", "R2", "R4", "#PWR1", "C1"] }));
+  assert.deepStrictEqual([refOf("s1"), refOf(b.id), refOf(f.id), refOf(g.id)], ["R3", "R5", "R6", "#PWR2"], "R1, R2, R4 and #PWR1 belong to another sheet");
 });
 
 test("ERC on the embedded sheet: unconnected pins, dangling wires, then the fixes and the other findings", () => {
