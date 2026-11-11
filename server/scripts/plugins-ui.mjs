@@ -5,7 +5,7 @@
 // second person and is one undo step), and the sandbox: a plugin without a permission is
 // refused, and one that tries to reach the page, the network or the session gets nowhere.
 //
-// Server: KC_DEV_LOGIN=1 ANTHROPIC_API_KEY=sk-ant-test ANTHROPIC_API_URL=http://127.0.0.1:8097
+// Server: KC_DEV_LOGIN=1 KC_ADMINS=plug-out ANTHROPIC_API_KEY=sk-ant-test ANTHROPIC_API_URL=http://127.0.0.1:8097
 //   (with fake-anthropic.mjs on 8097)
 //   E2E_PG_URL=… E2E_JWT_SECRET=… [SHOTS=/some/dir] node plugins-ui.mjs
 //
@@ -478,6 +478,51 @@ await c.click('#pluginRecommendedDismiss');
 check('the notice can be dismissed', (await c.locator('#pluginRecommended').count()) === 0);
 await c.reload(); await editorReady(c); await running(c, WRITER); await c.waitForTimeout(600);
 check('and stays dismissed', (await c.locator('#pluginRecommended').count()) === 0 && (await stored(c)).project.plugins.length === 2);
+
+// ---- reports and moderation: anyone can report, the administrators (KC_ADMINS) decide
+await c.evaluate(() => window.KcPlugins.openManager('catalog')); await c.waitForSelector(`#pluginRegistry [data-report="${WRITER}"]`);
+await c.click(`#pluginRegistry [data-report="${WRITER}"]`);
+await c.fill(`[data-report-reason="${WRITER}"]`, 'It moved my resistors without asking and I do not trust it.');
+await c.click(`[data-report-send="${WRITER}"]`); await c.waitForSelector(`[data-reported="${WRITER}"]`);
+check('a collaborator can report a published plugin', (await db.query('SELECT count(*)::int AS n FROM plugin_reports WHERE identifier = $1 AND reporter_id = $2 AND resolved_at IS NULL', [WRITER, lee])).rows[0].n === 1);
+check('non-administrators see no moderation tab', (await c.locator('#pluginManager [data-tab="moderation"]').count()) === 0);
+await shot(c, '21-reported'); await closeManager(c);
+const rep = (h, reason) => call('POST', `/api/plugins/registry/${WRITER}/report`, h, { reason });
+check('reporting needs a sign-in and a reason', (await rep({ 'Content-Type': 'application/json' }, 'a long enough reason here')).status === 401 && (await rep(as(vic, 'plug-vic'), 'bad')).status === 400 && (await call('POST', '/api/plugins/registry/test.none/report', as(vic, 'plug-vic'), { reason: 'a long enough reason here' })).status === 404);
+const mod = (h, id, action, reason = '') => call('POST', `/api/plugins/registry/${id}/moderate`, h, { action, reason });
+check('only administrators moderate', (await call('GET', '/api/plugins/moderation', as(dana, 'plug-dana'))).status === 403 && (await mod(as(dana, 'plug-dana'), WRITER, 'hide', 'because I can')).status === 403 && (await mod(as(out, 'plug-out'), WRITER, 'hide', '')).status === 400);
+const d = await open('plug-out', out, '/'); await d.waitForSelector('#homePlugins', { timeout: 15000 }); await d.click('#homePlugins');
+await d.waitForSelector('#pluginManager [data-tab="moderation"]'); await d.click('#pluginManager [data-tab="moderation"]'); await d.waitForSelector(`#pluginModeration [data-plugin="${WRITER}"]`);
+const modCard = d.locator(`#pluginModeration [data-plugin="${WRITER}"]`);
+check('the administrator sees the report and who made it', /plug-lee/.test(await modCard.innerText()) && /moved my resistors/.test(await modCard.innerText()) && /by plug-dana/.test(await modCard.innerText()) && (await modCard.locator('[data-mod="hide"]').isDisabled()));
+await d.fill(`[data-mod-reason="${WRITER}"]`, 'Changes designs in ways it does not describe.');
+await shot(d, '22-moderation');
+await modCard.locator('[data-mod="hide"]').click(); await d.waitForFunction((i) => (window.KcPlugins.store.get().moderation || []).some((e) => e.identifier === i && e.status === 'hidden'), WRITER);
+const leeCopy = async () => (await db.query('SELECT enabled, withdrawn FROM plugins WHERE identifier = $1 AND user_id = $2', [WRITER, lee])).rows[0];
+check('hiding takes it out of the registry and out of project recommendations', (await found('writ')).length === 0 && (await db.query("SELECT count(*)::int AS n FROM project_plugins WHERE identifier = $1", [WRITER])).rows[0].n === 0);
+const hiddenGet = await (await call('GET', `/api/plugins/registry/${WRITER}`, {})).json();
+check('a hidden plugin cannot be fetched, republished or unpublished around the decision', hiddenGet.status === 'hidden' && !('files' in hiddenGet) && (await call('PUT', `/api/plugins/registry/${WRITER}`, as(dana, 'plug-dana'), { manifest: { ...wm, version: '0.3.0' }, files: { 'main.js': '' } })).status === 403 && (await call('DELETE', `/api/plugins/registry/${WRITER}`, as(dana, 'plug-dana'))).status === 404);
+check('copies installed from the registry are switched off and say why; private copies are left alone', (await leeCopy()).enabled === false && /does not describe/.test((await leeCopy()).withdrawn)
+  && (await db.query('SELECT enabled, withdrawn FROM plugins WHERE identifier = $1 AND user_id = $2', [WRITER, dana])).rows[0].withdrawn === null);
+check('the report is settled', (await db.query('SELECT count(*)::int AS n FROM plugin_reports WHERE identifier = $1 AND resolved_at IS NULL', [WRITER])).rows[0].n === 0);
+await c.reload(); await editorReady(c); await c.waitForTimeout(800);
+check('the withdrawn copy no longer runs', (await frames(c)) === 0 && !(await plug(c)).running[WRITER]);
+await c.evaluate(() => window.KcPlugins.openManager('installed')); await c.waitForSelector('#pluginWithdrawn');
+check('its owner is told what happened and why', /does not describe/.test(await c.locator('#pluginWithdrawn').innerText()) && !(await c.locator('#pluginEnabled').isChecked()));
+await shot(c, '23-withdrawn'); await closeManager(c);
+await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSelector('#pluginManager');
+await a.click('#pluginManager [data-tab="installed"]'); await a.click(`#pluginList [data-plugin="${WRITER}"]`); await a.waitForSelector('#pluginModerated');
+check('the publisher is told too, and cannot publish over it', /hid your listing: Changes designs/.test(await a.locator('#pluginModerated').innerText()) && (await a.locator('#pluginPublish').count()) === 0 && (await a.locator('#pluginRecommend').isDisabled()));
+await closeManager(a);
+await d.locator(`#pluginModeration [data-plugin="${WRITER}"] [data-mod="restore"]`).click();
+await d.waitForFunction((i) => !(window.KcPlugins.store.get().moderation || []).some((e) => e.identifier === i), WRITER);
+check('restoring lists it again and lifts the notice, without switching anything back on', (await found('writ')).length === 1 && (await leeCopy()).withdrawn === null && (await leeCopy()).enabled === false);
+const bm = { identifier: 'test.bad', name: 'Bad', description: 'x', version: '1.0.0', runtime: { type: 'web', entrypoint: 'main.js' } };
+await call('PUT', '/api/plugins/registry/test.bad', as(lee, 'plug-lee'), { manifest: bm, files: { 'main.js': 'console.log(1)' } });
+check('removing is for good: files dropped, identifier kept from reuse', (await mod(as(out, 'plug-out'), 'test.bad', 'remove', 'Malware.')).status === 200 && (await found('bad')).length === 0
+  && JSON.stringify((await db.query("SELECT files, status FROM plugin_registry WHERE identifier = 'test.bad'")).rows[0]) === JSON.stringify({ files: {}, status: 'removed' })
+  && (await call('PUT', '/api/plugins/registry/test.bad', as(lee, 'plug-lee'), { manifest: bm, files: { 'main.js': '' } })).status === 403 && (await mod(as(out, 'plug-out'), 'test.bad', 'restore')).status === 400);
+await d.close();
 
 // unpublish: the registry and the recommendation go, installed copies stay
 await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSelector('#pluginManager');

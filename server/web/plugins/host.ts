@@ -26,6 +26,10 @@ export interface Consent { manifest: PluginManifest; files: Record<string, strin
 export interface CatalogEntry { manifest: PluginManifest; files: Record<string, string> }
 /** A plugin someone published to the community registry (no files: they are fetched when the person asks to install). */
 export interface RegistryEntry { identifier: string; manifest: PluginManifest; publisher: string; installs: number; publishedAt?: string; updatedAt?: string }
+/** What the registry says about one identifier. */
+export interface PublishedInfo { publisher: string; version: string; status: "listed" | "hidden" | "removed"; reason: string | null }
+/** A published plugin an administrator has to look at: reported, hidden or removed. */
+export interface ModerationEntry { identifier: string; manifest: PluginManifest; publisher: string; status: "listed" | "hidden" | "removed"; reason: string | null; installs: number; reports: Array<{ reporter: string; reason: string; at: string }> }
 /** A plugin the open project suggests to the people who work on it. */
 export interface ProjectPlugin { identifier: string; origin: "catalog" | "registry"; addedBy: string | null; publisher: string | null; manifest: PluginManifest; files: Record<string, string> }
 
@@ -34,10 +38,12 @@ export interface PluginState {
   installed: InstalledPlugin[]; catalog: CatalogEntry[] | null;
   running: Record<string, RunState>; logs: Record<string, LogLine[]>;
   /** The community registry as last searched; `published` is what is known about single identifiers (null: not published). */
-  registry: RegistryEntry[] | null; registryQuery: string; published: Record<string, { publisher: string; version: string } | null>;
+  registry: RegistryEntry[] | null; registryQuery: string; published: Record<string, PublishedInfo | null>;
+  /** Whether this person moderates the registry (KC_ADMINS on the server), and what is waiting for them. */
+  admin: boolean; moderation: ModerationEntry[] | null;
   /** What the open project recommends, and whether this person may change that. */
   project: { id: string | null; plugins: ProjectPlugin[]; canEdit: boolean; dismissed: string };
-  manager: { open: boolean; tab: "installed" | "catalog" | "project" | "develop"; selected: string | null };
+  manager: { open: boolean; tab: "installed" | "catalog" | "project" | "develop" | "moderation"; selected: string | null };
   panel: { open: boolean; active: string | null; width: number };
   prompt: PromptRequest | null; consent: Consent | null;
   editor: string | null;
@@ -48,7 +54,7 @@ const LS_PANEL = "kc.plugins.panel";
 
 let S: PluginState = {
   loaded: false, signedIn: false, error: null, installed: [], catalog: null, running: {}, logs: {},
-  registry: null, registryQuery: "", published: {}, project: { id: null, plugins: [], canEdit: false, dismissed: "" },
+  registry: null, registryQuery: "", published: {}, admin: false, moderation: null, project: { id: null, plugins: [], canEdit: false, dismissed: "" },
   manager: { open: false, tab: "installed", selected: null },
   panel: (() => { try { const j = JSON.parse(ls.get(LS_PANEL) || "{}"); return { open: !!j.open, active: typeof j.active === "string" ? j.active : null, width: Math.min(640, Math.max(240, Number(j.width) || 320)) }; } catch { return { open: false, active: null, width: 320 }; } })(),
   prompt: null, consent: null, editor: null,
@@ -83,8 +89,8 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 
 export async function refresh(): Promise<void> {
   const me = APP() ? APP().getState().me : null;
-  if (!me) { set({ loaded: true, signedIn: false, installed: [], error: null }); syncRunning(); return; }
-  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], error: null }); }
+  if (!me) { set({ loaded: true, signedIn: false, installed: [], admin: false, moderation: null, error: null }); syncRunning(); return; }
+  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); }
   catch (e) { set({ loaded: true, signedIn: true, error: e instanceof Error ? e.message : String(e) }); }
   syncRunning();
 }
@@ -106,13 +112,17 @@ export async function loadRegistry(q?: string): Promise<void> {
 /** Fetch a published plugin's files and put the consent sheet in front of the person. */
 export async function installFromRegistry(identifier: string): Promise<string | null> {
   if (!S.signedIn) return "Sign in to install plugins.";
-  try { const j = await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`); return requestInstall(j.manifest, j.files, `registry:${j.publisher}`); }
+  try {
+    const j = await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`);
+    if (j.status && j.status !== "listed") { void loadRegistry(); return "The administrators took this plugin out of the registry."; }
+    return requestInstall(j.manifest, j.files, `registry:${j.publisher}`);
+  }
   catch (e) { return msg(e); }
 }
 /** Learn whether an identifier is in the registry, and under whom (the installed plugin's detail asks). */
 export async function lookupPublished(identifier: string): Promise<void> {
-  let info: { publisher: string; version: string } | null = null;
-  try { const r = await fetch(`/api/plugins/registry/${encodeURIComponent(identifier)}`); if (r.ok) { const j = await r.json(); info = { publisher: j.publisher, version: (j.manifest && j.manifest.version) || "" }; } else if (r.status !== 404) return; }
+  let info: PublishedInfo | null = null;
+  try { const r = await fetch(`/api/plugins/registry/${encodeURIComponent(identifier)}`); if (r.ok) { const j = await r.json(); info = { publisher: j.publisher, version: (j.manifest && j.manifest.version) || j.version || "", status: j.status || "listed", reason: j.reason || null }; } else if (r.status !== 404) return; }
   catch { return; }
   set({ published: Object.assign({}, S.published, { [identifier]: info }) });
 }
@@ -126,6 +136,22 @@ export async function publish(identifier: string): Promise<string | null> {
 export async function unpublish(identifier: string): Promise<string | null> {
   try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}`, { method: "DELETE" }); } catch (e) { return msg(e); }
   await Promise.all([lookupPublished(identifier), S.registry ? loadRegistry() : Promise.resolve(), loadProject()]); return null;
+}
+
+/** Tell the administrators something is wrong with a published plugin. */
+export async function report(identifier: string, reason: string): Promise<string | null> {
+  if (!S.signedIn) return "Sign in to report a plugin.";
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}/report`, { method: "POST", body: JSON.stringify({ reason }) }); } catch (e) { return msg(e); }
+  if (S.admin) void loadModeration(); return null;
+}
+export async function loadModeration(): Promise<void> {
+  if (!S.admin) { set({ moderation: null }); return; }
+  try { const j = await api("/api/plugins/moderation"); set({ moderation: j.plugins || [] }); } catch (e) { set({ moderation: [], error: msg(e) }); }
+}
+/** An administrator's decision: hide, restore, remove, or dismiss the reports. */
+export async function moderate(identifier: string, action: "hide" | "restore" | "remove" | "dismiss", reason: string): Promise<string | null> {
+  try { await api(`/api/plugins/registry/${encodeURIComponent(identifier)}/moderate`, { method: "POST", body: JSON.stringify({ action, reason }) }); } catch (e) { return msg(e); }
+  await Promise.all([loadModeration(), loadRegistry(), refresh(), loadProject()]); return null;
 }
 
 // ---- what the open project recommends
@@ -154,7 +180,7 @@ export function dismissRecommended(): void {
 /** Where a plugin the person has can be got by anyone: the catalog, the registry, or nowhere (a private copy). */
 export function originOf(p: InstalledPlugin, s: PluginState = S): "catalog" | "registry" | null {
   if (p.source === "catalog") return "catalog";
-  return s.published[p.identifier] ? "registry" : null;
+  const pub = s.published[p.identifier]; return pub && pub.status === "listed" ? "registry" : null;
 }
 export async function recommend(identifier: string, origin: "catalog" | "registry", on: boolean): Promise<string | null> {
   const id = projectId(); if (!id) return "Open a project first.";
@@ -501,7 +527,7 @@ function showFrames() {
 }
 export function openManager(tab?: PluginState["manager"]["tab"]) {
   set({ manager: Object.assign({}, S.manager, { open: true, tab: tab || S.manager.tab }) });
-  void refresh(); if (!S.catalog) void loadCatalog(); void loadRegistry(); void loadProject();
+  if (!S.catalog) void loadCatalog(); void loadRegistry(); void loadProject(); void refresh().then(() => loadModeration());
 }
 export const closeManager = () => set({ manager: Object.assign({}, S.manager, { open: false }), consent: null });
 export const setManager = (patch: Partial<PluginState["manager"]>) => set({ manager: Object.assign({}, S.manager, patch) });
@@ -547,6 +573,7 @@ export function initPlugins(): void {
     if (now.editor !== was.editor) { set({ editor: now.editor }); showFrames(); }
     if (now.view !== was.view || now.project !== was.project) syncRunning();
     if (now.project !== was.project || now.me !== was.me) void loadProject();
+    if (now.project !== was.project && now.project && was.me === now.me) void refresh();   // a plugin withdrawn since the last look stops here
     if (!runs.size) return;
     if (now.docId !== was.docId || now.editor !== was.editor || now.viewOnly !== was.viewOnly) {
       for (const run of runs.values()) run.sandbox.send({ t: "event", name: "editor", data: editorState(has(run.plugin, "design:read")) });

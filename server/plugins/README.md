@@ -158,8 +158,22 @@ recommendation is a pointer: each person installs for themselves through the sam
 and nothing is installed or run for anyone who does not. A private plugin (from a file or an
 address) has to be published first, so collaborators have somewhere to get it.
 
+**Reports and moderation.** Anyone signed in can report a community plugin from its card
+(**Report a problem…**). The server's administrators are the GitHub logins listed in the
+`KC_ADMINS` environment variable (comma separated); they get a **Moderation** tab in the Plugin
+Manager showing every reported plugin with the reports. From there they can dismiss the reports,
+**hide** the plugin (reversible) or **remove** it for good, giving a reason. Hiding or removing
+takes the plugin out of the registry and out of project recommendations, and switches off the
+copies people installed from the registry; each of those people, and the publisher, is shown the
+reason. The copies stay with their owners, who can uninstall them or switch them back on. A
+hidden or removed plugin cannot be published again under the same identifier, and restoring a
+hidden one lists it again without switching anyone's copy back on. With `KC_ADMINS` unset there
+are no administrators and reports simply wait.
+
 The endpoints: `GET /api/plugins/registry?q=`, `GET|PUT|DELETE /api/plugins/registry/{identifier}`,
-`GET /api/projects/{id}/plugins`, `PUT|DELETE /api/projects/{id}/plugins/{identifier}`.
+`POST /api/plugins/registry/{identifier}/report`, `GET /api/plugins/moderation`,
+`POST /api/plugins/registry/{identifier}/moderate`, `GET /api/projects/{id}/plugins`,
+`PUT|DELETE /api/projects/{id}/plugins/{identifier}`.
 
 ## How plugins are contained
 

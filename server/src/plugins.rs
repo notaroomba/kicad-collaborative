@@ -135,6 +135,7 @@ fn row_json(r: &sqlx::postgres::PgRow) -> Value {
         "granted": r.get::<Value, _>("granted"),
         "enabled": r.get::<bool, _>("enabled"),
         "source": r.get::<String, _>("source"),
+        "withdrawn": r.get::<Option<String>, _>("withdrawn"),
         "installedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("installed_at"),
         "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
     })
@@ -142,11 +143,11 @@ fn row_json(r: &sqlx::postgres::PgRow) -> Value {
 
 /// `GET /api/plugins` — the signed-in person's plugins, with their files.
 pub async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Json<Value>> {
-    let rows = sqlx::query("SELECT identifier, manifest, files, granted, enabled, source, installed_at, updated_at FROM plugins WHERE user_id = $1 ORDER BY installed_at, identifier")
+    let rows = sqlx::query("SELECT identifier, manifest, files, granted, enabled, source, withdrawn, installed_at, updated_at FROM plugins WHERE user_id = $1 ORDER BY installed_at, identifier")
         .bind(user.id)
         .fetch_all(&state.pool)
         .await?;
-    Ok(Json(json!({ "plugins": rows.iter().map(row_json).collect::<Vec<_>>() })))
+    Ok(Json(json!({ "plugins": rows.iter().map(row_json).collect::<Vec<_>>(), "admin": is_admin(&user.login) })))
 }
 
 /// `GET /api/plugins/catalog` — the built-in plugins.  Public: it is the same for everyone.
@@ -191,7 +192,7 @@ pub async fn install(
     }
     sqlx::query(
         "INSERT INTO plugins (user_id, identifier, manifest, files, granted, source) VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (user_id, identifier) DO UPDATE SET manifest = EXCLUDED.manifest, files = EXCLUDED.files, granted = EXCLUDED.granted, source = EXCLUDED.source, updated_at = now()",
+         ON CONFLICT (user_id, identifier) DO UPDATE SET manifest = EXCLUDED.manifest, files = EXCLUDED.files, granted = EXCLUDED.granted, source = EXCLUDED.source, withdrawn = NULL, updated_at = now()",
     )
     .bind(user.id)
     .bind(&identifier)
@@ -269,7 +270,7 @@ pub async fn registry_list(State(state): State<AppState>, axum::extract::Query(q
         "SELECT r.identifier, r.manifest, r.published_at, r.updated_at, u.login,
                 (SELECT count(*) FROM plugins p WHERE p.identifier = r.identifier AND p.source LIKE 'registry:%') AS installs
          FROM plugin_registry r JOIN users u ON u.id = r.owner_id
-         WHERE $1 = '' OR r.identifier ILIKE $2 OR r.manifest->>'name' ILIKE $2 OR r.manifest->>'description' ILIKE $2 OR u.login ILIKE $2
+         WHERE r.status = 'listed' AND ($1 = '' OR r.identifier ILIKE $2 OR r.manifest->>'name' ILIKE $2 OR r.manifest->>'description' ILIKE $2 OR u.login ILIKE $2)
          ORDER BY r.updated_at DESC LIMIT 200",
     )
     .bind(&q)
@@ -292,17 +293,25 @@ pub async fn registry_list(State(state): State<AppState>, axum::extract::Query(q
     Ok(Json(json!({ "plugins": plugins })))
 }
 
-/// `GET /api/plugins/registry/{identifier}` — one published plugin with its files.
+/// `GET /api/plugins/registry/{identifier}` — one published plugin with its files.  One the
+/// administrators hid or removed answers with who published it, its status and the reason,
+/// and nothing to install.
 pub async fn registry_get(State(state): State<AppState>, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
-    let r = sqlx::query("SELECT r.manifest, r.files, r.updated_at, u.login FROM plugin_registry r JOIN users u ON u.id = r.owner_id WHERE r.identifier = $1")
+    let r = sqlx::query("SELECT r.manifest, r.files, r.updated_at, r.status, r.moderated_reason, u.login FROM plugin_registry r JOIN users u ON u.id = r.owner_id WHERE r.identifier = $1")
         .bind(&identifier)
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound)?;
+    let status: String = r.get("status");
+    if status != "listed" {
+        return Ok(Json(json!({ "publisher": r.get::<String, _>("login"), "status": status, "reason": r.get::<Option<String>, _>("moderated_reason"),
+            "version": r.get::<Value, _>("manifest").get("version").cloned() })));
+    }
     Ok(Json(json!({
         "manifest": r.get::<Value, _>("manifest"),
         "files": r.get::<Value, _>("files"),
         "publisher": r.get::<String, _>("login"),
+        "status": status,
         "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
     })))
 }
@@ -328,7 +337,11 @@ pub async fn registry_publish(
     if req.manifest.get("version").and_then(Value::as_str).map(|v| v.is_empty() || v.len() > 40).unwrap_or(true) {
         return Err(bad("a published plugin needs a version in its manifest, so people can tell an update from what they have"));
     }
-    let owner: Option<i64> = sqlx::query_scalar("SELECT owner_id FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_optional(&state.pool).await?;
+    let prev = sqlx::query("SELECT owner_id, status FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_optional(&state.pool).await?;
+    let owner: Option<i64> = prev.as_ref().map(|r| r.get("owner_id"));
+    if prev.as_ref().is_some_and(|r| r.get::<String, _>("status") != "listed") {
+        return Err(AppError::Api(axum::http::StatusCode::FORBIDDEN, "moderated", "the administrators took this plugin out of the registry, so it cannot be published again".into()));
+    }
     if owner.is_some_and(|o| o != user.id) {
         return Err(AppError::Api(axum::http::StatusCode::CONFLICT, "identifier_taken", "someone else has published a plugin with that identifier".into()));
     }
@@ -352,11 +365,149 @@ pub async fn registry_publish(
 /// `DELETE /api/plugins/registry/{identifier}` — unpublish.  Copies people already
 /// installed stay theirs; projects stop recommending it.
 pub async fn registry_unpublish(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
-    let done = sqlx::query("DELETE FROM plugin_registry WHERE identifier = $1 AND owner_id = $2").bind(&identifier).bind(user.id).execute(&state.pool).await?;
+    let done = sqlx::query("DELETE FROM plugin_registry WHERE identifier = $1 AND owner_id = $2 AND status = 'listed'").bind(&identifier).bind(user.id).execute(&state.pool).await?;
     if done.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
     sqlx::query("DELETE FROM project_plugins WHERE identifier = $1 AND origin = 'registry'").bind(&identifier).execute(&state.pool).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------- reports and moderation
+
+/// The server's administrators: the GitHub logins in `KC_ADMINS` (comma separated).  They
+/// moderate the registry; they have no other powers.
+fn is_admin(login: &str) -> bool {
+    std::env::var("KC_ADMINS").map(|v| v.split(',').any(|a| !a.trim().is_empty() && a.trim().eq_ignore_ascii_case(login))).unwrap_or(false)
+}
+
+fn reason_of(text: &str, max: usize) -> String {
+    text.trim().chars().filter(|c| !c.is_control() || *c == '\n').take(max).collect()
+}
+
+#[derive(Deserialize)]
+pub struct ReportRequest {
+    reason: String,
+}
+
+/// `POST /api/plugins/registry/{identifier}/report` — tell the administrators something is
+/// wrong with a published plugin.  One report per person per plugin; a new one replaces it.
+pub async fn registry_report(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(identifier): Path<String>,
+    LenientJson(req): LenientJson<ReportRequest>,
+) -> AppResult<Json<Value>> {
+    let reason = reason_of(&req.reason, 1000);
+    if reason.chars().count() < 10 {
+        return Err(bad("say what is wrong with it, in a sentence or more"));
+    }
+    let listed: i64 = sqlx::query_scalar("SELECT count(*) FROM plugin_registry WHERE identifier = $1 AND status = 'listed'").bind(&identifier).fetch_one(&state.pool).await?;
+    if listed == 0 {
+        return Err(AppError::NotFound);
+    }
+    let open: i64 = sqlx::query_scalar("SELECT count(*) FROM plugin_reports WHERE reporter_id = $1 AND resolved_at IS NULL AND identifier <> $2").bind(user.id).bind(&identifier).fetch_one(&state.pool).await?;
+    if open >= 20 {
+        return Err(bad("you have many reports waiting already; the administrators will get to them"));
+    }
+    sqlx::query(
+        "INSERT INTO plugin_reports (identifier, reporter_id, reason) VALUES ($1, $2, $3)
+         ON CONFLICT (identifier, reporter_id) DO UPDATE SET reason = EXCLUDED.reason, created_at = now(), resolved_at = NULL",
+    )
+    .bind(&identifier)
+    .bind(user.id)
+    .bind(&reason)
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /api/plugins/moderation` — for administrators: every published plugin that has an
+/// open report or is hidden or removed, with the reports.
+pub async fn moderation_list(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Json<Value>> {
+    if !is_admin(&user.login) {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query(
+        "SELECT r.identifier, r.manifest, r.status, r.moderated_reason, r.updated_at, u.login,
+                (SELECT count(*) FROM plugins p WHERE p.identifier = r.identifier AND p.source LIKE 'registry:%') AS installs,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('reporter', ru.login, 'reason', pr.reason, 'at', pr.created_at) ORDER BY pr.created_at)
+                          FROM plugin_reports pr JOIN users ru ON ru.id = pr.reporter_id WHERE pr.identifier = r.identifier AND pr.resolved_at IS NULL), '[]'::jsonb) AS reports
+         FROM plugin_registry r JOIN users u ON u.id = r.owner_id
+         WHERE r.status <> 'listed' OR EXISTS (SELECT 1 FROM plugin_reports pr WHERE pr.identifier = r.identifier AND pr.resolved_at IS NULL)
+         ORDER BY (r.status = 'listed') DESC, r.updated_at DESC LIMIT 300",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let plugins: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "identifier": r.get::<String, _>("identifier"),
+                "manifest": r.get::<Value, _>("manifest"),
+                "publisher": r.get::<String, _>("login"),
+                "status": r.get::<String, _>("status"),
+                "reason": r.get::<Option<String>, _>("moderated_reason"),
+                "installs": r.get::<i64, _>("installs"),
+                "reports": r.get::<Value, _>("reports"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "plugins": plugins })))
+}
+
+#[derive(Deserialize)]
+pub struct ModerateRequest {
+    action: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// `POST /api/plugins/registry/{identifier}/moderate` — an administrator's decision on a
+/// published plugin: `hide` it (reversible), `restore` a hidden one, `remove` it for good,
+/// or `dismiss` its open reports.  Hiding or removing also switches off the copies people
+/// installed from the registry and tells them why; those copies stay theirs.
+pub async fn registry_moderate(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(identifier): Path<String>,
+    LenientJson(req): LenientJson<ModerateRequest>,
+) -> AppResult<Json<Value>> {
+    if !is_admin(&user.login) {
+        return Err(AppError::Forbidden);
+    }
+    let status: String = sqlx::query_scalar("SELECT status FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_optional(&state.pool).await?.ok_or(AppError::NotFound)?;
+    let reason = reason_of(&req.reason, 500);
+    let mut tx = state.pool.begin().await?;
+    match req.action.as_str() {
+        "hide" | "remove" => {
+            if status == "removed" {
+                return Err(bad("that plugin has been removed already"));
+            }
+            if reason.chars().count() < 5 {
+                return Err(bad("give a reason: the publisher and the people who installed it are shown it"));
+            }
+            if req.action == "remove" {
+                sqlx::query("UPDATE plugin_registry SET status = 'removed', files = '{}'::jsonb, moderated_reason = $2, moderated_at = now() WHERE identifier = $1").bind(&identifier).bind(&reason).execute(&mut *tx).await?;
+            } else {
+                sqlx::query("UPDATE plugin_registry SET status = 'hidden', moderated_reason = $2, moderated_at = now() WHERE identifier = $1").bind(&identifier).bind(&reason).execute(&mut *tx).await?;
+            }
+            sqlx::query("UPDATE plugins SET enabled = FALSE, withdrawn = $2 WHERE identifier = $1 AND source LIKE 'registry:%'").bind(&identifier).bind(&reason).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM project_plugins WHERE identifier = $1 AND origin = 'registry'").bind(&identifier).execute(&mut *tx).await?;
+        }
+        "restore" => {
+            if status != "hidden" {
+                return Err(bad("only a hidden plugin can be restored"));
+            }
+            sqlx::query("UPDATE plugin_registry SET status = 'listed', moderated_reason = NULL, moderated_at = now() WHERE identifier = $1").bind(&identifier).execute(&mut *tx).await?;
+            sqlx::query("UPDATE plugins SET withdrawn = NULL WHERE identifier = $1 AND source LIKE 'registry:%'").bind(&identifier).execute(&mut *tx).await?;
+        }
+        "dismiss" => {}
+        _ => return Err(bad("action is hide, restore, remove or dismiss")),
+    }
+    sqlx::query("UPDATE plugin_reports SET resolved_at = now() WHERE identifier = $1 AND resolved_at IS NULL").bind(&identifier).execute(&mut *tx).await?;
+    tx.commit().await?;
+    tracing::info!(admin = %user.login, plugin = %identifier, action = %req.action, "plugin registry moderation");
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -370,7 +521,7 @@ pub async fn project_list(State(state): State<AppState>, AuthUser(user): AuthUse
         "SELECT pp.identifier, pp.origin, u.login AS added_by, r.manifest, r.files, ru.login AS publisher
          FROM project_plugins pp
          LEFT JOIN users u ON u.id = pp.added_by
-         LEFT JOIN plugin_registry r ON pp.origin = 'registry' AND r.identifier = pp.identifier
+         LEFT JOIN plugin_registry r ON pp.origin = 'registry' AND r.identifier = pp.identifier AND r.status = 'listed'
          LEFT JOIN users ru ON ru.id = r.owner_id
          WHERE pp.project_id = $1 ORDER BY pp.added_at",
     )
@@ -415,7 +566,7 @@ pub async fn project_recommend(
     }
     let known = match req.origin.as_str() {
         "catalog" => catalog_entry(&identifier).is_some(),
-        "registry" => sqlx::query_scalar::<_, i64>("SELECT count(*) FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_one(&state.pool).await? > 0,
+        "registry" => sqlx::query_scalar::<_, i64>("SELECT count(*) FROM plugin_registry WHERE identifier = $1 AND status = 'listed'").bind(&identifier).fetch_one(&state.pool).await? > 0,
         _ => return Err(bad("origin is catalog or registry")),
     };
     if !known {
