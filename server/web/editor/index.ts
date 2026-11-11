@@ -195,7 +195,9 @@ stage.addEventListener("pointerdown", (ev) => {
   // box even when it starts on a part; only an existing selection moves.  The press still selects, as the click would.
   const hadSelection = !!selectedSet();
   if (!E.selection.has(best.id)) E.selection.clear();
-  E.selected = best; drawSelection(); renderProps(); renderObjects();
+  E.selected = best;
+  { const g = groupExpand([best.id]); if (g.size > 1) for (const id of g) E.selection.add(id); }   // a click on a group member selects its group (KiCad)
+  drawSelection(); renderProps(); renderObjects();
   if (!hadSelection && E.tool === "select") { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
   if (!isSch() && !unlockedForEdit([best.id], true).length) return;   // a locked footprint is selected by the click but does not follow a drag
