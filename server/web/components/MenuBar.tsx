@@ -348,16 +348,16 @@ export function MenuBar() {
   const next = encodeURIComponent(location.pathname);
   const showKeys = !!st || focus !== null;
   return (
-    <div id="menubar" className="flex items-center gap-0.5 px-2 bg-bench border-b border-line select-none">
-      <div className="brand flex items-center gap-2 font-semibold mr-3">
+    <div id="menubar" className="flex items-center gap-0.5 px-2 min-w-0 overflow-hidden bg-bench border-b border-line select-none">
+      <div className="brand flex flex-none items-center gap-2 font-semibold mr-3 max-[1100px]:mr-1.5">
         <img className="logo w-4.5 h-4.5 block" src="/favicon.svg" alt="" />
-        KiCad Collaborative <span className="ver text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
+        <span className="max-[1100px]:hidden">KiCad Collaborative</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
       </div>
-      <div id={inEditor ? "kmenus" : "homeMenus"} className="flex gap-0.5" role="menubar" ref={barRef}>
+      <div id={inEditor ? "kmenus" : "homeMenus"} className="flex gap-0.5 min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="menubar" ref={barRef}>
         {menus.map((m, i) => {
           const isOpen = !!st && st.menu === i, at = m.title.toLowerCase().indexOf(m.mnemonic);
           return (
-            <div className={cx("menu relative", isOpen && "open")} data-menu={m.title.toLowerCase()} data-menu-idx={i} key={m.title}>
+            <div className={cx("menu relative flex-none", isOpen && "open")} data-menu={m.title.toLowerCase()} data-menu-idx={i} key={m.title}>
               <button type="button" role="menuitem" aria-haspopup="true" aria-expanded={isOpen} tabIndex={-1}
                 className={cx("bg-transparent border-0 py-1 px-2.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", (isOpen || focus === i) && "bg-paper shadow-[inset_0_0_0_1px_var(--line)]")}
                 onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (isOpen) close(); else openMenu(i); }}
@@ -371,17 +371,17 @@ export function MenuBar() {
       </div>
       {inEditor && project ? (
         <>
-          <span className="name ml-3.5 font-semibold" id="projName">{project.name}</span>
-          <span className={cx("pill", role, "ml-1.5")} id="roleChip">{role || "guest"}</span>
+          <span className="name ml-3.5 font-semibold min-w-0 truncate max-[700px]:hidden" id="projName" title={project.name}>{project.name}</span>
+          <span className={cx("pill", role, "ml-1.5 flex-none max-[700px]:hidden")} id="roleChip">{role || "guest"}</span>
         </>
       ) : null}
       <div className="spacer flex-1" />
       {inEditor ? <AssistantToggle /> : null}
-      <div className="user flex items-center gap-2 text-ink-2" id="userBox">
+      <div className="user flex flex-none items-center gap-2 text-ink-2 min-w-0" id="userBox">
         {me ? (
           <>
             {me.avatarUrl ? <img className="w-5 h-5 rounded-full" src={me.avatarUrl} alt="" /> : null}
-            <span>{me.name || me.login}</span>
+            <span className="max-[800px]:hidden">{me.name || me.login}</span>
             {!inEditor ? <button type="button" className="btn sm" id="logoutBtn" onClick={() => window.CollabHome?.signOut()}>Log out</button> : null}
           </>
         ) : <a className="btn sm" id="signinBtn" href={`/auth/github/login?next=${next}`}>Sign in with GitHub</a>}

@@ -5,7 +5,7 @@
 // editor in localStorage (kui.dock.<editor>), the open panes in kui.panes.<editor> (web/editor/panes.ts).
 // Panes stay mounted while hidden so the imperative islands (pcb-tools' MutationObserver on #layers)
 // keep their elements.
-import { useSyncExternalStore, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useSyncExternalStore, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { DOCKS, PANE_TITLES } from "../tables";
 import { dispatch, useApp, type Editor } from "../store";
 import { cx } from "../util";
@@ -39,6 +39,27 @@ function setLayout(ed: string, patch: Partial<DockLayout>, save: boolean): void 
 }
 function useLayout(ed: string): DockLayout {
   return useSyncExternalStore((fn) => { subs.add(fn); return () => { subs.delete(fn); }; }, () => layoutOf(ed));
+}
+
+// ---------------------------------------------------------------- narrow windows: the side docks become drawers
+// Below 900px a side dock no longer takes a grid column (it would squeeze the canvas to nothing): it floats over
+// the stage as a drawer, closed by default, opened by the tab on the stage's edge (or by showing one of its panes).
+export const NARROW_QUERY = "(max-width: 900px)";
+function useNarrow(): boolean {
+  return useSyncExternalStore((fn) => { const m = matchMedia(NARROW_QUERY); m.addEventListener("change", fn); return () => m.removeEventListener("change", fn); },
+    () => matchMedia(NARROW_QUERY).matches);
+}
+type Side = "left" | "right";
+let drawers: Record<Side, boolean> = { left: false, right: false };
+const drawerSubs = new Set<() => void>();
+export function setDrawer(side: Side, open: boolean): void {
+  if (drawers[side] === open) return;
+  // one drawer at a time: two would cover the whole stage of a narrow window
+  drawers = Object.assign({}, open ? { left: false, right: false } : drawers, { [side]: open });
+  for (const fn of Array.from(drawerSubs)) fn();
+}
+function useDrawer(side: Side): boolean {
+  return useSyncExternalStore((fn) => { drawerSubs.add(fn); return () => { drawerSubs.delete(fn); }; }, () => drawers[side]);
 }
 
 /** Track a sash drag: `move(dx, dy)` while the button is down, `done()` on release. */
@@ -132,21 +153,49 @@ function Dock({ side }: { side: "left" | "right" | "bottom" }) {
       </aside>
     );
   }
-  const w = side === "left" ? layout.left : layout.right;
+  return <SideDock side={side} ed={ed} names={names} any={any} firstShown={firstShown} w={side === "left" ? layout.left : layout.right} />;
+}
+
+function SideDock({ side, ed, names, any, firstShown, w }: { side: Side; ed: string; names: string[]; any: boolean; firstShown?: string; w?: number }) {
+  const narrow = useNarrow(), drawer = useDrawer(side);
+  const panes = useApp((s) => s.panes);
+  // showing one of this dock's panes (View menu, a toolbar button) in a narrow window opens its drawer
+  // (not when a document opens: its remembered panes arrive together with its editor)
+  const prev = useRef({ ed, panes });
+  useEffect(() => {
+    if (narrow && prev.current.ed === ed && names.some((n) => panes[n] && !prev.current.panes[n])) setDrawer(side, true);
+    prev.current = { ed, panes };
+  }, [narrow, ed, panes, names, side]);
   const down = (ev: RPointerEvent) => {
     const w0 = (ev.currentTarget as HTMLElement).parentElement!.getBoundingClientRect().width;
-    dragSash(ev, (dx) => setLayout(ed, { [side]: clamp(w0 + (side === "left" ? dx : -dx), 170, Math.max(220, window.innerWidth * 0.45)) }, false), () => setLayout(ed, {}, true));
+    dragSash(ev, (dx) => setLayout(ed, { [side]: clamp(w0 + (side === "left" ? dx : -dx), 170, Math.max(220, window.innerWidth * (narrow ? 0.85 : 0.45))) }, false), () => setLayout(ed, {}, true));
   };
+  const open = !narrow || drawer;
+  // the drawer sits beside the side toolbar (placed against the whole body: an absolutely positioned grid item
+  // with a grid-column would be placed against that — empty — column), so the tools stay reachable while it is open
+  const bar = narrow ? (document.getElementById(side === "left" ? "tbLeft" : "tbRight")?.offsetWidth ?? 34) : 0;
+  const width = w ? (narrow ? `min(${Math.round(w)}px, calc(100% - ${bar + 40}px))` : w) : narrow ? `min(300px, calc(100% - ${bar + 40}px))` : undefined;
   return (
-    <aside
-      id={side === "left" ? "dockL" : "dockR"}
-      className={cx("kdock relative flex flex-col min-h-0 overflow-hidden bg-bench border-line [&[hidden]]:hidden [@media(max-width:900px)]:hidden!", !w && "w-[300px] [@media(max-width:1100px)]:w-[240px]", side === "left" ? "border-r" : "border-l")}
-      style={w ? { width: w } : undefined}
-      hidden={!any}
-    >
-      <div className={cx("ksash absolute top-0 bottom-0 w-[4px] z-[3] cursor-col-resize hover:bg-blue/40", side === "left" ? "right-0" : "left-0")} data-dock-sash={side} onPointerDown={down} />
-      {names.map((n) => <PaneFor name={n} key={n} first={n === firstShown} />)}
-    </aside>
+    <>
+      <aside
+        id={side === "left" ? "dockL" : "dockR"}
+        className={cx("kdock flex flex-col min-h-0 overflow-hidden bg-bench border-line [&[hidden]]:hidden", narrow ? "kdrawer absolute top-0 bottom-0 z-40 shadow-panel" : "relative",
+          !w && !narrow && "w-[300px] [@media(max-width:1100px)]:w-[240px]", side === "left" ? "border-r" : "border-l")}
+        style={Object.assign({}, width !== undefined ? { width } : {}, narrow ? { [side]: bar, gridColumn: "auto", gridRow: "auto" } : {})}
+        hidden={!any || !open}
+      >
+        <div className={cx("ksash absolute top-0 bottom-0 w-[4px] z-[3] cursor-col-resize hover:bg-blue/40", side === "left" ? "right-0" : "left-0")} data-dock-sash={side} onPointerDown={down} />
+        {names.map((n) => <PaneFor name={n} key={n} first={n === firstShown} />)}
+      </aside>
+      {narrow && any ? (
+        <button type="button" className={cx("kdrawer-tab absolute z-41 top-2 w-4.5 h-12 p-0 flex items-center justify-center bg-bench text-ink-2 border border-line text-xs leading-none hover:text-ink hover:bg-paper",
+          side === "left" ? "rounded-r-sm border-l-0" : "rounded-l-sm border-r-0")}
+          style={drawer ? { [side]: `calc(${bar}px + ${typeof width === "number" ? width + "px" : width})` } : { [side]: bar }}
+          data-drawer={side} aria-expanded={drawer} title={drawer ? "Hide panels" : "Show panels"} onClick={() => setDrawer(side, !drawer)}>
+          {(side === "left") === drawer ? "\u2039" : "\u203a"}
+        </button>
+      ) : null}
+    </>
   );
 }
 export function DockLeft() { return <Dock side="left" />; }

@@ -50,7 +50,7 @@ export function StatusBar() {
   return (
     <div
       id="statusbar"
-      className="flex items-stretch gap-0 p-0 bg-bench border-t border-line text-xs font-mono font-normal leading-[normal] text-ink-2 tabular-nums"
+      className="flex items-stretch gap-0 p-0 min-w-0 overflow-hidden bg-bench border-t border-line text-xs font-mono font-normal leading-[normal] text-ink-2 tabular-nums"
     >
       <span className="sbmsg flex-1 flex items-center px-2.5 overflow-hidden text-ellipsis whitespace-nowrap font-sans min-w-0" id="sbMsg">{status.message}</span>
       <span
@@ -66,15 +66,15 @@ export function StatusBar() {
       {conn.edits ? <span className={cell} id="sbEdits">{`${conn.edits} edit${conn.edits === 1 ? "" : "s"}`}</span> : null}
       {inEditor ? (
         <>
-          <span className={cell} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
-          <span className={cx(cell, "min-w-[calc(9ch+20px)]")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
+          <span className={cx(cell, "max-[900px]:hidden")} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
+          <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
           <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
-          <span className={cx(cell, "min-w-[calc(42ch+20px)]")} id="sbDelta">{delta}</span>
+          <span className={cx(cell, "min-w-[calc(42ch+20px)] max-[1180px]:hidden")} id="sbDelta">{delta}</span>
           <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {fmtCoord(vp.gridPitch, u)}{vp.gridOn ? "" : " (hidden)"}</span>
           <button type="button" className={cx(cell, "bg-transparent border-0 border-l text-inherit font-[inherit] hover:text-ink")} id="sbUnits" title="Switch units (Ctrl+U)"
             onClick={() => window.CollabApp && window.CollabApp.dispatch({ type: "action", id: "toggleUnits" })}>{unitName(u)}</button>
-          <span className={cx(cell, "font-sans")} id="sbTool">{toolName(editor, tool, moduleTools.find((t) => t.id === tool)?.label)}</span>
-          {status.mode ? <span className={cx(cell, "font-sans")} id="sbMode">{status.mode}</span> : null}
+          <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[640px]:hidden")} id="sbTool">{toolName(editor, tool, moduleTools.find((t) => t.id === tool)?.label)}</span>
+          {status.mode ? <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[1024px]:hidden")} id="sbMode">{status.mode}</span> : null}
         </>
       ) : null}
     </div>
