@@ -1,6 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { state, store } from "./appstore";
+import { refreshCrosshair } from "./crosshair";
 import { drawComments } from "./comments";
 import { loadBase } from "./doc";
 import { $, NS } from "./dom";
@@ -100,7 +101,7 @@ export function applyView() {
   // Everything on the overlay is sized in screen pixels, so a zoom or fit
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).
-  drawComments(); drawSelection(); drawPeers(E.peerState);
+  drawComments(); drawSelection(); drawPeers(E.peerState); refreshCrosshair();
   requestRepaint();
 }
 

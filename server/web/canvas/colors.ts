@@ -17,7 +17,7 @@ export function dimColor(c, bg) {
 }
 
 export const SCH = {
-  bg: "#F5F4EF", grid: "#B5B5B5", wire: "#009600", bus: "#000084", junction: "#009600", outline: "#840000",
+  bg: "#F5F4EF", grid: "#B5B5B5", gridAxes: "#000084", wire: "#009600", bus: "#000084", junction: "#009600", outline: "#840000",
   body: "#FFFFC2", pin: "#840000", pinName: "#006464", pinNum: "#A90000", ref: "#006464", value: "#006464",
   field: "#840084", label: "#0F0F0F", glabel: "#840000", hlabel: "#725600", sheet: "#840000", sheetName: "#006464",
   sheetFile: "#725600", sheetFields: "#840084", sheetLabel: "#006464", noconnect: "#000084", notes: "#0000C2",
@@ -56,7 +56,7 @@ export const PCB_COLORS = {
 
 export const USER_COLORS = ["#C2C2C2", "#5994DC", "#B4DBD2", "#D8C852"];
    // User.1.. cycle (User.9 = B.SilkS colour in the theme)
-export const PCB_BG = "#001023", PCB_GRID = "#848484", VIA_HOLE = "#E3B72E", HOLE_WALL = "#ECECEC", NPTH = "#1AC4D2",
+export const PCB_BG = "#001023", PCB_GRID = "#848484", PCB_GRID_AXES = "#C2C2C2", VIA_HOLE = "#E3B72E", HOLE_WALL = "#ECECEC", NPTH = "#1AC4D2",
   // pad labels: PCB_RENDER_SETTINGS::LoadColors overwrites LAYER_PAD_NETNAMES with NETNAMES_LAYER_ID_START (white @ 0.7), inverted on bright copper
   PAD_TEXT = "rgba(255,255,255,0.7)", PAD_TEXT_DARK = "rgba(0,0,0,0.7)";
 

@@ -1,7 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
-import { PCB_BG, PCB_GRID, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbColor, pcbZ, rgba } from "./colors";
+import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbColor, pcbZ, rgba } from "./colors";
 import { flipH, pointInPoly } from "./sexpr";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
@@ -123,6 +123,8 @@ export function tracePad(ctx, g) {
  *                                readable), text on the other layers keeps its box but is re-mirrored to stay
  *                                readable; pad labels and net names are always kept readable;
  *   padNumbers     (board)     — default true; false hides the pad numbers (pad net names stay);
+ *   gridAxes       (both)      — GAL's grid axes (window.grid.axes_enabled, off by default): the X and Y axes
+ *                                through the document origin in the theme's grid_axes colour, grid shown or not;
  *   gridStyle      (both)      — "dots" (default), "lines" or "crosses" (KiCad's grid.style 0 / 1 / 2); gridMinSpacing
  *                                is the minimum spacing of drawn grid marks in px (default 10);
  *   showHiddenText (board)     — draw the hidden fp_text / properties (kept in item.hiddenGeom, tagged
@@ -352,6 +354,14 @@ export function render(doc, ctx, view, opts) {
         }
       }
     }
+  }
+  // GAL::DrawGrid draws the axes before it looks at the grid's visibility: one grid line wide, through 0,0
+  if (opts.gridAxes) {
+    const px1 = Math.max(1, dpr) / s;
+    ctx.strokeStyle = opts.gridAxesColor || (isPcb ? PCB_GRID_AXES : SCH.gridAxes); ctx.lineWidth = px1; ctx.lineCap = "butt"; ctx.beginPath();
+    if (vy0 <= 0 && vy1 >= 0) { ctx.moveTo(vx0, 0); ctx.lineTo(vx1, 0); }
+    if (vx0 <= 0 && vx1 >= 0) { ctx.moveTo(0, vy0); ctx.lineTo(0, vy1); }
+    ctx.stroke();
   }
   // the drawing sheet (frame, tick band, title block) and, above it, the page outline.  Under the
   // flipped board view KiCad mirrors the sheet back about the page — "Draw the title block normally

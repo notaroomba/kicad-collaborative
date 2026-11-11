@@ -1,6 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setToggles, store } from "./appstore";
+import { refreshCrosshair } from "./crosshair";
 import { $ } from "./dom";
 import { filters } from "./selection";
 import { E } from "./state";
@@ -82,4 +83,4 @@ export function syncSchModes() {
 
 export function setUnitsAction(u, id) { if (UNITS[u]) E.units = u; setRadio("Units", id); store.slice("viewport", { units: E.units }); }
 
-export function setCrosshair(mode, id) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); }
+export function setCrosshair(mode, id) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }

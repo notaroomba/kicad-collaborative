@@ -15,6 +15,7 @@
 // footprint), E.selection (box / multi selection) and the tool module's own pick (a wire, a track).
 // selectionItems() / clearAllSelection() / selectAt() treat them as the one selection KiCad has.
 import { state, store } from "./appstore";
+import { placeCrosshair } from "./crosshair";
 import { renderObjects, snapMm, syncItemsFromDoc } from "./doc";
 import { sendOp } from "./net";
 import { breakFollow, sendPresence } from "./peers";
@@ -404,7 +405,7 @@ export function installGestures(open: OpenMenu): void {
   stage.addEventListener("pointermove", onMoveCapture, true);
   stage.addEventListener("pointerup", onUpCapture, true);
   stage.addEventListener("pointercancel", () => { cancelInteraction(); }, true);
-  stage.addEventListener("pointerleave", () => { if (E.hoverId) { E.hoverId = null; requestRepaint(); } stage.classList.remove("over-sel"); });
+  stage.addEventListener("pointerleave", () => { placeCrosshair(null); if (E.hoverId) { E.hoverId = null; requestRepaint(); } stage.classList.remove("over-sel"); });
   stage.addEventListener("auxclick", (ev) => ev.preventDefault());           // no autoscroll / paste on a middle click
   stage.addEventListener("mousedown", (ev) => { if (ev.button === 1) ev.preventDefault(); });
   window.addEventListener("blur", () => { ctrlHeld = false; cancelInteraction(); });

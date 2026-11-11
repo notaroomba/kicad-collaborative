@@ -1,6 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setStatusBar, state, store } from "./appstore";
+import { toolCursor } from "./crosshair";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
 import { toolChanging } from "./gestures";
 import { sendOp } from "./net";
@@ -143,7 +144,7 @@ export function setTool(t) {
   const mt = moduleTool(t);
   stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : t === "zoomtool" ? "zoomtool" : t === "measure" ? "measure" : "";
   if (t !== "measure" && E.measure) { E.measure = null; dragG.replaceChildren(); setStatusBar({ message: "" }); }
-  if (mt && mt.cursor) stage.style.cursor = mt.cursor; else stage.style.cursor = "";
+  stage.style.cursor = mt && mt.cursor ? toolCursor(mt.cursor) : "";
   if (t === "comment" && !E.canJoin) { toast("Sign in to comment"); setTool("select"); return; }
   const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }
   requestRender();

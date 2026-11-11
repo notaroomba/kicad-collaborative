@@ -43,7 +43,7 @@ export function openPreferences(page?: string): void {
     const ov = (key: "connected" | "wires" | "vias" | "text" | "graphics", label: string) => { const s = h("select", { id: `${pre}-ov-${key}` }); s.addEventListener("change", () => { (o as unknown as Record<string, number>)[key + "Mm"] = +s.value; }); ovSel[key] = s;
       og.append(checkbox(label, o[key], (on) => { o[key] = on; }, { id: `${pre}-ovon-${key}` }), s); };
     ov("connected", "Connected items:"); ov("wires", "Wires:"); if (ed === "pcb") ov("vias", "Vias:"); ov("text", "Text:"); ov("graphics", "Graphics:");
-    ob.append(og); fill();
+    ob.append(og); KD().staticBox(R, "Grid Display").append(checkbox("Show grid axes", !!g.axes, (on) => { g.axes = on; }, { id: `${pre}-gridaxes` })); fill();
   };
   KD().open({ title: "Preferences", width: 900, cls: "kd-wide kd-flush",
     extra: [{ label: "Reset to Defaults", fn: () => { savePrefs(JSON.parse(JSON.stringify(DEFAULT_PREFS)) as Prefs); KD().close(); openPreferences(); } }],

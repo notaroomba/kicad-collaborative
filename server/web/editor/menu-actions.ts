@@ -8,6 +8,7 @@
 //            units (remembered), reset local coordinates, Show Hidden Fields, sheet navigation
 //   Route    layer switching (board)
 //   Help     List Hotkeys, About (help-dialogs.ts)
+import { cursorStep, panStep } from "./crosshair";
 import { GRID_CHOICES, navigateDocs, openDoc, rootSchematic, setActiveLayer, setGridPitch } from "./doc";
 import { HANDLERS, gridMenu, toggleRenderOpt } from "./actions";
 import { setToggle, state, store } from "./appstore";
@@ -228,8 +229,6 @@ function cursorPx(): [number, number] {
 }
 function zoomAtCursor(f: number): void { const [x, y] = cursorPx(); zoomBy(f, x, y); }
 function centreOnCursor(): void { const [x, y] = cursorPx(); E.viewTouched = true; E.panX += stage.clientWidth / 2 - x; E.panY += stage.clientHeight / 2 - y; applyView(); }
-function pan(dx: number, dy: number): void { E.viewTouched = true; E.panX += dx * stage.clientWidth * 0.1; E.panY += dy * stage.clientHeight * 0.1; applyView(); }
-
 /** Ids of everything selected: the app's selection, a selected field's owner and the tool module's own pick. */
 export function selectedIds(): string[] {
   const ids = new Set<string>(E.selection as Set<string>);
@@ -288,7 +287,9 @@ export const MENU_HANDLERS: Record<string, (anchor?: unknown) => unknown> = {
   plot: () => plotDialog(),
   properties: () => { if (!openSelectionProperties()) toast("Select an item first"); },
   zoomFitSelection, zoomIn: () => zoomAtCursor(1.25), zoomOut: () => zoomAtCursor(0.8), zoomCenter: centreOnCursor,
-  panUp: () => pan(0, 1), panDown: () => pan(0, -1), panLeft: () => pan(1, 0), panRight: () => pan(-1, 0),
+  panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),
+  cursorUp: () => cursorStep(0, -1, 1), cursorDown: () => cursorStep(0, 1, 1), cursorLeft: () => cursorStep(-1, 0, 1), cursorRight: () => cursorStep(1, 0, 1),
+  cursorUpFast: () => cursorStep(0, -1, 10), cursorDownFast: () => cursorStep(0, 1, 10), cursorLeftFast: () => cursorStep(-1, 0, 10), cursorRightFast: () => cursorStep(1, 0, 10),
   gridNext: () => stepGrid(1), gridPrev: () => stepGrid(-1), gridProperties: (a) => gridMenu(a),
   millimetersUnits: () => setUnits("mm"), inchesUnits: () => setUnits("in"), milsUnits: () => setUnits("mil"), toggleUnits,
   resetLocalCoords,

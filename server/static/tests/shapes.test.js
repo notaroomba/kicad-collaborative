@@ -54,5 +54,20 @@ test("SVG export draws board text in the stroke font when the stroke font is on"
   } finally { K.textMode = prev; }
 });
 
+test("grid axes: two lines through the origin, drawn with the grid off too", () => {
+  const doc = pcb(`(gr_line (start -10 -10) (end 10 10) (stroke (width 0.2) (type solid)) (layer "F.SilkS") (uuid "l"))`);
+  const lines = [], ctx = { canvas: { width: 400, height: 400 }, lineWidth: 1, globalAlpha: 1 };
+  for (const n of ["setTransform", "fillRect", "strokeRect", "clearRect", "beginPath", "closePath", "arc", "rect", "fill", "save", "restore", "translate", "rotate", "scale", "fillText", "strokeText", "setLineDash", "drawImage", "clip", "stroke"]) ctx[n] = () => {};
+  ctx.measureText = (t) => ({ width: t.length * 0.7 });
+  let from = null; ctx.moveTo = (x, y) => { from = [x, y]; }; ctx.lineTo = (x, y) => { lines.push([from, [x, y], ctx.strokeStyle]); };
+  const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -20, y0: -20, dpr: 1 };
+  K.render(doc, ctx, view, { gridAxes: true, frame: false });
+  const axes = lines.filter((l) => l[2] === "#C2C2C2");
+  assert.strictEqual(axes.length, 2, "two axis lines: " + axes.length);
+  assert(axes.some((l) => l[0][1] === 0 && l[1][1] === 0) && axes.some((l) => l[0][0] === 0 && l[1][0] === 0), "one on each axis");
+  lines.length = 0; K.render(doc, ctx, view, { frame: false });
+  assert(!lines.some((l) => l[2] === "#C2C2C2"), "off by default");
+});
+
 console.log(`shapes: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

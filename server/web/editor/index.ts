@@ -27,6 +27,7 @@ import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, instal
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
+import { placeCrosshair } from "./crosshair";
 import { installPcbRouting, pcbLayerKey } from "./pcbrouting";
 import { installProjectWatch } from "./projectwatch";
 import { breakFollow, sendPresence } from "./peers";
@@ -219,7 +220,7 @@ stage.addEventListener("pointerdown", (ev) => {
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
   E.lastCursorMm = mm; store.slice("viewport", { cursor: mm });
-  if (E.crosshairMode !== "small") { const r = stage.getBoundingClientRect(); const cy = ev.clientY - r.top, cx = ev.clientX - r.left; $("#chH").setAttribute("y1", cy); $("#chH").setAttribute("y2", cy); $("#chV").setAttribute("x1", cx); $("#chV").setAttribute("x2", cx); }
+  placeCrosshair(mm);
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); drawBoxSel(); return; }
   if (E.measure && !E.measure.b) { drawMeasure(snapMm(mm)); }

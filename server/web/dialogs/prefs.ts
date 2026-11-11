@@ -5,7 +5,7 @@ import { syncSchModes } from "../editor/panes";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 
 export type EditorId = "sch" | "pcb";
-export interface GridPrefs { sizes: number[]; fast1: number; fast2: number; overrides: GridOverrides }
+export interface GridPrefs { sizes: number[]; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }   // axes: window.grid.axes_enabled
 export interface Prefs {
   mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "none"; rightDrag: "pan" | "none"; centerOnZoom: boolean };
   schDisplay: { showHiddenPins: boolean; showHiddenFields: boolean; showPageLimits: boolean };
@@ -23,8 +23,8 @@ export const DEFAULT_PREFS: Prefs = {
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, highContrast: false },
   grids: {
     // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
-    sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES },
-    pcb: { sizes: [0.25, 0.5, 1, 0.1, 0.05, 1.27, 0.635], fast1: 0, fast2: 1, overrides: PCB_GRID_OVERRIDES },
+    sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES, axes: false },
+    pcb: { sizes: [0.25, 0.5, 1, 0.1, 0.05, 1.27, 0.635], fast1: 0, fast2: 1, overrides: PCB_GRID_OVERRIDES, axes: false },
   },
 };
 const KEY = "kui.prefs";
@@ -96,6 +96,7 @@ export function applyPrefs(full = true): void {
     const choices = g.sizes.map((mm) => [mm, gridLabel(mm)] as [number, string]);
     GRID_CHOICES[isSch() ? "kicad_sch" : "kicad_pcb"] = choices;
     store.slice("viewport", { gridChoices: choices.map((c) => c.slice()) });
+    E.renderOpts.gridAxes = !!g.axes;
     if (!full) { /* grids and colours only */ }
     else if (isSch()) {
       E.renderOpts.showHiddenPins = p.schDisplay.showHiddenPins; E.renderOpts.showHiddenText = p.schDisplay.showHiddenFields; E.renderOpts.pageLimits = p.schDisplay.showPageLimits;
