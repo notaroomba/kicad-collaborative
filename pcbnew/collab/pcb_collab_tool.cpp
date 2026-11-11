@@ -22,6 +22,7 @@
 #include "pcb_collab_sync.h"
 
 #include <widgets/wx_infobar.h>
+#include <wx/app.h>
 #include <wx/hyperlink.h>
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>

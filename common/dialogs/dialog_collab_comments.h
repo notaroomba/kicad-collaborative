@@ -20,6 +20,7 @@
 #pragma once
 
 #include <functional>
+#include <math/vector2d.h>
 #include <nlohmann/json.hpp>
 #include <wx/dialog.h>
 

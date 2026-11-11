@@ -41,6 +41,8 @@
 #include <tools/sch_actions.h>
 #include <tools/sch_line_wire_bus_tool.h>
 #include <tools/sch_move_tool.h>
+#include <tools/sch_selection_tool.h>
+#include <tool/tool_manager.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <gal/painter.h>
 #include <view/view.h>

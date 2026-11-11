@@ -18,6 +18,7 @@
  */
 
 #include <collab/collab_auth.h>
+#include <wx/intl.h>
 
 #include <kicad_curl/kicad_curl_easy.h>
 #include <nlohmann/json.hpp>
