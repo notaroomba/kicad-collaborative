@@ -6,6 +6,8 @@ COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci --no-audit --no-fund
 COPY web ./web
 COPY scripts ./scripts
+# the headless editor (web/mcp) bundles the editor's schematic and board tool modules
+COPY static/sch-tools.js static/pcb-tools.js ./static/
 RUN npm run check && npm run build
 
 FROM rust:1-slim-bookworm AS build
