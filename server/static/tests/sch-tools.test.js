@@ -1059,6 +1059,16 @@ test("annotate: X-then-Y numbering per prefix, incremental keeps existing refere
   assert.deepStrictEqual([refOf("s1"), refOf(b.id), refOf(f.id), refOf(g.id)], ["R3", "R5", "R6", "#PWR2"], "R1, R2, R4 and #PWR1 belong to another sheet");
 });
 
+test("paste modes (DIALOG_PASTE_SPECIAL): keep, remove, unique", () => {
+  const { d } = fresh(); const s1 = d.items.get("s1"); const text = sch.clipboardText(d, [s1]);
+  const parsed = sch.parseClipboard(text); const refOf = (n) => str(kids(n, "property").find((p) => str(p[1]) === "Reference")[2]);
+  const paste = (mode) => { const { ids } = sch._.pasteChanges(d, sch.parseClipboard(text), [200, 200], { pasteMode: mode }); return refOf(d.items.get(ids[0]).node); };
+  assert.ok(parsed); const orig = refOf(s1.node);
+  assert.strictEqual(paste("keep"), orig, "kept even though duplicated");
+  assert.ok(/\?$/.test(paste("remove")), "cleared");
+  const u = paste("unique"); assert.ok(/^\D+\d+$/.test(u) && u !== orig, "next free number: " + u);
+});
+
 test("ERC on the embedded sheet: unconnected pins, dangling wires, then the fixes and the other findings", () => {
   const { d, c } = fresh();
   assert.ok(sch.runAction("runERC", c));

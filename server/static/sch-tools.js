@@ -1783,7 +1783,15 @@ function pasteChanges(doc, parsed, at, opts) {
   for (const lib of parsed.libs) { const name = str(lib[1]); if (!doc.lib.has(name)) doc.lib.set(name, lib); }   // the sheet's own copy wins (ChoosePasteLibSymbol)
   const fresh = parsed.nodes.map((n) => cloneNode({ kind: n[0], node: deep(n) }));
   const used = usedReferences(doc);
-  for (const n of fresh) if (n[0] === "symbol" && !(opts && opts.keepAnnotations)) assignPastedRef(doc, n, used);
+  // PASTE_MODE: "keep" (keepAnnotations), "remove" (every reference becomes R?), "unique" (the next free number for a
+  // reference already in use, whatever the automatic-annotation setting); default: assignPastedRef's own rule
+  const mode = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null));
+  for (const n of fresh) {
+    if (n[0] !== "symbol" || mode === "keep") continue;
+    if (mode === "remove") { const p = refField(n); if (p) setReference(n, unannotated(str(p[2]))); continue; }
+    if (mode === "unique") { const auto = S.annotateAuto; S.annotateAuto = true; try { assignPastedRef(doc, n, used); } finally { S.annotateAuto = auto; } continue; }
+    assignPastedRef(doc, n, used);
+  }
   const lead = fresh.find((n) => n[0] === "symbol") || fresh[0], a = anchorOf(lead[0], lead);
   const dx = r4(at[0] - a[0]), dy = r4(at[1] - a[1]);
   for (const n of fresh) shiftNode(n[0], n, dx, dy);
@@ -1829,6 +1837,23 @@ function pasteSelection(ctx, opts) {
   const v = clipRead(ctx);
   if (v && typeof v.then === "function") { v.then((t) => pasteText(ctx, t, opts)); return true; }
   return pasteText(ctx, v, opts);
+}
+// DIALOG_PASTE_SPECIAL: Reference Designators — assign unique (the default with automatic annotation on), keep
+// (even if duplicated), or clear (the default with it off); OK pastes, Cancel does nothing.
+function pasteSpecial(ctx, opts) {
+  if (!editable(ctx)) return false;
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+  if (opts && (opts.pasteMode || opts.keepAnnotations !== undefined) || !KD || !KD.open) return pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}));
+  const at = snapCursor(ctx); let mode = S.annotateAuto ? "unique" : "remove";
+  const choices = [["unique", "Assign unique reference designators to pasted symbols", "Finds the next available reference designator for any designators that already exist in the design."],
+    ["keep", "Keep existing reference designators, even if they are duplicated", ""], ["remove", "Clear reference designators on all pasted symbols", "Replaces reference designators with '?'."]];
+  KD.open({ title: "Paste Special", width: 460,
+    build(body) {
+      body.innerHTML = `<div class="kd-note" style="margin-bottom:6px">Reference Designators</div>` + choices.map(([v, l, tip]) => `<label class="kd-chk" style="display:flex;gap:6px;align-items:center;margin:3px 0"${tip ? ` title="${tip}"` : ""}><input type="radio" name="kd-paste-mode" value="${v}" id="kd-paste-${v}"${v === mode ? " checked" : ""}>${l}</label>`).join("");
+      for (const r of body.querySelectorAll("input[name=kd-paste-mode]")) r.addEventListener("change", () => { if (r.checked) mode = r.value; });
+    },
+    ok() { setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode, at })), 0); } });
+  return true;
 }
 function duplicateSelection(ctx) {
   if (!editable(ctx)) return false;
@@ -2780,7 +2805,7 @@ const ACTION_LIST = [
   act("copy", "Copy", "Ctrl+C", (ctx) => copySelection(ctx)),
   act("copyAsText", "Copy as Text", "Ctrl+Shift+C", (ctx) => copyAsText(ctx)),
   act("paste", "Paste", "Ctrl+V", (ctx, opts) => pasteSelection(ctx, opts)),
-  act("pasteSpecial", "Paste Special...", "Ctrl+Shift+V", (ctx, opts) => pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}))),
+  act("pasteSpecial", "Paste Special...", "Ctrl+Shift+V", (ctx, opts) => pasteSpecial(ctx, opts)),
   act("duplicate", "Duplicate", "Ctrl+D", (ctx) => duplicateSelection(ctx)),
   act("unselectAll", "Unselect All", "Ctrl+Shift+A", (ctx) => unselectAll(ctx)),
   act("selectConnection", "Select/Expand Connection", "Ctrl+4", (ctx) => selectConnection(ctx)),
