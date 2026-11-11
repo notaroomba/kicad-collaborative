@@ -325,7 +325,22 @@ const onPointerUp = (ev) => {
   fp.x = nx; fp.y = ny; if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 };
 stage.addEventListener("pointerup", onPointerUp);
-registerPointerUp(onPointerUp);   // a click drops an item that follows the cursor after Move
+registerPointerUp(onPointerUp);
+
+// The keyboard belongs to the canvas, as in KiCad: a click on it takes the focus from a panel's field, and when a
+// dialog, prompt or popover closes with nothing focused, the focus goes back to it (not to the page).
+stage.addEventListener("pointerdown", (ev) => {
+  const t = ev.target as Element | null;
+  if (t && t.closest && t.closest("input, textarea, select, button, a, [contenteditable], #cmtPanel")) return;
+  if (document.activeElement !== stage) stage.focus({ preventScroll: true });
+}, true);
+const refocusCanvas = new MutationObserver((recs) => {
+  if (state.view !== "editor" || !E.kdoc) return;
+  const a = document.activeElement; if (a && a !== document.body && a.isConnected) return;
+  if (recs.some((r) => r.removedNodes.length > 0)) stage.focus({ preventScroll: true });
+});
+refocusCanvas.observe(document.body, { childList: true });
+const overlaysRoot = document.getElementById("ui-overlays"); if (overlaysRoot) refocusCanvas.observe(overlaysRoot, { childList: true, subtree: true });   // a click drops an item that follows the cursor after Move
 
 
 document.addEventListener("keydown", (ev) => {
