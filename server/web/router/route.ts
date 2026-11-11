@@ -200,7 +200,7 @@ export class Router {
     // A fine-pitch pad only has room for so wide a track between its neighbours: a connection that ends on one
     // runs as wide as that room allows, as people neck tracks down at such pads.
     if (cap < width) width = Math.max(s.minTrackWidth || 0.1, 0.1, Math.floor(cap * 100 + 1e-6) / 100);
-    const clr = P.netClearance(s, netKey); const viaD = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
+    const clr = Math.max(P.netClearance(s, netKey), s.minClearance || 0); const viaD = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
     const viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
     const key = `${width}/${clr}/${viaD}/${viaDrill}`; return G.classes.get(key) || buildClass(G, key, width, clr, viaD, viaDrill);
   }
@@ -278,7 +278,7 @@ export class Router {
   }
   /** The widest track that can leave a fine-pitch pad along its axis and keep the clearance to what is beside it. */
   private roomAt(a: Anchor, net: string): number {
-    if (!a.axis || !a.narrow || a.narrow > 0.35) return Infinity; const G = this.G, P = this.P; const clr = P.netClearance(this.s, net); this.index();
+    if (!a.axis || !a.narrow || a.narrow > 0.35) return Infinity; const G = this.G, P = this.P; const clr = Math.max(P.netClearance(this.s, net), this.s.minClearance || 0); this.index();
     let half = Infinity; const B = 2; const seen = new Set<any>();
     for (const sgn of [1, -1]) {
       let h = Infinity; const b: Pt = [a.p[0] + a.axis[0] * 0.45 * sgn, a.p[1] + a.axis[1] * 0.45 * sgn]; const sh = { t: "seg", a: a.p, b, r: 0 }; seen.clear();
@@ -351,6 +351,10 @@ export class Router {
           rt = open;
           if (relaxed) extra = (nodes) => { let off = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l === b.l && !want[a.l]) off += Math.hypot(b.ix - a.ix, b.iy - a.iy) * G.g; } return off * 4 * this.W.length; };
         }
+      }
+      if (soft && !collect) {   // looking through this run's routes: prefer the way that disturbs the fewest of them
+        const full = conn.cls.full, plan = extra;
+        extra = (nodes) => { let hit = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const m = full[a.l]; for (let k = 0; k <= n; k++) if (m[(a.iy + sy * k) * G.W + a.ix + sx * k]) hit++; } return hit * G.g * 12 * this.W.length + (plan ? plan(nodes) : 0); };
       }
       let used = 0; for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
       const maxVias = gd.maxVias - used;
@@ -540,7 +544,17 @@ export class Router {
         if (timeUp()) return; if (c.nodes) continue; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
         if (force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0) gained = true; else back(snap);
       }
-      if (!gained) return;
+      if (!gained) break;
+    }
+    // Last resort for what is still open: the narrowest track the board allows gets through gaps the class width
+    // does not.  Narrower than the net class asks for, never narrower than the design rules permit.
+    const floor = Math.max(this.s.minTrackWidth || 0, 0.1);
+    for (const c of conns) {
+      if (c.nodes || c.why === "budget" || timeUp() || c.cls.width <= floor + 1e-6) continue;
+      const known = new Set(this.G.classes.keys()); const wide = c.cls; const thin = this.classFor(c.net, floor);
+      if (!known.has(thin.key)) for (const o of conns) if (o.nodes) for (const sh of o.shapes) stampClass(this.G, thin, sh, 1, false);
+      c.cls = thin; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
+      if (!(force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0)) { back(snap); c.cls = wide; }
     }
   }
   /** The exact check: every new track and via against the real shapes, at the real clearances.  Offenders are dropped. */

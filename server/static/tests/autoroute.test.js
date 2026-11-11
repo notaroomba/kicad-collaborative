@@ -247,3 +247,10 @@ test("placement: two pinned parts in one group both land exactly where asked, un
   assert.deepEqual([at("U1").x, at("U1").y, at("U1").rot], [100.013, 50.57, 0]); assert.deepEqual([at("L1").x, at("L1").y, at("L1").rot], [121.57, 62.86, 90]);
   assert.equal(at("L1").group, "buck"); assert.equal(res.score.courtyardClashes, 0);
 });
+
+test("after routing a board with zones, the desktop app is asked to refill them", async () => {
+  const zone = `(zone (net "G") (net_name "G") (layer "B.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.3)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 91 41) (xy 129 41) (xy 129 69) (xy 91 69))))`;
+  const run = async (items) => { const doc = board(...items); const asked = []; const ctx = { K, doc, viewOnly: false, designSettings: null, commit() {}, toast() {}, requestRender() {}, requestDesktop(what) { asked.push(what); return true; } }; const s = await R.autoroute(ctx, {}); return { s, asked }; };
+  const withZone = await run([smd(100, 50, "A"), smd(115, 58, "A"), zone]); assert.deepEqual(withZone.asked, ["fill_zones"]); assert.equal(withZone.s.refillAsked, true);
+  const without = await run([smd(100, 50, "A"), smd(115, 58, "A")]); assert.deepEqual(without.asked, []); assert.equal(without.s.refillAsked, false);
+});

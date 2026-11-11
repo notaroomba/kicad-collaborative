@@ -9,7 +9,7 @@ const root = globalThis as any;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const CHUNK = 600;   // changes per commit: keeps one edit message well under the server's size limit
 
-export interface AutorouteSummary { total: number; routed: number; failed: { net: string; a: [number, number]; b: [number, number] }[]; segments: number; vias: number; length: number; ms: number; zoneEnds: number; zoneCovered: number; dropped: number; cancelled: boolean; ids: string[] }
+export interface AutorouteSummary { total: number; routed: number; failed: { net: string; a: [number, number]; b: [number, number] }[]; segments: number; vias: number; length: number; ms: number; zoneEnds: number; zoneCovered: number; dropped: number; cancelled: boolean; ids: string[]; refillAsked?: boolean }
 interface Running { router: Router; cancelled: boolean; done: boolean }
 let running: Running | null = null;
 
@@ -52,7 +52,12 @@ export async function autoroute(ctx: any, opts: RouteOptions = {}, ui?: { progre
   const changes = res.items.map((i) => P.addedChange(doc, i.node, i.net)); const ids: string[] = changes.map((c: any) => c.id);
   for (let i = 0; i < changes.length; i += CHUNK) ctx.commit(changes.slice(i, i + CHUNK), "autoroute");
   if (ctx.requestRender) ctx.requestRender();
-  return { total: res.total, routed: res.routed, failed: res.failed, segments: res.segments, vias: res.vias, length: res.length, ms: res.ms, zoneEnds: res.zoneEnds, zoneCovered: res.zoneCovered, dropped, cancelled: false, ids };
+  // Zones are filled by the desktop application (its filler is what fabrication output comes from): when the board
+  // has zones and new copper went down, ask a desktop editor in the session to refill; the fill arrives as an edit.
+  let refill = false;
+  if (changes.length) { let zones = false; for (const it of doc.items.values()) if (it.kind === "zone" && !K.kid(it.node, "keepout")) { zones = true; break; } if (zones && ctx.requestDesktop) { try { refill = !!ctx.requestDesktop("fill_zones"); } catch (e) { refill = false; } } }
+  (empty as any).refillAsked = refill;
+  return { refillAsked: refill, total: res.total, routed: res.routed, failed: res.failed, segments: res.segments, vias: res.vias, length: res.length, ms: res.ms, zoneEnds: res.zoneEnds, zoneCovered: res.zoneCovered, dropped, cancelled: false, ids };
 }
 
 /** One line for the status toast. */
@@ -147,7 +152,7 @@ function report(ctx: any, s: AutorouteSummary): void {
     title: "Autoroute finished", width: 460, okLabel: "Close",
     build(body: HTMLElement) {
       note(body, `${s.routed} of ${plural(s.total, "connection")} routed with ${plural(s.segments, "track segment")} and ${plural(s.vias, "via")} (${s.length.toFixed(1)} mm) in ${(s.ms / 1000).toFixed(1)} s. Undo takes the whole run back.`);
-      if (s.zoneEnds || s.zoneCovered) note(body, `${plural(s.zoneEnds + s.zoneCovered, "connection")} rely on a copper zone of their net (${s.zoneEnds} reach it through a new via): refill the zones (B in KiCad) to complete them.`);
+      if (s.zoneEnds || s.zoneCovered) note(body, `${plural(s.zoneEnds + s.zoneCovered, "connection")} rely on a copper zone of their net (${s.zoneEnds} reach it through a new via). ${s.refillAsked ? "The desktop app in this session was asked to refill the zones; the fill arrives as an edit." : "Refill the zones in the KiCad desktop app (B) to complete them."}`);
       if (s.dropped) note(body, `The board changed while routing: ${plural(s.dropped, "route")} no longer fitted and were left out.`);
       if (s.failed.length) {
         note(body, `${plural(s.failed.length, "connection")} could not be routed within the design rules and are still shown in the ratsnest:`);
