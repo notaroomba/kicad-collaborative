@@ -284,6 +284,36 @@ const moved = await tool(a, 'get_component', { ref: 'R1' }); const at = moved ? 
 check('board move applied', at === '150,80', String(at));
 await shot(a, '10-board-accepted');
 
+// ---- the autorouter as a proposal: unroute one net, then ask for it back
+const netName = 'Net-(P1-PM)';
+const tracks = (await tool(a, 'get_items', { net: netName, kinds: ['segment'] })).items.map((it) => it.id);
+check('fixture net has tracks to remove', tracks.length > 3, String(tracks.length));
+await post(`${AI}/__ctl/reset`);
+await script([
+  { content: [{ type: 'tool_use', id: 'toolu_r1', name: 'propose_changes', input: { title: 'Unroute the input net', edits: tracks.map((id) => ({ op: 'remove', id })) } }] },
+  { content: [{ type: 'text', text: 'Proposed.' }] },
+  { content: [{ type: 'tool_use', id: 'toolu_r2', name: 'propose_changes', input: { title: 'Route the input net', rationale: 'Autorouted within the net class rules.', edits: [{ op: 'autoroute', nets: [netName] }] } }] },
+  { content: [{ type: 'text', text: 'Routed on the card.' }] },
+]);
+await ask(a, 'Rip up the input net.');
+await a.locator('[data-proposal]').last().getByRole('button', { name: /accept/i }).click(); await a.waitForTimeout(800);
+const unrouted = (await tool(a, 'list_nets', { filter: netName })).nets[0];
+check('net is unrouted after the rip-up', unrouted.tracks === 0 && unrouted.unrouted_connections > 0, JSON.stringify(unrouted));
+await ask(a, 'Route it again.');
+const rres = (await requests()).pop().body.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).find((x) => x.tool_use_id === 'toolu_r2');
+check('autoroute reports what it routed', !!rres && !rres.is_error && /"routed":\s*[1-9]/.test(rres.content), rres && rres.content.slice(0, 500));
+check('autoroute changes nothing before it is accepted', (await tool(a, 'list_nets', { filter: netName })).nets[0].tracks === 0);
+const rcard = a.locator('[data-proposal]').last();
+await rcard.getByRole('button', { name: /preview/i }).click(); await a.waitForTimeout(600);
+await shot(a, '10b-autoroute-preview');
+await rcard.getByRole('button', { name: /accept/i }).click(); await a.waitForTimeout(1000);
+const routed = (await tool(a, 'list_nets', { filter: netName })).nets[0];
+check('accepted autoroute completes the net', routed.tracks > 0 && routed.unrouted_connections === 0, JSON.stringify(routed));
+const drc = await tool(a, 'run_checks', {});
+const mine = drc.violations.filter((v) => v.severity === 'error' && (v.message.includes(netName) || /clearance|short/i.test(v.code)));   // R1 was moved off its tracks earlier: those are not the router's
+check('autorouted copper passes the DRC', mine.length === 0, JSON.stringify(mine).slice(0, 400));
+await shot(a, '10c-autoroute-accepted');
+
 // ---- settings: a person's own key
 await a.click('#aiGear');
 await a.waitForSelector('#aiSettings');

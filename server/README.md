@@ -177,6 +177,9 @@ with Claude that can read the open design and propose edits to it.
   pipeline as one undo step, so everyone in the session sees them and they are
   checkpointed like any other edit. A proposal whose items changed since it was
   made is refused.
+- Schematic proposals are checked for pins that would end up on a different
+  net, and the card says so. On a board, an `autoroute` edit runs the board
+  autorouter and proposes its tracks and vias like any other change.
 
 | Endpoint | |
 |---|---|

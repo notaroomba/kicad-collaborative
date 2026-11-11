@@ -23,6 +23,7 @@ const QUICK: Record<"sch" | "pcb", [string, string][]> = {
   pcb: [
     ["Review this board", "Review this board. Read the board statistics, the design rules, the nets and the DRC results, then tell me what would stop it working or being manufactured, what is risky, and what is only polish, most important first."],
     ["Summarise the DRC problems", "Run the design rules check and summarise the violations by cause, with what to do about each."],
+    ["Route the unrouted nets", "Route the connections that are still unrouted on this board with the autorouter. First tell me which nets are unrouted and which of them should be routed by hand or first, then propose the routing, critical nets first."],
     ["Check power track widths", "Find the power and ground nets, look at the track widths and vias they use, and tell me whether they suit the currents these parts are likely to draw. Use the datasheets where the current is not obvious."],
     ["Explain the selection", "Explain what the selected footprint or copper is and what it connects to."],
   ],

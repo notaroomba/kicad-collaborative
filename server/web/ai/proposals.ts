@@ -25,6 +25,8 @@ export interface Proposal {
   note?: string;
   /** schematics: how pin connections differ once applied. Empty: unchanged. Absent: not checked. */
   connectivity?: string[];
+  /** extra facts for the model about what an edit did (the autorouter's summary) */
+  details?: unknown[];
 }
 
 const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -147,7 +149,7 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
   const edits = input.edits; if (!Array.isArray(edits) || !edits.length) throw new ToolError("edits must be a non-empty list.");
   if (edits.length > 400) throw new ToolError("That is too many edits for one proposal; split it into steps a person can review.");
   const isSch = doc.type === "sch"; const k = K();
-  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = [];
+  const changes: any[] = [], lines: EditLine[] = [], basis: Record<string, string> = {}, problems: string[] = []; const details: unknown[] = [];
   const touched = new Map<string, string>(); const taken = new Set<string>();
   const touch = (it: any, op: string) => { const prev = touched.get(it.id); if (prev) throw new ToolError(`${nameOf(it)} is already changed by an earlier edit (${prev}); combine them or split the proposal`); touched.set(it.id, op); basis[it.id] = k.serialize(it.node); };
   const schOnly = (op: string) => { if (!isSch) throw new ToolError(`${op} is a schematic edit and the board is open`); };
@@ -232,6 +234,21 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
           lines.push({ kind: "add", text: `Add via ${fmt(size)}/${fmt(drill)} mm on net ${net.name} at (${fmt(e.x)}, ${fmt(e.y)})`, ids: [c.id] });
           break;
         }
+        case "autoroute": {
+          pcbOnly(e.op); const P = PCB(); const R = (window as any).PcbAutoRouter;
+          if (!R || !R.route) throw new ToolError("the autorouter is not loaded in this editor");
+          if (e.nets !== undefined && (!Array.isArray(e.nets) || !e.nets.length)) throw new ToolError("nets must be a non-empty list of net names, or left out for every unrouted net");
+          const nets: string[] | null = e.nets ? e.nets.map((n: unknown) => boardNet(doc, text(n, "net")).name) : null;
+          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: 12000 });
+          const failed = (res.failed || []).map((f: any) => ({ net: f.net, from: f.a.map(r4), to: f.b.map(r4) }));
+          if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
+          if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
+          const ids: string[] = [];
+          for (const it of res.items) { const c = added(doc, it.node); if (!c.netName && it.netName) c.netName = it.netName; changes.push(c); ids.push(c.id); }   // not P.addedChange: that one inserts into the live board
+          details.push({ autoroute: { connections: res.total, routed: res.routed, unrouted: failed.slice(0, 40), segments: res.segments, vias: res.vias, length_mm: r4(res.length) } });
+          lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
+          break;
+        }
         case "add_item": {
           const trees = k.parseAll(text(e.sexpr, "sexpr"));
           if (trees.length !== 1 || !Array.isArray(trees[0])) throw new ToolError("sexpr must be exactly one item");
@@ -254,7 +271,7 @@ export function buildProposal(input: { title?: string; rationale?: string; edits
   });
   if (problems.length) throw new ToolError(`No proposal was shown, because ${problems.length === 1 ? "an edit is" : "some edits are"} invalid:\n- ${problems.join("\n- ")}`);
   return { id: "p" + Math.random().toString(36).slice(2, 9), title: String(input.title || "Proposed change").slice(0, 120), rationale: String(input.rationale || "").slice(0, 600),
-    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
+    docId: open.docId, docPath: open.path, lines, changes, basis, status: "pending", details: details.length ? details : undefined, connectivity: isSch ? connectivityDiff(doc, changes) : undefined };
 }
 
 /**

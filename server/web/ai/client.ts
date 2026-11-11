@@ -197,7 +197,7 @@ async function runTool(name: string, input: any, ui: UiMessage): Promise<{ conte
       S = Object.assign({}, S, { proposals: Object.assign({}, S.proposals, { [p.id]: p }) });
       ui.blocks.push({ t: "proposal", proposalId: p.id });
       const viewOnly = !!design.ED()?.viewOnly;
-      return { content: JSON.stringify({ proposal_id: p.id, status: "shown", document: p.docPath, edits: p.lines.map((l) => l.text),
+      return { content: JSON.stringify({ proposal_id: p.id, status: "shown", document: p.docPath, edits: p.lines.map((l) => l.text), details: p.details,
         connectivity: !p.connectivity ? undefined : p.connectivity.length ? { changed: p.connectivity, note: "These pins are connected differently once the proposal is applied. If that is not what the change is for (a tidy-up must not change connections), tell the person the card should be rejected and propose a corrected version." } : "unchanged: every pin is on the same net as before",
         note: viewOnly ? "The card is shown, but this person has view-only access and cannot accept it; someone with edit access would have to." : "The card is shown. It is not applied until a person accepts it; you will be told in a later message whether it was accepted or rejected." }) };
     }
