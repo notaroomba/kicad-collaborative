@@ -96,6 +96,86 @@ function disabledWhy(c: Ctx, id: string): string | null {
 }
 const isCheckable = (id: string) => MENU_CHECKS.has(id);
 
+// ---------------------------------------------------------------- the app menu
+/* The "KiCad Collaborative" title opens the application menu, like the application menu of a desktop program:
+   the places outside the current editor (projects, public projects, the part libraries, plugins, GitHub, Claude)
+   and the account.  Each entry is an editor action (web/editor/actions.ts HANDLERS). */
+interface AppEntry { id: string; label: string; icon: string; key?: string }
+function appEntries(me: AppState["me"], project: AppState["project"], inEditor: boolean): (AppEntry | "-")[] {
+  const out: (AppEntry | "-")[] = [
+    { id: "home", label: "Projects", icon: "directory_open" },
+    { id: "explore", label: "Explore Public Projects", icon: "search_tree" },
+  ];
+  if (me) out.push({ id: "newProject", label: "New Project...", icon: "add_board" }, { id: "openTrash", label: "Trash", icon: "trash" });
+  out.push("-",
+    { id: "symbolLibrary", label: "Symbol Library Browser", icon: "library_browser" },
+    { id: "footprintLibrary", label: "Footprint Library Browser", icon: "library" },
+    { id: "pluginManager", label: "Plugin and Content Manager", icon: "puzzle_piece" },
+    "-",
+    { id: "github", label: inEditor && project ? "GitHub Sync for This Project..." : "GitHub Sync...", icon: "import" },
+    { id: "connectClaude", label: "Connect Claude...", icon: "special_tools" },
+    "-",
+    { id: "about", label: "About KiCad Collaborative", icon: "about" });
+  if (me) out.push({ id: "signOut", label: "Log Out", icon: "" });
+  return out;
+}
+function AppMenu({ inEditor }: { inEditor: boolean }) {
+  const me = useApp((s) => s.me), project = useApp((s) => s.project);
+  const [open, setOpen] = useState(false), [sel, setSel] = useState(-1);
+  const btn = useRef<HTMLButtonElement | null>(null), panel = useRef<HTMLDivElement | null>(null);
+  const entries = useMemo(() => appEntries(me, project, inEditor), [me, project, inEditor]);
+  const items = entries.map((e, i) => (e === "-" ? -1 : i)).filter((i) => i >= 0);
+  const close = useCallback((refocus?: boolean) => { setOpen(false); setSel(-1); if (refocus && btn.current) btn.current.focus(); }, []);
+  const run = useCallback((e: AppEntry) => {
+    close();
+    const app = window.CollabApp;
+    if (app) app.dispatch({ type: "action", id: e.id, anchor: btn.current ? btn.current.getBoundingClientRect() : null });
+  }, [close]);
+  useEffect(() => {
+    if (!open) return;
+    const away = (ev: PointerEvent) => { const t = ev.target as Node; if (panel.current && panel.current.contains(t)) return; if (btn.current && btn.current.contains(t)) return; close(); };
+    const key = (ev: KeyboardEvent) => {
+      const k = ev.key, eat = () => { ev.preventDefault(); ev.stopPropagation(); };
+      if (k === "Escape") { eat(); close(true); return; }
+      if (k === "ArrowDown" || k === "ArrowUp") {
+        eat(); const at = items.indexOf(sel), n = items.length;
+        setSel(items[at < 0 ? (k === "ArrowDown" ? 0 : n - 1) : (at + (k === "ArrowDown" ? 1 : n - 1)) % n]); return;
+      }
+      if (k === "Enter" || k === " ") { eat(); const e = entries[sel]; if (e && e !== "-") run(e); return; }
+      if (k === "Tab") { eat(); return; }
+    };
+    document.addEventListener("pointerdown", away, true); window.addEventListener("keydown", key, true); window.addEventListener("resize", () => close());
+    return () => { document.removeEventListener("pointerdown", away, true); window.removeEventListener("keydown", key, true); };
+  }, [open, sel, items, entries, run, close]);
+  const r = open && btn.current ? btn.current.getBoundingClientRect() : null;
+  return (
+    <div className="brand relative flex flex-none items-center mr-3 max-[1100px]:mr-1.5">
+      <button type="button" id="appMenuBtn" ref={btn} aria-haspopup="menu" aria-expanded={open} title="KiCad Collaborative menu"
+        className={cx("flex items-center gap-2 font-semibold border-0 py-1 px-1.5 -ml-1.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", open ? "bg-paper shadow-[inset_0_0_0_1px_var(--line)]" : "bg-transparent")}
+        onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (open) close(); else { setOpen(true); setSel(-1); } }}
+        onKeyDown={(ev) => { if (!open && (ev.key === "Enter" || ev.key === " " || ev.key === "ArrowDown")) { ev.preventDefault(); setOpen(true); setSel(items[0] ?? -1); } }}>
+        <img className="logo w-4.5 h-4.5 block" src="/favicon.svg" alt="" />
+        <span className="max-[1100px]:hidden">KiCad Collaborative</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
+        <span className="text-2xs text-ink-3" aria-hidden="true">▾</span>
+      </button>
+      {open && r ? (
+        <div id="appMenu" role="menu" ref={panel} className={PANEL} style={{ left: r.left, top: r.bottom + 2, maxHeight: `calc(100vh - ${Math.round(r.bottom) + 12}px)` }}>
+          {entries.map((e, i) => e === "-"
+            ? <div key={"sep" + i} className="h-px bg-line my-1 mx-1" role="separator" />
+            : (
+              <button type="button" key={e.id} role="menuitem" data-appmenu={e.id}
+                className={cx(ROW, sel === i ? "bg-accent text-white" : "bg-transparent")}
+                onMouseMove={() => setSel(i)} onClick={() => run(e)}>
+                <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{e.icon ? <KIcon name={e.icon} size={16} /> : null}</span>
+                <span className="flex-1">{e.label}</span>
+              </button>
+            ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- panels
 const PANEL = "dd fixed min-w-[230px] bg-panel border border-line rounded-md p-1 z-50 shadow-panel overflow-y-auto overflow-x-hidden";
 const ROW = "mi flex items-center w-full text-left border-0 py-[5px] pl-1.5 pr-2.5 rounded-xs text-ink no-underline hover:no-underline cursor-default whitespace-nowrap";
@@ -350,10 +430,7 @@ export function MenuBar() {
   const showKeys = !!st || focus !== null;
   return (
     <div id="menubar" className="flex items-center gap-0.5 px-2 min-w-0 overflow-hidden bg-bench border-b border-line select-none">
-      <div className="brand flex flex-none items-center gap-2 font-semibold mr-3 max-[1100px]:mr-1.5">
-        <img className="logo w-4.5 h-4.5 block" src="/favicon.svg" alt="" />
-        <span className="max-[1100px]:hidden">KiCad Collaborative</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
-      </div>
+      <AppMenu inEditor={inEditor} />
       <div id={inEditor ? "kmenus" : "homeMenus"} className="flex gap-0.5 min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="menubar" ref={barRef}>
         {menus.map((m, i) => {
           const isOpen = !!st && st.menu === i, at = m.title.toLowerCase().indexOf(m.mnemonic);
