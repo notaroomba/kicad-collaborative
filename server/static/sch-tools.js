@@ -828,10 +828,12 @@ function endDrag(ctx, commit) {
   const d = S.drag; S.drag = null; if (!d) return;
   const [dx, dy] = d.last, doc = ctx.doc;
   applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
-  if (!commit || !d.moved || (!dx && !dy)) { ctx.requestRender(); return; }
+  const done = () => { if (d.restoreMode) { S.dragMode = d.restoreMode; announceModes(ctx); } ctx.requestRender(); };
+  if (!commit && d.pasted) { done(); ctx.undo(); return; }                    // Esc on a paste in flight: the pasted items go
+  if (!commit || !d.moved || (!dx && !dy)) { done(); return; }
   const changes = dragChanges(ctx, d, dx, dy);
-  if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move");
-  ctx.requestRender();
+  if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move", d.pasted ? { amend: true } : undefined);
+  done();
 }
 function cancelDrag(ctx) { if (S.drag) endDrag(ctx, false); }
 
@@ -1683,6 +1685,9 @@ function clipWrite(ctx, text) {
   else if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {});
 }
 function clipRead(ctx) {           // a string, or a Promise of one when the browser clipboard must be asked
+  // the system clipboard first: what was copied in another tab, by another person's session on this machine or
+  // by the desktop application is what Ctrl+V pastes; the editor's own buffer is the fallback when it is denied
+  if (ctx.clipboard && typeof ctx.clipboard.read === "function") { try { const v = ctx.clipboard.read(); if (v && typeof v.then === "function") return v.then((t) => t || CLIP.text, () => CLIP.text); } catch (e) { /* fall through */ } }
   if (ctx.clipboard && typeof ctx.clipboard.get === "function") { try { const v = ctx.clipboard.get(); if (v !== undefined && v !== null) return v; } catch (e) { /* fall through */ } }
   if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) return navigator.clipboard.readText().then((t) => t || CLIP.text, () => CLIP.text);
   return CLIP.text;
@@ -1786,9 +1791,21 @@ function pasteText(ctx, text, opts) {
   const parsed = parseClipboard(text);
   if (!parsed) { if (str(text).trim()) ctx.toast("Clipboard has no schematic items"); return false; }
   const { changes, ids } = pasteChanges(ctx.doc, parsed, (opts && opts.at) || snapCursor(ctx), opts);
+  if (!changes.length) return false;
   ctx.commit(changes, (opts && opts.label) || "paste");
   setSelectionIds(ctx, ids);
+  followPaste(ctx, ids, (opts && opts.at) || cursorOf(ctx));
   return true;
+}
+// KiCad's Paste / Duplicate: the new items ride the cursor until a click places them, Esc discards them.  They are
+// committed where they appear (so peers see them at once) and the placing move is folded into the same undo step.
+function followPaste(ctx, ids, at) {
+  if (typeof ctx.undo !== "function" || typeof document === "undefined" || !S.dom) return;   // headless: the paste stays where it landed
+  const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean); if (!items.length) return;
+  const mode = S.dragMode; S.dragMode = "move";
+  const d = beginDrag(ctx, items, at, false);
+  if (!d) { S.dragMode = mode; return; }
+  d.pasted = true; d.restoreMode = mode; d.moved = true;
 }
 function pasteSelection(ctx, opts) {
   if (!editable(ctx)) return false;

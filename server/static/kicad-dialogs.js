@@ -83,6 +83,15 @@ function setFieldHidden(node, p, hidden) {
 let current = null;
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; }
 function close() { if (current) { current.ov.remove(); current = null; } }
+// Esc closes the open dialog wherever the keyboard focus is: a dialog that redraws its body (the Symbol Fields
+// Table) or is opened from a toolbar button can leave the focus outside the overlay, whose own key handler then
+// never hears the key.
+if (typeof document !== "undefined") document.addEventListener("keydown", (ev) => {
+  if (!current || ev.key !== "Escape" || ev.defaultPrevented) return;
+  const t = ev.target;
+  if (t && t.closest && t.closest(".kd-overlay, #ctxMenu, [role='menu']")) return;   // the overlay's own handler, a prompt on top, or an open menu
+  ev.preventDefault(); ev.stopPropagation(); current.finish(false);
+}, true);
 /** open({title, width, build(body, api), ok() -> false keeps it open, extra:[{label, fn}], readOnly}) */
 function open(spec) {
   close();
@@ -115,7 +124,7 @@ function open(spec) {
   tt.addEventListener("pointerdown", (ev) => { if (ev.target.classList.contains("kd-x")) return; const r = dlg.getBoundingClientRect(); dragFrom = [ev.clientX - r.left, ev.clientY - r.top]; dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = r.left + "px"; dlg.style.top = r.top + "px"; tt.setPointerCapture(ev.pointerId); });
   tt.addEventListener("pointermove", (ev) => { if (!dragFrom) return; dlg.style.left = Math.max(0, ev.clientX - dragFrom[0]) + "px"; dlg.style.top = Math.max(0, ev.clientY - dragFrom[1]) + "px"; });
   tt.addEventListener("pointerup", () => { dragFrom = null; });
-  current = { ov, dlg, body, spec };
+  current = { ov, dlg, body, spec, finish };
   ensureCss();
   const api = { body, close, dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);

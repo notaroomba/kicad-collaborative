@@ -136,6 +136,7 @@ stage.addEventListener("dblclick", (ev) => {
 
 stage.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0 || E.tool !== "select" || !E.kdoc || E.selection.size < 2 || E.viewOnly || ev.shiftKey) return;
+  if (isSch() && CollabTools.sch && CollabTools.sch.state.drag) return;   // a Move / paste is following the cursor: this click drops it (sch-tools)
   const mm = worldMm(ev); const hit = hitAny(mm);
   if (!hit || !E.selection.has(hit.id)) return;
   ev.stopImmediatePropagation(); ev.preventDefault();

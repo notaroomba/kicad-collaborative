@@ -11,8 +11,9 @@ import { api, toast } from "./util";
 import { dragG, isSch, pxPerMm, requestRender, stage, worldMm } from "./view";
    // ERC/DRC markers handed over by the tool modules; the project's .kicad_pro text (design rules)
 // KiCad's clipboard is s-expression text: the modules write it here and to the system clipboard when allowed.
+// read() takes the system clipboard when it holds any s-expression (a lone (text …), (bus …), (sheet …) is one too).
 export const appClipboard = { text: "", get() { return appClipboard.text; }, set(t) { appClipboard.text = String(t || ""); if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(appClipboard.text).catch(() => {}); },
-  async read() { try { if (navigator.clipboard && navigator.clipboard.readText) { const t = await navigator.clipboard.readText(); if (t && /^\s*\((kicad_sch|kicad_pcb|lib_symbols|symbol|wire|footprint|segment|via|zone|gr_|label|junction)/.test(t)) return t; } } catch (e) { /* permission denied: use the buffer */ } return appClipboard.text; } };
+  async read() { try { if (navigator.clipboard && navigator.clipboard.readText) { const t = await navigator.clipboard.readText(); if (t && /^\s*\(\s*[a-z_]+[\s("]/i.test(t)) return t; } } catch (e) { /* permission denied: use the buffer */ } return appClipboard.text; } };
 
 export const undoStack = [], redoStack = [];
 
@@ -27,7 +28,9 @@ export function toolCtx(extra) {
     setSelection(ids) { E.selection = new Set([...(ids || [])].filter((id) => E.kdoc && E.kdoc.items.has(id))); E.selected = null; E.selField = null; for (const id of E.selection) { const f = E.items.find((x) => x.id === id); if (f) { E.selected = f; break; } } store.slice("selection", { ids: [...E.selection], primary: E.selected ? E.selected.id : null, version: (state.selection ? state.selection.version || 0 : 0) + 1 }); drawSelection(); renderProps(); renderObjects(); requestRender(); },
     setMarkers(list) { E.markers = Array.isArray(list) ? list : []; E.renderOpts.markers = E.markers.length ? E.markers : undefined; store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); if (E.markers.length) toast(`${E.markers.length} marker${E.markers.length === 1 ? "" : "s"}`); },
     setSelected(fp) { E.selected = fp ? (E.items.find((f) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
-    commit(changes, label) { commitChanges(changes, label); },
+    // opts.amend folds the change into the previous undo step (a paste and the move that places it are one step)
+    commit(changes, label, opts) { commitChanges(changes, label, opts); },
+    undo() { undoLast(); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender, toast, enterSheet, setTool,
     // Ask a desktop editor in this document to do what the browser cannot (fill zones).
@@ -37,7 +40,7 @@ export function toolCtx(extra) {
 }
 
 // Local apply + broadcast, with an inverse recorded for undo.
-export function commitChanges(changes, label) {
+export function commitChanges(changes, label, opts) {
   if (!changes || !changes.length) return;
   const inverse = [];
   for (const c of changes) {
@@ -48,7 +51,9 @@ export function commitChanges(changes, label) {
   }
   applyChanges(changes);
   sendOp(changes);   // journalled and replayed on reconnect even when the socket is down
-  undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift();
+  const prev = opts && opts.amend ? undoStack[undoStack.length - 1] : null;
+  if (prev) { prev.changes = prev.changes.concat(changes); prev.inverse = inverse.concat(prev.inverse); }   // undone newest first
+  else { undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift(); }
   redoStack.length = 0; publishUndo();
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
 }

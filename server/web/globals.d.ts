@@ -109,7 +109,8 @@ interface ToolCtx {
   docs: unknown[]; project: unknown; api(path: string, opts?: RequestInit): Promise<unknown>; docId: string | null;
   setHighlight(ids: Set<string> | null): void;
   setSelected(fp: { id: string } | null): void;
-  commit(changes: KChange[], label?: string): void;
+  commit(changes: KChange[], label?: string, opts?: { amend?: boolean }): void;
+  undo?(): void;
   applyLocal(changes: KChange[]): void;
   requestRender(): void; toast(msg: string, ms?: number): void; enterSheet(file: string): void; setTool(t: string): void; setStatus(text: string): void;
 }
