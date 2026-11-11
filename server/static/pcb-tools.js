@@ -65,6 +65,13 @@ const fmt = (v) => String(+v.toFixed(3));
 const layerClass = (l) => /^[FB]\.SilkS$/.test(l) ? "silk" : /\.Cu$/.test(l) ? "copper" : l === "Edge.Cuts" ? "edges" : /^[FB]\.CrtYd$/.test(l) ? "courtyard" : /^[FB]\.Fab$/.test(l) ? "fab" : "others";
 const LINE_W = { silk: 0.1, copper: 0.2, edges: 0.05, courtyard: 0.05, fab: 0.1, others: 0.1 };
 const TEXT_STYLE = { silk: [1, 0.1], copper: [1.5, 0.3], edges: [1, 0.15], courtyard: [1, 0.15], fab: [1, 0.15], others: [1, 0.15] };
+/** Take the project's per-layer-class defaults (board.design_settings.defaults) for new graphics and text. */
+function layerDefaults(d) {
+  for (const [cls, stem] of [["silk", "silk"], ["copper", "copper"], ["edges", "board_outline"], ["courtyard", "courtyard"], ["fab", "fab"], ["others", "other"]]) {
+    const w = d[stem + "_line_width"]; if (typeof w === "number" && w > 0) LINE_W[cls] = w;
+    const sz = d[stem + "_text_size_h"], th = d[stem + "_text_thickness"]; if (typeof sz === "number" && sz > 0) TEXT_STYLE[cls] = [sz, typeof th === "number" && th > 0 ? th : TEXT_STYLE[cls][1]];
+  }
+}
 const textStyle = (layer) => { const [size, thick] = TEXT_STYLE[layerClass(layer)]; return { size, thick }; };
 const isBack = (l) => /^B\./.test(l);
 const xy = (p) => ["xy", r6(p[0]), r6(p[1])];
@@ -1434,7 +1441,8 @@ function designSettings(src) {
   if (src.netclasses || src.clearance !== undefined) return Object.assign(s, src);   // already our shape
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; }
+  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; }
+  const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
     for (const c of ns.classes) if (c && c.name) s.netclasses[c.name] = { clearance: c.clearance !== undefined ? c.clearance : s.clearance, track_width: c.track_width !== undefined ? c.track_width : s.trackWidth, via_diameter: c.via_diameter !== undefined ? c.via_diameter : s.viaDiameter, via_drill: c.via_drill !== undefined ? c.via_drill : s.viaDrill };
@@ -1521,7 +1529,7 @@ const boxCenter = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, 
 function drc(doc, settings, opts) {
   const s = settings && settings.netclasses ? settings : designSettings(settings); opts = opts || {}; const out = [];
   const nl = netlist(doc); const conds = nl.conductors.filter((c) => c.kind !== "zone");
-  const clr = (c) => netClearance(s, c.net); const maxClr = Math.max(s.clearance, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
+  const clr = (c) => netClearance(s, c.net); const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
   // copper clearance
   const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
   for (let i = 0; i < order.length; i++) {
@@ -1529,7 +1537,7 @@ function drc(doc, settings, opts) {
     for (let j = i + 1; j < order.length; j++) {
       const b = order[j]; if (b.bbox[0] > a.bbox[2] + maxClr) break;
       if (a.net && a.net === b.net) continue; if (!shareLayer(a.layers, b.layers)) continue;
-      const need = Math.max(clr(a), clr(b)); if (!boxesTouch(a.bbox, b.bbox, need)) continue;
+      const need = Math.max(clr(a), clr(b), s.minClearance || 0); if (!boxesTouch(a.bbox, b.bbox, need)) continue;   // Board Setup > Constraints: the board minimum is a floor
       const gap = shapeGap(a.shape, b.shape); if (gap >= need - DRC_EPS) continue;
       const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);   // the stricter class of the pair names the rule
       const [x, y] = boxCenter(a.bbox, b.bbox);

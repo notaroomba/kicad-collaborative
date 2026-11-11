@@ -1901,7 +1901,7 @@ function symbolPins(doc, item) {
   const tf = (lx, ly) => [r4(ax + T[0] * lx + T[1] * ly), r4(ay + T[2] * lx + T[3] * ly)];
   for (const sub of kids(lib, "symbol")) {
     const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
-    if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+    if ((u !== 0 && u !== unit) || (m && s !== 0 && s !== style)) continue;   // unit 0 / body style 0 = common to all
     for (const g of kids(sub, "pin")) {
       const [px, py, pr] = atOf(g), lenN = kid(g, "length"), len = lenN ? num(lenN[1]) : 2.54;
       const dir = ((Math.round(pr) % 360) + 360) % 360, d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
@@ -1942,7 +1942,7 @@ function bodyBox(doc, item) {
     const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1, styleN = kid(n, "body_style") || kid(n, "convert"), style = styleN ? num(styleN[1], 1) : 1;
     for (const sub of kids(lib, "symbol")) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
-      if ((u !== 0 && u !== unit) || (m && s !== style)) continue;
+      if ((u !== 0 && u !== unit) || (m && s !== 0 && s !== style)) continue;   // unit 0 / body style 0 = common to all
       for (const g of sub.slice(2)) {
         if (!Array.isArray(g)) continue;
         const gk = g[0];

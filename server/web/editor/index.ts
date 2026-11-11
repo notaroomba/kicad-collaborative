@@ -16,6 +16,7 @@ import "./history";
 import "./net";
 import "./actions";
 import "./panes";
+import "./pcbdialogs";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
 import { placeComment } from "./comments";

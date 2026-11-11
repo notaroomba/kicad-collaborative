@@ -162,6 +162,7 @@ export function applyChanges(changes) {
   for (const c of changes || []) {
     // a document-level change (Page Settings: paper and title block) addresses no item — web/dialogs/project.ts
     if (c && c.docProps) { if (KiCadCanvas.applyDocProps(E.kdoc, c.docProps)) { any = true; if (isSch()) { E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]]; base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" ")); applyView(); } } continue; }
+    if (c && c.typeName === "BOARD_SETUP") { if (KiCadCanvas.boardSetup && KiCadCanvas.boardSetup.applyBoardSetup(E.kdoc, c)) { any = true; renderLayersFromDoc(); } continue; }   // board-level sections (canvas/board-setup.ts)
     let ok = false;
     try { ok = KiCadCanvas.applyChange(E.kdoc, c, E.IU); } catch (e) { console.warn("change not applied", e); }
     if (ok) { any = true; continue; }

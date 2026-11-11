@@ -33,6 +33,10 @@ import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
 import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawPad, drawSelectionHalo, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { boardSetup } from "./board-setup";
+import { DRC_ITEMS } from "./drc-items";
+import { pcbNetlist } from "./pcb-netlist";
+import { projectFile } from "./project-file";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
@@ -67,4 +71,5 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
   pcbSizes };
 
+api.pcbNetlist = pcbNetlist; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;

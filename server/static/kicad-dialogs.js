@@ -126,6 +126,8 @@ function open(spec) {
 
 // ---------------------------------------------------------------- item properties (props.js rows, staged)
 function openItem(ctx, item, opts) {
+  // board items with a KiCad dialog of their own (web/editor/pcbdialogs/item-props.ts); opts.generic asks for this sheet
+  if (item && root.KDialogs.pcbItemDialog && !(opts && opts.generic) && root.KDialogs.pcbItemDialog(ctx, item)) return null;
   const P = PROPS(); if (!P || !P.renderInto || !item) return null;
   const doc = ctx.doc, Kc = K();
   const staged = clone(item.node); let dirty = false;
