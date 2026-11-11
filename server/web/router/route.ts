@@ -17,6 +17,7 @@ export interface RouteOptions {
   pitch?: number;                // force the grid pitch, mm
   weights?: Partial<Weights>;
   powerWidth?: number;           // track width for supply nets (GND, +3V3, VBUS …) that have no class of their own; 0 keeps the class width.  Default: twice the class width, 0.3 to 0.5 mm
+  fewerVias?: boolean;           // after routing, lay each route that changes layer again without (or with fewer) vias where the finished board leaves room; default true
   timeMs?: number;               // stop starting new connections after this long
   zones?: boolean;               // let a route end in the net's own copper zone; default true
   // ---- a plan from outside (the assistant's model, or a person): the engine still does the geometry and the rules
@@ -64,7 +65,8 @@ export class Router {
   G!: Grid; nets: NetInfo[] = []; conns: Conn[] = []; pref: number[] = []; W: Weights; allowVias: boolean; s: any;
   stopped = false; zoneCovered = 0; dropped: any[] = []; stat: Record<string, number> = { noSoft: 0, noBlockers: 0, tooMany: 0, ripped: 0, ripLimit: 0 };
   constructor(public K: any, public P: any, public doc: any, settings: any, public opts: RouteOptions = {}) {
-    this.W = Object.assign({}, TRAINED, opts.weights || {}); this.allowVias = opts.allowVias !== false;
+    // the weights were fitted to how people route; a via is then charged double, because a board with few layer changes is what is asked for
+    this.W = Object.assign({}, TRAINED, { via: TRAINED.via * 2 }, opts.weights || {}); this.allowVias = opts.allowVias !== false;
     this.s = settings && settings.netclasses ? settings : P.designSettings(settings);
     this.build();
   }
@@ -307,6 +309,7 @@ export class Router {
     const add = (o: Obstacle) => { const bb = full(o.shape); const e = { o, bb }; for (let y = Math.floor(bb[1] / B); y <= Math.floor(bb[3] / B); y++) for (let x = Math.floor(bb[0] / B); x <= Math.floor(bb[2] / B); x++) { const k = x + "," + y; let l = idx.get(k); if (!l) idx.set(k, l = []); l.push(e); } };
     for (const list of G.obstacles.values()) for (const o of list) { if (o.shape.t === "path" && o.shape.pts.length > 2) { for (let i = 0; i + 1 < o.shape.pts.length; i++) add({ net: o.net, layers: o.layers, clr: o.clr, edge: o.edge, shape: { t: "seg", a: o.shape.pts[i], b: o.shape.pts[i + 1], r: o.shape.r || 0 } }); } else add(o); }
   }
+  private viaCap = Infinity;
   private cur: Conn | null = null; private curSoft = false; private oidx: Map<string, { o: Obstacle; bb: number[] }[]> | null = null;
   /** Exact: does a piece of track keep its clearance to the board's copper, holes and edges, and to this run's routes? */
   private clearOf(shape: Shape, layer: number, net: string, clr: number, why?: { net: string; gap: number; need: number }): boolean {
@@ -368,7 +371,7 @@ export class Router {
         extra = (nodes) => { let hit = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const m = full[a.l]; for (let k = 0; k <= n; k++) if (m[(a.iy + sy * k) * G.W + a.ix + sx * k]) hit++; } return hit * G.g * 12 * this.W.length + (plan ? plan(nodes) : 0); };
       }
       let used = 0; for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
-      const maxVias = gd.maxVias - used;
+      const maxVias = Math.min(gd.maxVias - used, this.viaCap);
       const src = this.access(A, maps, rt), tgt = this.access(B, maps, rt); if (!src) return null;
       let term = tb; let zoneSet: Set<number> | null = null;
       if (zoneAt(B.cluster)) { zoneSet = new Set(); term = tb.slice(); for (const z of net.zoneCells!) if (rt[z.l] && !maps[z.l][z.iy * G.W + z.ix]) { term.push(z); zoneSet.add(z.l * G.W * G.H + z.iy * G.W + z.ix); } }
@@ -526,7 +529,9 @@ export class Router {
     }
     if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);
     if (ripUp && !this.stopped) { this.repair(timeUp); if (this.opts.zones !== false) this.stitch(timeUp); }
+    if (this.opts.fewerVias !== false && !this.stopped) this.fewerVias(timeUp);
     this.widen();
+    if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);   // what the last two steps moved may have cut a pour again
     this.validate();
     if (this.opts.explain !== false) this.explain();
     this.ms = Date.now() - t0; this.passes = pass;
@@ -569,6 +574,22 @@ export class Router {
       if (!known.has(thin.key)) for (const o of conns) if (o.nodes) for (const sh of o.shapes) stampClass(this.G, thin, sh, 1, false);
       c.cls = thin; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
       if (!(force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0)) { c.cls = wide; back(snap); }
+    }
+  }
+  /** Once everything is laid there is often room that was not there (or not known to be free) when a route chose to
+   *  change layers.  Each route with vias is tried again on the finished board with none, then with fewer; it is
+   *  only replaced when that works and does not send it on a long way round. */
+  fewerVias(timeUp: () => boolean): void {
+    const conns = this.conns; const todo = conns.filter((c) => c.nodes && c.viaCells.length && !c.zoneEnd).sort((a, b) => b.viaCells.length - a.viaCells.length);
+    for (const c of todo) {
+      if (timeUp()) break; if (!c.nodes || this.netOf(c.net).guide.allowed || conns.some((o) => o.nodes && o.landed === c.id)) continue;   // a plan that names the net's layers stands
+      const old = { nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd, ends: c.ends, a: c.a, b: c.b };
+      const n = old.viaCells.length, len = old.feat ? old.feat.length : c.len; this.rip(c); let done = false;
+      for (const cap of n > 2 ? [0, n - 2] : [0]) {
+        this.viaCap = cap; let found: Found | null = null; try { found = this.find(c, false); } finally { this.viaCap = Infinity; }
+        if (found && found.res.feat.vias < n && found.res.feat.length <= len * 2.5 + 4) { this.commit(c, found); this.stat.viasSaved = (this.stat.viasSaved || 0) + n - c.viaCells.length; done = true; break; }
+      }
+      if (!done) { Object.assign(c, old); this.place(c, 1); }
     }
   }
   // ------------------------------------------------------------------ copper pours
