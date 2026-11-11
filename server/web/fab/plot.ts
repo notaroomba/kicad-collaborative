@@ -15,7 +15,7 @@
 // what a fabricator needs of them (mask, paste, unused-layer removal) is not what the screen draws.
 import { isList, kid, num, polyPtsOf, str } from "../canvas/sexpr";
 import { type BoardModel, type Footprint, type Node, type Pad, type PadShape, type Via, isBack, isCopper, isFront, padShapeOn } from "./model";
-import { MAX_ERROR, fracture, inflate, primPolys, stadium, union } from "./poly";
+import { MAX_ERROR, clockwise, fracture, inflate, primPolys, stadium, union } from "./poly";
 import { type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
 
 export interface PlotOptions {
@@ -33,7 +33,7 @@ export interface PlotOptions {
 const SKETCH_WIDTH = 0.1, FAB_LINE_WIDTH = 0.1;
 const isFab = (l: string): boolean => l === "F.Fab" || l === "B.Fab";
 
-interface StrokeLineLike { strokes: number[][]; width: number }
+interface StrokeLineLike { strokes: number[][]; width: number; advance: number }
 interface CanvasText {
   strokeLine(text: string, italic?: boolean): StrokeLineLike;
   strokeOrigin(width: number, h: string, v: string, penX: number, penY: number): [number, number];
@@ -85,7 +85,7 @@ function textPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
   const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);
   if (g.face) log.warn(`Text set in the font "${S(g.face)}" is plotted with the KiCad stroke font: a browser cannot read the outlines of an installed font.`);
   const C = canvas(); const line = C.strokeLine(text, !!g.italic);
-  const [ox, oy] = C.strokeOrigin(line.width, S(g.h) || "center", S(g.v) || "middle", pen / sizeX, pen / size);
+  const [ox, oy] = C.strokeOrigin(line.advance, S(g.h) || "center", S(g.v) || "middle", pen / sizeX, pen / size);
   const a = -N(g.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
   const x0 = N(g.x), y0 = N(g.y);
   // local (unit) → board: T(x, y) · Rot(a) · MirrorX · Scale(sx, sy) · T(ox, oy)
@@ -227,7 +227,7 @@ function customPolys(shape: PadShape): Pt[][] {
       stroke(pts, w, false);
     }
   }
-  return polys;
+  return polys.map(clockwise);
 }
 
 /** One pad on one layer (plotPadLayer in PlotStandardLayer, then BRDITEMS_PLOTTER::PlotPad). */

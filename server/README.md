@@ -554,6 +554,16 @@ drill and placement files as text:
 KICAD_CLI=/path/to/build/kicad/kicad-cli node scripts/fab-verify.mjs ../demos/pic_programmer/pic_programmer.kicad_pcb
 ```
 
+Against this tree's kicad-cli, on the boards in `demos/` (two to six copper layers, through-hole
+and fine-pitch, custom pads, zones, dimensions, slots, back-side parts): every layer, the drill
+files and the placement file match on pic_programmer, complex_hierarchy, interf_u, both ecc83
+boards, sonde xilinx, microwave, constraints, StickHub, kit-dev-coldfire, video, One-Air-Max,
+CM5_MINIMA_3 and multichannel_mixer, with and without the drill/place origin and mask
+subtraction. The one difference left is text set in a TrueType font (RoyalBlue54L-Feather and
+tinytapeout-demo use one on their silkscreen): a browser cannot read an installed font's
+outlines, so that text is plotted in KiCad's stroke font at the same place and size, and the
+dialog says so.
+
 `static/tests/fab.test.js` (part of `npm test`) covers the writers on a small board, and
 `scripts/fab-ui.mjs` drives the dialog in a browser and checks the downloaded archives.
 

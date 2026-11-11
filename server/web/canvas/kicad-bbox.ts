@@ -12,7 +12,7 @@
 //   PCB_TEXT    EDA_TEXT::GetTextBox turned about the text position
 //   PAD         the pad shape's box (a turned rectangle, not its circumscribed circle)
 //   FOOTPRINT   the position grown by 0.25 mm, merged with its graphics, pads, zones and visible texts
-import { kid, kids, num, rotator } from "./sexpr";
+import { kid, kids, num, rotator, splitLines } from "./sexpr";
 import { textWidth } from "./text";
 
 export type BoxIU = [number, number, number, number];
@@ -52,7 +52,7 @@ function addGeom(b: Box, g: Geom): void {
   } else if (g.t === "text" && !g.noBox) {
     // EDA_TEXT::GetTextBox for the stroke font: the string's width, the size grown by the 0.17 "fudge" that
     // covers descenders, placed by the justification, then turned about the anchor
-    const size = g.size || 1, lines = String(g.text || "").split("\n");
+    const size = g.size || 1, lines = splitLines(g.text || "");
     let w = 0; for (const l of lines) w = Math.max(w, textWidth(l, g.sizeX || size, typeof g.w === "number" ? g.w : 0));
     const fudge = size * 0.17, h = size + fudge + (lines.length - 1) * size * 1.68 * 0.9583;
     const hj = String(g.h || "center");

@@ -373,7 +373,7 @@ export function buildDimensionGeom(item, n) {
     if (t0 > 0) line(a, [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0]);
     if (t1 < 1) line([a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1], b);
   };
-  const deg = (v) => Math.atan2(-v[1], v[0]) * 180 / Math.PI;   // EDA_ANGLE of a vector (CCW positive on screen)
+  const deg = (v) => Math.atan2(v[1], v[0]) * 180 / Math.PI;   // EDA_ANGLE( vector ): atan2( y, x ) in the file's frame, which drawAnArrow turns back by
   const [s, e] = pts;
   if (type === "aligned" || type === "orthogonal") {
     const height = num((kid(n, "height") || [])[1], 0); const orientN = kid(n, "orientation"); const ortho = type === "orthogonal";
@@ -384,9 +384,10 @@ export function buildDimensionGeom(item, n) {
     const sgn = height >= 0 ? 1 : -1;
     const cs = [s[0] + sgn * en[0] * Math.abs(height), s[1] + sgn * en[1] * Math.abs(height)];
     const ce = ortho ? (horiz ? [e[0], cs[1]] : [cs[0], e[1]]) : [e[0] + sgn * en[0] * Math.abs(height), e[1] + sgn * en[1] * Math.abs(height)];
-    line([s[0] + en[0] * extOff, s[1] + en[1] * extOff], [s[0] + en[0] * (extOff + extLen), s[1] + en[1] * (extOff + extLen)]);
+    const xn = [sgn * en[0], sgn * en[1]];   // the extension lines run to the crossbar's side: a negative height turns them over
+    line([s[0] + xn[0] * extOff, s[1] + xn[1] * extOff], [s[0] + xn[0] * (extOff + extLen), s[1] + xn[1] * (extOff + extLen)]);
     if (ortho) { const e2 = [e[0] - ce[0], e[1] - ce[1]]; const l2 = Math.hypot(e2[0], e2[1]) || 1; const n2 = [e2[0] / l2, e2[1] / l2]; const st = [ce[0] - n2[0] * extH, ce[1] - n2[1] * extH]; line(st, [st[0] + n2[0] * (l2 - extOff + extH), st[1] + n2[1] * (l2 - extOff + extH)]); }
-    else line([e[0] + en[0] * extOff, e[1] + en[1] * extOff], [e[0] + en[0] * (extOff + extLen), e[1] + en[1] * (extOff + extLen)]);
+    else line([e[0] + xn[0] * extOff, e[1] + xn[1] * extOff], [e[0] + xn[0] * (extOff + extLen), e[1] + xn[1] * (extOff + extLen)]);
     knock(cs, ce, ortho ? ef.thick : -ef.thick);
     const ang = deg([ce[0] - cs[0], ce[1] - cs[1]]);
     if (inward) { arrow(cs, ang + 180, arrowLen * 2); arrow(ce, ang, arrowLen * 2); } else { arrow(cs, ang, 0); arrow(ce, ang + 180, 0); }
@@ -443,6 +444,8 @@ export function buildFootprintGeom(doc, item) {
       buildTextBoxGeom(item, g, tf, layerOf(g, "F.SilkS"), frot);
     } else if (gk === "pad") {
       buildPadGeom(item, g, tf, side, doc, padIndex++);
+    } else if (gk === "dimension") {
+      buildDimensionGeom(item, g);   // a footprint's dimension is stored in board coordinates, like its zones
     } else if (gk === "zone") {
       const before = item.geom.length; buildZoneGeom(doc, item, g);
       for (let i = before; i < item.geom.length; i++) { const z = item.geom[i]; if (z.pts) z.pts = z.pts.map(([x, y]) => tf(x, y)); else if (z.t === "line") { const a = tf(z.x1, z.y1), b = tf(z.x2, z.y2); z.x1 = a[0]; z.y1 = a[1]; z.x2 = b[0]; z.y2 = b[1]; } }

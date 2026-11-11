@@ -4,6 +4,8 @@
 //
 //   KICAD_CLI=/path/to/kicad-cli [DPI=600] [KEEP=/some/dir] [TOLERANCE=0.02] node fab-verify.mjs board.kicad_pcb [more boards…]
 //
+// KEEP keeps both sets of files and a picture of every layer that differs (blue: only the web writer, red: only kicad-cli).
+//
 // Needs kicad-cli (this tree's, from its build directory, reads the current file format) and gerbv.
 // "solid" differences are those that survive a 3 × 3 erosion: a one-pixel fringe along an edge is how two
 // writers round the same shape, a solid patch is a shape one of them does not have.  A layer fails when its
@@ -87,6 +89,7 @@ for (const board of boards) {
     }
     const pct = 100 * solid / Math.max(inkRef, 1); if (inkRef || solid) worst = Math.max(worst, pct);
     const bad = pct > TOLERANCE || (!inkRef && solid > 0); if (bad) failed++;
+    if (bad && process.env.KEEP) writeDiffPng(path.join(work, key + '-diff.png'), A, B);
     console.log(`   ${layer.padEnd(12)} ${bad ? 'DIFFERS' : 'same   '}  ink ${String(inkRef).padStart(9)} px  edge fringe ${String(diff).padStart(7)}  solid ${String(solid).padStart(6)} (${pct.toFixed(4)}%)`);
   }
   // drill and placement: the text, without the comment lines that carry the date and the program's name
@@ -98,13 +101,28 @@ for (const board of boards) {
     console.log(`   ${d.name.padEnd(28)} ${same ? 'identical' : d.holes === 0 && !fs.existsSync(r) ? 'empty (kicad-cli writes none)' : 'DIFFERS'}  ${d.holes} holes`);
   }
   const pa = body(fs.readFileSync(path.join(mine, 'pos.csv'), 'utf8')), pb = fs.existsSync(path.join(ref, 'pos.csv')) ? body(fs.readFileSync(path.join(ref, 'pos.csv'), 'utf8')) : null;
-  if (pa !== pb) failed++;
-  console.log(`   ${'pos.csv'.padEnd(28)} ${pa === pb ? 'identical' : 'DIFFERS'}  ${pa.split('\n').length - 1} parts`);
+  // parts that share a reference (usually an empty one) come out in whatever order std::sort leaves them
+  const rows = (t) => t === null ? '' : t.split('\n').sort().join('\n');
+  const posSame = pa === pb, posRows = !posSame && rows(pa) === rows(pb);
+  if (!posSame && !posRows) failed++;
+  console.log(`   ${'pos.csv'.padEnd(28)} ${posSame ? 'identical' : posRows ? 'same rows (parts with equal references in another order)' : 'DIFFERS'}  ${pa.split('\n').length - 1} parts`);
   console.log(`   worst layer: ${worst.toFixed(4)}% solid difference`);
   if (!process.env.KEEP) fs.rmSync(work, { recursive: true, force: true });
 }
 console.log(failed ? `\n${failed} difference(s)` : '\nall outputs match');
 process.exit(failed ? 1 : 0);
+
+/** Where two bitmaps differ, as a PNG: grey where both have ink, blue where only the web writer has, red where only kicad-cli has. */
+function writeDiffPng(file, A, B) {
+  const { w, h } = A, raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0, i = y * w, o = y * (w * 3 + 1) + 1; x < w; x++, i++, o += 3) {
+    const a = A.on[i], b = B.on[i];
+    if (a && b) { raw[o] = raw[o + 1] = raw[o + 2] = 90; } else if (a) { raw[o] = 60; raw[o + 1] = 120; raw[o + 2] = 255; } else if (b) { raw[o] = 255; raw[o + 1] = 60; raw[o + 2] = 60; }
+  }
+  const chunk = (kind, data) => { const out = Buffer.alloc(12 + data.length); out.writeUInt32BE(data.length, 0); out.write(kind, 4, 'latin1'); data.copy(out, 8); out.writeUInt32BE(zlib.crc32(out.subarray(4, 8 + data.length)), 8 + data.length); return out; };
+  const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;
+  fs.writeFileSync(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]));
+}
 
 /** An 8-bit PNG (grey, RGB or RGBA, not interlaced) as a bitmap of lit pixels. */
 function readPng(buf) {

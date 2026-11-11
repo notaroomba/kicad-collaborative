@@ -88,6 +88,12 @@ export function fracture(paths: Pt[][]): Pt[][] {
   return out;
 }
 
+/**
+ * An outline wound the way every shape made here is (clockwise on screen).  A union counts windings, so a
+ * drawn polygon that runs the other way would cancel the shape it overlaps instead of joining it.
+ */
+export function clockwise(pts: Pt[]): Pt[] { return area(pts) < 0 ? pts.slice().reverse() : pts; }
+
 /** A thick segment with round ends as a polygon. */
 export function stadium(x1: number, y1: number, x2: number, y2: number, w: number): Pt[] {
   const r = w / 2;
@@ -121,7 +127,7 @@ export function primPolys(p: Prim): Pt[][] {
     case "rect": return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, 0, p.rot)] : [];
     case "oval": return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, Math.min(p.w, p.h) / 2, p.rot)] : [];
     case "roundrect": return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, p.r, p.rot)] : [];
-    case "poly": return p.pts.length >= 3 ? [p.pts.map((q) => [p.x + q[0], p.y + q[1]] as Pt)] : [];
-    case "region": return p.pts.length >= 3 ? [p.pts] : [];
+    case "poly": return p.pts.length >= 3 ? [clockwise(p.pts.map((q) => [p.x + q[0], p.y + q[1]] as Pt))] : [];
+    case "region": return p.pts.length >= 3 ? [clockwise(p.pts)] : [];
   }
 }

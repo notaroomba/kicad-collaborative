@@ -2,7 +2,7 @@
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, parseColor, pcbColor, pcbZ, rgba } from "./colors";
-import { flipH, pointInPoly } from "./sexpr";
+import { flipH, pointInPoly, splitLines } from "./sexpr";
 import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
@@ -828,7 +828,7 @@ export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
   if (g.knockout) {
     // PCB_TEXT knockout: the text box, inflated by GetKnockoutTextMargin, in the layer colour; the glyphs cut out in the background colour
     const sx = g.sizeX > 0 ? g.sizeX : g.size, line = strokeLine(text, !!g.italic);
-    const [ox, oy] = strokeOrigin(line.width, h, g.v, pen / sx, pen / g.size); const m = Math.max(pen / 2, g.size / 9);
+    const [ox, oy] = strokeOrigin(line.advance, h, g.v, pen / sx, pen / g.size); const m = Math.max(pen / 2, g.size / 9);
     const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = mirror ? -1 : 1;
     ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
     // the glyph cell: capitals span 20/21 above the layout baseline and 1/21 below it (FONT_OFFSET)
@@ -838,7 +838,7 @@ export function drawTextStroke(ctx, g, minW, color, base, flip, bgColor) {
   }
   if (g.multiline && text.indexOf("\n") >= 0) {
     // a drawing-sheet field carrying a \n: lines an interline apart, the block placed per EDA_TEXT::GetLinePositions
-    const lines = text.split("\n"), step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
+    const lines = splitLines(text), step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
     for (let i = 0; i < lines.length; i++) { spec.text = lines[i]; spec.dy = offs[i] * step; drawStrokeText(ctx, base, spec, color, minW); }
     return;
   }
@@ -892,7 +892,7 @@ export function drawText(ctx, g, s, docType, minW, colorOverride, base, flip, bg
   if (boldPass) { ctx.lineWidth = extra; ctx.strokeStyle = color; ctx.lineJoin = "round"; }
   // A drawing-sheet field carrying a \n is a multiline run: KiCad lays the lines out an interline
   // apart and centres the block on the anchor (EDA_TEXT::GetLinePositions, common/eda_text.cpp:937-978).
-  const lines = g.multiline && g.text.indexOf("\n") >= 0 ? g.text.split("\n") : null;
+  const lines = g.multiline && g.text.indexOf("\n") >= 0 ? splitLines(g.text) : null;
   if (lines) {
     const step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
     for (let i = 0; i < lines.length; i++) { const y = base0 + offs[i] * step; if (boldPass) ctx.strokeText(lines[i], 0, y); ctx.fillText(lines[i], 0, y); }

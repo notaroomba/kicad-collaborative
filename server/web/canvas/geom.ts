@@ -3,7 +3,7 @@
 import { schTheme, withSchTheme } from "./colors";
 import { buildPcbGeom } from "./geom-pcb";
 import { buildSchGeom } from "./geom-sch";
-import { flipH, flipV, justOf, rotator, str } from "./sexpr";
+import { flipH, flipV, justOf, rotator, str, splitLines } from "./sexpr";
 import { INTERLINE, parseMarkup, textWidth, unescapeText } from "./text";
 // ---------------------------------------------------------------- geometry builders
 export function bboxAdd(item, x, y, pad) {
@@ -88,7 +88,7 @@ export function textGeom(item, x, y, text, size, color, rot, just, layer, extra)
 
 /** Multi-line text: one geom per line, the block anchored per the vertical justification. */
 export function textLines(item, x, y, text, size, color, rot, just, layer, extra) {
-  const lines = str(text).split("\n"); if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color, rot, just, layer, extra);
+  const lines = splitLines(str(text)); if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color, rot, just, layer, extra);
   const j = justOf(just || [], extra && extra.defH, extra && extra.defV); const il = size * INTERLINE;
   const off0 = j.v === "top" ? 0 : j.v === "bottom" ? -(lines.length - 1) * il : -(lines.length - 1) * il / 2;
   const R = rotator(rot || 0); const out = [];

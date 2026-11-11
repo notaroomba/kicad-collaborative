@@ -13,9 +13,24 @@ import { type Pt, rot } from "./prims";
 
 /** StrNumCmp on reference designators: C2 before C10. */
 export function refCompare(a: string, b: string): number {
-  const ra = /^(.*?)(\d+)(.*)$/.exec(a), rb = /^(.*?)(\d+)(.*)$/.exec(b);
-  if (ra && rb && ra[1].toUpperCase() === rb[1].toUpperCase()) return Number(ra[2]) - Number(rb[2]) || ra[3].localeCompare(rb[3]);
-  return a.toUpperCase() < b.toUpperCase() ? -1 : a.toUpperCase() > b.toUpperCase() ? 1 : 0;
+  // StrNumCmp, case sensitive: runs of digits compare as numbers, everything else character by character
+  let i = 0, j = 0; const digit = (c: string): boolean => c >= "0" && c <= "9";
+  while (i < a.length && j < b.length) {
+    let c1 = a[i], c2 = b[j];
+    if (digit(c1) && digit(c2)) {
+      let n1 = 0, n2 = 0;
+      do { n1 = n1 * 10 + (a.charCodeAt(i) - 48); i++; } while (i < a.length && digit(a[i]));
+      do { n2 = n2 * 10 + (b.charCodeAt(j) - 48); j++; } while (j < b.length && digit(b[j]));
+      if (n1 !== n2) return n1 < n2 ? -1 : 1;
+      c1 = i < a.length ? a[i] : "\0"; c2 = j < b.length ? b[j] : "\0";
+    }
+    if (c1 !== c2) return c1 < c2 ? -1 : 1;
+    if (i < a.length) i++;
+    if (j < b.length) j++;
+  }
+  if (i >= a.length && j < b.length) return -1;
+  if (i < a.length && j >= b.length) return 1;
+  return 0;
 }
 
 /** An angle folded into (-180, 180], as EDA_ANGLE::Normalize180 leaves a footprint's orientation. */

@@ -97,6 +97,8 @@ export interface StrokeLine {
   strokes: number[][];
   /** KiCad's bounding-box width of the line in units of the glyph width: cursor − INTER_CHAR */
   width: number;
+  /** where the cursor ends, in the same units: what FONT::getLinePositions centres and right-aligns a line by (boundingBoxSingleLine returns it, trailing gap included) */
+  advance: number;
   /** cached Path2D of `strokes` (browser only) */
   path: Path2D | null;
 }
@@ -142,7 +144,7 @@ function layout(text: string, italic: boolean): StrokeLine {
     if (n.kind === "~") strokes.push([start + 0.1, -OVERBAR_HEIGHT, cursor - 0.1, -OVERBAR_HEIGHT]);   // bar trimmed by 0.1 × size each end
   };
   node(parseStrokeMarkup(text), false, false);
-  return { strokes, width: Math.max(0, cursor - INTER_CHAR), path: null };
+  return { strokes, width: Math.max(0, cursor - INTER_CHAR), advance: cursor, path: null };
 }
 
 /** One line of text laid out in unit space (cached). */
@@ -202,7 +204,7 @@ export function drawStrokeText(ctx: StrokeCtx, base: number[], t: StrokeTextSpec
   const line = strokeLine(t.text, t.italic);
   const sy = t.size, sx = t.sizeX && t.sizeX > 0 ? t.sizeX : t.size;
   const pen = Math.max(t.pen, minPen);
-  const o = strokeOrigin(line.width, t.h, t.v, t.pen / sx, t.pen / sy);
+  const o = strokeOrigin(line.advance, t.h, t.v, t.pen / sx, t.pen / sy);
   const ox = o[0], oy = o[1] + (t.dy || 0) / sy;
   const a = -(t.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = t.mirror ? -1 : 1;
   // device = base · T(x, y) · Rot(a) · MirrorX · Scale(sx, sy) · T(ox, oy)

@@ -4,7 +4,7 @@ import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH, schTheme } from "./colors";
 import { inSchTheme } from "./geom";
 import { bboxOf } from "./hit";
 import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
-import { isList, kid, quotedMask, str } from "./sexpr";
+import { isList, kid, quotedMask, str, splitLines } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 import { strokeLine, strokeOrigin } from "./stroke-font";
@@ -75,7 +75,7 @@ export function svgGeom(g, hairline, isPcb, bg) {
     // centred on the anchor — EDA_TEXT::GetLinePositions.  SVG would swallow the newline otherwise.
     let body;
     if (g.multiline && g.text.indexOf("\n") >= 0) {
-      const ls = g.text.split("\n"), step = size * TEXT_INTERLINE, offs = lineOffsets(ls.length, g.v);
+      const ls = splitLines(g.text), step = size * TEXT_INTERLINE, offs = lineOffsets(ls.length, g.v);
       body = ls.map((t, i) => `<text y="${fmt(base0 + offs[i] * step)}" ${attrs}>${esc(t)}</text>`).join("");
     } else body = `<text y="${fmt(base0)}" ${attrs}>${esc(g.text)}</text>`;
     return `<g transform="${tr}"${op}>${pre}${body}${bars}</g>`;
@@ -107,12 +107,12 @@ export function svgStrokeText(g, hairline, bg, op) {
   const pen = Math.max(g.w > 0 ? g.w : size / 8, hairline);
   const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
   const m0 = c * mx * sx, m1 = sn * mx * sx, m2 = -sn * size, m3 = c * size;
-  const lines = g.multiline && text.indexOf("\n") >= 0 ? text.split("\n") : [text];
+  const lines = g.multiline && text.indexOf("\n") >= 0 ? splitLines(text) : [text];
   const offs = lines.length > 1 ? lineOffsets(lines.length, g.v) : [0];
   let d = "", pre = "", color = g.color;
   for (let i = 0; i < lines.length; i++) {
     const line = strokeLine(lines[i], !!g.italic); if (!line.strokes.length) continue;
-    const [ox, oy0] = strokeOrigin(line.width, g.h, g.v, pen / sx, pen / size); const oy = oy0 + offs[i] * TEXT_INTERLINE;
+    const [ox, oy0] = strokeOrigin(line.advance, g.h, g.v, pen / sx, pen / size); const oy = oy0 + offs[i] * TEXT_INTERLINE;
     const X = (u, v) => g.x + m0 * (u + ox) + m2 * (v + oy), Y = (u, v) => g.y + m1 * (u + ox) + m3 * (v + oy);
     if (g.knockout && i === 0) {
       const m = Math.max(pen / 2, size / 9) / size, mxu = Math.max(pen / 2, size / 9) / sx;   // the inflated glyph cell, in unit space

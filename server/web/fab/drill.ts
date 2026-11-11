@@ -58,6 +58,16 @@ export function boardHoles(m: BoardModel): Hole[] {
 }
 
 const nm = (v: number): number => Math.round(v * 1e6);
+
+/**
+ * printf("%.*f"): Number.toFixed, except that a value exactly half way between two results goes to the even
+ * one (C rounds the binary value to even, JavaScript rounds it up) — 164.0625 is "164.062" in a drill file.
+ */
+export function cFixed(v: number, digits: number): string {
+  const m = v * Math.pow(10, digits), lo = Math.floor(m);
+  if (Number.isInteger(v * 16384) && m - lo === 0.5) return ((lo % 2 === 0 ? lo : lo + 1) / Math.pow(10, digits)).toFixed(digits);
+  return v.toFixed(digits);
+}
 /** cmpHoleSorting: plated first, then diameter, attribute, X, Y. */
 function sortHoles(hs: Hole[]): Hole[] {
   return hs.slice().sort((a, b) => (a.plated === b.plated ? 0 : a.plated ? -1 : 1) || nm(a.d) - nm(b.d) || a.attr - b.attr || nm(a.x) - nm(b.x) || nm(a.y) - nm(b.y));
@@ -73,10 +83,11 @@ function writeExcellon(holes: Hole[], fileFunction: string, opt: DrillOptions): 
     if (!t || nm(t.d) !== nm(h.d) || t.plated !== h.plated || t.attr !== h.attr) tools.push({ d: h.d, plated: h.plated, attr: h.attr, count: 0 });
     tools[tools.length - 1].count++; toolOf.push(tools.length);
   }
-  const unit = opt.metric ? 1 : 1 / 25.4, mant = opt.metric ? 3 : 4, lhs = opt.metric ? 3 : 2;
+  const conv = opt.metric ? 1 / 1e6 : 0.001 / 25400;
+  const mant = opt.metric ? 3 : 4, lhs = opt.metric ? 3 : 2;
   const trim = (s: string): string => { let r = s.replace(/0+$/, ""); if (r.endsWith(".")) r += "0"; return r; };
   const coord1 = (v: number): string => {
-    if (opt.zeros === "decimal") return trim(v.toFixed(mant));
+    if (opt.zeros === "decimal") return trim(cFixed(v, mant));
     const iv = Math.round(v * Math.pow(10, mant));
     if (opt.zeros === "suppress_leading") return String(iv);
     const neg = iv < 0; let s = String(Math.abs(iv)).padStart(lhs + mant, "0");
@@ -84,7 +95,8 @@ function writeExcellon(holes: Hole[], fileFunction: string, opt: DrillOptions): 
     return (neg ? "-" : "") + s;
   };
   const xy = (x: number, y: number): string => {
-    const gx = (x - opt.origin[0]) * unit, gy = (y - opt.origin[1]) * (opt.mirrorY ? 1 : -1) * unit;
+    // as the Excellon writer: whole nanometres times its conversion factor, so the last digit rounds as its does
+    const gx = (nm(x) - nm(opt.origin[0])) * conv, gy = (nm(y) - nm(opt.origin[1])) * (opt.mirrorY ? 1 : -1) * conv;
     return "X" + coord1(gx) + "Y" + coord1(gy === 0 ? 0 : gy);
   };
   const L: string[] = ["M48"];
@@ -100,7 +112,7 @@ function writeExcellon(holes: Hole[], fileFunction: string, opt: DrillOptions): 
   L.push((opt.metric ? "METRIC" : "INCH") + (opt.zeros === "suppress_leading" ? ",TZ" : opt.zeros === "suppress_trailing" ? ",LZ" : ""));
   tools.forEach((t, i) => {
     if (!opt.minimalHeader) L.push(ATTR_TEXT[t.attr] || "; #@! TD");
-    L.push(`T${i + 1}C${(t.d * unit).toFixed(mant)}`);
+    L.push(`T${i + 1}C${cFixed(nm(t.d) * conv, mant)}`);
   });
   L.push("%", "G90", "G05");
   let cur = -1;

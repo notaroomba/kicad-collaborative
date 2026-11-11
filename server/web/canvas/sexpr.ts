@@ -223,6 +223,9 @@ export function justOf(just, defH, defV) {
   return { h, v };
 }
 
+/** wxStringSplit on line ends, as FONT::getLinePositions splits a text: a final empty piece is not a line. */
+export function splitLines(text) { const l = String(text).split("\n"); if (l.length > 1 && l[l.length - 1] === "") l.pop(); return l; }
+
 export const flipH = (h) => h === "left" ? "right" : h === "right" ? "left" : h;
 
 export const flipV = (v) => v === "top" ? "bottom" : v === "bottom" ? "top" : v;
