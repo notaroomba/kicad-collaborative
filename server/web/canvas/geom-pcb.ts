@@ -3,7 +3,7 @@
 import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { expandDocVars } from "./geom-sch";
-import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, faceOf, ellipsePts, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, ptsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
+import { arcFrom3, atOf, bezierPts, dashOf, effectsOf, faceOf, ellipsePts, fillOf, has, isList, justOf, kid, kids, netOf, num, pointInPoly, polyPtsOf, rotPt, rotator, str, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
@@ -46,7 +46,11 @@ export function displayNetName(name) {
 /** PrintableCharCount: the characters of a marked-up string that take room (markup braces and tabs do not). */
 export function printableCharCount(t) { return parseMarkup(t.replace(/\t/g, "")).text.length; }
 
-export function layerOf(node, def) { const l = kid(node, "layer"); return l ? str(l[1]) : def; }
+export function layerOf(node, def) {
+  const l = kid(node, "layer"); if (l) return str(l[1]);
+  // a copper shape that also opens the solder mask is written (layers "F.Cu" "F.Mask"): its own layer comes first
+  const ls = kid(node, "layers"); return ls && ls.length > 1 ? str(ls[1]) : def;
+}
 
 export function padCopperLayer(pad) {
   const ls = kid(pad, "layers"); const names = ls ? ls.slice(1).map(str) : [];
@@ -162,7 +166,7 @@ export function buildZoneGeom(doc, item, n) {
   const cp = kid(n, "connect_pads"); const clN = cp && kid(cp, "clearance"); const clearance = clN ? num(clN[1], 0.5) : 0.5;
   const unfilled = !keepout && !kids(n, "filled_polygon").length;
   for (const poly of kids(n, "polygon")) {
-    const p = ptsOf(poly); if (p.length < 2) continue;
+    const p = polyPtsOf(poly); if (p.length < 2) continue;
     for (const layer of layersZ) {
       const color = pcbColor(layer); const z = pcbZ(layer) + (keepout ? Z_TEXT : 0.5);
       G(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
@@ -170,13 +174,13 @@ export function buildZoneGeom(doc, item, n) {
         // ZONE::HatchBorder: short diagonal ticks along the border (edge) or full diagonals (full); slope by layer parity
         const info = doc.layers.get(layer); const slope = info && (info.id & 1) ? 1 : -1;
         const segs = hatchLines(p, slope, hatchStyle === "full" ? pitch * 2 : pitch, hatchStyle === "full" ? -1 : pitch);
-        for (const s of segs) G(item, { t: "line", x1: s[0], y1: s[1], x2: s[2], y2: s[3], w: 0, color, layer, z });
+        for (const s of segs) G(item, { t: "line", x1: s[0], y1: s[1], x2: s[2], y2: s[3], w: 0, color, layer, z, zoneHatch: true });
       }
     }
   }
   if (keepout) return;   // rule areas have no fill
   for (const fp of kids(n, "filled_polygon")) {
-    const layer = layerOf(fp, layersZ[0]); const p = ptsOf(fp); if (p.length < 3) continue;
+    const layer = layerOf(fp, layersZ[0]); const p = polyPtsOf(fp); if (p.length < 3) continue;
     G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net });
   }
 }
@@ -220,8 +224,8 @@ export function hatchLines(pts, slope, spacing, lineLen) {
 export function pointGeom(item, n, tf) {
   const at = kid(n, "at"); if (!at) return; const [x, y] = tf(num(at[1]), num(at[2]));
   const sz = kid(n, "size"), size = (sz ? num(sz[1]) : 1) / 2, layer = layerOf(n, "F.SilkS"), z = pcbZ(layer) + 0.9, w = 0.01;
-  for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt" });
-  G(item, { t: "circle", x, y, r: size / 2, w, color: pcbColor(layer), layer, z });
+  for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt", point: true });
+  G(item, { t: "circle", x, y, r: size / 2, w, color: pcbColor(layer), layer, z, point: true });
 }
 export const POINT_COLOR = "#FF26E2";   // LAYER_POINTS (builtin_color_themes.h)
 
@@ -278,6 +282,15 @@ export function barcodeGeom(item, n, tf, frot) {
 }
 
 export function graphicGeom(item, g, shape, tf, layer, z) {
+  const first = item.geom ? item.geom.length : 0;
+  graphicShapeGeom(item, g, shape, tf, layer, z);
+  // (layers "F.Cu" "F.Mask") (solder_mask_margin m): the shape also opens the mask, grown by the margin (plotting)
+  const ls = kid(g, "layers"); const mask = ls && ls.slice(1).map(str).find((l) => /\.Mask$/.test(l));
+  if (!mask || !item.geom) return;
+  const mm = kid(g, "solder_mask_margin");
+  for (let i = first; i < item.geom.length; i++) { item.geom[i].maskLayer = mask; if (mm) item.geom[i].maskMargin = num(mm[1]); }
+}
+function graphicShapeGeom(item, g, shape, tf, layer, z) {
   const w = widthOf(g, 0); const color = pcbColor(layer); z = z === undefined ? pcbZ(layer) : z;
   if (layer === "Edge.Cuts") item.edge = true;   // board outline: what "fit" and the board box mean
   const f = fillOf(g); const fillColor = f.type === "solid" ? color : null; const ds = dashOf(g);
@@ -301,7 +314,7 @@ export function graphicGeom(item, g, shape, tf, layer, z) {
     const e = ellipsePts(g, false); if (!e) return; const p = e.pts.map(([x, y]) => tf(x, y));
     G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color, fill: e.closed ? fillColor : null, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "poly" || shape === "curve") {
-    let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
+    let p = polyPtsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (shape === "curve") p = bezierPts(p);
     G(item, Object.assign({ t: "poly", pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   }
@@ -309,7 +322,7 @@ export function graphicGeom(item, g, shape, tf, layer, z) {
 
 export function buildTextBoxGeom(item, n, tf, layer, rotBase) {
   const ef = effectsOf(n); if (ef.hide) return;
-  let pts = ptsOf(n).map(([x, y]) => tf(x, y));
+  let pts = polyPtsOf(n).map(([x, y]) => tf(x, y));
   if (pts.length < 4) { const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]); pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)]; }
   const w = widthOf(n, 0); const color = pcbColor(layer); const z = pcbZ(layer);
   if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly", pts, close: true, w, color, layer, z }, dashOf(n)));
@@ -334,7 +347,7 @@ export function buildTextBoxGeom(item, n, tf, layer, rotBase) {
 export function buildDimensionGeom(item, n) {
   const typeN = kid(n, "type"); const type = typeN ? str(typeN[1]) : "aligned";
   const layer = layerOf(n, "Dwgs.User"); const color = pcbColor(layer); const z = pcbZ(layer);
-  const pts = ptsOf(n); if (pts.length < 2) return;
+  const pts = polyPtsOf(n); if (pts.length < 2) return;
   const style = kid(n, "style") || []; const thick = num((kid(style, "thickness") || [])[1], 0.15); const arrowLen = num((kid(style, "arrow_length") || [])[1], 1.27);
   const extH = num((kid(style, "extension_height") || [])[1], 0.58586), extOff = num((kid(style, "extension_offset") || [])[1], 0);
   const inward = str((kid(style, "arrow_direction") || [])[1]) === "inward";

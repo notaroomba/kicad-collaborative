@@ -111,6 +111,28 @@ export function atOf(node) {
 
 export function ptsOf(node) { const p = kid(node, "pts"); return p ? kids(p, "xy").map((x) => [num(x[1]), num(x[2])]) : []; }
 
+/** The outline a (pts …) list draws: its points, with a side that is an arc flattened (ptsOf keeps to the stored vertices). */
+export function polyPtsOf(node) {
+  const p = kid(node, "pts"); if (!p) return [];
+  const out = [];
+  for (let i = 1; i < p.length; i++) {
+    const c = p[i]; if (!isList(c)) continue;
+    if (c[0] === "xy") out.push([num(c[1]), num(c[2])]);
+    else if (c[0] === "arc") {
+      // a polygon side that is an arc (SHAPE_LINE_CHAIN with arcs): flattened to chords 5 µm off the arc at most
+      const s = kid(c, "start"), m = kid(c, "mid"), e = kid(c, "end"); if (!s || !m || !e) continue;
+      const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
+      if (!a) { out.push([num(s[1]), num(s[2])], [num(e[1]), num(e[2])]); continue; }
+      const TAU = 2 * Math.PI; let sweep = a.anticlockwise ? a.a0 - a.a1 : a.a1 - a.a0; sweep = ((sweep % TAU) + TAU) % TAU;
+      const step = a.r > 0.005 ? 2 * Math.acos(1 - 0.005 / a.r) : Math.PI / 2, n = Math.max(2, Math.ceil(sweep / step));
+      out.push([num(s[1]), num(s[2])]);
+      for (let k = 1; k < n; k++) { const t = a.a0 + (a.anticlockwise ? -1 : 1) * sweep * k / n; out.push([a.x + a.r * Math.cos(t), a.y + a.r * Math.sin(t)]); }
+      out.push([num(e[1]), num(e[2])]);
+    }
+  }
+  return out;
+}
+
 export function widthOf(node, def) {
   const s = kid(node, "stroke"); const w = s && kid(s, "width"); if (w) return num(w[1], def);
   const w2 = kid(node, "width"); return w2 ? num(w2[1], def) : def;

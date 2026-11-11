@@ -245,6 +245,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/dist/autoroute.js", get(pages::autoroute_js))
         .route("/static/dist/autoroute.js.map", get(pages::autoroute_js_map))
         .route("/static/dist/viewer3d.js", get(pages::viewer3d_js))
+        .route("/static/dist/fab.js", get(pages::fab_js))
+        .route("/static/dist/fab.js.map", get(pages::fab_js_map))
         .route("/static/dist/kicad-icons.json", get(pages::kicad_icons_json))
         .route("/static/kicad-canvas.js", get(pages::canvas_js))
         .route("/static/sch-tools.js", get(pages::sch_tools_js))

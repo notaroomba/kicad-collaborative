@@ -16,6 +16,7 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 - **Cloud projects.** Upload, browse, and open shared projects from the project manager or from the web home in any browser (search, stars, thumbnails, a Trash with 30-day restore); paired projects automatically rejoin their session.
 - **Sharing and roles.** Invite collaborators by GitHub username or email as editors, commenters or viewers, or create revocable edit, comment-only and view-only links (view links open without an account); set per-project permissions; change roles, remove people or transfer ownership, effective immediately, also for people who have the project open.
 - **Comments and review.** Discuss the design through document comment threads and canvas pins.
+- **Fabrication outputs from the browser.** Gerbers, drill files, the pick-and-place file and the BOM in one click, with presets for JLCPCB and PCBWay, checked against KiCad's own plot output.
 - **Version history.** Create named checkpoints and restore an earlier version as the project owner.
 - **Offline recovery.** Local edits are journalled and replayed after reconnection, with duplicate operations suppressed.
 - **Libraries travel with your work.** Placed symbols and footprints are embedded in synchronization operations; project archives can include local libraries and 3D models.

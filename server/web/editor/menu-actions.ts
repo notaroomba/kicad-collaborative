@@ -35,7 +35,7 @@ const st = state as unknown as { docs?: DocEntry[]; docId?: string | null; proje
 
 // ---------------------------------------------------------------- files
 function currentDoc(): DocEntry | null { return (st.docs || []).find((d) => d.docId === st.docId) || null; }
-function fileStem(): { name: string; stem: string } {
+export function fileStem(): { name: string; stem: string } {
   const d = currentDoc(); const name = d ? d.path.split("/").pop() || d.path : (isSch() ? "sheet.kicad_sch" : "board.kicad_pcb");
   return { name, stem: name.replace(/\.kicad_(sch|pcb)$/, "") };
 }

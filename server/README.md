@@ -487,6 +487,42 @@ presence, idempotent resubmission and version history. It creates and deletes
 test users, so point it at a **local server and a throwaway database only** —
 usage is in the file header.
 
+## Fabrication outputs
+
+File > Fabrication Outputs in the board editor writes what a manufacturer builds from, in the
+browser, from the live board: Gerbers (RS-274X with X2 attributes), Excellon drill files, the
+component placement file and the bill of materials, and downloads them as one archive.
+
+| Preset | What it writes |
+| --- | --- |
+| JLCPCB | Copper, paste, legend, mask and outline with Protel extensions, X2 attributes as comments, the drill/place origin, mask subtracted from the legend; `gerbers.zip` for the order page, `bom.csv` (`Designator, Footprint, Quantity, Value, LCSC Part #`) and `positions.csv` (`Designator, Mid X, Mid Y, Rotation, Layer`) for assembly, with JLCPCB's rotation corrections by package and the `JLCPCB Rotation Offset` / `JLCPCB Position Offset` fields honoured |
+| PCBWay | The same Gerbers and drill files, `bom.csv` and `centroid.csv` in the columns of PCBWay's assembly templates |
+| KiCad defaults | Every layer KiCad's Plot dialog ticks, `.gbr` names, page origin, and the drill, placement and BOM files as KiCad's own dialogs write them |
+
+The dialog lists the files with a drawing of each layer as plotted, reports what an order form
+would bounce (no outline, zones without a fill, BOM lines without a part number) and lets the
+layers and options be changed before the download. The same four menu entries (Gerbers, Drill
+Files, Component Placement, Bill of Materials) open it on their kind of file.
+
+The writers are `server/web/fab` (`prims.ts` plot primitives, `model.ts` pads, vias, tracks and
+zones read from the board, `plot.ts` pcbnew's layer plotting order and rules, `gerber.ts`,
+`drill.ts`, `parts.ts` placement and BOM, `presets.ts`, `zip.ts`), built into
+`static/dist/fab.js` and loaded on first use. They are also `window.KiCadFab` for plugins and
+scripts: `KiCadFab.buildPackage({ doc, setup }, { preset })`, `plotGerbers`, `drillFiles`,
+`positions`, `bom`. Polygon work (custom pads, mask margins, the solder mask minimum width)
+uses clipper2-ts, the library pcbnew's own polygon code is built on.
+
+The output is held against KiCad's own. `scripts/fab-verify.mjs` writes every layer of a board
+with both, draws both with gerbv on the same window and compares the pixels, and compares the
+drill and placement files as text:
+
+```bash
+KICAD_CLI=/path/to/build/kicad/kicad-cli node scripts/fab-verify.mjs ../demos/pic_programmer/pic_programmer.kicad_pcb
+```
+
+`static/tests/fab.test.js` (part of `npm test`) covers the writers on a small board, and
+`scripts/fab-ui.mjs` drives the dialog in a browser and checks the downloaded archives.
+
 ## Board autorouter
 
 `web/router/` (bundled to `static/dist/autoroute.js`) is the web editor's **Route ▸ Autoroute…**. It only runs when

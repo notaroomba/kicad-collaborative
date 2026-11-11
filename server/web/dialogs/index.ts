@@ -18,6 +18,7 @@ import { applyPrefs, fastGrid, gridLabel, prefs, toggleGridOverrides } from "./p
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { openSyncSheetPins } from "./sync-pins";
+import { openFabOutputs } from "../editor/fab-outputs";
 
 type Handler = (anchor?: unknown) => void;
 interface Marker { code: string; severity: string }
@@ -55,7 +56,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     find: ((a?: unknown) => { if (E.kdoc && isSch()) openFind(false); else if (find) find(a); }) as Handler,
     findAndReplace: needDoc(() => openFind(true), true),
     editSymbolFields: needDoc(() => openFieldsTable(false), true),
-    generateBOM: needDoc(() => openFieldsTable(true), true),
+    // the board editor's File > Fabrication Outputs > Bill of Materials is the fabrication package; the schematic's is the fields table
+    generateBOM: (() => { if (E.kdoc && !isSch()) openFabOutputs("bom"); else needDoc(() => openFieldsTable(true), true)(); }) as Handler,
     assignFootprints: needDoc(openAssignFootprints, true),
     schematicSetup: needDoc(() => openSchematicSetup(), true),
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
