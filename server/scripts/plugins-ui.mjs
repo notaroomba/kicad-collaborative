@@ -47,7 +47,9 @@ async function user(githubId, login) {
 }
 const dana = await user(9401, 'plug-dana'), lee = await user(9402, 'plug-lee'), vic = await user(9403, 'plug-vic');
 await db.query('DELETE FROM projects WHERE owner_id = $1', [dana]);
+const out = await user(9404, 'plug-out');
 await db.query('DELETE FROM plugins WHERE user_id = ANY($1)', [[dana, lee, vic]]);
+await db.query('DELETE FROM plugin_registry WHERE owner_id = ANY($1)', [[dana, lee, vic, out]]);
 await db.query('DELETE FROM ai_usage WHERE user_id = ANY($1)', [[dana, lee, vic]]);
 const projectId = (await db.query(`INSERT INTO projects (owner_id, name) VALUES ($1, 'ecc83-pp') RETURNING id`, [dana])).rows[0].id;
 await db.query(`INSERT INTO permissions (project_id, user_id, role, created_by) VALUES ($1, $2, 'editor', $3), ($1, $4, 'viewer', $3)`, [projectId, lee, dana, vic]);
@@ -174,7 +176,7 @@ const a = await open('plug-dana', dana, `/p/${projectId}/edit?doc=${docs['ecc83-
 await editorReady(a);
 
 // ---- the manager and the catalog
-check('page forbids frames from navigating', (await (await fetch(`${BASE}/`)).headers.get('content-security-policy')) === "frame-src 'none'");
+check('page forbids frames from navigating', (await (await fetch(`${BASE}/p/${projectId}/edit`)).headers.get('content-security-policy')) === "frame-src 'none'");
 check('no plugin runs before one is installed', (await frames(a)) === 0);
 await menu(a, 'tools', 'External Plugins', 'pluginManager');
 await a.waitForSelector('#pluginManager');
@@ -190,6 +192,8 @@ await install(a, ID('bom-export'));
 const consent = await a.locator('#pluginConsent').innerText();
 check('consent names the plugin and each permission', /Install BOM Export\?/.test(consent) && /Read your designs/.test(consent) && /Save files/.test(consent) && !/Change your designs/.test(consent));
 check('nothing is stored before consent', (await plug(a)).installed.length === 0 && (await db.query('SELECT count(*)::int AS n FROM plugins WHERE user_id = $1', [dana])).rows[0].n === 0);
+const sheetBox = await a.locator('#pluginConsent').boundingBox(), okBox = await a.locator('#pluginConsentOk').boundingBox(), dlgBox = await a.locator('#pluginManager').boundingBox();
+check('the consent sheet is laid out in full', sheetBox.height > 250 && okBox.y + okBox.height <= dlgBox.y + dlgBox.height && dlgBox.y >= 0 && dlgBox.y + dlgBox.height <= 900, JSON.stringify({ sheetBox, okBox, dlgBox }));
 await shot(a, '02-consent');
 await accept(a, ID('bom-export'));
 check('installed, enabled and running after consent', (await plug(a)).installed[0].enabled && (await frames(a)) === 1);
@@ -404,6 +408,89 @@ check('the store refuses a mismatched identifier and bad paths', (await put('tes
 check('the store needs a sign-in', (await put('test.srv', { manifest, files: { 'main.js': '' }, granted: [] }, { 'Content-Type': 'application/json' })) === 401);
 const leeList = await fetch(`${BASE}/api/plugins`, { headers: { Authorization: `Bearer ${mintJwt(lee, 'plug-lee')}` } }).then((r) => r.json());
 check("one person's plugins are not another's", leeList.plugins.length === 0);
+
+// ---- publishing to the community registry, and what a project recommends
+const as = (id, login) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${mintJwt(id, login)}` });
+const call = (method, url, h, body) => fetch(`${BASE}${url}`, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+const stored = (page) => page.evaluate(() => { const s = window.KcPlugins.store.get(); return { project: s.project, registry: s.registry, published: s.published, sources: Object.fromEntries(s.installed.map((p) => [p.identifier, p.source])) }; });
+await a.goto(`${BASE}/p/${projectId}/edit?doc=${docs['ecc83-pp.kicad_sch']}`); await editorReady(a); await running(a, WRITER);
+check('a project recommends nothing to start with', (await stored(a)).project.plugins.length === 0 && (await a.locator('#pluginRecommended').count()) === 0);
+await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSelector('#pluginManager');
+await a.click(`#pluginList [data-plugin="${WRITER}"]`); await a.waitForSelector('#pluginShare #pluginPublish');
+check('a private plugin cannot be recommended until it is published', await a.locator('#pluginRecommend').isDisabled());
+a.once('dialog', (d) => d.accept()); await a.click('#pluginPublish'); await a.waitForSelector('#pluginUnpublish');
+const row = (await db.query('SELECT owner_id, manifest FROM plugin_registry WHERE identifier = $1', [WRITER])).rows[0];
+check('publishing lists the plugin under the publisher', !!row && row.owner_id === dana && row.manifest.version === '0.1.0');
+check('publishing installs it for nobody', (await db.query('SELECT count(*)::int AS n FROM plugins WHERE identifier = $1 AND user_id <> $2', [WRITER, dana])).rows[0].n === 1 /* vic loaded their own copy earlier */);
+await a.click('#pluginRecommend');
+await a.waitForFunction((i) => window.KcPlugins.store.get().project.plugins.some((r) => r.identifier === i), WRITER);
+await shot(a, '16-publish-and-recommend');
+await a.click(`#pluginList [data-plugin="${ID('design-stats')}"]`); await a.waitForSelector('#pluginRecommend');
+check('a catalog plugin offers recommending but not publishing', (await a.locator('#pluginPublish').count()) === 0);
+await a.click('#pluginRecommend');
+await a.waitForFunction(() => window.KcPlugins.store.get().project.plugins.length === 2);
+check('recommendations are stored with the project', (await db.query('SELECT identifier, origin FROM project_plugins WHERE project_id = $1 ORDER BY identifier', [projectId])).rows.map((r) => `${r.identifier}:${r.origin}`).join(' ') === `${ID('design-stats')}:catalog ${WRITER}:registry`);
+await a.click('#pluginManager [data-tab="project"]'); await a.waitForSelector('#pluginProject .plg-card');
+check("the project tab lists them, already installed for the recommender", (await a.locator('#pluginProject .plg-card').count()) === 2 && (await a.locator('#pluginProject [data-install]').count()) === 0 && (await a.locator('#pluginProject [data-unrecommend]').count()) === 2);
+await closeManager(a);
+check('the recommender is not nagged about plugins they have', (await a.locator('#pluginRecommended').count()) === 0);
+
+const wm = { identifier: WRITER, name: 'Writer', description: 'x', version: '0.9.0', runtime: { type: 'web', entrypoint: 'main.js' } };
+check('an identifier belongs to whoever published it first', (await call('PUT', `/api/plugins/registry/${WRITER}`, as(lee, 'plug-lee'), { manifest: wm, files: { 'main.js': '' } })).status === 409 && (await call('DELETE', `/api/plugins/registry/${WRITER}`, as(lee, 'plug-lee'))).status === 404);
+check('the built-in catalog cannot be published over', (await call('PUT', `/api/plugins/registry/${ID('fake')}`, as(lee, 'plug-lee'), { manifest: { ...wm, identifier: ID('fake') }, files: { 'main.js': '' } })).status === 400);
+check('publishing needs a version and a sign-in', (await call('PUT', '/api/plugins/registry/test.nover', as(lee, 'plug-lee'), { manifest: { ...wm, identifier: 'test.nover', version: undefined }, files: { 'main.js': '' } })).status === 400 && (await call('PUT', '/api/plugins/registry/test.anon', { 'Content-Type': 'application/json' }, { manifest: { ...wm, identifier: 'test.anon' }, files: { 'main.js': '' } })).status === 401);
+check('only editors change what a project recommends', (await call('PUT', `/api/projects/${projectId}/plugins/${ID('bom-export')}`, as(vic, 'plug-vic'), { origin: 'catalog' })).status === 403 && (await call('DELETE', `/api/projects/${projectId}/plugins/${WRITER}`, as(vic, 'plug-vic'))).status === 403);
+check('a private plugin cannot be recommended', (await call('PUT', `/api/projects/${projectId}/plugins/${PROBE}`, as(dana, 'plug-dana'), { origin: 'registry' })).status === 400 && (await call('PUT', `/api/projects/${projectId}/plugins/${PROBE}`, as(dana, 'plug-dana'), { origin: 'catalog' })).status === 400);
+check('people outside the project do not see its recommendations', (await call('GET', `/api/projects/${projectId}/plugins`, as(out, 'plug-out'))).status === 403);
+const seen = await (await call('GET', `/api/projects/${projectId}/plugins`, as(vic, 'plug-vic'))).json();
+check('a viewer sees them and cannot edit them', seen.plugins.length === 2 && seen.canEdit === false);
+const found = async (q) => (await (await call('GET', `/api/plugins/registry?q=${encodeURIComponent(q)}`, {})).json()).plugins;
+check('the registry is searchable and lists no files', (await found('writ')).length === 1 && (await found('plug-dana')).length === 1 && (await found('zz%zz')).length === 0 && (await found('_')).length === 0 && !('files' in (await found(''))[0]));
+
+// the collaborator: shown the recommendations, nothing installed or run until they choose
+const c = await open('plug-lee', lee, `/p/${projectId}/edit?doc=${docs['ecc83-pp.kicad_sch']}`);
+await editorReady(c); await c.waitForSelector('#pluginRecommended');
+check('a collaborator is told, and nothing is installed or run for them', /recommends 2 plugins/.test(await c.locator('#pluginRecommended').innerText()) && (await plug(c)).installed.length === 0 && (await frames(c)) === 0);
+await shot(c, '17-collaborator-sees-recommendation');
+await c.click('#pluginRecommendedShow'); await c.waitForSelector('#pluginProject .plg-card');
+check('the notice opens the project tab', (await c.locator('#pluginProject .plg-card').count()) === 2 && (await c.locator('#pluginProject [data-install]').count()) === 2);
+await shot(c, '18-project-tab');
+await c.click(`#pluginProject [data-install="${WRITER}"]`); await c.waitForSelector('#pluginConsent');
+const sheet = await c.locator('#pluginConsent').innerText();
+check('consent says who published it and that it is not reviewed', /published by plug-dana/.test(sheet) && /not reviewed/.test(sheet) && /Change your designs/.test(sheet) && (await plug(c)).installed.length === 0);
+await shot(c, '19-registry-consent');
+await accept(c, WRITER);
+check('installed from the registry for that person only', (await stored(c)).sources[WRITER] === 'registry:plug-dana' && (await frames(c)) === 1);
+await c.click('#pluginManager [data-tab="catalog"]'); await c.waitForSelector('#pluginRegistry .plg-card');
+await c.waitForFunction(() => /1 install\b/.test(document.querySelector('#pluginRegistry')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+const card = await c.locator(`#pluginRegistry [data-plugin="${WRITER}"]`).innerText();
+check('the catalog has a community section with publisher and installs', /by plug-dana/.test(card) && /1 install\b/.test(card) && /Installed/.test(card), card);
+await c.fill('#pluginSearch', 'nothing-like-this'); await c.waitForSelector('#pluginRegistryEmpty');
+await c.fill('#pluginSearch', 'writer'); await c.waitForSelector('#pluginRegistry .plg-card');
+check('searching the community section filters it', (await c.locator('#pluginRegistry .plg-card').count()) === 1);
+await c.locator('#pluginRegistry').evaluate((el) => el.scrollIntoView({ block: 'start' })); await c.waitForTimeout(200);
+await shot(c, '20-community');
+check('a new version is offered as an update', (await call('PUT', `/api/plugins/registry/${WRITER}`, as(dana, 'plug-dana'), { manifest: { ...wm, version: '0.2.0' }, files: { 'main.js': 'console.log("v2")' } })).status === 200
+  && (await c.fill('#pluginSearch', ''), await c.waitForFunction(() => /Update…/.test(document.querySelector('#pluginRegistry')?.textContent || ''), null, { timeout: 5000 }).then(() => true, () => false)));
+await closeManager(c);
+check('the notice counts only what is still missing', /recommends a plugin/.test(await c.locator('#pluginRecommended').innerText()));
+await c.click('#pluginRecommendedDismiss');
+check('the notice can be dismissed', (await c.locator('#pluginRecommended').count()) === 0);
+await c.reload(); await editorReady(c); await running(c, WRITER); await c.waitForTimeout(600);
+check('and stays dismissed', (await c.locator('#pluginRecommended').count()) === 0 && (await stored(c)).project.plugins.length === 2);
+
+// unpublish: the registry and the recommendation go, installed copies stay
+await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSelector('#pluginManager');
+await a.click('#pluginManager [data-tab="installed"]'); await a.click(`#pluginList [data-plugin="${WRITER}"]`); await a.waitForSelector('#pluginUnpublish');
+check('the publisher is offered to publish their newer or older copy', (await a.locator('#pluginPublish').count()) === 1);
+a.once('dialog', (d) => d.accept()); await a.click('#pluginUnpublish'); await a.waitForSelector('#pluginShare #pluginPublish:has-text("Publish…")');
+check('unpublishing removes it from the registry and from projects', (await db.query('SELECT count(*)::int AS n FROM plugin_registry WHERE identifier = $1', [WRITER])).rows[0].n === 0 && (await stored(a)).project.plugins.length === 1
+  && (await db.query('SELECT count(*)::int AS n FROM project_plugins WHERE project_id = $1', [projectId])).rows[0].n === 1);
+check('people who installed it keep their copy', (await db.query('SELECT count(*)::int AS n FROM plugins WHERE identifier = $1 AND user_id = $2', [WRITER, lee])).rows[0].n === 1);
+await a.click('#pluginManager [data-tab="project"]'); await a.waitForSelector('#pluginProject .plg-card');
+await a.click(`#pluginProject [data-unrecommend="${ID('design-stats')}"]`); await a.waitForSelector('#pluginProjectEmpty');
+check('an editor can stop recommending', (await db.query('SELECT count(*)::int AS n FROM project_plugins WHERE project_id = $1', [projectId])).rows[0].n === 0);
+await closeManager(a); await c.close();
 
 check('no page errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 await browser.close(); await db.end();

@@ -138,6 +138,29 @@ into it. The app's colour tokens (`--paper`, `--bench`, `--panel`, `--line`, `--
 frame's root and follow the light and dark themes, and plain `button`, `input`, `select` and
 `table` elements are already styled with them. Use the tokens; do not hard-code colours.
 
+## Sharing a plugin
+
+**Publish it.** Install your plugin from a file or an address, open it in the Plugin Manager and
+choose **Publish…** under Sharing. That lists your copy in the community registry (Catalog tab,
+Community section) under your account name, where anyone can search for it and install it. The
+manifest needs a `version`; publish again after loading a newer copy and people who have it are
+offered **Update…**, with any new permission pointed out. The identifier is yours from the first
+publish, and **Unpublish** takes the listing down again (people who installed it keep their copy).
+Identifiers under `dev.notaroomba.kicad-collab.` are the built-in catalog's.
+
+Publishing shares a copy and nothing else. Community plugins are not reviewed: whoever installs
+one is told who published it and sees every permission before it is stored.
+
+**Recommend it to a project.** With a project open, an editor can tick **Recommend to this
+project's collaborators** on a built-in or published plugin. Everyone who opens the project then
+sees a notice across the top of the canvas and the list under **This project** in the manager. A
+recommendation is a pointer: each person installs for themselves through the same consent sheet,
+and nothing is installed or run for anyone who does not. A private plugin (from a file or an
+address) has to be published first, so collaborators have somewhere to get it.
+
+The endpoints: `GET /api/plugins/registry?q=`, `GET|PUT|DELETE /api/plugins/registry/{identifier}`,
+`GET /api/projects/{id}/plugins`, `PUT|DELETE /api/projects/{id}/plugins/{identifier}`.
+
 ## How plugins are contained
 
 - A plugin runs in an `<iframe sandbox="allow-scripts">` with an opaque origin. It cannot reach

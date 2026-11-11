@@ -238,6 +238,212 @@ pub async fn uninstall(State(state): State<AppState>, AuthUser(user): AuthUser, 
     Ok(Json(json!({ "ok": true })))
 }
 
+// ---------------------------------------------------------------- the community registry
+
+/// Identifiers under this prefix are the built-in catalog's; nobody may publish under it.
+const RESERVED_PREFIX: &str = "dev.notaroomba.kicad-collab.";
+
+fn catalog_entry(identifier: &str) -> Option<(Value, Map<String, Value>)> {
+    CATALOG.iter().find_map(|(manifest, files)| {
+        let manifest: Value = serde_json::from_str(manifest).ok()?;
+        if manifest.get("identifier").and_then(Value::as_str) != Some(identifier) {
+            return None;
+        }
+        Some((manifest, files.iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect()))
+    })
+}
+
+#[derive(Deserialize)]
+pub struct RegistryQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// `GET /api/plugins/registry?q=` — published plugins, newest first, with who published
+/// each and how many people have it installed.  Public, like the catalog; files are left
+/// out of the listing and fetched per plugin.
+pub async fn registry_list(State(state): State<AppState>, axum::extract::Query(query): axum::extract::Query<RegistryQuery>) -> AppResult<Json<Value>> {
+    let q: String = query.q.trim().chars().take(80).collect();
+    let like = format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let rows = sqlx::query(
+        "SELECT r.identifier, r.manifest, r.published_at, r.updated_at, u.login,
+                (SELECT count(*) FROM plugins p WHERE p.identifier = r.identifier AND p.source LIKE 'registry:%') AS installs
+         FROM plugin_registry r JOIN users u ON u.id = r.owner_id
+         WHERE $1 = '' OR r.identifier ILIKE $2 OR r.manifest->>'name' ILIKE $2 OR r.manifest->>'description' ILIKE $2 OR u.login ILIKE $2
+         ORDER BY r.updated_at DESC LIMIT 200",
+    )
+    .bind(&q)
+    .bind(&like)
+    .fetch_all(&state.pool)
+    .await?;
+    let plugins: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "identifier": r.get::<String, _>("identifier"),
+                "manifest": r.get::<Value, _>("manifest"),
+                "publisher": r.get::<String, _>("login"),
+                "installs": r.get::<i64, _>("installs"),
+                "publishedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("published_at"),
+                "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "plugins": plugins })))
+}
+
+/// `GET /api/plugins/registry/{identifier}` — one published plugin with its files.
+pub async fn registry_get(State(state): State<AppState>, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+    let r = sqlx::query("SELECT r.manifest, r.files, r.updated_at, u.login FROM plugin_registry r JOIN users u ON u.id = r.owner_id WHERE r.identifier = $1")
+        .bind(&identifier)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(json!({
+        "manifest": r.get::<Value, _>("manifest"),
+        "files": r.get::<Value, _>("files"),
+        "publisher": r.get::<String, _>("login"),
+        "updatedAt": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct PublishRequest {
+    manifest: Value,
+    files: Map<String, Value>,
+}
+
+/// `PUT /api/plugins/registry/{identifier}` — publish a plugin, or a new version of one
+/// the caller published.  The identifier is theirs from then on.
+pub async fn registry_publish(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(identifier): Path<String>,
+    LenientJson(req): LenientJson<PublishRequest>,
+) -> AppResult<Json<Value>> {
+    check(&identifier, &req.manifest, &req.files, &[])?;
+    if identifier.starts_with(RESERVED_PREFIX) || catalog_entry(&identifier).is_some() {
+        return Err(bad("that identifier belongs to the built-in catalog; publish under an identifier of your own"));
+    }
+    if req.manifest.get("version").and_then(Value::as_str).map(|v| v.is_empty() || v.len() > 40).unwrap_or(true) {
+        return Err(bad("a published plugin needs a version in its manifest, so people can tell an update from what they have"));
+    }
+    let owner: Option<i64> = sqlx::query_scalar("SELECT owner_id FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_optional(&state.pool).await?;
+    if owner.is_some_and(|o| o != user.id) {
+        return Err(AppError::Api(axum::http::StatusCode::CONFLICT, "identifier_taken", "someone else has published a plugin with that identifier".into()));
+    }
+    let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM plugin_registry WHERE owner_id = $1 AND identifier <> $2").bind(user.id).bind(&identifier).fetch_one(&state.pool).await?;
+    if mine >= MAX_PLUGINS {
+        return Err(bad(format!("an account publishes at most {MAX_PLUGINS} plugins")));
+    }
+    sqlx::query(
+        "INSERT INTO plugin_registry (identifier, owner_id, manifest, files) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (identifier) DO UPDATE SET manifest = EXCLUDED.manifest, files = EXCLUDED.files, updated_at = now() WHERE plugin_registry.owner_id = EXCLUDED.owner_id",
+    )
+    .bind(&identifier)
+    .bind(user.id)
+    .bind(&req.manifest)
+    .bind(Value::Object(req.files))
+    .execute(&state.pool)
+    .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `DELETE /api/plugins/registry/{identifier}` — unpublish.  Copies people already
+/// installed stay theirs; projects stop recommending it.
+pub async fn registry_unpublish(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+    let done = sqlx::query("DELETE FROM plugin_registry WHERE identifier = $1 AND owner_id = $2").bind(&identifier).bind(user.id).execute(&state.pool).await?;
+    if done.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    sqlx::query("DELETE FROM project_plugins WHERE identifier = $1 AND origin = 'registry'").bind(&identifier).execute(&state.pool).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------- what a project recommends
+
+/// `GET /api/projects/{id}/plugins` — the plugins this project suggests, each with the
+/// copy to install.  Anyone who can open the project can see them; seeing is all it does.
+pub async fn project_list(State(state): State<AppState>, AuthUser(user): AuthUser, Path(project_id): Path<uuid::Uuid>) -> AppResult<Json<Value>> {
+    let role = crate::persist::effective_role(&state.pool, user.id, project_id).await?.ok_or(AppError::Forbidden)?;
+    let rows = sqlx::query(
+        "SELECT pp.identifier, pp.origin, u.login AS added_by, r.manifest, r.files, ru.login AS publisher
+         FROM project_plugins pp
+         LEFT JOIN users u ON u.id = pp.added_by
+         LEFT JOIN plugin_registry r ON pp.origin = 'registry' AND r.identifier = pp.identifier
+         LEFT JOIN users ru ON ru.id = r.owner_id
+         WHERE pp.project_id = $1 ORDER BY pp.added_at",
+    )
+    .bind(project_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut plugins = Vec::new();
+    for r in &rows {
+        let identifier: String = r.get("identifier");
+        let origin: String = r.get("origin");
+        let (manifest, files, publisher) = if origin == "catalog" {
+            match catalog_entry(&identifier) {
+                Some((m, f)) => (m, Value::Object(f), None),
+                None => continue,
+            }
+        } else {
+            match r.get::<Option<Value>, _>("manifest") {
+                Some(m) => (m, r.get::<Value, _>("files"), r.get::<Option<String>, _>("publisher")),
+                None => continue,
+            }
+        };
+        plugins.push(json!({ "identifier": identifier, "origin": origin, "addedBy": r.get::<Option<String>, _>("added_by"), "publisher": publisher, "manifest": manifest, "files": files }));
+    }
+    Ok(Json(json!({ "plugins": plugins, "canEdit": role == "editor" })))
+}
+
+#[derive(Deserialize)]
+pub struct RecommendRequest {
+    origin: String,
+}
+
+/// `PUT /api/projects/{id}/plugins/{identifier}` — an editor recommends a catalog or
+/// registry plugin to the project's collaborators.
+pub async fn project_recommend(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((project_id, identifier)): Path<(uuid::Uuid, String)>,
+    LenientJson(req): LenientJson<RecommendRequest>,
+) -> AppResult<Json<Value>> {
+    if crate::persist::effective_role(&state.pool, user.id, project_id).await?.as_deref() != Some("editor") {
+        return Err(AppError::Forbidden);
+    }
+    let known = match req.origin.as_str() {
+        "catalog" => catalog_entry(&identifier).is_some(),
+        "registry" => sqlx::query_scalar::<_, i64>("SELECT count(*) FROM plugin_registry WHERE identifier = $1").bind(&identifier).fetch_one(&state.pool).await? > 0,
+        _ => return Err(bad("origin is catalog or registry")),
+    };
+    if !known {
+        return Err(bad("only a plugin from the catalog or the registry can be recommended, so that collaborators can get it"));
+    }
+    let have: i64 = sqlx::query_scalar("SELECT count(*) FROM project_plugins WHERE project_id = $1").bind(project_id).fetch_one(&state.pool).await?;
+    if have >= 30 {
+        return Err(bad("a project recommends at most 30 plugins"));
+    }
+    sqlx::query("INSERT INTO project_plugins (project_id, identifier, origin, added_by) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, identifier) DO UPDATE SET origin = EXCLUDED.origin")
+        .bind(project_id)
+        .bind(&identifier)
+        .bind(&req.origin)
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `DELETE /api/projects/{id}/plugins/{identifier}`
+pub async fn project_unrecommend(State(state): State<AppState>, AuthUser(user): AuthUser, Path((project_id, identifier)): Path<(uuid::Uuid, String)>) -> AppResult<Json<Value>> {
+    if crate::persist::effective_role(&state.pool, user.id, project_id).await?.as_deref() != Some("editor") {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("DELETE FROM project_plugins WHERE project_id = $1 AND identifier = $2").bind(project_id).bind(&identifier).execute(&state.pool).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
