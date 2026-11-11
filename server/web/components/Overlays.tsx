@@ -13,11 +13,14 @@ export function Toast() {
     if (!toast) return;
     // In the editor the message is KiCad's infobar (WX_INFOBAR::ShowMessageFor): a bar over the top edge of the
     // canvas, laid over it rather than pushing it down; elsewhere a toast at the bottom of the window.
-    const stage = document.getElementById("stage"), r = stage && stage.offsetParent ? stage.getBoundingClientRect() : null;
-    setBox(r && r.width > 0 ? { left: r.left, top: r.top, width: r.width } : null);
+    const stage = document.getElementById("stage");
+    const measure = () => { const r = stage && stage.offsetParent ? stage.getBoundingClientRect() : null; setBox(r && r.width > 0 ? { left: r.left, top: r.top, width: r.width } : null); };
+    measure();
+    // A dock opening or closing while the bar is up (a plugin panel, the assistant) resizes the canvas: the bar follows it.
+    const ro = stage && typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null; if (ro && stage) ro.observe(stage);
     setShow(true);
     const t = setTimeout(() => setShow(false), toast.ms || 2200);
-    return () => clearTimeout(t);
+    return () => { clearTimeout(t); if (ro) ro.disconnect(); };
   }, [toast]);
   const close = <button type="button" className="kinfobar-x" aria-label="Close" onClick={() => setShow(false)}><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 2l6 6M8 2L2 8" stroke="currentColor" strokeWidth="1.4" /></svg></button>;
   if (box) return <div id="toast" role="status" aria-live="polite" className={cx("kinfobar", show && "show")} style={box}>{toast ? toast.text : ""}{close}</div>;

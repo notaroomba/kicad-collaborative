@@ -228,6 +228,12 @@ await a.evaluate((id) => window.CollabEditor.api.toolCtx().setSelection([id]), r
 await panel.locator('#sel tbody tr').first().waitFor();
 check('panel follows the selection', /R1/.test(await panel.locator('#sel').innerText()) && /1 item selected/.test(await panel.locator('#selNote').innerText()));
 check('panel is themed from the page', await panel.locator('body').evaluate((b) => getComputedStyle(b).backgroundColor) === await a.evaluate(() => { const d = document.createElement('div'); d.style.background = 'var(--paper)'; document.body.appendChild(d); const c = getComputedStyle(d).backgroundColor; d.remove(); return c; }));
+await a.evaluate(() => window.CollabEditor.api.toolCtx().toast('A message while the dock is open', 4000)); await a.waitForSelector('#toast.show');
+const barBox = await a.locator('#toast').boundingBox(), stageBox = await a.locator('#stage').boundingBox();
+await a.evaluate(() => window.KcPlugins.runUi('pluginPanels')); await a.waitForTimeout(350);
+const barBox2 = await a.locator('#toast').boundingBox(), stageBox2 = await a.locator('#stage').boundingBox();
+await a.evaluate(() => window.KcPlugins.runUi('pluginPanels')); await a.waitForTimeout(350);
+check('the editor infobar follows the canvas when the plugin dock opens or closes', Math.abs(barBox.width - stageBox.width) < 2 && Math.abs(barBox2.width - stageBox2.width) < 2 && Math.abs(stageBox.width - stageBox2.width) > 100, JSON.stringify({ barBox, stageBox, barBox2, stageBox2 }));
 await shot(a, '05-panel');
 await a.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 await a.waitForTimeout(400);
