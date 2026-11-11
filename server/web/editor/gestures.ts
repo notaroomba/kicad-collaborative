@@ -21,7 +21,7 @@ import { breakFollow, sendPresence } from "./peers";
 import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
-import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw } from "./view";
+import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
 
 // typed faces of the untyped editor modules this file leans on
 type Mm = [number, number];
@@ -278,7 +278,7 @@ function computeHover(): void {
     const under = hit && (hit.movable ? hit.movable.id : hit.item ? hit.item.id : null);
     over = !!under && !E.viewOnly && selectionIds().includes(under);
   }
-  if (id !== E.hoverId) { E.hoverId = id; requestRender(); }
+  if (id !== E.hoverId) { E.hoverId = id; requestRepaint(); }
   // over something already selected a drag moves it: say so with the cursor (KiCad's "moving" arrow)
   stage.classList.toggle("over-sel", over);
 }
@@ -318,7 +318,35 @@ function onWheel(ev: WheelEvent): void {
   if (ev.ctrlKey) { panBy(-rot * 0.0012 * r.width, 0, mm); return; }
   if (ev.altKey) return;
   if (dx !== 0 && Math.abs(dx) > Math.abs(dy)) { panBy(-dx, 0, mm); return; } // horizontal wheel / two-finger sideways
-  zoomBy(Math.pow(E.zoomStep || 1.0018, -dy), ev.clientX - r.left, ev.clientY - r.top);
+  wheelZoom(Math.pow(E.zoomStep || 1.0018, -dy), ev.clientX - r.left, ev.clientY - r.top);
+}
+
+// ---------------------------------------------------------------- smooth wheel zoom
+// KiCad's GAL eases a wheel zoom in over a few frames instead of jumping; the first step lands on the very next
+// frame (no added lag), the rest follow an ease-out over ZOOM_EASE_MS.  Notches that arrive while it runs retarget
+// it from where the view is now, so fast scrolling accelerates rather than queues.  Off with E.smoothZoom === false
+// or the OS "reduce motion" setting.
+const ZOOM_EASE_MS = 110;
+interface ZoomAnim { from: number; to: number; cx: number; cy: number; t0: number; raf: number }
+const reducedMotion = (): boolean => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+function wheelZoom(factor: number, cx: number, cy: number): void {
+  const prev = E.zoomAnim as ZoomAnim | null;
+  if (E.smoothZoom === false || reducedMotion()) { zoomBy(factor, cx, cy); return; }
+  const [lo, hi] = (zoomLimits as unknown as () => [number, number])();
+  const base = prev ? prev.to : E.zoom as number;
+  const to = Math.min(Math.max(hi, E.zoom), Math.max(Math.min(lo, E.zoom), base * factor));
+  if (prev) cancelAnimationFrame(prev.raf);
+  const a: ZoomAnim = { from: E.zoom, to, cx, cy, t0: performance.now(), raf: 0 };
+  E.zoomAnim = a;
+  const step = (now: number): void => {
+    if (E.zoomAnim !== a) return;
+    const p = Math.min(1, Math.max(0, (now - a.t0) / ZOOM_EASE_MS)), e = 1 - Math.pow(1 - p, 3);
+    const z = a.from * Math.pow(a.to / a.from, p >= 1 ? 1 : Math.max(e, 0.35));
+    if (p >= 1) E.zoomAnim = null;
+    if (z !== E.zoom) zoomBy(z / E.zoom, a.cx, a.cy);
+    if (p >= 1) requestRender(); else a.raf = requestAnimationFrame(step);
+  };
+  a.raf = requestAnimationFrame(step);
 }
 
 // ---------------------------------------------------------------- right / middle button
@@ -376,7 +404,7 @@ export function installGestures(open: OpenMenu): void {
   stage.addEventListener("pointermove", onMoveCapture, true);
   stage.addEventListener("pointerup", onUpCapture, true);
   stage.addEventListener("pointercancel", () => { cancelInteraction(); }, true);
-  stage.addEventListener("pointerleave", () => { if (E.hoverId) { E.hoverId = null; requestRender(); } stage.classList.remove("over-sel"); });
+  stage.addEventListener("pointerleave", () => { if (E.hoverId) { E.hoverId = null; requestRepaint(); } stage.classList.remove("over-sel"); });
   stage.addEventListener("auxclick", (ev) => ev.preventDefault());           // no autoscroll / paste on a middle click
   stage.addEventListener("mousedown", (ev) => { if (ev.button === 1) ev.preventDefault(); });
   window.addEventListener("blur", () => { ctrlHeld = false; cancelInteraction(); });

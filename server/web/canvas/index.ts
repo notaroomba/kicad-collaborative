@@ -23,7 +23,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
-import { PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, pcbColor, pcbZ } from "./colors";
+import { PCB_BG, PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, pcbColor, pcbZ } from "./colors";
 import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, parseDoc, titleBlockOf } from "./doc";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
 import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingSheet, wrapFragment } from "./export";
@@ -48,7 +48,7 @@ import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } fr
 import { pcbSizes } from "./pcb-sizes";
 import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
-export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
+export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,

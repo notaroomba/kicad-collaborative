@@ -8,6 +8,7 @@ import { drawHover } from "./gestures";
 import { anchorMm, breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
+import { paintDocument, stats as paintStats } from "./paint";
 import { activeModule, toolCtx } from "./tools";
 import { toast } from "./util";
 // ================================================================ EDITOR
@@ -42,7 +43,11 @@ export const isSch = () => E.DOC_TYPE === "kicad_sch";
 // ---- canvas renderer (the document itself, mirrored from the collaboration stream) ----
 export const canvas = $("#canvas"), cctx = canvas.getContext("2d");
 
-export function requestRender() { if (E.renderReq || !E.kdoc) return; E.renderReq = requestAnimationFrame(() => { E.renderReq = 0; drawCanvas(); }); }
+/** Repaint everything on the next frame (the document pass included). */
+export function requestRender() { E.renderFull = true; requestRepaint(); }
+E.paintStats = paintStats;   // frame counters (full passes, strip pans, blits, scaled zoom frames) for the perf tests
+/** Repaint on the next frame, re-rendering the document only when it, the options or the view changed (paint.ts). */
+export function requestRepaint() { if (E.renderReq || !E.kdoc) return; E.renderReq = requestAnimationFrame(() => { E.renderReq = 0; drawCanvas(); }); }
    // bitmaps decode asynchronously; repaint once they are ready
 export function sizeCanvas() {
   // the backing store is the stage in device pixels exactly (E.canvasPx, from the device-pixel-content-box
@@ -59,7 +64,8 @@ export function drawCanvas() {
   const view = { ppm, zoom: E.zoom, panX: E.panX, panY: E.panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
   const ghosts = E.peerGhosts || [];
   const skip = ghosts.length ? new Set(ghosts.flatMap((g) => [...g.ids])) : null;
-  KiCadCanvas.render(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds, skip }, E.renderOpts));
+  const force = E.renderFull !== false; E.renderFull = false;
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));
@@ -95,7 +101,7 @@ export function applyView() {
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).
   drawComments(); drawSelection(); drawPeers(E.peerState);
-  requestRender();
+  requestRepaint();
 }
 
 export function contentBoxMm() {
@@ -118,6 +124,7 @@ export function contentBoxMm() {
 export function fitView() { fitBox(contentBoxMm(), isSch() ? 0.97 : 0.85); }
 
 export function fitBox(box, margin) {
+  if (E.zoomAnim) { cancelAnimationFrame(E.zoomAnim.raf); E.zoomAnim = null; }
   const sw = stage.clientWidth, sh = stage.clientHeight;
   if (!sw || !sh) { setTimeout(fitView, 100); return; }
   world.style.width = sw + "px";

@@ -291,6 +291,10 @@ export function render(doc, ctx, view, opts) {
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
   const sCss = view.ppm * view.zoom;                    // css px per mm (KiCad's LOD rules work in logical pixels)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // region: [x0, y0, x1, y1] device px — repaint only that part of the canvas (the editor's pan strips); the
+  // pixels drawn there are the full render's, the rest of the canvas is left alone
+  const region = opts.region || null;
+  if (region) { ctx.save(); ctx.beginPath(); ctx.rect(region[0], region[1], region[2] - region[0], region[3] - region[1]); ctx.clip(); }
   const bg = opts.background === undefined ? (doc.type === "sch" ? SCH.bg : PCB_BG) : opts.background;
   if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); } else if (typeof ctx.clearRect === "function") ctx.clearRect(0, 0, W, H);
   const tx = view.panX * dpr - view.x0 * s, ty = view.panY * dpr - view.y0 * s;
@@ -299,7 +303,15 @@ export function render(doc, ctx, view, opts) {
   const A = flip ? -s : s, E = flip ? tx + 2 * cx * s : tx;
   ctx.setTransform(A, 0, 0, s, E, ty);
   const dx0 = -E / A, dx1 = (W - E) / A;
-  const vx0 = Math.min(dx0, dx1), vx1 = Math.max(dx0, dx1), vy0 = -ty / s, vy1 = vy0 + H / s;   // visible mm rect
+  const fx0 = Math.min(dx0, dx1), fx1 = Math.max(dx0, dx1), fy0 = -ty / s, fy1 = fy0 + H / s;   // visible mm rect
+  // the rect geometry is culled against: the visible one, or the repainted region (plus a margin for strokes
+  // and labels that reach into it from outside)
+  let vx0 = fx0, vx1 = fx1, vy0 = fy0, vy1 = fy1;
+  if (region) {
+    const m = 48, rx0 = (region[0] - m - E) / A, rx1 = (region[2] + m - E) / A;
+    vx0 = Math.max(fx0, Math.min(rx0, rx1)); vx1 = Math.min(fx1, Math.max(rx0, rx1));
+    vy0 = Math.max(fy0, (region[1] - m - ty) / s); vy1 = Math.min(fy1, (region[3] + m - ty) / s);
+  }
   // grid: GAL::DrawGrid.  The pitch is multiplied by the coarse tick (10) until grid marks are more than
   // grid.min_spacing (10 px; 20 for small crosses) apart; every 10th row / column of the drawn grid is major:
   // twice the dot size, line width or cross size.  Styles: "dots" (KiCad's default), "lines", "crosses".
@@ -312,7 +324,7 @@ export function render(doc, ctx, view, opts) {
     const i0 = Math.floor((vx0 - gx) / pitch), i1 = Math.ceil((vx1 - gx) / pitch), j0 = Math.floor((vy0 - gy) / pitch), j1 = Math.ceil((vy1 - gy) / pitch);
     const px1 = Math.max(1, dpr) / s;   // one device pixel (grid.line_width 1.0)
     const gridColor = opts.gridColor || (isPcb ? PCB_GRID : SCH.grid);
-    if ((i1 - i0) * (j1 - j0) < 400000) {
+    if ((Math.ceil((fx1 - gx) / pitch) - Math.floor((fx0 - gx) / pitch)) * (Math.ceil((fy1 - gy) / pitch) - Math.floor((fy0 - gy) / pitch)) < 400000) {   // the whole view's count, region or not
       if (style === "dots") {
         ctx.fillStyle = gridColor; ctx.beginPath();
         for (let i = i0; i <= i1; i++) {
@@ -441,7 +453,7 @@ export function render(doc, ctx, view, opts) {
   const setCap = (c) => { if (c !== curCap) { ctx.lineCap = c; curCap = c; } };
   const strokeG = (g) => { const p = pathOf(g); if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); } };
   const fillG = (g) => { const p = pathOf(g); if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } };
-  const base = [A, 0, 0, s, E, ty]; const viewRect = [vx0, vy0, vx1, vy1];
+  const base = [A, 0, 0, s, E, ty]; const viewRect = [fx0, fy0, fx1, fy1];
   const dirty = () => { curStroke = curFill = null; curWidth = -1; curCap = "round"; curAlpha = -1; };
   let ratsDone = !rats, previewIdx = 0;
   for (const z of ZS) {
@@ -529,6 +541,7 @@ export function render(doc, ctx, view, opts) {
   // selection: eeschema draws a selection shadow (a translucent halo around the item's own geometry);
   // pcbnew repaints the item in its selected colour instead, which the geometry pass above already did
   if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
+  if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 

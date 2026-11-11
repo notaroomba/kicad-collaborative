@@ -8,7 +8,7 @@ import { cycleFollow } from "./peers";
 import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, selFilter } from "./selection";
 import { E } from "./state";
 import { api, toast } from "./util";
-import { dragG, isSch, pxPerMm, requestRender, stage, worldMm } from "./view";
+import { dragG, isSch, pxPerMm, requestRender, requestRepaint, stage, worldMm } from "./view";
    // ERC/DRC markers handed over by the tool modules; the project's .kicad_pro text (design rules)
 // KiCad's clipboard is s-expression text: the modules write it here and to the system clipboard when allowed.
 // read() takes the system clipboard when it holds any s-expression (a lone (text …), (bus …), (sheet …) is one too).
@@ -32,7 +32,7 @@ export function toolCtx(extra) {
     commit(changes, label, opts) { commitChanges(changes, label, opts); },
     undo() { undoLast(); },
     applyLocal(changes) { applyChanges(changes); },
-    requestRender, toast, enterSheet, setTool,
+    requestRender: requestRepaint, toast, enterSheet, setTool,
     // Ask a desktop editor in this document to do what the browser cannot (fill zones).
     requestDesktop(action) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },
     setStatus(text) { setStatusBar({ mode: text || "" }); },
