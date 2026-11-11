@@ -35,7 +35,7 @@ const now = Math.floor(Date.now() / 1000);
 const head = b64({ alg: 'HS256', typ: 'JWT' }), body = b64({ sub: uid, login: 'ai-rp', iat: now, exp: now + 7200 });
 const jwt = `${head}.${body}.${crypto.createHmac('sha256', SECRET).update(`${head}.${body}`).digest('base64url')}`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {});   // PW_CHANNEL=chrome uses an installed Chrome
 const ctx = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
 const page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('PAGEERR', String(e).slice(0, 300)));
