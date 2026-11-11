@@ -292,16 +292,19 @@ const route = async (title, rationale, edit) => {
 // FINE=0.15 forces that width on every net of the RP2040; left unset, the engine necks down at its 0.2 mm pads by itself.
 const u1 = (await tool('get_component', { ref: 'U1' })).pads || [];
 const fine = {}; if (process.env.FINE) for (const p of u1) if (p.net && p.net !== '(no net)') fine[p.net] = { width: +process.env.FINE };
-const T = +(process.env.TIME || 60);
-const critical = [...named(/USB_D-/), ...named(/USB_D\+/), ...named(/\(R3-|\(R4-/), ...named(/XIN|XOUT|Y1/), ...named(/QSPI/)];
-const usb = critical.filter((n) => /USB_D|\(R3-|\(R4-/.test(n)), tight = critical.filter((n) => !usb.includes(n));
-await route('Route USB', 'The USB pair before anything else, D- and D+ side by side from the connector through the series resistors to the RP2040.', { nets: usb, order: usb, net_options: fine, time_s: T });
-await route('Route crystal and flash', 'The crystal loop and the QSPI bus on the top layer with no vias, while the board is empty and they can run straight.', { nets: tight, order: tight, layers: ['F.Cu'], allow_vias: false, net_options: fine, time_s: T });
+const T = +(process.env.TIME || 200);
+const usb = [...named(/USB_D-/), ...named(/USB_D\+/), ...named(/\(R3-|\(R4-/)], tight = [...named(/XIN|XOUT|Y1/), ...named(/QSPI/)];
+const critical = [...usb, ...tight];
 const power = ['VBUS', '+3V3', '+1V1'];
 const rest = nets.filter((n) => n && n !== 'GND' && !critical.includes(n) && !power.includes(n));
 const stages = {
-  // the engine orders a fine-pitch fan-out itself; PINORDER=1 gives it the GPIOs in pin order instead
-  S: () => route('Route the signals', 'GPIO fan-out to the headers, buttons, LED and SWD.', { nets: rest, ...(process.env.PINORDER ? { order: [...Array.from({ length: 30 }, (_, n) => GP(n)).filter((n) => rest.includes(n)), ...rest.filter((n) => !/^GPIO/.test(n))] } : {}), net_options: fine, time_s: T }),
+  // One call for the whole board: tracks from an earlier call are fixed copper the engine cannot rip up, and it orders the
+  // RP2040's fan-out itself. Only the nets that must be shortest are named in order.
+  A: () => route('Route the board', 'Everything in one pass so the router can move its own tracks: the USB pair, crystal and flash bus first, VBUS wider, ground into the plane.', { order: critical, net_options: { ...fine, VBUS: { width: 0.4 } }, time_s: T }),
+  // The staged plan, kept for comparison (ORDER=UCPZGS): each stage is its own proposal.
+  U: () => route('Route USB', 'The USB pair before anything else.', { nets: usb, order: usb, net_options: fine, time_s: T }),
+  C: () => route('Route crystal and flash', 'The crystal loop and the QSPI bus on the top layer with no vias.', { nets: tight, order: tight, layers: ['F.Cu'], allow_vias: false, net_options: fine, time_s: T }),
+  S: () => route('Route the signals', 'GPIO fan-out to the headers, buttons, LED and SWD.', { nets: rest, net_options: fine, time_s: T }),
   P: () => route('Route power', 'VBUS and the 3.3 V and 1.1 V rails, VBUS wider for the regulator input.', { nets: power, order: power, net_options: { ...fine, VBUS: { width: 0.4 } }, time_s: T }),
   Z: () => propose({ title: 'Ground plane on the bottom layer', rationale: 'A solid ground pour under the whole board: every ground pad then needs only a short via, and every signal has an unbroken return path beneath it. The RP2040 exposed pad, its only ground, gets vias straight down into it, and TESTEN is tied to the pad beside it.', edits: [
     { op: 'add_via', net: 'GND', x: X0 + 13, y: Y0 + 31 },
@@ -310,15 +313,11 @@ const stages = {
     sexpr: `(zone (net "GND") (layer "B.Cu") (uuid "${crypto.randomUUID()}") (hatch edge 0.5) (connect_pads (clearance 0.3)) (min_thickness 0.25) (fill (thermal_gap 0.3) (thermal_bridge_width 0.4)) (polygon (pts (xy ${X0} ${Y0}) (xy ${X0 + W} ${Y0}) (xy ${X0 + W} ${Y0 + H}) (xy ${X0} ${Y0 + H}))))` }] }),
   G: () => route('Route ground', 'Ground pads down to the plane, and to each other where they are neighbours.', { nets: ['GND'], net_options: fine, time_s: T }),
 };
-for (const k of (process.env.ORDER || 'PZGS')) await stages[k]();
-await route('Route what is left', 'A second pass over the connections the earlier stages could not make, now that every other net is down.', { net_options: fine, time_s: T });
-const done = (t) => tally[t] && tally[t].of > 0 && tally[t].routed === tally[t].of;
-check('USB fully routed', done('Route USB'));
-check('crystal and flash fully routed', done('Route crystal and flash'));
-check('power fully routed', done('Route power'));
-check('ground fully routed onto the plane', done('Route ground'));
-const sig = tally['Route the signals'], extra = tally['Route what is left'];
-check('most signals routed', sig && sig.routed + (extra.routed || 0) >= 0.6 * sig.of, sig && `${sig.routed + (extra.routed || 0)} of ${sig.of}`);
+for (const k of (process.env.ORDER || 'ZA')) await stages[k]();
+const left = Object.values(tally).flatMap((t) => t.unrouted || []);
+if (left.length) await route('Route what is left', 'A second look at the connections the first pass could not make.', { net_options: fine, time_s: T });
+const total = Object.entries(tally).filter(([k]) => k !== 'Route what is left').reduce((a, [, t]) => a + t.of, 0), routed = Object.values(tally).reduce((a, t) => a + t.routed, 0);
+check('at least 95% of the connections routed', total > 0 && routed >= 0.95 * total, `${routed} of ${total}`);
 await page.evaluate(() => window.CollabEditor.api.fitView()); await page.waitForTimeout(600);
 await shot('rp2040-03-routed');
 await save('rp2040-devboard.kicad_pcb');
