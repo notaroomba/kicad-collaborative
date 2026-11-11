@@ -67,10 +67,10 @@ export function StatusBar() {
       {inEditor ? (
         <>
           <span className={cell} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
-          <span className={cx(cell, "min-w-[64px]")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
-          <span className={cx(cell, "min-w-[176px]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
-          <span className={cx(cell, "min-w-[252px]")} id="sbDelta">{delta}</span>
-          <span className={cell} id="sbGrid">grid {fmtCoord(vp.gridPitch, u)}{vp.gridOn ? "" : " (hidden)"}</span>
+          <span className={cx(cell, "min-w-[calc(9ch+20px)]")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
+          <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
+          <span className={cx(cell, "min-w-[calc(42ch+20px)]")} id="sbDelta">{delta}</span>
+          <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {fmtCoord(vp.gridPitch, u)}{vp.gridOn ? "" : " (hidden)"}</span>
           <button type="button" className={cx(cell, "bg-transparent border-0 border-l text-inherit font-[inherit] hover:text-ink")} id="sbUnits" title="Switch units (Ctrl+U)"
             onClick={() => window.CollabApp && window.CollabApp.dispatch({ type: "action", id: "toggleUnits" })}>{unitName(u)}</button>
           <span className={cx(cell, "font-sans")} id="sbTool">{toolName(editor, tool, moduleTools.find((t) => t.id === tool)?.label)}</span>
