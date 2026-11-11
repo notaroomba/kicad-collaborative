@@ -1909,10 +1909,10 @@
     const col = dnp ? (c) => dimColor(c, SCH.bg) : (c) => c;
     const alpha = noSim ? 0.5 : void 0;
     const bodyLayer = "Symbols";
-    let bodyBox = null, pinBox = null, unitCount = 1;
+    let bodyBox = null, pinBox = null, unitCount2 = 1;
     if (lib) for (const sub of kids(lib, "symbol")) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/);
-      if (m && +m[1] > unitCount) unitCount = +m[1];
+      if (m && +m[1] > unitCount2) unitCount2 = +m[1];
     }
     const take = (g0) => {
       const b = item.bbox;
@@ -2000,10 +2000,10 @@
       const [px, py, pr] = atOf(p);
       const isRef = name === "Reference", isVal = name === "Value";
       const color = col(isRef || isVal ? SCH.ref : SCH.field);
-      let shown = isRef && unitCount > 1 ? val + unitLetter(unit) : val;
+      let shown = isRef && unitCount2 > 1 ? val + unitLetter(unit) : val;
       if (shown.indexOf("${") >= 0) shown = expandTextVars(shown, (tok) => {
         const up = tok.toUpperCase();
-        if (up === "UNIT") return unitCount > 1 ? unitLetter(unit) : "";
+        if (up === "UNIT") return unitCount2 > 1 ? unitLetter(unit) : "";
         for (const q of kids(n, "property")) if (str(q[1]).toUpperCase() === up && q !== p) return str(q[2]);
         return null;
       });
@@ -3592,6 +3592,10 @@
           doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== void 0 ? str(l[3]) : "" });
           if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name);
         }
+      } else if (k === "general") {
+        const t = kid(node, "thickness");
+        if (t && type === "pcb") doc.thickness = num(t[1], 1.6);
+        continue;
       } else if (k === "net") {
         if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2]));
         continue;
@@ -4124,6 +4128,10 @@
     const netNames = isPcb && opts.netNames !== false, zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
     const rats = isPcb && opts.ratsnest && opts.ratsnest.length ? opts.ratsnest : null, ratsNets = opts.ratsnestNets || null;
     const markers = opts.markers && opts.markers.length ? opts.markers : null;
+    const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
+    const obj2 = isPcb && opts.objects ? opts.objects : null, objHide = obj2 && obj2.hide && obj2.hide.size ? obj2.hide : null, objAlpha = obj2 && obj2.opacity ? obj2.opacity : null;
+    const hcHide = !!opts.inactiveHide;
+    const itemColors = isPcb && opts.itemColors && opts.itemColors.size ? opts.itemColors : null, tint = itemColors ? /* @__PURE__ */ new Map() : null;
     const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
     const s = view.ppm * view.zoom * dpr;
     const sCss = view.ppm * view.zoom;
@@ -4148,7 +4156,7 @@
       const go = opts.gridOrigin || [0, 0], gx = go[0], gy = go[1];
       const i0 = Math.floor((vx0 - gx) / pitch), i1 = Math.ceil((vx1 - gx) / pitch), j0 = Math.floor((vy0 - gy) / pitch), j1 = Math.ceil((vy1 - gy) / pitch);
       const px1 = Math.max(1, dpr) / s;
-      const gridColor = isPcb ? PCB_GRID : SCH.grid;
+      const gridColor = opts.gridColor || (isPcb ? PCB_GRID : SCH.grid);
       if ((i1 - i0) * (j1 - j0) < 4e5) {
         if (style === "dots") {
           ctx.fillStyle = gridColor;
@@ -4232,6 +4240,9 @@
       if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
       const isHl = hl ? hl.has(it.id) : false;
       const isSel = selPcb ? selPcb.has(it.id) : false;
+      const itemTint = itemColors ? itemColors.get(it.id) : null;
+      const isFp = objHide && it.kind === "footprint";
+      if (isFp && objHide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
       const partial = !zoneFill && b && it.geom.length > 6 && (b[0] < cx0 || b[2] > cx1 || b[1] < cy0 || b[3] > cy1);
       for (const g of it.geom) {
         if (partial && g.t !== "image") {
@@ -4249,9 +4260,21 @@
             break;
           }
           if (!vis) continue;
-        } else if (hidden.has(g.layer) || zoneOutline && g.zoneFill) continue;
+        } else {
+          if (hidden.has(g.layer) || zoneOutline && g.zoneFill) continue;
+          if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes") continue;
+        }
+        if (objHide) {
+          const oc = objectClass(g);
+          if (oc && objHide.has(oc)) continue;
+          if (isFp && g.t === "text" && !g.pad && (objHide.has("fpText") || g.field === "Reference" && objHide.has("references") || g.field === "Value" && objHide.has("values"))) continue;
+        }
         const z = zOf(g);
         bucket(BUCKETS, z).push(g);
+        if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || g.pad && g.t !== "text")) {
+          const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex];
+          if (tc) tint.set(g, tc);
+        }
         if (isHl) hlGeoms.add(g);
         if (isSel) selGeoms.add(g);
         if (netNames && g.net > 0) {
@@ -4361,11 +4384,31 @@
         if (g.zoneFill) alpha *= ZONE_OPACITY;
         if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
         let color = g.color, fill = g.fill;
+        if (objAlpha) {
+          const oc = objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null);
+          const oa = oc ? objAlpha[oc] : void 0;
+          if (oa !== void 0 && oa < 1) alpha *= oa;
+        }
+        if (layerColors && !g.hole) {
+          const lc = layerColors.get(g.layer);
+          if (lc) {
+            const def = pcbColor(g.layer);
+            if (color === def) color = lc;
+            if (fill === def) fill = lc;
+          }
+        }
         if (netColors && g.net > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ.indexOf(g.layer) >= 0) {
           const nc = netColors.get(g.net);
           if (nc) {
             color = nc;
             if (fill) fill = nc;
+          }
+        }
+        if (tint) {
+          const tc = tint.get(g);
+          if (tc && copperZ.indexOf(g.layer) >= 0) {
+            color = tc;
+            if (fill) fill = tc;
           }
         }
         if (selPcb && selGeoms.has(g) && !g.hole) {
@@ -4483,10 +4526,40 @@
       drawZonePreview(ctx, pg, obstacles, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1));
     }
     ctx.globalAlpha = 1;
+    if (obj2 && obj2.show) drawObjectOverlays(ctx, doc, obj2, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
     if (hl) drawHalo(ctx, doc, hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
     if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
     if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  function objectClass(g) {
+    return g.track ? "tracks" : g.via ? "vias" : g.pad ? "pads" : g.zoneFill || g.zoneOutline || g.zoneUnfilled ? "zones" : g.t === "image" ? "images" : null;
+  }
+  var ANCHOR_COLOR = "#FF26E2";
+  function drawObjectOverlays(ctx, doc, obj2, opts, s, dpr, hidden, vr) {
+    const show = obj2.show, hide = obj2.hide || /* @__PURE__ */ new Set();
+    if (show.has("lockedShadow") && opts.lockedIds && opts.lockedIds.size) drawHalo(ctx, doc, opts.lockedIds, s, dpr, hidden, { color: () => "#FF26E2", alpha: 0.5, extraPx: 4 });
+    if (show.has("anchors")) {
+      const a = 5 * Math.max(1, dpr) / s;
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+      ctx.lineCap = "butt";
+      ctx.strokeStyle = ANCHOR_COLOR;
+      ctx.lineWidth = Math.max(1, dpr) / s;
+      ctx.beginPath();
+      for (const it of doc.items.values()) {
+        if (it.kind !== "footprint" || it.x === void 0) continue;
+        if (hide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
+        if (it.x < vr[0] - a || it.x > vr[2] + a || it.y < vr[1] - a || it.y > vr[3] + a) continue;
+        ctx.moveTo(it.x - a, it.y);
+        ctx.lineTo(it.x + a, it.y);
+        ctx.moveTo(it.x, it.y - a);
+        ctx.lineTo(it.x, it.y + a);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
   }
   function drawRatsnest(ctx, lines, nets, netColors, s, dpr, vr) {
     ctx.save();
@@ -5567,6 +5640,1706 @@
     return addItem(doc, node);
   }
 
+  // web/canvas/board-setup.ts
+  var isList2 = Array.isArray;
+  var quote = (s) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  function idxOf(node, key) {
+    for (let j = 1; j < node.length; j++) {
+      const c = node[j];
+      if (isList2(c) && c[0] === key) return j;
+    }
+    return -1;
+  }
+  var kidStr = (node, key) => {
+    const k = node ? kid(node, key) : null;
+    return k ? str(k[1]) : "";
+  };
+  var kidNum = (node, key, def = 0) => {
+    const k = node ? kid(node, key) : null;
+    return k ? num(k[1], def) : def;
+  };
+  var yes = (node, key, def) => {
+    const k = node ? kid(node, key) : null;
+    return k ? str(k[1]) !== "no" : def;
+  };
+  var fmt2 = (v) => String(+(+v).toFixed(6));
+  var HEADER_KEYS = /* @__PURE__ */ new Set(["general", "layers", "setup", "version"]);
+  function boardHeader(text) {
+    const out = { general: null, layers: null, setup: null, version: 0 };
+    const n = text.length;
+    let i = text.indexOf("(kicad_pcb");
+    if (i < 0) return out;
+    i += 10;
+    let found = 0;
+    while (i < n && found < 4) {
+      const c = text[i];
+      if (c === "(") {
+        let j = i + 1;
+        while (j < n && /[A-Za-z_0-9]/.test(text[j])) j++;
+        const key = text.slice(i + 1, j);
+        let depth = 0, k = i;
+        for (; k < n; k++) {
+          const ch = text[k];
+          if (ch === '"') {
+            k++;
+            while (k < n && text[k] !== '"') {
+              if (text[k] === "\\") k++;
+              k++;
+            }
+          } else if (ch === "(") depth++;
+          else if (ch === ")") {
+            depth--;
+            if (!depth) break;
+          }
+        }
+        if (HEADER_KEYS.has(key)) {
+          const node = parse(text.slice(i, k + 1));
+          if (node) {
+            if (key === "version") out.version = num(node[1], 0);
+            else if (key === "general") out.general = node;
+            else if (key === "layers") out.layers = node;
+            else out.setup = node;
+            found++;
+          }
+        } else if (key === "footprint" || key === "segment" || key === "via" || key === "zone" || key === "gr_line") break;
+        i = k + 1;
+      } else if (c === ")") break;
+      else i++;
+    }
+    return out;
+  }
+  var D_ON = "On-board, non-copper";
+  var D_AUX = "Auxiliary";
+  var FRONT_TECH = [
+    ["F.CrtYd", 31, "F.Courtyard", "Off-board, testing", true],
+    ["F.Fab", 35, "F.Fab", "Off-board, manufacturing", false],
+    ["F.Adhes", 9, "F.Adhesive", D_ON, false],
+    ["F.Paste", 13, "F.Paste", D_ON, false],
+    ["F.SilkS", 5, "F.Silkscreen", D_ON, false],
+    ["F.Mask", 1, "F.Mask", D_ON, false]
+  ];
+  var BACK_TECH = [
+    ["B.Mask", 3, "B.Mask", D_ON, false],
+    ["B.SilkS", 7, "B.Silkscreen", D_ON, false],
+    ["B.Paste", 15, "B.Paste", D_ON, false],
+    ["B.Adhes", 11, "B.Adhesive", D_ON, false],
+    ["B.Fab", 33, "B.Fab", "Off-board, manufacturing", false],
+    ["B.CrtYd", 29, "B.Courtyard", "Off-board, testing", true]
+  ];
+  var OTHER = [
+    ["Edge.Cuts", 25, "Edge.Cuts", "Board contour", true],
+    ["Margin", 27, "Margin", "Board contour setback", true],
+    ["Eco1.User", 21, "User.Eco1", D_AUX, false],
+    ["Eco2.User", 23, "User.Eco2", D_AUX, false],
+    ["Cmts.User", 19, "User.Comments", D_AUX, false],
+    ["Dwgs.User", 17, "User.Drawings", D_AUX, false]
+  ];
+  var FILE_ORDER = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
+  var MAX_USER_LAYERS = 45;
+  var copperLayerId = (name) => name === "F.Cu" ? 0 : name === "B.Cu" ? 2 : 2 * (Number(/^In(\d+)\.Cu$/.exec(name)?.[1] || 0) + 1);
+  var userLayerId = (n) => 39 + 2 * (n - 1);
+  function copperNames(count) {
+    const out = ["F.Cu"];
+    for (let i = 1; i <= count - 2; i++) out.push(`In${i}.Cu`);
+    out.push("B.Cu");
+    return out;
+  }
+  var COPPER_TYPES = [["signal", "signal"], ["power", "power plane"], ["mixed", "mixed"], ["jumper", "jumper"]];
+  var USER_TYPES = [["user", "Auxiliary"], ["front", "Off-board, front"], ["back", "Off-board, back"]];
+  function modernLayerIds(layers) {
+    if (!layers) return true;
+    for (const l of layers.slice(1)) if (isList2(l) && str(l[1]) === "B.Cu") return num(l[0], 2) === 2;
+    return true;
+  }
+  function layerRows(layers) {
+    const have = /* @__PURE__ */ new Map();
+    const cu = [];
+    for (const l of (layers || []).slice(1)) {
+      if (!isList2(l)) continue;
+      const name = str(l[1]), type = str(l[2]);
+      have.set(name, { type, userName: l[3] !== void 0 ? str(l[3]) : "", id: num(l[0], 0) });
+      if (/\.Cu$/.test(name)) cu.push(name);
+    }
+    const stack = cu.length >= 2 ? copperNames(cu.length) : copperNames(2);
+    const rows = [];
+    const tech = (t) => {
+      const h = have.get(t[0]);
+      rows.push({ name: t[0], id: t[1], type: "user", userName: h && h.userName ? h.userName : "", enabled: !!h || !layers, copper: false, mandatory: t[4], description: t[3], userDefined: false });
+    };
+    FRONT_TECH.forEach(tech);
+    for (const name of stack) {
+      const h = have.get(name);
+      rows.push({ name, id: copperLayerId(name), type: h ? h.type : "signal", userName: h ? h.userName : "", enabled: true, copper: true, mandatory: true, description: "", userDefined: false });
+    }
+    BACK_TECH.forEach(tech);
+    OTHER.forEach(tech);
+    for (let n = 1; n <= MAX_USER_LAYERS; n++) {
+      const name = `User.${n}`, h = have.get(name);
+      if (!h) continue;
+      rows.push({ name, id: userLayerId(n), type: h.type === "front" || h.type === "back" ? h.type : "user", userName: h.userName, enabled: true, copper: false, mandatory: false, description: "", userDefined: true });
+    }
+    return rows;
+  }
+  function defaultLayerName(name) {
+    for (const t of [...FRONT_TECH, ...BACK_TECH, ...OTHER]) if (t[0] === name) return t[2];
+    return name;
+  }
+  function layerNameError(rows, row, name) {
+    if (!name) return "Layer must have a name.";
+    if (/[ %$"\\/]/.test(name)) return `%, $, ", \\, / and spaces are forbidden in layer names.`.replace("%, ", "%, ");
+    const shown = (r) => r.userName || (r.copper || r.userDefined ? r.name : defaultLayerName(r.name));
+    for (const r of rows) if (r !== row && r.enabled && (shown(r) === name || r.name === name)) return `Layer name '${name}' already in use.`;
+    return "";
+  }
+  function layersText(rows) {
+    const on = rows.filter((r) => r.enabled);
+    const line = (r) => `(${r.id} ${quote(r.name)} ${r.type}${r.userName && r.userName !== r.name ? " " + quote(r.userName) : ""})`;
+    const out = [];
+    for (const r of on) if (r.copper) out.push(line(r));
+    for (const name of FILE_ORDER) {
+      const r = on.find((x) => x.name === name);
+      if (r) out.push(line(r));
+    }
+    for (const r of on) if (r.userDefined) out.push(line(r));
+    return "(layers " + out.join(" ") + ")";
+  }
+  function setCopperCount(rows, count) {
+    const n = Math.max(2, Math.min(32, count)), stack = copperNames(n);
+    const old = new Map(rows.filter((r) => r.copper).map((r) => [r.name, r]));
+    const cu = stack.map((name) => old.get(name) || { name, id: copperLayerId(name), type: "signal", userName: "", enabled: true, copper: true, mandatory: true, description: "", userDefined: false });
+    const first = rows.findIndex((r) => r.copper), rest = rows.filter((r) => !r.copper);
+    return [...rest.slice(0, first), ...cu, ...rest.slice(first)];
+  }
+  function stackupRows(setup, userNames) {
+    const st = setup ? kid(setup, "stackup") : null;
+    if (!st) return [];
+    const rows = [];
+    for (const l of kids(st, "layer")) {
+      const name = str(l[1]), diel = /^dielectric (\d+)$/.exec(name);
+      const groups = [["layer", name]];
+      for (let j = 2; j < l.length; j++) {
+        const c = l[j];
+        if (c === "addsublayer") groups.push(["layer", name]);
+        else if (isList2(c)) groups[groups.length - 1].push(c);
+      }
+      const type = kidStr(groups[0], "type");
+      groups.forEach((g, gi) => {
+        const th = kid(g, "thickness");
+        rows.push({
+          layer: diel ? `Dielectric ${diel[1]}${groups.length > 1 ? ` (${gi + 1}/${groups.length})` : ""}` : userNames && userNames.get(name) || name,
+          id: diel ? diel[1] : "",
+          type: type === "copper" ? "Copper" : type === "core" ? "Core" : type === "prepreg" ? "PrePreg" : type,
+          material: kidStr(g, "material"),
+          thickness: th ? num(th[1], 0) : null,
+          locked: !!th && th.includes("locked"),
+          color: kidStr(g, "color"),
+          epsilonR: kid(g, "epsilon_r") ? kidNum(g, "epsilon_r") : null,
+          lossTangent: kid(g, "loss_tangent") ? kidNum(g, "loss_tangent") : null,
+          sub: gi > 0
+        });
+      });
+    }
+    return rows;
+  }
+  function stackupThickness(rows) {
+    let t = 0;
+    for (const r of rows) if (r.thickness !== null && (r.type === "Copper" || r.type === "Core" || r.type === "PrePreg" || /Solder Mask/.test(r.type))) t += r.thickness;
+    return +t.toFixed(6);
+  }
+  var COPPER_FINISHES = ["None", "ENIG", "ENEPIG", "HAL SnPb", "HAL lead-free", "Hard gold", "Immersion tin", "Immersion nickel", "Immersion silver", "Immersion gold", "HT_OSP", "OSP", "User defined"];
+  function boardFinish(setup) {
+    const st = setup ? kid(setup, "stackup") : null;
+    const ec = kidStr(st, "edge_connector");
+    return { copperFinish: kidStr(st, "copper_finish") || "None", edgeConnector: ec === "bevelled" ? "bevelled" : ec === "yes" ? "yes" : "no", edgePlating: yes(st, "edge_plating", false), hasStackup: !!st };
+  }
+  function maskPaste(setup) {
+    const tent = setup ? kid(setup, "tenting") : null;
+    const legacy = tent && tent.slice(1).some((x) => !isList2(x));
+    return {
+      maskExpansion: kidNum(setup, "pad_to_mask_clearance"),
+      maskMinWidth: kidNum(setup, "solder_mask_min_width"),
+      pasteClearance: kidNum(setup, "pad_to_paste_clearance"),
+      pasteRatio: kidNum(setup, "pad_to_paste_clearance_ratio"),
+      allowBridges: yes(setup, "allow_soldermask_bridges_in_footprints", false),
+      tentFront: tent ? legacy ? tent.includes("front") : yes(tent, "front", true) : true,
+      tentBack: tent ? legacy ? tent.includes("back") : yes(tent, "back", true) : true
+    };
+  }
+  function dashRatios(setup) {
+    const pp = setup ? kid(setup, "pcbplotparams") : null;
+    return { dash: kidNum(pp, "dashed_line_dash_ratio", 12), gap: kidNum(pp, "dashed_line_gap_ratio", 3) };
+  }
+  function ser(node, quotedSlot = false) {
+    if (!isList2(node)) return typeof node === "number" ? fmt2(node) : quotedSlot || !/^[A-Za-z_][\w.:*+-]*$/.test(node) ? quote(node) : node;
+    const q = quotedMask(node);
+    return "(" + node.map((c, j) => ser(c, j > 0 && j < 30 && (q >> j & 1) === 1)).join(" ") + ")";
+  }
+  function replaceOrInsert(setup, key, text, before) {
+    const i = idxOf(setup, key);
+    if (text === null) {
+      if (i > 0) setup.splice(i, 1);
+      return;
+    }
+    const node = parse(text);
+    if (i > 0) {
+      setup[i] = node;
+      return;
+    }
+    let at = setup.length;
+    for (const b of before) {
+      const j = idxOf(setup, b);
+      if (j > 0) {
+        at = j;
+        break;
+      }
+    }
+    setup.splice(at, 0, node);
+  }
+  var AFTER_MASK = ["solder_mask_min_width", "pad_to_paste_clearance", "pad_to_paste_clearance_ratio", "allow_soldermask_bridges_in_footprints", "tenting", "covering", "plugging", "capping", "filling", "zone_defaults", "aux_axis_origin", "grid_origin", "pcbplotparams"];
+  function editSetup(setup, e) {
+    const out = setup ? parse(ser(setup)) : parse("(setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no))");
+    if (e.maskPaste) {
+      const m = e.maskPaste;
+      replaceOrInsert(out, "pad_to_mask_clearance", `(pad_to_mask_clearance ${fmt2(m.maskExpansion)})`, AFTER_MASK);
+      replaceOrInsert(out, "solder_mask_min_width", m.maskMinWidth ? `(solder_mask_min_width ${fmt2(m.maskMinWidth)})` : null, AFTER_MASK.slice(1));
+      replaceOrInsert(out, "pad_to_paste_clearance", m.pasteClearance ? `(pad_to_paste_clearance ${fmt2(m.pasteClearance)})` : null, AFTER_MASK.slice(2));
+      replaceOrInsert(out, "pad_to_paste_clearance_ratio", m.pasteRatio ? `(pad_to_paste_clearance_ratio ${fmt2(m.pasteRatio)})` : null, AFTER_MASK.slice(3));
+      replaceOrInsert(out, "allow_soldermask_bridges_in_footprints", `(allow_soldermask_bridges_in_footprints ${m.allowBridges ? "yes" : "no"})`, AFTER_MASK.slice(4));
+      replaceOrInsert(out, "tenting", `(tenting (front ${m.tentFront ? "yes" : "no"}) (back ${m.tentBack ? "yes" : "no"}))`, AFTER_MASK.slice(5));
+    }
+    if (e.dash) {
+      const pp = kid(out, "pcbplotparams");
+      if (pp) {
+        replaceOrInsert(pp, "dashed_line_dash_ratio", `(dashed_line_dash_ratio ${fmt2(e.dash.dash)})`, ["dashed_line_gap_ratio", "svgprecision"]);
+        replaceOrInsert(pp, "dashed_line_gap_ratio", `(dashed_line_gap_ratio ${fmt2(e.dash.gap)})`, ["svgprecision"]);
+      }
+    }
+    let st = kid(out, "stackup");
+    if (e.copper && st) {
+      const thickness = e.boardThickness || 1.6, cuT = 0.035, n = e.copper.length;
+      const masks = kids(st, "layer").filter((l) => /Solder Mask/.test(kidStr(l, "type"))).length;
+      const dielT = +Math.max(0.01, (thickness - cuT * n - 0.01 * masks) / Math.max(1, n - 1)).toFixed(6);
+      const oldCu = /* @__PURE__ */ new Map(), oldDiel = /* @__PURE__ */ new Map();
+      let firstCu = -1, lastCu = -1;
+      for (let j = 1; j < st.length; j++) {
+        const l = st[j];
+        if (!isList2(l) || l[0] !== "layer") continue;
+        const name = str(l[1]), d = /^dielectric (\d+)$/.exec(name);
+        if (d) oldDiel.set(Number(d[1]), l);
+        else if (/\.Cu$/.test(name)) oldCu.set(name, l);
+        else continue;
+        if (firstCu < 0) firstCu = j;
+        lastCu = j;
+      }
+      const mid = [];
+      e.copper.forEach((name, k) => {
+        mid.push(oldCu.get(name) || parse(`(layer ${quote(name)} (type "copper") (thickness ${fmt2(cuT)}))`));
+        if (k < n - 1) mid.push(oldDiel.get(k + 1) || parse(`(layer "dielectric ${k + 1}" (type ${k % 2 === 0 ? '"core"' : '"prepreg"'}) (thickness ${fmt2(dielT)}) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))`));
+      });
+      if (firstCu > 0) st.splice(firstCu, lastCu - firstCu + 1, ...mid);
+    }
+    if (e.finish) {
+      if (!st && (e.finish.copperFinish !== "None" || e.finish.edgeConnector !== "no" || e.finish.edgePlating)) {
+        st = parse("(stackup (dielectric_constraints no))");
+        out.splice(1, 0, st);
+      }
+      if (st) {
+        const f = e.finish, tail = ["dielectric_constraints", "edge_connector", "edge_plating"];
+        replaceOrInsert(st, "copper_finish", `(copper_finish ${quote(f.copperFinish)})`, tail);
+        replaceOrInsert(st, "edge_connector", f.edgeConnector === "no" ? null : `(edge_connector ${f.edgeConnector})`, ["edge_plating"]);
+        replaceOrInsert(st, "edge_plating", f.edgePlating ? "(edge_plating yes)" : null, []);
+      }
+    }
+    return out;
+  }
+  var sectionText = (node) => ser(node);
+  var BOARD_SETUP_TYPE = "BOARD_SETUP";
+  function boardSetupChange(sections) {
+    const properties = [];
+    for (const name of ["general", "layers", "setup"]) {
+      const v = sections[name];
+      if (v) properties.push({ name, after: { type: "sexpr", v } });
+    }
+    return { id: "board-setup", kind: "MODIFIED", typeName: BOARD_SETUP_TYPE, properties };
+  }
+  function applyHeaderChange(header, change) {
+    const out = { ...header };
+    if (change.typeName !== BOARD_SETUP_TYPE) return out;
+    for (const p of change.properties || []) {
+      const v = p.after && typeof p.after.v === "string" ? parse(p.after.v) : null;
+      if (!v) continue;
+      if (p.name === "layers") out.layers = v;
+      else if (p.name === "setup") out.setup = v;
+      else if (p.name === "general") out.general = v;
+    }
+    return out;
+  }
+  function applyBoardSetup(doc, change) {
+    if (!change || change.typeName !== BOARD_SETUP_TYPE || doc.type !== "pcb") return false;
+    for (const p of change.properties || []) {
+      if (p.name !== "layers" || !p.after || typeof p.after.v !== "string") continue;
+      const node = parse(p.after.v);
+      if (!node) continue;
+      doc.layers.clear();
+      doc.copper.length = 0;
+      for (const l of node.slice(1)) {
+        if (!isList2(l)) continue;
+        const name = str(l[1]), type = str(l[2]);
+        doc.layers.set(name, { id: num(l[0], 0), type, userName: l[3] !== void 0 ? str(l[3]) : "" });
+        if (/\.Cu$/.test(name) && type !== "user") doc.copper.push(name);
+      }
+    }
+    const d = doc;
+    d.boardSetup = applyHeaderChange(d.boardSetup || { general: null, layers: null, setup: null, version: 0 }, change);
+    return true;
+  }
+  var boardSetup = {
+    boardHeader,
+    layerRows,
+    layersText,
+    setCopperCount,
+    copperNames,
+    layerNameError,
+    defaultLayerName,
+    modernLayerIds,
+    stackupRows,
+    stackupThickness,
+    boardFinish,
+    maskPaste,
+    dashRatios,
+    editSetup,
+    sectionText,
+    boardSetupChange,
+    applyHeaderChange,
+    applyBoardSetup,
+    COPPER_FINISHES,
+    COPPER_TYPES,
+    USER_TYPES,
+    BOARD_SETUP_TYPE
+  };
+
+  // web/canvas/drc-items.ts
+  var DRC_ITEMS = [
+    ["Electrical", "", ""],
+    ["Items shorting two nets", "shorting_items", "error"],
+    ["Tracks crossing", "tracks_crossing", "error"],
+    ["Clearance violation", "clearance", "error"],
+    ["Creepage violation", "creepage", "error"],
+    ["Via is not connected or connected on only one layer", "via_dangling", "warning"],
+    ["Track has unconnected end", "track_dangling", "warning"],
+    ["Thermal relief connection to zone incomplete", "starved_thermal", "error"],
+    ["Design for Manufacturing", "", ""],
+    ["Board edge clearance violation", "copper_edge_clearance", "error"],
+    ["Hole clearance violation", "hole_clearance", "error"],
+    ["Drilled hole too close to other hole", "hole_to_hole", "warning"],
+    ["Drilled holes co-located", "holes_co_located", "warning"],
+    ["Track width", "track_width", "error"],
+    ["Track angle", "track_angle", "error"],
+    ["Track segment length", "track_segment_length", "error"],
+    ["Annular width", "annular_width", "error"],
+    ["Hole size out of range", "drill_out_of_range", "error"],
+    ["Micro via hole size out of range", "microvia_drill_out_of_range", "error"],
+    ["Microvia stack has malformed span", "malformed_microvia_stack_span", "error"],
+    ["Microvia under microvia not filled", "microvia_stack_not_filled", "warning"],
+    ["Microvia stack too deep", "microvia_stack_depth", "error"],
+    ["Microvia too deep for its diameter", "microvia_aspect_ratio", "error"],
+    ["Microvia crosses core material", "microvia_crosses_core", "warning"],
+    ["Via diameter", "via_diameter", "error"],
+    ["Courtyards overlap", "courtyards_overlap", "error"],
+    ["Footprint has no courtyard defined", "missing_courtyard", "ignore"],
+    ["Footprint has malformed courtyard", "malformed_courtyard", "error"],
+    ["Board has malformed outline", "invalid_outline", "error"],
+    ["Copper sliver", "copper_sliver", "warning"],
+    ["Solder mask aperture bridges items with different nets", "solder_mask_bridge", "error"],
+    ["Copper connection too narrow", "connection_width", "warning"],
+    ["Track connected to post-machined or backdrilled layer", "track_on_post_machined_layer", "error"],
+    ["Track endpoint not centered on via", "track_not_centered_on_via", "ignore"],
+    ["Via-stitching zones overlap for same net", "via_stitch_overlap", "error"],
+    ["Tuning profile track geometries", "tuning_profile_track_geometries", "ignore"],
+    ["Schematic Parity", "", ""],
+    ["Duplicate footprints", "duplicate_footprints", "warning"],
+    ["Missing footprint", "missing_footprint", "warning"],
+    ["Extra footprint", "extra_footprint", "warning"],
+    ["Footprint attributes don't match symbol", "footprint_symbol_mismatch", "warning"],
+    ["Footprint field does not match symbol field", "footprint_symbol_field_mismatch", "warning"],
+    ["Footprint doesn't match symbol's footprint filters", "footprint_filters_mismatch", "ignore"],
+    ["Pad net doesn't match schematic", "net_conflict", "warning"],
+    ["Missing connection between items", "unconnected_items", "error"],
+    ["Signal Integrity", "", ""],
+    ["Track length out of range", "length_out_of_range", "error"],
+    ["Net chain stub length out of range", "net_chain_stub_length", "error"],
+    ["Net chain routed without continuous copper on the required reference layer", "net_chain_return_path", "error"],
+    ["Net chain nets do not have consistent tuning profile assignment", "net_chain_tuning_profiles", "error"],
+    ["Skew between tracks out of range", "skew_out_of_range", "error"],
+    ["Too many or too few vias on a connection", "too_many_vias", "error"],
+    ["Differential pair gap out of range", "diff_pair_gap_out_of_range", "error"],
+    ["Differential uncoupled length too long", "diff_pair_uncoupled_length_too_long", "error"],
+    ["Readability", "", ""],
+    ["Silkscreen clearance", "silk_overlap", "warning"],
+    ["Silkscreen clipped by solder mask", "silk_over_copper", "warning"],
+    ["Silkscreen clipped by board edge", "silk_edge_clearance", "warning"],
+    ["Text height out of range", "text_height", "warning"],
+    ["Text thickness out of range", "text_thickness", "warning"],
+    ["Mirrored text on front layer", "mirrored_text_on_front_layer", "warning"],
+    ["Non-Mirrored text on back layer", "nonmirrored_text_on_back_layer", "warning"],
+    ["Miscellaneous", "", ""],
+    ["Items not allowed", "items_not_allowed", "error"],
+    ["Text or graphic on Edge.Cuts layer", "text_on_edge_cuts", "error"],
+    ["Isolated copper fill", "isolated_copper", "warning"],
+    ["Footprint is not valid", "footprint", "error"],
+    ["Padstack is questionable", "padstack", "warning"],
+    ["PTH inside courtyard", "pth_inside_courtyard", "error"],
+    ["NPTH inside courtyard", "npth_inside_courtyard", "error"],
+    ["Item on a disabled copper layer", "item_on_disabled_layer", "error"],
+    ["Unresolved text variable", "unresolved_variable", "error"],
+    ["Assertion failure", "assertion_failure", "error"],
+    ["Footprint component type doesn't match footprint pads", "footprint_type_mismatch", "ignore"],
+    ["Footprint not found in libraries", "lib_footprint_issues", "warning"],
+    ["Footprint doesn't match copy in library", "lib_footprint_mismatch", "warning"],
+    ["Through hole pad has no hole", "through_hole_pad_without_hole", "error"],
+    ["Footprint with pads is scaled (physical part size unchanged)", "footprint_scaled_with_pads", "warning"],
+    ["Missing tuning profile", "missing_tuning_profile", "warning"],
+    ["Padstack is not valid", "padstack_invalid", "error"],
+    ["Error", "generic_error", "error"],
+    ["Warning", "generic_warning", "error"]
+  ];
+
+  // web/canvas/pcb-netlist.ts
+  var isList3 = Array.isArray;
+  var r4 = (v) => +(+v).toFixed(4);
+  var pkey = (p) => r4(p[0]) + "," + r4(p[1]);
+  function idxOf2(node, key) {
+    for (let j = 1; j < node.length; j++) {
+      const c = node[j];
+      if (isList3(c) && c[0] === key) return j;
+    }
+    return -1;
+  }
+  var quote2 = (s) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+  function qnode(key, values) {
+    return parse("(" + key + values.map((v) => " " + (typeof v === "number" ? String(v) : quote2(v))).join("") + ")");
+  }
+  function setKid(node, key, values, before, bare = false) {
+    const c = bare ? [key, ...values] : qnode(key, values);
+    const i = idxOf2(node, key);
+    if (i > 0) {
+      node[i] = c;
+      return c;
+    }
+    let at = node.length;
+    for (const b of before) {
+      const j = idxOf2(node, b);
+      if (j > 0) {
+        at = j;
+        break;
+      }
+    }
+    node.splice(at, 0, c);
+    return c;
+  }
+  function delKid(node, key) {
+    const i = idxOf2(node, key);
+    if (i > 0) {
+      node.splice(i, 1);
+      return true;
+    }
+    return false;
+  }
+  var kidStr2 = (node, key) => {
+    const k = kid(node, key);
+    return k ? str(k[1]) : "";
+  };
+  var yes2 = (node, key, def) => {
+    const k = kid(node, key);
+    return k ? str(k[1]) !== "no" : def;
+  };
+  function prop(node, name) {
+    for (const p of kids(node, "property")) if (str(p[1]) === name) return p;
+    return null;
+  }
+  var propVal = (node, name) => {
+    const p = prop(node, name);
+    return p ? str(p[2]) : "";
+  };
+  function escapeNetName(s) {
+    return s.replace(/\//g, "{slash}").replace(/[\r\n]/g, "");
+  }
+  function unescapeNetName(s) {
+    return s.replace(/\{slash\}/g, "/").replace(/\{backslash\}/g, "\\").replace(/\{lt\}/g, "<").replace(/\{gt\}/g, ">").replace(/\{colon\}/g, ":").replace(/\{dquote\}/g, '"').replace(/\{space\}/g, " ");
+  }
+  function busVector(text) {
+    const m = /^(.*?)\[(\d+)\.\.(\d+)\](.*)$/.exec(text);
+    if (!m) return null;
+    const a = Number(m[2]), b = Number(m[3]), out = [];
+    const step = a <= b ? 1 : -1;
+    for (let i = a; step > 0 ? i <= b : i >= b; i += step) {
+      out.push(m[1] + i + m[4]);
+      if (out.length > 4096) break;
+    }
+    return out;
+  }
+  var isBusText = (t) => /\[\d+\.\.\d+\]/.test(t) || /\{[^}]*\s[^}]*\}/.test(t);
+  var P_PIN = 1;
+  var P_SHEET_PIN = 2;
+  var P_HIER = 3;
+  var P_LOCAL = 4;
+  var P_BUS_MEMBER = 5;
+  var P_POWER = 6;
+  var P_GLOBAL = 7;
+  var UnionFind = class {
+    constructor() {
+      this.parent = [];
+    }
+    add() {
+      this.parent.push(this.parent.length);
+      return this.parent.length - 1;
+    }
+    find(i) {
+      const p = this.parent;
+      while (p[i] !== i) {
+        p[i] = p[p[i]];
+        i = p[i];
+      }
+      return i;
+    }
+    union(a, b) {
+      a = this.find(a);
+      b = this.find(b);
+      if (a !== b) this.parent[b] = a;
+    }
+  };
+  function distSeg(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+  function instanceRef(node, path, project) {
+    const unitN = kid(node, "unit");
+    let ref = propVal(node, "Reference"), unit = unitN ? num(unitN[1], 1) : 1, found = false;
+    const inst = kid(node, "instances");
+    if (inst) {
+      const projects = kids(inst, "project");
+      projects.sort((a, b) => Number(str(b[1]) === project) - Number(str(a[1]) === project));
+      for (const pr of projects) {
+        for (const p of kids(pr, "path")) {
+          if (str(p[1]) !== path) continue;
+          const r = kid(p, "reference"), u = kid(p, "unit");
+          if (r) ref = str(r[1]);
+          if (u) unit = num(u[1], unit);
+          found = true;
+          break;
+        }
+        if (found) break;
+      }
+    }
+    return { ref, unit };
+  }
+  function unitCount(doc, node) {
+    const id = kidStr2(node, "lib_name") || kidStr2(node, "lib_id");
+    const lib = doc.lib.get(id) || doc.lib.get(kidStr2(node, "lib_id"));
+    if (!lib) return 1;
+    let n = 1;
+    for (const sub of kids(lib, "symbol")) {
+      const m = /_(\d+)_(\d+)$/.exec(str(sub[1]));
+      if (m) n = Math.max(n, Number(m[1]));
+    }
+    return n;
+  }
+  function unitLetter2(unit) {
+    let s = "", u = unit;
+    while (u > 0) {
+      u--;
+      s = String.fromCharCode(65 + u % 26) + s;
+      u = Math.floor(u / 26);
+    }
+    return s;
+  }
+  function defaultPinNet(p, forceNoConnect) {
+    const nc = forceNoConnect || p.pin.type === "no_connect";
+    let name = nc ? "unconnected-(" : "Net-(";
+    const shownName = p.pin.name === "~" ? "" : p.pin.name, number = p.pin.number;
+    const multiple = p.pins.some((q) => (q.name === "~" ? "" : q.name) === shownName && q.number !== number && nc === (q.type === "no_connect"));
+    if (p.ref.endsWith("?")) return name + p.uuid + "-Pad" + number + ")";
+    if (shownName && shownName !== number) {
+      name += p.unitRef + "-" + escapeNetName(shownName);
+      if (nc || multiple) name += "-Pad" + escapeNetName(number);
+      return name + ")";
+    }
+    return name + p.ref + "-Pad" + escapeNetName(number) + ")";
+  }
+  function buildNetlist(root2, loadSheet, h, project) {
+    const warnings = [];
+    const uf = new UnionFind();
+    const keyNodes = /* @__PURE__ */ new Map();
+    const keyNode = (k) => {
+      let n = keyNodes.get(k);
+      if (n === void 0) {
+        n = uf.add();
+        keyNodes.set(k, n);
+      }
+      return n;
+    };
+    const drivers = /* @__PURE__ */ new Map();
+    const pinsAt = /* @__PURE__ */ new Map();
+    const sheetPinNodes = /* @__PURE__ */ new Set(), ncNodes = /* @__PURE__ */ new Set();
+    const busLabels = /* @__PURE__ */ new Map();
+    const addDriver = (n, d) => {
+      const l = drivers.get(n);
+      if (l) l.push(d);
+      else drivers.set(n, [d]);
+    };
+    const components = /* @__PURE__ */ new Map();
+    const compPins = /* @__PURE__ */ new Map();
+    const instances = [{ sheet: root2, uuidPath: [root2.uuid], human: "/", depth: 0, index: 0, sheetUuids: [] }];
+    const childOf = /* @__PURE__ */ new Map();
+    for (let q = 0; q < instances.length && instances.length < 2e3; q++) {
+      const inst = instances[q];
+      for (const it of inst.sheet.doc.items.values()) {
+        if (it.kind !== "sheet") continue;
+        const file = propVal(it.node, "Sheetfile") || propVal(it.node, "Sheet file"), name = propVal(it.node, "Sheetname") || propVal(it.node, "Sheet name");
+        if (inst.depth > 24) {
+          warnings.push(`Sheet ${name} is nested too deeply.`);
+          continue;
+        }
+        const sub = file ? loadSheet(file, inst.sheet) : null;
+        if (!sub) {
+          warnings.push(`Sheet file '${file}' of sheet '${name}' is not in the project.`);
+          continue;
+        }
+        childOf.set(inst.index + "|" + it.id, instances.length);
+        instances.push({ sheet: sub, uuidPath: [...inst.uuidPath, it.id], human: inst.human + name + "/", depth: inst.depth + 1, index: instances.length, sheetUuids: [...inst.sheetUuids, it.id] });
+      }
+    }
+    for (const inst of instances) {
+      const doc = inst.sheet.doc, I = inst.index;
+      const lines = [];
+      const ends = /* @__PURE__ */ new Map();
+      for (const it of doc.items.values()) {
+        if (it.kind !== "wire" && it.kind !== "bus") continue;
+        const pts = ptsOf(it.node);
+        if (pts.length < 2) continue;
+        const node = uf.add();
+        for (let k = 1; k < pts.length; k++) {
+          const li = lines.length;
+          lines.push({ a: pts[k - 1], b: pts[k], node, bus: it.kind === "bus" });
+          for (const p of [pts[k - 1], pts[k]]) {
+            const key = pkey(p);
+            const l = ends.get(key);
+            if (l) l.push(li);
+            else ends.set(key, [li]);
+          }
+        }
+      }
+      const linesAt = (p, bus) => {
+        const out = [];
+        for (const li of ends.get(pkey(p)) || []) if (lines[li].bus === bus) out.push(lines[li].node);
+        for (const l of lines) if (l.bus === bus && distSeg(p, l.a, l.b) <= 1e-3) out.push(l.node);
+        return out;
+      };
+      for (const l of lines) for (const p of [l.a, l.b]) for (const n of linesAt(p, l.bus)) uf.union(l.node, n);
+      for (const it of doc.items.values()) {
+        if (it.kind !== "junction") continue;
+        const p = atOf(it.node).slice(0, 2);
+        for (const bus of [false, true]) {
+          const ns = linesAt(p, bus);
+          for (let k = 1; k < ns.length; k++) uf.union(ns[0], ns[k]);
+        }
+      }
+      const points = /* @__PURE__ */ new Map();
+      const terminal = (p, bus) => {
+        const n = uf.add();
+        for (const ln of linesAt(p, bus)) uf.union(n, ln);
+        const key = (bus ? "b" : "w") + pkey(p);
+        const l = points.get(key);
+        if (l) {
+          uf.union(l[0], n);
+          l.push(n);
+        } else points.set(key, [n]);
+        return n;
+      };
+      for (const it of doc.items.values()) {
+        const n = it.node, k = it.kind;
+        if (k === "label" || k === "global_label" || k === "hierarchical_label") {
+          const text = str(n[1]), p = atOf(n).slice(0, 2), bus = isBusText(text);
+          const t = terminal(p, bus);
+          if (bus) {
+            const l = busLabels.get(t) || [];
+            busLabels.set(t, l);
+            l.push({ text, prio: k === "label" ? P_LOCAL : k === "global_label" ? P_GLOBAL : P_HIER, inst });
+            uf.union(t, keyNode(k === "global_label" ? "gbus:" + text : k === "label" ? `${I}|lbus:${text}` : `${I}|hbus:${text}`));
+          } else if (k === "label") {
+            uf.union(t, keyNode(`${I}|local:${text}`));
+            addDriver(t, { prio: P_LOCAL, name: inst.human + escapeNetName(text), depth: inst.depth });
+          } else if (k === "global_label") {
+            uf.union(t, keyNode("global:" + text));
+            addDriver(t, { prio: P_GLOBAL, name: escapeNetName(text), depth: inst.depth });
+          } else {
+            uf.union(t, keyNode(`${I}|hier:${text}`));
+            uf.union(t, keyNode(`${I}|local:${text}`));
+            addDriver(t, { prio: P_HIER, name: inst.human + escapeNetName(text), depth: inst.depth });
+          }
+        } else if (k === "sheet") {
+          const child = childOf.get(I + "|" + it.id);
+          for (const pin of kids(n, "pin")) {
+            const text = str(pin[1]), p = atOf(pin).slice(0, 2), bus = isBusText(text);
+            const t = terminal(p, bus);
+            if (bus) {
+              const l = busLabels.get(t) || [];
+              busLabels.set(t, l);
+              l.push({ text, prio: P_SHEET_PIN, inst });
+              if (child !== void 0) uf.union(t, keyNode(`${child}|hbus:${text}`));
+            } else {
+              sheetPinNodes.add(t);
+              addDriver(t, { prio: P_SHEET_PIN, name: inst.human + escapeNetName(text), depth: inst.depth });
+              if (child !== void 0) uf.union(t, keyNode(`${child}|hier:${text}`));
+            }
+          }
+        } else if (k === "symbol") {
+          const power = h.isPower(doc, it), value = propVal(n, "Value");
+          const { ref, unit } = instanceRef(n, "/" + inst.uuidPath.join("/"), project);
+          const inNetlist = !ref.startsWith("#") && !power, onBoard = yes2(n, "on_board", true);
+          const pins = h.symbolPins(doc, it);
+          const units = unitCount(doc, n), unitRef = units > 1 ? ref + unitLetter2(unit) : ref;
+          let comp;
+          if (inNetlist && onBoard) {
+            const path = "/" + [...inst.sheetUuids, it.id].join("/");
+            comp = components.get(ref);
+            if (!comp) {
+              const fields = {};
+              for (const p of kids(n, "property")) {
+                const name = str(p[1]);
+                if (name !== "Reference" && name !== "Value" && name !== "Footprint") fields[name] = str(p[2]);
+              }
+              comp = {
+                ref,
+                value,
+                footprint: propVal(n, "Footprint"),
+                libId: kidStr2(n, "lib_id"),
+                paths: [path],
+                fields,
+                sheetName: inst.human,
+                sheetFile: inst.sheet.file.split("/").pop() || inst.sheet.file,
+                dnp: yes2(n, "dnp", false),
+                excludeFromBom: !yes2(n, "in_bom", true),
+                excludeFromBoard: false,
+                pins: /* @__PURE__ */ new Map()
+              };
+              components.set(ref, comp);
+              compPins.set(ref, []);
+            } else {
+              if (unit === 1) comp.paths.unshift(path);
+              else comp.paths.push(path);
+              if (!comp.footprint) comp.footprint = propVal(n, "Footprint");
+            }
+          }
+          for (const pin of pins) {
+            const t = terminal([pin.x, pin.y], false);
+            if (power && value && pin.type === "power_in") {
+              uf.union(t, keyNode("global:" + value));
+              addDriver(t, { prio: P_POWER, name: escapeNetName(value), depth: inst.depth });
+              continue;
+            }
+            if (power) continue;
+            if (pin.hidden && pin.type === "power_in") {
+              uf.union(t, keyNode("global:" + pin.name));
+              addDriver(t, { prio: P_POWER, name: escapeNetName(pin.name), depth: inst.depth });
+            }
+            if (pin.type === "no_connect") ncNodes.add(t);
+            const pr = { comp: comp ? ref : null, ref, unitRef, pin, pins, uuid: it.id, power, inNetlist };
+            const l = pinsAt.get(t);
+            if (l) l.push(pr);
+            else pinsAt.set(t, [pr]);
+            if (comp) compPins.get(ref).push(pr);
+          }
+        }
+      }
+      for (const it of doc.items.values()) {
+        if (it.kind !== "no_connect") continue;
+        const p = atOf(it.node).slice(0, 2);
+        const l = points.get("w" + pkey(p));
+        if (l) ncNodes.add(l[0]);
+        else for (const ln of linesAt(p, false)) ncNodes.add(ln);
+      }
+    }
+    const busGroups = /* @__PURE__ */ new Map();
+    for (const [n, l] of busLabels) {
+      const r = uf.find(n);
+      const g = busGroups.get(r);
+      if (g) g.push(...l);
+      else busGroups.set(r, l.slice());
+    }
+    const better = (a, b) => {
+      const sa = a.prio >= P_HIER, sb = b.prio >= P_HIER;
+      if (sa !== sb) return sa ? -1 : 1;
+      if (a.prio !== b.prio) return b.prio - a.prio;
+      if (sa && a.depth !== b.depth) return a.depth - b.depth;
+      const la = a.name.includes("-Pad"), lb = b.name.includes("-Pad");
+      if (la !== lb) return la ? 1 : -1;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    };
+    let groupN = 0;
+    for (const labels of busGroups.values()) {
+      const best = labels.slice().sort((a, b) => better({ prio: a.prio, depth: a.inst.depth, name: a.text }, { prio: b.prio, depth: b.inst.depth, name: b.text }))[0];
+      const members = busVector(best.text);
+      if (!members) continue;
+      const prefix = best.prio === P_GLOBAL ? "" : best.inst.human;
+      const g = groupN++;
+      for (const l of labels) {
+        const local = busVector(l.text);
+        if (!local) continue;
+        for (let k = 0; k < local.length && k < members.length; k++) {
+          const m = keyNode(`busmember:${g}:${k}`);
+          if (!drivers.has(m)) addDriver(m, { prio: P_BUS_MEMBER, name: prefix + escapeNetName(members[k]), depth: best.inst.depth });
+          uf.union(m, keyNode(`${l.inst.index}|local:${local[k]}`));
+        }
+      }
+    }
+    const groups = /* @__PURE__ */ new Map();
+    const groupOf = (n) => {
+      const r = uf.find(n);
+      let g = groups.get(r);
+      if (!g) {
+        g = { drivers: [], pins: [], nc: false, sheetPin: false };
+        groups.set(r, g);
+      }
+      return g;
+    };
+    for (const [n, l] of drivers) groupOf(n).drivers.push(...l);
+    for (const [n, l] of pinsAt) groupOf(n).pins.push(...l);
+    for (const n of ncNodes) groupOf(n).nc = true;
+    for (const n of sheetPinNodes) groupOf(n).sheetPin = true;
+    const nets = /* @__PURE__ */ new Map();
+    for (const g of groups.values()) {
+      const netPins = g.pins.filter((p) => p.comp);
+      if (!netPins.length) continue;
+      let name;
+      const strong = g.drivers.filter((d) => d.prio >= P_HIER);
+      if (strong.length) name = strong.sort(better)[0].name;
+      else if (g.drivers.length) name = g.drivers.sort(better)[0].name;
+      else {
+        const cands = g.pins.filter((p) => p.inNetlist);
+        const force = g.nc || cands.length === 1;
+        name = cands.map((p) => defaultPinNet(p, force)).sort((a, b) => better({ prio: P_PIN, depth: 0, name: a }, { prio: P_PIN, depth: 0, name: b }))[0];
+      }
+      for (const p of netPins) {
+        const comp = components.get(p.comp);
+        if (!p.pin.number) continue;
+        const shown = p.pin.name === "~" ? "" : p.pin.name;
+        const type = p.pin.type + (g.nc && netPins.length === 1 ? "+no_connect" : "");
+        if (!comp.pins.has(p.pin.number)) comp.pins.set(p.pin.number, { net: name, name: shown ? shown + "_" + p.pin.number : "", type });
+        const l = nets.get(name);
+        if (l) l.push({ ref: comp.ref, pin: p.pin.number });
+        else nets.set(name, [{ ref: comp.ref, pin: p.pin.number }]);
+      }
+    }
+    return { components: Array.from(components.values()), nets, warnings };
+  }
+  var MANDATORY = /* @__PURE__ */ new Set(["Reference", "Value", "Datasheet", "Description"]);
+  var PAD_AFTER_NET = ["pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "custom", "primitives", "tenting", "teardrops", "padstack", "uuid", "tstamp"];
+  var clone = (n) => typeof KiCadCanvas !== "undefined" && KiCadCanvas.cloneNode ? KiCadCanvas.cloneNode(n) : JSON.parse(JSON.stringify(n));
+  function netNameOf2(doc, node) {
+    const n = kid(node, "net");
+    if (!n) return "";
+    if (typeof n[1] === "number") return n.length > 2 ? str(n[2]) : doc.nets.get(n[1]) || "";
+    return str(n[1]);
+  }
+  function usesNetCodes(doc) {
+    for (const it of doc.items.values()) {
+      const probe = it.kind === "footprint" ? kid(it.node, "pad") : it.kind === "segment" || it.kind === "via" || it.kind === "arc" ? it.node : null;
+      const n = probe && kid(probe, "net");
+      if (!n) continue;
+      return typeof n[1] === "number";
+    }
+    return false;
+  }
+  function fpRef(node) {
+    const p = prop(node, "Reference");
+    if (p) return str(p[2]);
+    for (const t of kids(node, "fp_text")) if (str(t[1]) === "reference") return str(t[2]);
+    return "";
+  }
+  function fpValue(node) {
+    const p = prop(node, "Value");
+    if (p) return str(p[2]);
+    for (const t of kids(node, "fp_text")) if (str(t[1]) === "value") return str(t[2]);
+    return "";
+  }
+  function setFpText(node, name, text) {
+    const p = prop(node, name);
+    if (p) {
+      p[2] = text;
+      return;
+    }
+    for (const t of kids(node, "fp_text")) if (str(t[1]) === name.toLowerCase()) t[2] = text;
+  }
+  function attrFlags(node) {
+    const a = kid(node, "attr");
+    return new Set(a ? a.slice(1).map(str) : []);
+  }
+  var ATTR_ORDER = ["smd", "through_hole", "board_only", "exclude_from_pos_files", "exclude_from_bom", "allow_missing_courtyard", "allow_soldermask_bridges", "dnp"];
+  function setAttrFlag(node, flag, on) {
+    const flags = attrFlags(node);
+    if (on) flags.add(flag);
+    else flags.delete(flag);
+    const list = [...ATTR_ORDER.filter((f) => flags.has(f)), ...Array.from(flags).filter((f) => !ATTR_ORDER.includes(f))];
+    if (!list.length) {
+      delKid(node, "attr");
+      return;
+    }
+    setKid(node, "attr", list, ["duplicate_pad_numbers_are_jumpers", "net_tie_pad_groups", "fp_text", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text_box", "dimension", "pad", "zone", "group", "embedded_fonts", "model"], true);
+  }
+  var isLocked = (node) => node.includes("locked") || yes2(node, "locked", false);
+  var fpSide = (node) => kidStr2(node, "layer") || "F.Cu";
+  var fpRot = (node) => {
+    const a = atOf(node);
+    return a[2] || 0;
+  };
+  function newField(fp, name, value, o) {
+    const size = o.fieldSize || 1, thick = o.fieldThickness || 0.15, rot = fpRot(fp), back = fpSide(fp) === "B.Cu";
+    const uuid = o.newUuid ? o.newUuid() : "";
+    return parse(`(property ${quote2(name)} ${quote2(value)} (at 0 0${rot ? " " + rot : ""}) (layer "${back ? "B.Fab" : "F.Fab"}") (hide yes)${uuid ? ` (uuid "${uuid}")` : ""} (effects (font (size ${size} ${size}) (thickness ${thick}))${back ? " (justify mirror)" : ""}))`);
+  }
+  function insertField(fp, field) {
+    let at = -1;
+    for (let j = 1; j < fp.length; j++) {
+      const c = fp[j];
+      if (isList3(c) && c[0] === "property" && !str(c[1]).startsWith("ki_")) at = j;
+    }
+    if (at < 0) at = Math.max(idxOf2(fp, "tags"), idxOf2(fp, "descr"), idxOf2(fp, "at"), 1);
+    fp.splice(at + 1, 0, field);
+  }
+  function planUpdate(doc, netlist, o = {}) {
+    const report = [];
+    let warnings = 0, errors = 0;
+    const say = (severity, text) => {
+      report.push({ severity, text });
+      if (severity === "warning") warnings++;
+      if (severity === "error") errors++;
+    };
+    const modified = /* @__PURE__ */ new Map(), removed = [], added = [];
+    const byCode = usesNetCodes(doc);
+    const codeOf = /* @__PURE__ */ new Map();
+    let maxCode = 0;
+    for (const [code, name] of doc.nets) {
+      codeOf.set(name, code);
+      maxCode = Math.max(maxCode, code);
+    }
+    const boardNets = /* @__PURE__ */ new Set();
+    const fps = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "footprint") {
+        fps.push(it);
+        for (const p of kids(it.node, "pad")) {
+          const n = netNameOf2(doc, p);
+          if (n) boardNets.add(n);
+        }
+      } else if (it.kind === "segment" || it.kind === "arc" || it.kind === "via" || it.kind === "zone") {
+        const n = netNameOf2(doc, it.node);
+        if (n) boardNets.add(n);
+      }
+    }
+    const addedNets = /* @__PURE__ */ new Set();
+    const oldToNew = /* @__PURE__ */ new Map();
+    const netValues = (name) => {
+      if (!byCode) return [name];
+      let code = codeOf.get(name);
+      if (code === void 0) {
+        code = ++maxCode;
+        codeOf.set(name, code);
+      }
+      return [code, name];
+    };
+    const byPath = /* @__PURE__ */ new Map(), byRef = /* @__PURE__ */ new Map();
+    for (const fp of fps) {
+      const path = kidStr2(fp.node, "path");
+      if (path && !byPath.has(path)) byPath.set(path, fp);
+      const ref = fpRef(fp.node);
+      const l = byRef.get(ref);
+      if (l) l.push(fp);
+      else byRef.set(ref, [fp]);
+    }
+    const claimed = /* @__PURE__ */ new Map();
+    const fpOf = /* @__PURE__ */ new Map();
+    const comps = netlist.components.slice().sort((a, b) => a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
+    if (!o.relinkByRef) for (const c of comps) for (const p of c.paths) {
+      const fp = byPath.get(p);
+      if (fp && !claimed.has(fp.id)) {
+        claimed.set(fp.id, c);
+        fpOf.set(c, fp);
+        break;
+      }
+    }
+    const allPaths = /* @__PURE__ */ new Set();
+    for (const c of comps) for (const p of c.paths) allPaths.add(p);
+    for (const c of comps) {
+      if (fpOf.has(c)) continue;
+      for (const fp of byRef.get(c.ref) || []) {
+        if (claimed.has(fp.id)) continue;
+        if (!o.relinkByRef && allPaths.has(kidStr2(fp.node, "path"))) continue;
+        claimed.set(fp.id, c);
+        fpOf.set(c, fp);
+        break;
+      }
+    }
+    const padsOf = (fp) => kids(fp, "pad");
+    const applyNets = (ref, fp, c) => {
+      let changed = false;
+      for (const pad of padsOf(fp)) {
+        const number = str(pad[1]), pin = number ? c.pins.get(number) : void 0, cur = netNameOf2(doc, pad);
+        const layers = kid(pad, "layers"), onCopper = !layers || layers.slice(1).some((l) => /\.Cu$/.test(str(l)));
+        if (!pin || !onCopper) {
+          if (cur) {
+            say("action", `Disconnect ${ref} pin ${number}.`);
+            delKid(pad, "net");
+            delKid(pad, "pinfunction");
+            delKid(pad, "pintype");
+            changed = true;
+          } else if (onCopper && number && str(pad[2]) !== "np_thru_hole") say("warning", `No net found for component ${ref} pad ${number} (no pin ${number} in symbol).`);
+          continue;
+        }
+        if (cur !== pin.net) {
+          if (!boardNets.has(pin.net) && !addedNets.has(pin.net)) {
+            addedNets.add(pin.net);
+            say("action", `Add net ${unescapeNetName(pin.net)}.`);
+          }
+          if (cur) {
+            oldToNew.set(cur, pin.net);
+            say("action", `Reconnect ${ref} pin ${number} from ${unescapeNetName(cur)} to ${unescapeNetName(pin.net)}.`);
+          } else say("action", `Connect ${ref} pin ${number} to ${unescapeNetName(pin.net)}.`);
+          setKid(pad, "net", netValues(pin.net), PAD_AFTER_NET);
+          changed = true;
+        }
+        if (kidStr2(pad, "pinfunction") !== pin.name) {
+          if (pin.name) setKid(pad, "pinfunction", [pin.name], PAD_AFTER_NET.slice(1));
+          else delKid(pad, "pinfunction");
+          changed = true;
+        }
+        if (kidStr2(pad, "pintype") !== pin.type) {
+          if (pin.type) setKid(pad, "pintype", [pin.type], PAD_AFTER_NET.slice(2));
+          else delKid(pad, "pintype");
+          changed = true;
+        }
+      }
+      return changed;
+    };
+    const applyComponent = (fp, c, fresh) => {
+      let changed = false;
+      const oldRef = fpRef(fp);
+      if (oldRef !== c.ref) {
+        if (!fresh) say("action", `Change ${oldRef} reference designator to ${c.ref}.`);
+        setFpText(fp, "Reference", c.ref);
+        changed = true;
+      }
+      const oldVal = fpValue(fp);
+      if (oldVal !== c.value) {
+        if (!fresh) say("action", `Change ${c.ref} value from ${oldVal} to ${c.value}.`);
+        setFpText(fp, "Value", c.value);
+        changed = true;
+      }
+      const path = kidStr2(fp, "path");
+      if (!c.paths.includes(path)) {
+        if (!fresh) say("action", `Update ${c.ref} symbol association from ${path} to ${c.paths[0]}.`);
+        setKid(fp, "path", [c.paths[0]], ["sheetname", "sheetfile", "units", "solder_mask_margin", "solder_paste_margin", "clearance", "zone_connect", "attr", "duplicate_pad_numbers_are_jumpers", "fp_text", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "pad", "embedded_fonts", "model"]);
+        changed = true;
+      }
+      if (o.updateFields !== false) {
+        let touched = false;
+        for (const [name, value] of Object.entries(c.fields)) {
+          if (name.startsWith("ki_")) continue;
+          const p = prop(fp, name);
+          if (p) {
+            if (str(p[2]) !== value) {
+              p[2] = value;
+              touched = true;
+            }
+          } else if (prop(fp, "Reference")) {
+            insertField(fp, newField(fp, name, value, o));
+            touched = true;
+          }
+        }
+        if (touched) {
+          if (!fresh) say("action", `Update ${c.ref} fields.`);
+          changed = true;
+        }
+      }
+      if (o.removeExtraFields) {
+        let dropped = false;
+        for (let j = fp.length - 1; j > 0; j--) {
+          const p = fp[j];
+          if (!isList3(p) || p[0] !== "property") continue;
+          const name = str(p[1]);
+          if (MANDATORY.has(name) || name === "Footprint" || name.startsWith("ki_") || name in c.fields) continue;
+          fp.splice(j, 1);
+          dropped = true;
+        }
+        if (dropped) {
+          if (!fresh) say("action", `Remove ${c.ref} footprint fields not in symbol.`);
+          changed = true;
+        }
+      }
+      if (kidStr2(fp, "sheetname") !== c.sheetName) {
+        if (!fresh) say("action", `Update ${c.ref} sheetname to '${c.sheetName}'.`);
+        setKid(fp, "sheetname", [c.sheetName], ["sheetfile", "units", "attr", "fp_text", "fp_line", "pad", "embedded_fonts", "model"]);
+        changed = true;
+      }
+      if (kidStr2(fp, "sheetfile") !== c.sheetFile) {
+        if (!fresh) say("action", `Update ${c.ref} sheetfile to '${c.sheetFile}'.`);
+        setKid(fp, "sheetfile", [c.sheetFile], ["units", "attr", "fp_text", "fp_line", "pad", "embedded_fonts", "model"]);
+        changed = true;
+      }
+      const flags = attrFlags(fp);
+      if (flags.has("exclude_from_bom") !== c.excludeFromBom) {
+        if (!fresh) say("action", `${c.excludeFromBom ? "Add" : "Remove"} ${c.ref} 'exclude from BOM' fabrication attribute.`);
+        setAttrFlag(fp, "exclude_from_bom", c.excludeFromBom);
+        changed = true;
+      }
+      if (flags.has("dnp") !== c.dnp) {
+        if (!fresh) say("action", `${c.dnp ? "Add" : "Remove"} ${c.ref} 'Do not place' fabrication attribute.`);
+        setAttrFlag(fp, "dnp", c.dnp);
+        changed = true;
+      }
+      if (applyNets(c.ref, fp, c)) changed = true;
+      return changed;
+    };
+    const bb = doc.bbox || [0, 0, 0, 0];
+    let nextX = bb[0], rowY = bb[3] + 10;
+    const place = (fp) => {
+      let w = 10, hgt = 10;
+      try {
+        const probe = { id: "probe", kind: "footprint", node: clone(fp), geom: [], bbox: null, movable: false, docType: "pcb" };
+        KiCadCanvas.buildGeom(doc, probe);
+        if (probe.bbox) {
+          const a = atOf(fp);
+          w = probe.bbox[2] - probe.bbox[0];
+          hgt = probe.bbox[3] - probe.bbox[1];
+          const dx = a[0] - probe.bbox[0], dy = a[1] - probe.bbox[1];
+          setKid(fp, "at", [r4(nextX + dx), r4(rowY + dy)], ["descr", "tags", "property"]);
+        } else setKid(fp, "at", [r4(nextX), r4(rowY)], ["descr", "tags", "property"]);
+      } catch (e) {
+        setKid(fp, "at", [r4(nextX), r4(rowY)], ["descr", "tags", "property"]);
+      }
+      nextX += w + 2.54;
+      if (nextX - bb[0] > Math.max(120, bb[2] - bb[0])) {
+        nextX = bb[0];
+        rowY += hgt + 5;
+      }
+    };
+    for (const c of comps) {
+      const fp = fpOf.get(c);
+      if (!fp) {
+        if (!c.footprint) {
+          say("error", `Cannot add ${c.ref} (no footprint assigned).`);
+          continue;
+        }
+        const lib = o.footprintFor ? o.footprintFor(c.footprint) : null;
+        if (lib === "missing") {
+          say("error", `Cannot add ${c.ref} (footprint '${c.footprint}' not found).`);
+          continue;
+        }
+        if (!lib) {
+          say("error", `Cannot add ${c.ref} (footprint '${c.footprint}': library not available).`);
+          continue;
+        }
+        const node2 = clone(lib);
+        say("action", `Add ${c.ref} (footprint '${c.footprint}').`);
+        applyComponent(node2, c, true);
+        place(node2);
+        added.push(node2);
+        continue;
+      }
+      let node = clone(fp.node);
+      const curId = str(node[1]);
+      if (o.replaceFootprints !== false && c.footprint && curId !== c.footprint) {
+        const lib = o.footprintFor ? o.footprintFor(c.footprint) : null;
+        if (!lib || lib === "missing") say("error", `Cannot update ${c.ref} (footprint '${c.footprint}' ${lib === "missing" ? "not found" : "not available: no footprint library"}).`);
+        else if (isLocked(node) && !o.overrideLocks) say("warning", `Cannot change ${c.ref} footprint from '${curId}' to '${c.footprint}' (footprint is locked).`);
+        else {
+          say("action", `Change ${c.ref} footprint from '${curId}' to '${c.footprint}'.`);
+          const fresh = clone(lib), a = atOf(node);
+          const at = [a[0], a[1]];
+          if (a[2]) at.push(a[2]);
+          setKid(fresh, "at", at, ["descr", "tags", "property"], true);
+          setKid(fresh, "uuid", [fp.id], ["at"]);
+          for (const name of ["Reference", "Value"]) {
+            const from = prop(node, name), to = prop(fresh, name);
+            if (from && to) {
+              const keep = to[2];
+              to.length = 0;
+              to.push(...clone(from));
+              if (name === "Value" && !c.value) to[2] = keep;
+            }
+          }
+          for (const pad of padsOf(fresh)) {
+            const old = padsOf(node).find((q) => str(q[1]) === str(pad[1]));
+            const n = old && kid(old, "net");
+            if (n) {
+              const i = idxOf2(pad, "net");
+              if (i > 0) pad[i] = clone(n);
+              else setKid(pad, "net", n.slice(1), PAD_AFTER_NET);
+            }
+          }
+          node = fresh;
+        }
+      }
+      if (applyComponent(node, c, false) || node !== fp.node && JSON.stringify(node) !== JSON.stringify(fp.node)) modified.set(fp.id, node);
+    }
+    for (const fp of fps) {
+      if (claimed.has(fp.id)) continue;
+      const ref = fpRef(fp.node);
+      if (attrFlags(fp.node).has("board_only")) continue;
+      if (o.deleteUnused) {
+        if (isLocked(fp.node) && !o.overrideLocks) {
+          say("warning", `Cannot remove unused footprint ${ref} (footprint is locked).`);
+          continue;
+        }
+        say("action", `Remove unused footprint ${ref}.`);
+        removed.push(fp.id);
+      } else if (padsOf(fp.node).some((p) => netNameOf2(doc, p))) {
+        const node = clone(fp.node);
+        let changed = false;
+        for (const pad of padsOf(node)) if (netNameOf2(doc, pad)) {
+          say("action", `Disconnect ${ref} pin ${str(pad[1])}.`);
+          delKid(pad, "net");
+          delKid(pad, "pinfunction");
+          delKid(pad, "pintype");
+          changed = true;
+        }
+        if (changed) modified.set(fp.id, node);
+      }
+    }
+    const still = /* @__PURE__ */ new Set();
+    for (const c of comps) for (const p of c.pins.values()) still.add(p.net);
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc" && it.kind !== "via" && it.kind !== "zone") continue;
+      const cur = netNameOf2(doc, it.node);
+      if (!cur || still.has(cur)) continue;
+      const to = oldToNew.get(cur);
+      if (!to) continue;
+      const node = clone(it.node);
+      if (it.kind === "zone") {
+        const zn = kidStr2(node, "name");
+        say("action", zn ? `Reconnect copper zone '${zn}' from ${unescapeNetName(cur)} to ${unescapeNetName(to)}.` : `Reconnect copper zone from ${unescapeNetName(cur)} to ${unescapeNetName(to)}.`);
+        if (byCode) {
+          setKid(node, "net", [codeOf.get(to)], ["net_name", "layer", "layers"]);
+          setKid(node, "net_name", [to], ["layer", "layers"]);
+        } else {
+          setKid(node, "net", [to], ["net_name", "layer", "layers"]);
+          if (kid(node, "net_name")) setKid(node, "net_name", [to], ["layer", "layers"]);
+        }
+      } else {
+        if (it.kind === "via") say("action", `Reconnect via from ${unescapeNetName(cur)} to ${unescapeNetName(to)}.`);
+        setKid(node, "net", byCode ? [codeOf.get(to)] : [to], ["uuid", "tstamp"]);
+      }
+      modified.set(it.id, node);
+    }
+    for (const n of Array.from(boardNets).sort()) if (!still.has(n) && netGone(n)) say("action", `Removed unused net ${unescapeNetName(n)}.`);
+    function netGone(n) {
+      for (const fp of fps) {
+        if (removed.includes(fp.id)) continue;
+        const node = modified.get(fp.id) || fp.node;
+        for (const p of kids(node, "pad")) if (netNameOf2(doc, p) === n) return false;
+      }
+      return true;
+    }
+    for (const w of netlist.warnings) say("warning", w);
+    say("info", `Total warnings: ${warnings}, errors: ${errors}.`);
+    return { report, modified, removed, added, warnings, errors };
+  }
+  function footprintFromLibrary(mod, fpid, newUuid2) {
+    const fp = clone(mod);
+    fp[0] = "footprint";
+    fp[1] = fpid;
+    for (const k of ["version", "generator", "generator_version", "tedit", "uuid", "at", "locked", "placed"]) while (delKid(fp, k)) {
+    }
+    const stamp = (n) => {
+      for (let j = 1; j < n.length; j++) {
+        const c = n[j];
+        if (!isList3(c)) continue;
+        if (c[0] === "uuid" || c[0] === "tstamp") {
+          n[j] = qnode("uuid", [newUuid2()]);
+          continue;
+        }
+        stamp(c);
+      }
+      if (["property", "fp_text", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text_box", "pad", "zone", "dimension"].includes(str(n[0])) && idxOf2(n, "uuid") < 0) {
+        const e = idxOf2(n, "effects");
+        n.splice(e > 0 ? e : n.length, 0, qnode("uuid", [newUuid2()]));
+      }
+    };
+    stamp(fp);
+    const layer = idxOf2(fp, "layer");
+    fp.splice(layer > 0 ? layer + 1 : 2, 0, qnode("uuid", [newUuid2()]), ["at", 0, 0]);
+    return fp;
+  }
+  function schematicParity(doc, netlist) {
+    const out = [];
+    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
+    const at = (fp) => {
+      const a = atOf(fp.node);
+      return [a[0] || 0, a[1] || 0];
+    };
+    const say = (code, text, fp) => {
+      const p = fp ? at(fp) : [0, 0];
+      out.push({ code, severity: "warning", x: p[0], y: p[1], text, ids: fp ? [fp.id] : [] });
+    };
+    const byPath = /* @__PURE__ */ new Map(), byRef = /* @__PURE__ */ new Map();
+    for (const fp of fps) {
+      const path = kidStr2(fp.node, "path");
+      if (path && !byPath.has(path)) byPath.set(path, fp);
+      const ref = fpRef(fp.node);
+      const l = byRef.get(ref);
+      if (l) l.push(fp);
+      else byRef.set(ref, [fp]);
+    }
+    for (const [ref, list] of byRef) if (ref && list.length > 1) for (const fp of list.slice(1)) say("duplicate_footprints", `Duplicate footprints (${ref})`, fp);
+    const pinNet = /* @__PURE__ */ new Map();
+    for (const [name, pins] of netlist.nets) for (const p of pins) pinNet.set(p.ref + "|" + p.pin, name);
+    const matched = /* @__PURE__ */ new Set();
+    for (const c of netlist.components) {
+      let fp;
+      for (const p of c.paths) {
+        fp = byPath.get(p);
+        if (fp) break;
+      }
+      if (!fp) fp = (byRef.get(c.ref) || []).find((f) => !matched.has(f.id));
+      if (!fp) {
+        if (c.footprint) say("missing_footprint", `Missing footprint ${c.ref} (${c.value})`, null);
+        continue;
+      }
+      matched.add(fp.id);
+      const value = fpValue(fp.node);
+      if (value !== c.value) say("footprint_symbol_mismatch", `Value (${value}) doesn't match symbol value (${c.value})`, fp);
+      const fpid = str(fp.node[1]);
+      if (c.footprint && fpid !== c.footprint) say("footprint_symbol_mismatch", `${fpid} doesn't match footprint given by symbol (${c.footprint})`, fp);
+      const seen = /* @__PURE__ */ new Set();
+      for (const pad of kids(fp.node, "pad")) {
+        const number = str(pad[1]);
+        if (!number) continue;
+        seen.add(number);
+        const want = pinNet.get(c.ref + "|" + number), n = kid(pad, "net");
+        const have = n ? typeof n[1] === "number" ? n.length > 2 ? str(n[2]) : str(doc.nets.get(n[1]) || "") : str(n[1]) : "";
+        if (want === void 0) {
+          if (have && !/^unconnected-\(/.test(have)) say("net_conflict", `${c.ref} pad ${number}: No corresponding pin found in schematic`, fp);
+        } else if (!have) say("net_conflict", `${c.ref} pad ${number}: Pad missing net given by schematic (${want})`, fp);
+        else if (have !== want) say("net_conflict", `${c.ref} pad ${number}: Pad net (${have}) doesn't match net given by schematic (${want})`, fp);
+      }
+      for (const key of pinNet.keys()) if (key.startsWith(c.ref + "|") && !seen.has(key.slice(c.ref.length + 1))) say("net_conflict", `${c.ref}: No pad found for pin ${key.slice(c.ref.length + 1)} in schematic`, fp);
+    }
+    for (const fp of fps) {
+      if (matched.has(fp.id)) continue;
+      const attr = kid(fp.node, "attr");
+      if (attr && attr.includes("board_only")) continue;
+      say("extra_footprint", `Extra footprint (${fpRef(fp.node) || str(fp.node[1])})`, fp);
+    }
+    return out;
+  }
+  var pcbNetlist = { buildNetlist, planUpdate, schematicParity, footprintFromLibrary, escapeNetName, unescapeNetName, busVector };
+
+  // web/canvas/project-file.ts
+  var JNum = class {
+    constructor(raw) {
+      this.raw = raw;
+    }
+    get v() {
+      return Number(this.raw);
+    }
+    get isFloat() {
+      return /[.eE]/.test(this.raw);
+    }
+  };
+  var isJObj = (v) => !!v && typeof v === "object" && !Array.isArray(v) && !(v instanceof JNum);
+  function formatNumber(n, float) {
+    if (!isFinite(n)) return "null";
+    if (!float && Number.isInteger(n)) return String(n);
+    if (Object.is(n, -0)) return "-0.0";
+    const a = Math.abs(n);
+    if (a !== 0 && (a < 1e-4 || a >= 1e15)) {
+      const [m, e] = n.toExponential().split("e");
+      const ex = Number(e);
+      return `${m}e${ex < 0 ? "-" : "+"}${String(Math.abs(ex)).padStart(2, "0")}`;
+    }
+    const s = String(n);
+    return /[.e]/.test(s) ? s : s + ".0";
+  }
+  function parseProject(text) {
+    let i = 0;
+    const n = text.length;
+    const fail = (what) => {
+      throw new SyntaxError(`${what} at offset ${i}`);
+    };
+    const ws = () => {
+      while (i < n) {
+        const c = text.charCodeAt(i);
+        if (c === 32 || c === 10 || c === 13 || c === 9) i++;
+        else break;
+      }
+    };
+    const str2 = () => {
+      const start = i;
+      i++;
+      while (i < n) {
+        const c = text[i];
+        if (c === "\\") i += 2;
+        else if (c === '"') {
+          i++;
+          return JSON.parse(text.slice(start, i));
+        } else i++;
+      }
+      return fail("unterminated string");
+    };
+    const value = () => {
+      ws();
+      const c = text[i];
+      if (c === "{") {
+        i++;
+        const o = {};
+        ws();
+        if (text[i] === "}") {
+          i++;
+          return o;
+        }
+        for (; ; ) {
+          ws();
+          if (text[i] !== '"') fail("expected a key");
+          const k = str2();
+          ws();
+          if (text[i] !== ":") fail("expected ':'");
+          i++;
+          o[k] = value();
+          ws();
+          if (text[i] === ",") {
+            i++;
+            continue;
+          }
+          if (text[i] === "}") {
+            i++;
+            return o;
+          }
+          fail("expected ',' or '}'");
+        }
+      }
+      if (c === "[") {
+        i++;
+        const a = [];
+        ws();
+        if (text[i] === "]") {
+          i++;
+          return a;
+        }
+        for (; ; ) {
+          a.push(value());
+          ws();
+          if (text[i] === ",") {
+            i++;
+            continue;
+          }
+          if (text[i] === "]") {
+            i++;
+            return a;
+          }
+          fail("expected ',' or ']'");
+        }
+      }
+      if (c === '"') return str2();
+      if (text.startsWith("true", i)) {
+        i += 4;
+        return true;
+      }
+      if (text.startsWith("false", i)) {
+        i += 5;
+        return false;
+      }
+      if (text.startsWith("null", i)) {
+        i += 4;
+        return null;
+      }
+      const m = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(text.slice(i, i + 40));
+      if (!m) return fail("unexpected token");
+      i += m[0].length;
+      return new JNum(m[0]);
+    };
+    const v = value();
+    ws();
+    if (i < n) fail("trailing characters");
+    return v;
+  }
+  var jstr = (s) => JSON.stringify(s).replace(/[\u007f-￿]/g, (c) => c);
+  function stringifyProject(v, level = 0) {
+    const pad = "  ".repeat(level), pad1 = "  ".repeat(level + 1);
+    let out;
+    if (v === null || v === void 0) out = "null";
+    else if (v instanceof JNum) out = v.raw;
+    else if (typeof v === "boolean") out = v ? "true" : "false";
+    else if (typeof v === "string") out = jstr(v);
+    else if (Array.isArray(v)) out = v.length ? "[\n" + v.map((x) => pad1 + stringifyProject(x, level + 1)).join(",\n") + "\n" + pad + "]" : "[]";
+    else {
+      const keys = Object.keys(v).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+      out = keys.length ? "{\n" + keys.map((k) => pad1 + jstr(k) + ": " + stringifyProject(v[k], level + 1)).join(",\n") + "\n" + pad + "}" : "{}";
+    }
+    return level === 0 ? out + "\n" : out;
+  }
+  function toPlain(v) {
+    if (v === null || v === void 0) return null;
+    if (v instanceof JNum) return v.v;
+    if (Array.isArray(v)) return v.map(toPlain);
+    if (typeof v === "object") {
+      const o = {};
+      for (const k of Object.keys(v)) o[k] = toPlain(v[k]);
+      return o;
+    }
+    return v;
+  }
+  function fromPlain(p, prev, floats = true) {
+    if (p === null || p === void 0) return null;
+    if (typeof p === "number") {
+      if (prev instanceof JNum) {
+        if (prev.v === p) return prev;
+        return new JNum(formatNumber(p, prev.isFloat || !Number.isInteger(p)));
+      }
+      return new JNum(formatNumber(p, floats));
+    }
+    if (typeof p === "boolean" || typeof p === "string") return p;
+    if (Array.isArray(p)) {
+      const pa = Array.isArray(prev) ? prev : [];
+      return p.map((x, i) => fromPlain(x, pa[i] !== void 0 ? pa[i] : pa[0], floats));
+    }
+    const po = isJObj(prev) ? prev : {};
+    const o = {};
+    for (const k of Object.keys(p)) o[k] = fromPlain(p[k], po[k], floats);
+    return o;
+  }
+  function getPath(root2, path) {
+    let v = root2;
+    for (const k of path) {
+      if (!isJObj(v)) return void 0;
+      v = v[k];
+    }
+    return v;
+  }
+  function setPath(root2, path, value, floats = true) {
+    if (!isJObj(root2) || !path.length) return false;
+    let o = root2;
+    for (let i = 0; i < path.length - 1; i++) {
+      const k = path[i];
+      let c = o[k];
+      if (!isJObj(c)) {
+        c = {};
+        o[k] = c;
+      }
+      o = c;
+    }
+    const last = path[path.length - 1], prev = o[last];
+    if (prev !== void 0 && JSON.stringify(toPlain(prev)) === JSON.stringify(value)) return false;
+    o[last] = fromPlain(value, prev, floats);
+    return true;
+  }
+  function editProject(text, edits) {
+    const root2 = parseProject(text);
+    const changed = edits.filter((e) => setPath(root2, e.path, e.value, !e.ints));
+    return { text: changed.length ? stringifyProject(root2) : text, changed };
+  }
+  var RULE_DEFAULTS = {
+    min_clearance: 0,
+    min_connection: 0,
+    min_track_width: 0.2,
+    min_via_annular_width: 0.1,
+    min_via_diameter: 0.5,
+    min_through_hole_diameter: 0.3,
+    min_microvia_diameter: 0.2,
+    min_microvia_drill: 0.1,
+    min_hole_to_hole: 0.25,
+    min_hole_clearance: 0.25,
+    min_silk_clearance: 0,
+    min_groove_width: 0,
+    min_text_height: 0.8,
+    min_text_thickness: 0.08,
+    min_copper_edge_clearance: 0.5,
+    solder_mask_to_copper_clearance: 0,
+    max_error: 5e-3,
+    min_resolved_spokes: 2,
+    use_height_for_length_calcs: true,
+    allow_microvias: false,
+    allow_blind_buried_vias: false
+  };
+  var LAYER_CLASSES = [["silk", "Silk Layers"], ["copper", "Copper Layers"], ["board_outline", "Edge Cuts"], ["courtyard", "Courtyards"], ["fab", "Fab Layers"], ["other", "Other Layers"]];
+  var DEFAULTS_DEFAULTS = {
+    silk_line_width: 0.1,
+    silk_text_size_h: 1,
+    silk_text_size_v: 1,
+    silk_text_thickness: 0.1,
+    silk_text_italic: false,
+    silk_text_upright: false,
+    copper_line_width: 0.2,
+    copper_text_size_h: 1.5,
+    copper_text_size_v: 1.5,
+    copper_text_thickness: 0.3,
+    copper_text_italic: false,
+    copper_text_upright: false,
+    board_outline_line_width: 0.05,
+    courtyard_line_width: 0.05,
+    fab_line_width: 0.1,
+    fab_text_size_h: 1,
+    fab_text_size_v: 1,
+    fab_text_thickness: 0.15,
+    fab_text_italic: false,
+    fab_text_upright: false,
+    other_line_width: 0.1,
+    other_text_size_h: 1,
+    other_text_size_v: 1,
+    other_text_thickness: 0.15,
+    other_text_italic: false,
+    other_text_upright: false,
+    dimension_units: 3,
+    dimension_precision: 4,
+    apply_defaults_to_fp_fields: false,
+    apply_defaults_to_fp_text: false,
+    apply_defaults_to_fp_shapes: false,
+    apply_defaults_to_fp_dimensions: false,
+    apply_defaults_to_fp_barcodes: false
+  };
+  var DIMENSION_DEFAULTS = { arrow_length: 127e4, extension_offset: 5e5, keep_text_aligned: true, suppress_zeroes: true, text_position: 0, units_format: 1 };
+  var NETCLASS_DEFAULTS = {
+    bus_width: 12,
+    clearance: 0.2,
+    diff_pair_gap: 0.25,
+    diff_pair_via_gap: 0.25,
+    diff_pair_width: 0.2,
+    line_style: 0,
+    microvia_diameter: 0.3,
+    microvia_drill: 0.1,
+    name: "Default",
+    pcb_color: "rgba(0, 0, 0, 0.000)",
+    priority: 2147483647,
+    schematic_color: "rgba(0, 0, 0, 0.000)",
+    track_width: 0.2,
+    tuning_profile: "",
+    via_diameter: 0.6,
+    via_drill: 0.3,
+    wire_width: 6
+  };
+  function designSettingsOf(root2) {
+    const p = toPlain(getPath(root2, ["board", "design_settings"]));
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  }
+  var projectFile = {
+    JNum,
+    parseProject,
+    stringifyProject,
+    toPlain,
+    fromPlain,
+    getPath,
+    setPath,
+    editProject,
+    formatNumber,
+    designSettingsOf,
+    RULE_DEFAULTS,
+    DEFAULTS_DEFAULTS,
+    DIMENSION_DEFAULTS,
+    NETCLASS_DEFAULTS,
+    LAYER_CLASSES
+  };
+
   // web/canvas/index.ts
   var api = {
     parse,
@@ -5723,6 +7496,10 @@
     // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
     pcbSizes
   };
+  api.pcbNetlist = pcbNetlist;
+  api.boardSetup = boardSetup;
+  api.DRC_ITEMS = DRC_ITEMS;
+  api.projectFile = projectFile;
   root.KiCadCanvas = api;
 })();
 //# sourceMappingURL=kicad-canvas.js.map
