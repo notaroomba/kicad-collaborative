@@ -99,6 +99,11 @@ converted from it on each request (`src/parts/easyeda.rs`). A placed part is
 embedded in the sheet or board as KiCad does, with `LCSC` / `Mouser` /
 `DigiKey`, `MPN` and `Manufacturer` fields.
 
+The dialog's BOM tab lists the parts of the open sheet or board by the vendor
+fields they carry, with stock and the price break for the number of boards,
+finds and assigns a vendor part to lines that have none, and downloads the BOM
+in JLCPCB's assembly format or in full.
+
 LCSC needs no key. Mouser and DigiKey need API keys, either for the whole
 deployment (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`) or
 per person in the dialog's API Keys tab (stored encrypted in `vendor_keys`).

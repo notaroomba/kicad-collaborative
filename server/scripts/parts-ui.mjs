@@ -122,8 +122,7 @@ check('the op carries the library symbol and the vendor fields', op.includes('LC
 await openDialog(A); await search(A, 'C25804');
 await A.waitForFunction(() => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === 'C25804'; });
 check('searching an LCSC number opens that part straight away', /0603WAF1002T5E/.test(await A.locator('#kp-part-title').innerText()));
-A.once('dialog', (d) => d.accept('Motor Board'));
-await A.selectOption('#kp-add', '+'); await A.waitForFunction(() => [...document.querySelectorAll('#kp-add option')].some((o) => o.textContent === 'Motor Board'));
+await A.selectOption('#kp-add', '+'); await A.waitForSelector('#kp-ask-input'); await shot(A, '06b-new-library'); await A.fill('#kp-ask-input', 'Motor Board'); await A.click('#kp-ask-ok'); await A.waitForFunction(() => [...document.querySelectorAll('#kp-add option')].some((o) => o.textContent === 'Motor Board'));
 check('the part is saved to a new library', (await db.query(`SELECT i.vendor, i.vendor_id, i.mpn FROM part_library_items i JOIN part_libraries l ON l.id = i.library_id WHERE l.owner_id = $1`, [danaId])).rows.map((r) => `${r.vendor}:${r.vendor_id}:${r.mpn}`).join() === 'lcsc:C25804:0603WAF1002T5E');
 await search(A, 'C165948'); await A.waitForFunction(() => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === 'C165948' && !document.querySelector('#kp-side .kp-spin'); });
 const libId = (await db.query(`SELECT id FROM part_libraries WHERE owner_id = $1`, [danaId])).rows[0].id;
@@ -139,6 +138,39 @@ check('the library is shared with the project', /shared with PIC programmer/.tes
 const [download] = await Promise.all([A.waitForEvent('download'), A.click('#kp-export')]);
 const zipPath = await download.path(); const zipBytes = fs.readFileSync(zipPath);
 check('the library downloads as a KiCad library zip', download.suggestedFilename() === 'Motor_Board.zip' && zipBytes.includes(Buffer.from('Motor_Board.kicad_sym')) && zipBytes.includes(Buffer.from('Motor_Board.pretty/R0603.kicad_mod')) && zipBytes.includes(Buffer.from('Motor_Board.3dshapes/R0603.step')), download.suggestedFilename());
+await A.keyboard.press('Escape');
+
+// ---------------------------------------------------------------- bill of materials
+await openDialog(A, 'Bill of Materials with Vendor Prices…'); await A.waitForSelector('#kp-bom tr.kp-row');
+await A.waitForFunction(() => !document.querySelector('#kp-bom .kp-spin'));
+const stmRow = await A.locator('#kp-bom tr.kp-row[data-id="C8734"]').innerText();
+check('the BOM lists the placed vendor part with its stock and price', /STM32F103C8T6/.test(stmRow) && /212,539/.test(stmRow) && /\$1\.41/.test(stmRow), stmRow.replace(/\s+/g, ' '));
+const sum1 = await A.locator('#kp-bom-sum').innerText();
+check('… and totals the sheet', /\d+ parts in \d+ lines on this sheet · 1 with a vendor part · \$1\.41 for one board/.test(sum1), sum1);
+await A.fill('#kp-boards', '100'); await A.waitForFunction(() => /100 boards/.test(document.querySelector('#kp-bom-sum').textContent));
+const stm100 = await A.locator('#kp-bom tr.kp-row[data-id="C8734"]').innerText();
+check('100 boards use the price break for 100', /\$1\.09/.test(stm100) && /\$108\.54/.test(stm100), stm100.replace(/\s+/g, ' '));
+await A.fill('#kp-boards', '1'); await A.waitForFunction(() => /one board/.test(document.querySelector('#kp-bom-sum').textContent));
+// a line without a vendor part: find one and assign it
+const line = A.locator('#kp-bom tr.kp-nopart').first(); const lineRefs = await line.locator('td').first().getAttribute('title');
+await line.locator('.kp-find').click(); await A.waitForSelector('#kp-q');
+await search(A, 'C25804'); await A.waitForFunction(() => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === 'C25804' && !document.querySelector('#kp-side .kp-spin'); });
+check('finding a part for a line offers to assign it', /^Assign to /.test(await A.locator('#kp-assign').innerText()));
+await shot(A, '07b-assign');
+await A.click('#kp-assign'); await A.waitForSelector('#kp-bom tr.kp-row[data-id="C25804"]'); await A.waitForFunction(() => !document.querySelector('#kp-bom .kp-spin'));
+const rRow = await A.locator('#kp-bom tr.kp-row[data-id="C25804"]');
+check('the assigned line now has the part', (await rRow.locator('td').first().getAttribute('title')) === lineRefs && /0603WAF1002T5E/.test(await rRow.innerText()), await rRow.innerText());
+const asgOp = (await db.query(`SELECT changes::text AS c FROM ops WHERE doc_id = $1 ORDER BY seq DESC LIMIT 1`, [SCH])).rows[0].c;
+check('the op writes quoted, hidden fields onto each symbol', asgOp.includes('"MODIFIED"') && asgOp.includes('(property \\"LCSC\\" \\"C25804\\"') && asgOp.includes('(property \\"MPN\\" \\"0603WAF1002T5E\\"') && asgOp.includes('(hide yes)') && (asgOp.match(/"MODIFIED"/g) || []).length === lineRefs.split(', ').length);
+await B.waitForTimeout(800);
+const bFields = await B.evaluate((ref) => { const K = window.KiCadCanvas, it = [...window.CollabApp.getState().document.items].find((i) => i.ref === ref); return it ? 1 : 0; }, lineRefs.split(', ')[0]);
+check('the other person still has those symbols', bFields === 1);
+await shot(A, '07c-bom');
+const [jlc] = await Promise.all([A.waitForEvent('download'), A.click('#kp-bom-jlc')]);
+const jlcText = fs.readFileSync(await jlc.path(), 'utf8');
+check('the JLCPCB BOM downloads with the LCSC numbers', /-jlcpcb-bom\.csv$/.test(jlc.suggestedFilename()) && jlcText.startsWith('Comment,Designator,Footprint,LCSC Part #') && /STM32F103C8T6,U[?\d]+,[^,]*,C8734/.test(jlcText) && jlcText.includes(',C25804'), jlcText.slice(0, 200));
+const [full] = await Promise.all([A.waitForEvent('download'), A.click('#kp-bom-csv')]);
+check('the full BOM downloads with prices', fs.readFileSync(await full.path(), 'utf8').includes('LCSC,C8734,STM32F103C8T6'));
 await A.keyboard.press('Escape');
 
 // ---------------------------------------------------------------- board: place a footprint from the library

@@ -7,6 +7,7 @@
 import { api, ApiError, type Library, type LibraryItem, type LibrarySummary, type Part, type PartInfo, type Vendor } from "./api";
 import { drawFootprint, drawSymbol } from "./preview";
 import { canPlace, placePart } from "./place";
+import { assignChanges, collect, fullCsv, jlcCsv, priceAt, totals, type BomLine } from "./bom";
 
 type Child = Node | string | null | undefined | false;
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: Record<string, unknown> | null, ...kids: (Child | Child[])[]): HTMLElementTagNameMap[K] {
@@ -53,6 +54,8 @@ const CSS = `
 .kp-table tr.kp-row{cursor:pointer}
 .kp-table tr.kp-row:hover td{background:color-mix(in srgb,var(--blue,#4D7FC4) 8%,transparent)}
 .kp-table tr.kp-row.on td{background:color-mix(in srgb,var(--blue,#4D7FC4) 18%,transparent)}
+.kp-dim{color:var(--ink-2,#5B5A55);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+.kp-table tr.kp-nopart{cursor:default}
 .kp-mono{font-family:var(--mono,ui-monospace,monospace)}
 .kp-num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .kp-desc{color:var(--ink-2,#5B5A55);max-width:340px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -72,6 +75,12 @@ const CSS = `
 .kp-view{border:1px solid var(--line,#CFCDC5);border-radius:3px;overflow:hidden;background:var(--panel,#fff)}
 .kp-view canvas{display:block;width:100%;height:172px;cursor:zoom-in}
 .kp-zoom{position:fixed;inset:0;background:#000a;z-index:210;display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+.kp-ask{position:fixed;inset:0;background:#0005;z-index:220;display:flex;align-items:center;justify-content:center}
+.kp-ask form{width:min(420px,92vw);background:var(--bench,#ECEBE6);color:var(--ink,#1B1B1B);border:1px solid var(--line,#CFCDC5);border-radius:6px;box-shadow:var(--shadow,0 10px 30px #0003);padding:14px 16px;display:flex;flex-direction:column;gap:10px;animation:kp-in .12s ease-out}
+.kp-ask b{font-size:14px}.kp-ask p{margin:0;color:var(--ink-2,#5B5A55);font-size:12.5px;line-height:1.45}
+.kp-ask input{background:var(--panel,#fff);color:var(--ink,#1B1B1B);border:1px solid var(--line,#CFCDC5);border-radius:3px;padding:6px 8px;font:inherit}
+.kp-ask div{display:flex;justify-content:flex-end;gap:6px}
+@keyframes kp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .kp-zoom canvas{width:min(820px,92vw);height:min(820px,88vh);border-radius:4px;border:1px solid var(--line,#CFCDC5)}
 .kp-view div{font-size:11px;color:var(--ink-2,#5B5A55);padding:2px 6px;border-top:1px solid var(--line,#CFCDC5);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kp-facts{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin:8px 0}
@@ -97,11 +106,36 @@ const money = (v: number, cur: string) => (cur && cur !== "USD" ? `${v.toFixed(v
 const stockText = (n: number | null) => (n === null || n === undefined ? "—" : n.toLocaleString("en-US"));
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
 
-interface Opts { ctx?: ToolCtx | null; tab?: "search" | "libraries" | "keys"; query?: string }
+interface Opts { ctx?: ToolCtx | null; tab?: Tab; query?: string }
+
+/**
+ * A small question over the dialog, in place of the browser's prompt / confirm: resolves with the
+ * text (or "" for a plain yes) on OK and null on Cancel or Escape.
+ */
+function ask(o: { title: string; text?: string; input?: string | null; placeholder?: string; ok?: string; danger?: boolean; cancel?: boolean }): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = o.input !== undefined && o.input !== null ? h("input", { type: "text", id: "kp-ask-input", value: o.input, placeholder: o.placeholder || "", autocomplete: "off", spellcheck: "false" }) : null;
+    const done = (v: string | null) => { back.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const key = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.stopImmediatePropagation(); ev.preventDefault(); done(null); } };
+    const form = h("form", { onsubmit: (ev: Event) => { ev.preventDefault(); done(input ? input.value : ""); } },
+      h("b", null, o.title), o.text ? h("p", null, o.text) : null, input,
+      h("div", null, o.cancel === false ? null : h("button", { class: "kp-btn", type: "button", id: "kp-ask-cancel", onclick: () => done(null) }, "Cancel"),
+        h("button", { class: "kp-btn " + (o.danger ? "danger" : "primary"), type: "submit", id: "kp-ask-ok" }, o.ok || "OK")));
+    const back = h("div", { class: "kp-ask", onmousedown: (ev: Event) => { if (ev.target === back) done(null); } }, form);
+    document.body.appendChild(back); document.addEventListener("keydown", key, true);
+    if (input) { input.focus(); input.select(); } else (form.querySelector("#kp-ask-ok") as HTMLElement).focus();
+  });
+}
+const tell = (title: string, text?: string) => ask({ title, text, cancel: false });
+
+type Tab = "search" | "libraries" | "keys" | "bom";
+
+/** "R1, R2, R3 +4" */
+const refList = (refs: string[]) => (refs.length > 4 ? `${refs.slice(0, 3).join(", ")} +${refs.length - 3}` : refs.join(", "));
 
 class PartsDialog {
   private root: HTMLElement; private bodyEl: HTMLElement; private tabs: Record<string, HTMLButtonElement> = {};
-  private ctx: ToolCtx | null; private tab: "search" | "libraries" | "keys";
+  private ctx: ToolCtx | null; private tab: Tab;
   private vendors: Vendor[] = []; private libs: LibrarySummary[] = [];
   // search
   private q = ""; private vendor = "all"; private results: PartInfo[] | null = null; private searchErrors: { vendor: string; message: string }[] = []; private searching = false; private searchSeq = 0;
@@ -109,15 +143,17 @@ class PartsDialog {
   private sel: { vendor: string; id: string; lib?: string } | null = null; private part: Part | null = null; private partErr = ""; private partLoading = false; private partSeq = 0;
   // libraries
   private lib: Library | null = null; private libBusy = ""; private libNote = "";
-  private onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !ev.defaultPrevented) { ev.stopPropagation(); this.close(); } };
+  // the bill of materials of the open document, and the line a search is looking for a part for
+  private bom: BomLine[] | null = null; private boards = 1; private assign: { ids: string[]; refs: string[] } | null = null;
+  private onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !ev.defaultPrevented && !document.querySelector(".kp-ask")) { ev.stopPropagation(); this.close(); } };
 
   constructor(opts: Opts) {
     this.ctx = opts.ctx || null; this.tab = opts.tab || "search"; this.q = opts.query || "";
     if (!document.getElementById("kp-style")) document.head.append(h("style", { id: "kp-style" }, CSS));
-    const tab = (id: "search" | "libraries" | "keys", label: string) => (this.tabs[id] = h("button", { class: "kp-tab", type: "button", "data-tab": id, onclick: () => this.setTab(id) }, label));
+    const tab = (id: Tab, label: string) => (this.tabs[id] = h("button", { class: "kp-tab", type: "button", "data-tab": id, onclick: () => this.setTab(id) }, label));
     this.bodyEl = h("div", { class: "kp-body" });
     const box = h("div", { class: "kp", role: "dialog", "aria-label": "Vendor Parts" },
-      h("div", { class: "kp-head" }, h("span", { class: "kp-title" }, "Vendor Parts"), tab("search", "Search"), tab("libraries", "My Libraries"), tab("keys", "API Keys"),
+      h("div", { class: "kp-head" }, h("span", { class: "kp-title" }, "Vendor Parts"), tab("search", "Search"), tab("libraries", "My Libraries"), this.ctx && this.ctx.doc ? tab("bom", "BOM") : null, tab("keys", "API Keys"),
         h("button", { class: "kp-x", type: "button", title: "Close (Esc)", onclick: () => this.close() }, "×")),
       this.bodyEl);
     // keep the editor's hotkeys and tools out of the dialog
@@ -143,12 +179,15 @@ class PartsDialog {
       this.vendors = vendors; this.libs = libs; this.render();
       if (this.q && this.tab === "search") void this.search();
       if (this.tab === "libraries" && !this.lib && this.libs.length) void this.openLibrary(this.libs[0].id);
+      if (this.tab === "bom") void this.loadBom();
     } catch (e) { this.bodyEl.replaceChildren(h("div", { class: "kp-empty", style: "flex:1" }, h("b", null, errText(e)), e instanceof ApiError && e.status === 401 ? h("p", null, h("a", { class: "kp-btn primary", href: `/auth/github/login?next=${encodeURIComponent(location.pathname)}` }, "Sign in with GitHub")) : null)); }
   }
 
-  private setTab(t: "search" | "libraries" | "keys") {
+  private setTab(t: Tab) {
     this.tab = t; this.sel = null; this.part = null; this.partErr = "";
     if (t === "libraries" && !this.lib && this.libs.length) void this.openLibrary(this.libs[0].id);
+    if (t !== "search") this.assign = null;
+    if (t === "bom") void this.loadBom();
     this.render();
   }
 
@@ -156,14 +195,14 @@ class PartsDialog {
   private render() {
     for (const [id, b] of Object.entries(this.tabs)) b.classList.toggle("on", id === this.tab);
     if (this.tab === "keys") { this.bodyEl.replaceChildren(this.renderKeys()); return; }
-    const main = this.tab === "search" ? this.renderSearch() : this.renderLibrary();
+    const main = this.tab === "search" ? this.renderSearch() : this.tab === "bom" ? this.renderBom() : this.renderLibrary();
     const kids: Node[] = [];
     if (this.tab === "libraries") kids.push(this.renderLibList());
     kids.push(main, this.renderSide());
     // the search box keeps its focus and caret across a re-render
-    const active = document.activeElement as HTMLInputElement | null; const keep = active && active.id === "kp-q" ? [active.selectionStart, active.selectionEnd] : null;
+    const active = document.activeElement as HTMLInputElement | null; const keep = active && (active.id === "kp-q" || active.id === "kp-boards") ? [active.selectionStart, active.selectionEnd] : null;
     this.bodyEl.replaceChildren(...kids);
-    if (keep) { const q = this.bodyEl.querySelector<HTMLInputElement>("#kp-q"); if (q) { q.focus(); q.setSelectionRange(keep[0], keep[1]); } }
+    if (keep) { const q = this.bodyEl.querySelector<HTMLInputElement>("#" + active!.id); if (q) { q.focus(); try { q.setSelectionRange(keep[0], keep[1]); } catch { /* a number input has no caret to restore */ } } }
     this.paint();
   }
 
@@ -273,8 +312,10 @@ class PartsDialog {
     const editable = this.libs.filter((l) => l.can_edit);
     const addSel = h("select", { id: "kp-add", title: "Save this part to one of your libraries", onchange: (ev: Event) => { const v = (ev.target as HTMLSelectElement).value; (ev.target as HTMLSelectElement).value = ""; if (v) void this.addTo(v); } },
       h("option", { value: "" }, "Add to library…"), ...editable.map((l) => h("option", { value: l.id }, l.name)), h("option", { value: "+" }, "New library…"));
+    const canAssign = this.assign && this.ctx && this.ctx.doc && !this.ctx.viewOnly;
     const actions = h("div", { class: "kp-actions" },
-      h("button", { class: "kp-btn primary", type: "button", id: "kp-place", disabled: !!why, title: why || "Put this part on the cursor", onclick: () => void this.place() }, kind),
+      canAssign ? h("button", { class: "kp-btn primary", type: "button", id: "kp-assign", title: "Write this part's vendor number, MPN and manufacturer onto " + this.assign!.refs.join(", "), onclick: () => this.assignPart() }, `Assign to ${refList(this.assign!.refs)}`) : null,
+      h("button", { class: "kp-btn" + (canAssign ? "" : " primary"), type: "button", id: "kp-place", disabled: !!why, title: why || "Put this part on the cursor", onclick: () => void this.place() }, kind),
       addSel,
       p.datasheet ? h("a", { class: "kp-btn", href: p.datasheet, target: "_blank", rel: "noreferrer" }, "Datasheet ↗") : null,
       p.url ? h("a", { class: "kp-btn", href: p.url, target: "_blank", rel: "noreferrer" }, `${p.vendor_name} ↗`) : null,
@@ -311,7 +352,7 @@ class PartsDialog {
   private async relink() {
     const p = this.part; if (!p) return;
     const cur = p.cad ? p.cad.source.vendor_id : "";
-    const v = prompt(`LCSC part number whose symbol and footprint to use for ${p.mpn || p.vendor_id}\n(leave empty to look it up again by manufacturer part number)`, cur);
+    const v = await ask({ title: "Symbol and footprint", text: `LCSC part number whose symbol and footprint to use for ${p.mpn || p.vendor_id}. Leave it empty to look it up again by manufacturer part number.`, input: cur, placeholder: "C8734", ok: "Use" });
     if (v === null) return;
     try { this.part = await api.linkCad(p.vendor, p.vendor_id, v.trim() || null, this.sel ? this.sel.lib : undefined); this.partErr = ""; } catch (e) { this.partErr = errText(e); }
     this.render();
@@ -324,6 +365,75 @@ class PartsDialog {
     try { await placePart(freshCtx(ctx), p); } catch (e) { ctx.toast("Placing failed: " + errText(e), 4000); }
   }
 
+  // ------------------------------------------------------------ bill of materials
+  private async loadBom() {
+    const ctx = this.ctx; if (!ctx || !ctx.doc) { this.bom = []; return; }
+    const lines = collect(ctx.K, ctx.doc, ctx.isSch); this.bom = lines;
+    const todo = lines.filter((l) => l.vendor); for (const l of todo) l.loading = true;
+    this.render();
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const l = todo[next++]; if (!l) return;
+        try { l.part = await api.part(l.vendor!, l.vendorId); } catch (e) { l.err = errText(e); }
+        l.loading = false;
+        if (this.bom === lines && this.tab === "bom") this.render();
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  }
+
+  private download(name: string, text: string) {
+    const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/csv" })), download: name });
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  private findFor(l: BomLine) {
+    const size = /(?:^|[_\-:])(01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)(?:[_\-]|$)/.exec(l.footprint);
+    this.assign = { ids: l.ids, refs: l.refs }; this.q = l.mpn || [l.value, size ? size[1] : ""].filter(Boolean).join(" ");
+    this.tab = "search"; this.sel = null; this.part = null; this.partErr = ""; this.results = null; this.render(); void this.search();
+  }
+
+  private assignPart() {
+    const ctx = this.ctx, p = this.part, a = this.assign; if (!ctx || !ctx.doc || !p || !a) return;
+    const changes = assignChanges(ctx.K, ctx.doc, a.ids, p.fields);
+    if (!changes.length) { this.toast("Those parts are no longer in the document."); return; }
+    ctx.commit(changes, "assign part"); ctx.requestRender();
+    ctx.toast(`${p.mpn || p.vendor_id} assigned to ${refList(a.refs)}`, 3000);
+    this.assign = null; this.setTab("bom");
+  }
+
+  private renderBom(): HTMLElement {
+    const ctx = this.ctx; const lines = this.bom || []; const t = totals(lines, this.boards);
+    const what = ctx && ctx.isSch ? "this sheet" : "this board";
+    const stem = ((ctx && (ctx.project as { name?: string } | null)?.name) || "bom").replace(/[^\w.-]+/g, "_");
+    const bar = h("div", { class: "kp-bar" },
+      h("label", { style: "display:flex;align-items:center;gap:6px" }, "Boards", h("input", { type: "number", id: "kp-boards", min: "1", max: "100000", value: String(this.boards), style: "width:76px",
+        oninput: (ev: Event) => { const n = Math.floor(+(ev.target as HTMLInputElement).value); if (n >= 1 && n !== this.boards) { this.boards = Math.min(n, 100000); this.render(); } } })),
+      h("span", { id: "kp-bom-sum", style: "flex:1;color:var(--ink-2,#5B5A55)" }, lines.length
+        ? `${t.parts} parts in ${t.lines} lines on ${what} · ${t.matched} with a vendor part${t.matched ? ` · ${money(t.cost, t.currency)} for ${this.boards === 1 ? "one board" : this.boards + " boards"}` : ""}${t.short ? ` · ${t.short} short of stock` : ""}` : ""),
+      h("button", { class: "kp-btn", type: "button", id: "kp-bom-jlc", disabled: !lines.length, title: "Comment, Designator, Footprint, LCSC Part #: the file JLCPCB's assembly order asks for", onclick: () => this.download(`${stem}-jlcpcb-bom.csv`, jlcCsv(lines)) }, "JLCPCB BOM ↓"),
+      h("button", { class: "kp-btn", type: "button", id: "kp-bom-csv", disabled: !lines.length, title: "Every line with stock and prices, for a spreadsheet", onclick: () => this.download(`${stem}-bom.csv`, fullCsv(lines, this.boards)) }, "Full BOM ↓"));
+    const table = h("table", { class: "kp-table", id: "kp-bom" }, h("thead", null, h("tr", null, h("th", null, "References"), h("th", { class: "kp-num" }, "Qty"), h("th", null, "Value"), h("th", null, "Part"), h("th", { class: "kp-num" }, "Stock"), h("th", { class: "kp-num" }, "Each"), h("th", { class: "kp-num" }, "Total"))));
+    const body = h("tbody"); table.append(body);
+    for (const l of lines) {
+      const need = l.refs.length * this.boards; const p = l.part; const pr = p ? priceAt(p.prices, need) : null;
+      const on = !!(this.sel && l.vendor === this.sel.vendor && l.vendorId === this.sel.id);
+      const part: Child[] = l.vendor
+        ? [h("div", null, (p && p.mpn) || l.mpn || l.vendorId), h("div", { class: "kp-dim" }, this.vendorBadge(l.vendor, p ? p.vendor_name : l.vendor.toUpperCase()), " ", h("span", { class: "kp-mono" }, l.vendorId), l.loading ? h("span", { class: "kp-spin", style: "margin-left:6px" }) : null, l.err ? h("span", { style: "color:var(--err,#E6090D);margin-left:6px", title: l.err }, "not found") : null)]
+        : [h("button", { class: "kp-btn sm kp-find", type: "button", title: "Search the vendors for this part and write the choice onto " + l.refs.join(", "), onclick: (ev: Event) => { ev.stopPropagation(); this.findFor(l); } }, "Find a part…"), l.mpn ? h("span", { class: "kp-dim", style: "margin-left:6px" }, l.mpn) : null];
+      body.append(h("tr", { class: "kp-row" + (on ? " on" : "") + (l.vendor ? "" : " kp-nopart"), "data-key": l.key, "data-vendor": l.vendor || "", "data-id": l.vendorId, onclick: () => { if (l.vendor) void this.select(l.vendor, l.vendorId); } },
+        h("td", { title: l.refs.join(", ") }, refList(l.refs)), h("td", { class: "kp-num" }, String(need)),
+        h("td", null, h("div", null, l.value), h("div", { class: "kp-dim", title: l.footprint }, l.footprint.includes(":") ? l.footprint.slice(l.footprint.indexOf(":") + 1) : l.footprint)),
+        h("td", null, ...part),
+        h("td", { class: "kp-num", style: p && p.stock !== null && p.stock < need ? "color:var(--err,#E6090D)" : "" }, p && p.stock !== null ? stockText(p.stock) : ""),
+        h("td", { class: "kp-num" }, pr ? money(pr.price, pr.currency) : ""), h("td", { class: "kp-num" }, pr ? money(pr.price * need, pr.currency) : "")));
+    }
+    const empty = !lines.length ? h("div", { class: "kp-empty" }, h("b", null, `No parts on ${what}.`), h("p", null, "Symbols marked “exclude from BOM” or “do not populate”, and power symbols, are left out.")) : null;
+    return h("div", { class: "kp-main" }, bar, ctx && ctx.isSch && (ctx.docs || []).filter((d) => (d as { docType?: string }).docType === "sch").length > 1 ? h("div", { class: "kp-note" }, "This lists the open sheet. Open the board for the whole design.") : null,
+      h("div", { class: "kp-list" }, empty || table));
+  }
+
   // ------------------------------------------------------------ libraries
   private async reloadLibs() { try { this.libs = await api.libraries(this.projectId()); } catch { /* the list on screen stands */ } }
 
@@ -334,8 +444,8 @@ class PartsDialog {
   }
 
   private async newLibrary(): Promise<string | null> {
-    const name = prompt("Name of the new library", ""); if (!name || !name.trim()) return null;
-    try { const lib = await api.createLibrary(name.trim()); await this.reloadLibs(); return lib.id; } catch (e) { alert(errText(e)); return null; }
+    const name = await ask({ title: "New library", input: "", placeholder: "Library name", ok: "Create" }); if (!name || !name.trim()) return null;
+    try { const lib = await api.createLibrary(name.trim()); await this.reloadLibs(); return lib.id; } catch (e) { void tell("The library could not be created", errText(e)); return null; }
   }
 
   private async addTo(libId: string) {
@@ -374,12 +484,12 @@ class PartsDialog {
     const run = async (what: string, fn: () => Promise<void>) => { this.libBusy = what; this.libNote = ""; this.render(); try { await fn(); } catch (e) { this.libNote = errText(e); } this.libBusy = ""; this.render(); };
     const bar = h("div", { class: "kp-bar" },
       h("b", { id: "kp-libname", style: "margin-right:auto" }, lib.name, lib.project_name ? h("span", { class: "kp-badge", style: "margin-left:8px;font-weight:400" }, `shared with ${lib.project_name}`) : null),
-      lib.can_edit ? h("button", { class: "kp-btn", type: "button", disabled: busy, onclick: () => { const n = prompt("Library name", lib.name); if (n && n.trim() && n.trim() !== lib.name) void run("rename", async () => { this.lib = await api.updateLibrary(lib.id, { name: n.trim() }); await this.reloadLibs(); }); } }, "Rename…") : null,
+      lib.can_edit ? h("button", { class: "kp-btn", type: "button", disabled: busy, onclick: async () => { const n = await ask({ title: "Rename library", input: lib.name, ok: "Rename" }); if (n && n.trim() && n.trim() !== lib.name) void run("rename", async () => { this.lib = await api.updateLibrary(lib.id, { name: n.trim() }); await this.reloadLibs(); }); } }, "Rename…") : null,
       lib.mine && pid && lib.project_id !== pid ? h("button", { class: "kp-btn", type: "button", id: "kp-share", disabled: busy, title: "Everyone in this project can use the library; its editors can add to it", onclick: () => void run("share", async () => { this.lib = await api.updateLibrary(lib.id, { project_id: pid }); await this.reloadLibs(); }) }, "Share with This Project") : null,
       lib.mine && lib.project_id ? h("button", { class: "kp-btn", type: "button", id: "kp-unshare", disabled: busy, onclick: () => void run("share", async () => { this.lib = await api.updateLibrary(lib.id, { project_id: null }); await this.reloadLibs(); }) }, "Stop Sharing") : null,
       h("button", { class: "kp-btn", type: "button", id: "kp-refreshlib", disabled: busy || !lib.items.length, title: "Fetch every part in this library from its vendor again", onclick: () => void run("refresh", async () => { const r = await api.refreshLibrary(lib.id); this.lib = r.library; this.libNote = r.failed.length ? `${r.refreshed} refreshed, ${r.failed.length} could not be reached and kept their saved copy.` : `${r.refreshed} part${r.refreshed === 1 ? "" : "s"} refreshed.`; }) }, this.libBusy === "refresh" ? [h("span", { class: "kp-spin" }), "Refreshing…"] : "Refresh All"),
       h("a", { class: "kp-btn", id: "kp-export", href: api.exportUrl(lib.id), title: "A .kicad_sym symbol library, a .pretty footprint folder and the 3D models, for desktop KiCad" }, "Export for KiCad ↓"),
-      lib.mine ? h("button", { class: "kp-btn danger", type: "button", disabled: busy, onclick: () => { if (confirm(`Delete the library “${lib.name}”? Designs that already use its parts are not affected.`)) void run("delete", async () => { await api.deleteLibrary(lib.id); this.lib = null; await this.reloadLibs(); }); } }, "Delete") : null);
+      lib.mine ? h("button", { class: "kp-btn danger", type: "button", disabled: busy, onclick: async () => { if (await ask({ title: `Delete “${lib.name}”?`, text: "Designs that already use its parts are not affected.", ok: "Delete", danger: true }) !== null) void run("delete", async () => { await api.deleteLibrary(lib.id); this.lib = null; await this.reloadLibs(); }); } }, "Delete") : null);
     const body = lib.items.length
       ? this.partsTable(lib.items.map((i) => ({ key: i.vendor + "\n" + i.vendor_id, vendor: i.vendor, vendor_name: i.vendor_name, vendor_id: i.vendor_id, mpn: i.mpn, manufacturer: i.manufacturer, description: i.description, package: i.package, stock: i.stock, prices: i.prices || [], assembly: i.assembly, item: i })), lib)
       : h("div", { class: "kp-empty" }, h("b", null, "This library is empty."), h("p", null, "Find a part under Search and choose “Add to library…”."));
@@ -400,11 +510,11 @@ class PartsDialog {
         try {
           const r = await api.putKey(v.id, Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value.trim()])));
           this.vendors = await api.vendors(); this.render();
-          if (!r.verified) alert(`Saved, but ${v.name} could not be reached to check the key.`);
+          if (!r.verified) void tell("Key saved", `${v.name} could not be reached to check it.`);
         } catch (e) { msg.textContent = errText(e); msg.style.color = "var(--err,#E6090D)"; save.disabled = false; }
       } }, "Save");
       card.append(h("div", { style: "display:flex;gap:6px;margin-top:10px;align-items:center" }, save,
-        v.key_source === "yours" ? h("button", { class: "kp-btn", type: "button", onclick: async () => { try { await api.deleteKey(v.id); this.vendors = await api.vendors(); } catch (e) { alert(errText(e)); } this.render(); } }, "Remove") : null,
+        v.key_source === "yours" ? h("button", { class: "kp-btn", type: "button", onclick: async () => { try { await api.deleteKey(v.id); this.vendors = await api.vendors(); } catch (e) { void tell("The key could not be removed", errText(e)); } this.render(); } }, "Remove") : null,
         h("a", { href: v.signup, target: "_blank", rel: "noreferrer", style: "margin-left:auto;font-size:12px" }, "Get a key ↗")), msg);
       return card;
     }));

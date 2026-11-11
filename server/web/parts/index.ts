@@ -33,6 +33,7 @@ function installActions(): void {
       m.actions = {
         ...(m.actions || {}),
         vendorParts: { label: "Add Part from Vendor…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx }); } },
+        vendorBom: { label: "Bill of Materials with Vendor Prices…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx, tab: "bom" }); } },
         vendorLibraries: { label: "Part Libraries…", key: null, menu: "Tools", run(ctx: ToolCtx) { lastCtx = ctx; openParts({ ctx, tab: "libraries" }); } },
       };
     } catch (e) { console.warn("vendor parts: could not add the menu entries", e); }
@@ -64,7 +65,7 @@ function registerSource(): boolean {
 
 W.KiCadParts = {
   /** Open the dialog.  `ctx` is the editor's tool context; without one the dialog browses and manages libraries only. */
-  open(opts?: { ctx?: ToolCtx; tab?: "search" | "libraries" | "keys"; query?: string }) { if (opts && opts.ctx) lastCtx = opts.ctx; openParts(opts || {}); },
+  open(opts?: { ctx?: ToolCtx; tab?: "search" | "libraries" | "keys" | "bom"; query?: string }) { if (opts && opts.ctx) lastCtx = opts.ctx; openParts(opts || {}); },
   close: closeParts,
   isOpen,
   /** Fetch a part by reference and put it on the cursor: the same thing the dialog's Place button does. */
