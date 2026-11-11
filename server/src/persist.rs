@@ -44,6 +44,8 @@ pub struct OpRow {
     pub author_id: i64,
     pub client_id: String,
     pub changes: Value,
+    /// The author's login (empty when the account is gone).
+    pub login: String,
 }
 
 pub async fn get_user(pool: &PgPool, id: i64) -> DbResult<Option<User>> {
@@ -825,13 +827,21 @@ pub async fn min_op_seq(pool: &PgPool, doc_id: Uuid) -> DbResult<Option<i64>> {
 
 pub async fn ops_since(pool: &PgPool, doc_id: Uuid, since: i64) -> DbResult<Vec<OpRow>> {
     sqlx::query_as::<_, OpRow>(
-        "SELECT seq, author_id, client_id, changes FROM ops
-         WHERE doc_id = $1 AND seq > $2 ORDER BY seq",
+        "SELECT o.seq, o.author_id, o.client_id, o.changes, COALESCE(u.login, '') AS login
+         FROM ops o LEFT JOIN users u ON u.id = o.author_id
+         WHERE o.doc_id = $1 AND o.seq > $2 ORDER BY o.seq",
     )
     .bind(doc_id)
     .bind(since)
     .fetch_all(pool)
     .await
+}
+
+/// True when an op insert failed because another writer already holds that seq: with
+/// several replicas the `(doc_id, seq)` primary key is what puts their ops in one order.
+pub fn is_seq_taken(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.is_unique_violation() && d.constraint() == Some("ops_pkey"))
 }
 
 /// Insert an op at the given seq. Returns Ok(None) on success; if the

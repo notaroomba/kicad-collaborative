@@ -60,9 +60,13 @@ struct JoinedDoc {
 /// anyone's access changed since it was cached: a demoted editor stops writing
 /// and a removed member stops receiving without having to reconnect.  `None`
 /// means the access is gone.
-async fn current_role(state: &AppState, user_id: i64, d: &mut JoinedDoc) -> Option<String> {
+///
+/// `writing` is set for an op.  With other replicas around, the news that access changed
+/// travels as a notification and can arrive a moment after the change itself, so a write
+/// does not rely on it: it asks the database every time.
+async fn current_role(state: &AppState, user_id: i64, d: &mut JoinedDoc, writing: bool) -> Option<String> {
     let now = state.access_epoch.load(std::sync::atomic::Ordering::Relaxed);
-    if now != d.epoch {
+    if now != d.epoch || (writing && state.relay.others_alive()) {
         match persist::effective_role(&state.pool, user_id, d.project_id).await {
             Ok(Some(role)) => {
                 d.role = role;
@@ -218,13 +222,19 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
         }
         format!("{}{}", own_prefix, suffix)
     };
-    let color_idx = state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len();
+    // One counter for every replica, so two people who meet in a document through
+    // different replicas were not both handed the same colour.
+    let color_idx = match sqlx::query_as::<_, (i64,)>("SELECT nextval('peer_color_seq')").fetch_one(&state.pool).await {
+        Ok((n,)) => n as usize % PEER_COLORS.len(),
+        Err(_) => state.color_counter.fetch_add(1, Ordering::Relaxed) % PEER_COLORS.len(),
+    };
     let peer = PeerInfo {
         client_id: client_id.clone(),
         user_id: user.id,
         login: user.login.clone(),
         name: user.name.clone().unwrap_or_else(|| user.login.clone()),
         color: PEER_COLORS[color_idx].to_string(),
+        kind: if client_kind.as_deref() == Some("web") { "web".into() } else { "desktop".into() },
     };
     let _ = out_tx.try_send(
         json!({
@@ -357,7 +367,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                     );
                     continue;
                 };
-                let role = current_role(&state, user.id, d).await;
+                let role = current_role(&state, user.id, d, true).await;
                 if role.as_deref() != Some("editor") {
                     let _ = out_tx.try_send(
                         json!({ "type": "error", "code": "permission_denied", "docId": doc_id,
@@ -400,7 +410,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, cookie_token: String)
                 // Presence is the heartbeat of someone who only watches: the place to
                 // notice that their access was taken away.
                 if let Some(d) = joined.get_mut(&doc_id) {
-                    if current_role(&state, user.id, d).await.is_none() {
+                    if current_role(&state, user.id, d, false).await.is_none() {
                         let _ = out_tx.try_send(
                             json!({ "type": "error", "code": "permission_denied", "docId": doc_id })
                                 .to_string(),

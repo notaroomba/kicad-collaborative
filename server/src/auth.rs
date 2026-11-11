@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use axum::extract::{FromRequestParts, Query, State};
 use axum::http::request::Parts;
@@ -19,7 +16,8 @@ use crate::persist::{self, User};
 use crate::AppState;
 
 pub const TOKEN_TTL_SECS: i64 = 30 * 24 * 3600;
-const PENDING_TTL: Duration = Duration::from_secs(600);
+/// How long an in-flight sign-in (an OAuth state or a one-time code) stays usable.
+const PENDING_TTL_SECS: f64 = 600.0;
 pub const COOKIE_NAME: &str = "kc_session";
 /// Binds an in-flight OAuth `state` to the browser that started the flow.
 /// ponytail: one cookie name, so two concurrent logins in one browser clobber
@@ -35,6 +33,7 @@ pub struct Claims {
 }
 
 /// In-flight browser OAuth state, keyed by the random `state` we hand GitHub.
+#[derive(Serialize, Deserialize)]
 pub struct PendingLogin {
     pub next: String,
     /// Set when this login was initiated by a desktop PKCE authorize request.
@@ -46,10 +45,10 @@ pub struct PendingLogin {
     /// Set when this is not a sign-in at all but a signed-in user granting
     /// repository access (github.rs): the token is stored, no session is minted.
     pub connect: Option<PendingConnect>,
-    pub created: Instant,
 }
 
 /// A signed-in user adding repository access to their account.
+#[derive(Serialize, Deserialize)]
 pub struct PendingConnect {
     pub user_id: i64,
     pub github_id: i64,
@@ -59,14 +58,14 @@ pub struct PendingConnect {
 
 /// One-time code that hands a finished browser session to a non-canonical
 /// host, so its cookie is set on that host rather than public_url.
+#[derive(Serialize, Deserialize)]
 pub struct PendingAdopt {
     pub user_id: i64,
     pub login: String,
     pub next: String,
-    pub created: Instant,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PendingDesktop {
     pub code_challenge: String,
     pub redirect_uri: String,
@@ -74,35 +73,67 @@ pub struct PendingDesktop {
 }
 
 /// One-time desktop auth code -> (pkce info, user id).
+#[derive(Serialize, Deserialize)]
 pub struct PendingDesktopCode {
     pub desktop: PendingDesktop,
     pub user_id: i64,
     pub login: String,
-    pub created: Instant,
 }
 
-#[derive(Default)]
-pub struct AuthPending {
-    pub logins: Mutex<HashMap<String, PendingLogin>>,
-    pub desktop_codes: Mutex<HashMap<String, PendingDesktopCode>>,
-    pub adopt_codes: Mutex<HashMap<String, PendingAdopt>>,
+/// In-flight sign-in state lives in Postgres rather than in this process.  A sign-in is
+/// several requests long (GitHub's redirect back, the desktop app's token exchange, the
+/// adopt hop to another host) and with more than one server replica each of them may land
+/// on a different one; kept in memory, the second request found nothing and the sign-in
+/// failed with "unknown or expired oauth state".
+const KIND_LOGIN: &str = "login";
+const KIND_DESKTOP: &str = "desktop";
+const KIND_ADOPT: &str = "adopt";
+
+async fn pending_put<T: Serialize>(state: &AppState, kind: &str, key: &str, value: &T) -> AppResult<()> {
+    // Expired rows are swept on the way in; nothing else ever needs to.
+    sqlx::query("DELETE FROM auth_pending WHERE created < now() - make_interval(secs => $1)")
+        .bind(PENDING_TTL_SECS)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO auth_pending (kind, key, payload) VALUES ($1, $2, $3)
+         ON CONFLICT (kind, key) DO UPDATE SET payload = EXCLUDED.payload, created = now()",
+    )
+    .bind(kind)
+    .bind(key)
+    .bind(serde_json::to_value(value).map_err(|e| anyhow::anyhow!("pending state: {e}"))?)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
 }
 
-impl AuthPending {
-    fn purge(&self) {
-        self.logins
-            .lock()
-            .unwrap()
-            .retain(|_, v| v.created.elapsed() < PENDING_TTL);
-        self.desktop_codes
-            .lock()
-            .unwrap()
-            .retain(|_, v| v.created.elapsed() < PENDING_TTL);
-        self.adopt_codes
-            .lock()
-            .unwrap()
-            .retain(|_, v| v.created.elapsed() < PENDING_TTL);
-    }
+/// Look at an unexpired entry without consuming it.
+async fn pending_peek<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT payload FROM auth_pending
+         WHERE kind = $1 AND key = $2 AND created >= now() - make_interval(secs => $3)",
+    )
+    .bind(kind)
+    .bind(key)
+    .bind(PENDING_TTL_SECS)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.and_then(|(v,)| serde_json::from_value(v).ok()))
+}
+
+/// Consume an entry: exactly one request gets it, whichever replica it reaches.  An expired
+/// entry is removed and reported as absent.
+async fn pending_take<T: serde::de::DeserializeOwned>(state: &AppState, kind: &str, key: &str) -> AppResult<Option<T>> {
+    let row: Option<(serde_json::Value, bool)> = sqlx::query_as(
+        "DELETE FROM auth_pending WHERE kind = $1 AND key = $2
+         RETURNING payload, created >= now() - make_interval(secs => $3)",
+    )
+    .bind(kind)
+    .bind(key)
+    .bind(PENDING_TTL_SECS)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.filter(|(_, fresh)| *fresh).and_then(|(v, _)| serde_json::from_value(v).ok()))
 }
 
 pub fn random_token() -> String {
@@ -250,7 +281,7 @@ pub async fn github_login(
         .filter(|o| *o != canonical && is_allowed_origin(&state, o))
         .map(str::to_string);
 
-    Ok(start_github_flow(&state, client_id, next, None, return_origin, None, SIGN_IN_SCOPE))
+    start_github_flow(&state, client_id, next, None, return_origin, None, SIGN_IN_SCOPE).await
 }
 
 const SIGN_IN_SCOPE: &str = "read:user user:email";
@@ -296,10 +327,10 @@ pub async fn github_connect(
         github_id: user.github_id,
         return_to: format!("{origin}{next}"),
     };
-    Ok(start_github_flow(&state, client_id, next, None, None, Some(connect), scope))
+    start_github_flow(&state, client_id, next, None, None, Some(connect), scope).await
 }
 
-fn start_github_flow(
+async fn start_github_flow(
     state: &AppState,
     client_id: &str,
     next: String,
@@ -307,13 +338,9 @@ fn start_github_flow(
     return_origin: Option<String>,
     connect: Option<PendingConnect>,
     scope: &str,
-) -> Response {
-    state.auth_pending.purge();
+) -> AppResult<Response> {
     let oauth_state = random_token();
-    state.auth_pending.logins.lock().unwrap().insert(
-        oauth_state.clone(),
-        PendingLogin { next, desktop, return_origin, connect, created: Instant::now() },
-    );
+    pending_put(state, KIND_LOGIN, &oauth_state, &PendingLogin { next, desktop, return_origin, connect }).await?;
     let url = format!(
         "{}/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&state={}",
         state.cfg.github_web_url,
@@ -332,7 +359,7 @@ fn start_github_flow(
         .secure(state.cfg.public_url.starts_with("https://"))
         .build();
 
-    (CookieJar::new().add(cookie), Redirect::to(&url)).into_response()
+    Ok((CookieJar::new().add(cookie), Redirect::to(&url)).into_response())
 }
 
 /// Only allow same-site relative redirect targets.
@@ -394,12 +421,8 @@ pub async fn github_callback(
     // A repository grant is bound differently: its state names the account it is
     // for, and the token is refused below unless it belongs to that very GitHub
     // user — so a state in the wrong browser can attach nothing to anyone.
-    let is_connect = state
-        .auth_pending
-        .logins
-        .lock()
-        .unwrap()
-        .get(&q.state)
+    let is_connect = pending_peek::<PendingLogin>(&state, KIND_LOGIN, &q.state)
+        .await?
         .is_some_and(|p| p.connect.is_some());
     if !is_connect && jar.get(OAUTH_STATE_COOKIE).map(|c| c.value()) != Some(q.state.as_str()) {
         return Err(AppError::BadRequest("oauth state mismatch".into()));
@@ -407,16 +430,9 @@ pub async fn github_callback(
 
     let jar = jar.remove( Cookie::build( ( OAUTH_STATE_COOKIE, "" ) ).path( "/auth" ).build() );
 
-    let pending = state
-        .auth_pending
-        .logins
-        .lock()
-        .unwrap()
-        .remove(&q.state)
+    let pending: PendingLogin = pending_take(&state, KIND_LOGIN, &q.state)
+        .await?
         .ok_or_else(|| AppError::BadRequest("unknown or expired oauth state".into()))?;
-    if pending.created.elapsed() > PENDING_TTL {
-        return Err(AppError::BadRequest("expired oauth state".into()));
-    }
 
     let http = reqwest::Client::new();
     let token: GithubTokenResponse = http
@@ -532,17 +548,9 @@ pub async fn adopt(
     State(state): State<AppState>,
     Query(q): Query<AdoptQuery>,
 ) -> AppResult<Response> {
-    state.auth_pending.purge();
-    let pending = state
-        .auth_pending
-        .adopt_codes
-        .lock()
-        .unwrap()
-        .remove(&q.code)
+    let pending: PendingAdopt = pending_take(&state, KIND_ADOPT, &q.code)
+        .await?
         .ok_or_else(|| AppError::BadRequest("unknown or expired sign-in code".into()))?;
-    if pending.created.elapsed() > PENDING_TTL {
-        return Err(AppError::BadRequest("expired sign-in code".into()));
-    }
 
     let jwt = mint_jwt(&state, pending.user_id, &pending.login);
     let cookie = Cookie::build((COOKIE_NAME, jwt))
@@ -566,15 +574,13 @@ async fn finish_login(
     // bounce the browser back there.
     if let Some(origin) = pending.return_origin.clone() {
         let code = random_token();
-        state.auth_pending.adopt_codes.lock().unwrap().insert(
-            code.clone(),
-            PendingAdopt {
-                user_id: user.id,
-                login: user.login.clone(),
-                next: pending.next.clone(),
-                created: Instant::now(),
-            },
-        );
+        pending_put(
+            state,
+            KIND_ADOPT,
+            &code,
+            &PendingAdopt { user_id: user.id, login: user.login.clone(), next: pending.next.clone() },
+        )
+        .await?;
         let url = format!("{}/auth/adopt?code={}", origin.trim_end_matches('/'), urlencode(&code));
         return Ok(Redirect::to(&url).into_response());
     }
@@ -592,15 +598,13 @@ async fn finish_login(
     if let Some(desktop) = pending.desktop {
         let code = random_token();
         let redirect_uri = desktop.redirect_uri.clone();
-        state.auth_pending.desktop_codes.lock().unwrap().insert(
-            code.clone(),
-            PendingDesktopCode {
-                desktop,
-                user_id: user.id,
-                login: user.login.clone(),
-                created: Instant::now(),
-            },
-        );
+        pending_put(
+            state,
+            KIND_DESKTOP,
+            &code,
+            &PendingDesktopCode { desktop, user_id: user.id, login: user.login.clone() },
+        )
+        .await?;
 
         // The code never leaves the server until the user clicks Allow, so a
         // local process that opens this URL cannot silently obtain a token.
@@ -664,9 +668,8 @@ pub async fn desktop_confirm(
     axum::Form(form): axum::Form<DesktopConfirm>,
 ) -> AppResult<Response> {
     let url = {
-        let codes = state.auth_pending.desktop_codes.lock().unwrap();
-        let pending = codes
-            .get(&form.code)
+        let pending: PendingDesktopCode = pending_peek(&state, KIND_DESKTOP, &form.code)
+            .await?
             .ok_or_else(|| AppError::BadRequest("unknown or expired code".into()))?;
 
         format!(
@@ -762,12 +765,12 @@ pub async fn desktop_authorize(
     {
         if let Some(user) = persist::get_user(&state.pool, claims.sub).await? {
             let pending =
-                PendingLogin { next: "/".into(), desktop: Some(desktop), return_origin: None, connect: None, created: Instant::now() };
+                PendingLogin { next: "/".into(), desktop: Some(desktop), return_origin: None, connect: None };
             return finish_login(&state, jar, user, pending).await;
         }
     }
 
-    Ok(start_github_flow(&state, client_id, "/".into(), Some(desktop), None, None, SIGN_IN_SCOPE).into_response())
+    start_github_flow(&state, client_id, "/".into(), Some(desktop), None, None, SIGN_IN_SCOPE).await
 }
 
 #[derive(Deserialize)]
@@ -785,16 +788,9 @@ pub async fn desktop_token(
     if req.grant_type != "authorization_code" {
         return Err(AppError::BadRequest("unsupported grant_type".into()));
     }
-    let pending = state
-        .auth_pending
-        .desktop_codes
-        .lock()
-        .unwrap()
-        .remove(&req.code)
+    let pending: PendingDesktopCode = pending_take(&state, KIND_DESKTOP, &req.code)
+        .await?
         .ok_or_else(|| AppError::BadRequest("unknown or expired code".into()))?;
-    if pending.created.elapsed() > PENDING_TTL {
-        return Err(AppError::BadRequest("expired code".into()));
-    }
     if pending.desktop.redirect_uri != req.redirect_uri {
         return Err(AppError::BadRequest("redirect_uri mismatch".into()));
     }

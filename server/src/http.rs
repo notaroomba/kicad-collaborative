@@ -932,13 +932,11 @@ pub async fn create_comment(
                                           req.y, body)
         .await?;
 
-    if let Some(tx) = state.registry.existing(doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "added", "comment": comment.to_json() }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(comment.to_json()).into_response())
 }
@@ -964,13 +962,11 @@ pub async fn update_comment(
 
     let updated = persist::get_comment(&state.pool, id).await?.ok_or(AppError::NotFound)?;
 
-    if let Some(tx) = state.registry.existing(updated.doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(updated.doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "updated", "comment": updated.to_json() }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(updated.to_json()).into_response())
 }
@@ -995,14 +991,12 @@ pub async fn delete_comment(
 
     persist::delete_comment(&state.pool, id).await?;
 
-    if let Some(tx) = state.registry.existing(comment.doc_id) {
-        let _ = tx
-            .send(crate::doc_actor::DocMsg::Comment {
+    state
+        .doc_event(comment.doc_id, crate::doc_actor::DocMsg::Comment {
                 payload: json!({ "action": "deleted",
                                  "comment": { "id": id, "docId": comment.doc_id } }),
-            })
-            .await;
-    }
+        })
+        .await;
 
     Ok(Json(json!({ "ok": true })).into_response())
 }
@@ -1910,9 +1904,7 @@ pub async fn restore_checkpoint(
         let seq = head + 1;
         persist::insert_snapshot(&state.pool, doc_id, seq, &content, None, Some(user.id)).await?;
 
-        if let Some(tx) = state.registry.existing(doc_id) {
-            let _ = tx.send(crate::doc_actor::DocMsg::Reset { seq }).await;
-        }
+        state.doc_event(doc_id, crate::doc_actor::DocMsg::Reset { seq }).await;
 
         restored.push(json!({ "docId": doc_id, "seq": seq }));
     }

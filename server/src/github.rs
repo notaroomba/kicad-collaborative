@@ -502,10 +502,8 @@ async fn freshen(state: &AppState, project_id: Uuid) -> AppResult<()> {
         if persist::latest_snapshot_seq(&state.pool, doc.id).await? >= head {
             continue;
         }
-        if let Some(tx) = state.registry.existing(doc.id) {
-            if tx.send(DocMsg::SnapshotNow).await.is_ok() {
-                waiting.push(doc.id);
-            }
+        if state.doc_event(doc.id, DocMsg::SnapshotNow).await {
+            waiting.push(doc.id);
         }
     }
     for _ in 0..24 {
@@ -1508,9 +1506,7 @@ pub async fn pull(
                     persist::name_latest_snapshot(&state.pool, lf.doc.id, &stamp).await?;
                     let seq = persist::head_seq(&state.pool, lf.doc.id).await? + 1;
                     persist::insert_snapshot(&state.pool, lf.doc.id, seq, &content, None, Some(user.id)).await?;
-                    if let Some(tx) = state.registry.existing(lf.doc.id) {
-                        let _ = tx.send(DocMsg::Reset { seq }).await;
-                    }
+                    state.doc_event(lf.doc.id, DocMsg::Reset { seq }).await;
                 }
             }
             None => {

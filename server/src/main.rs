@@ -13,6 +13,7 @@ mod parts;
 mod persist;
 mod plugins;
 mod registry;
+mod relay;
 mod ws;
 
 use std::sync::atomic::AtomicUsize;
@@ -54,18 +55,44 @@ pub struct Config {
 pub struct AppState {
     pub pool: PgPool,
     pub cfg: Arc<Config>,
-    pub auth_pending: Arc<auth::AuthPending>,
     pub registry: Arc<registry::Registry>,
     pub color_counter: Arc<AtomicUsize>,
     /// Bumped whenever anybody's access to any project changes (role, removal,
     /// transfer, visibility, trash).  Live sockets cache their role per joined
     /// document; a changed epoch makes them look it up again (ws.rs).
     pub access_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// The link to the other server replicas, if there are any (relay.rs).
+    pub relay: Arc<relay::Relay>,
 }
 
 impl AppState {
     pub fn access_changed(&self) {
         self.access_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.relay.publish(serde_json::json!({ "t": "access" }));
+    }
+
+    /// Deliver a server-initiated event (a comment, a history restore, a snapshot
+    /// request) to everyone who has the document open, on whichever replica.  Returns
+    /// whether anybody could have received it.
+    pub async fn doc_event(&self, doc_id: uuid::Uuid, msg: doc_actor::DocMsg) -> bool {
+        use doc_actor::DocMsg;
+        let relayed = match &msg {
+            DocMsg::Comment { payload } => Some(serde_json::json!({ "t": "comment", "d": doc_id, "comment": payload })),
+            DocMsg::Reset { seq } => Some(serde_json::json!({ "t": "reset", "d": doc_id, "seq": seq })),
+            DocMsg::SnapshotNow => Some(serde_json::json!({ "t": "snapshot_now", "d": doc_id })),
+            _ => None,
+        };
+        let mut delivered = false;
+        if let Some(tx) = self.registry.existing(doc_id) {
+            delivered = tx.send(msg).await.is_ok();
+        }
+        if let Some(relayed) = relayed {
+            if self.relay.others_alive() {
+                self.relay.publish(relayed);
+                delivered = true;
+            }
+        }
+        delivered
     }
 }
 
@@ -152,14 +179,16 @@ async fn main() -> anyhow::Result<()> {
     };
     sqlx::migrate!("./migrations").run(&pool).await?;
 
+    let (relay, relay_outbox) = relay::Relay::new();
     let state = AppState {
         pool: pool.clone(),
         cfg: Arc::new(cfg),
-        auth_pending: Arc::new(auth::AuthPending::default()),
-        registry: Arc::new(registry::Registry::default()),
+        registry: Arc::new(registry::Registry::new(relay.clone())),
         color_counter: Arc::new(AtomicUsize::new(0)),
         access_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        relay: relay.clone(),
     };
+    relay::start(relay, relay_outbox, pool.clone(), state.registry.clone(), state.access_epoch.clone());
 
     // Daily pruning of ops/snapshots behind snapshot coverage.
     {

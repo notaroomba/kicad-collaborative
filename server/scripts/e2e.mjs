@@ -23,6 +23,10 @@ import pg from 'pg';
 
 const BASE = (process.env.E2E_BASE || 'http://127.0.0.1:8099').replace(/\/$/, '');
 const WS = BASE.replace(/^http/, 'ws') + '/ws';
+// With E2E_BASE_B set, everything Bob does over the socket goes through a second replica
+// of the server (same database), so every exchange below also crosses replicas.
+const BASE_B = (process.env.E2E_BASE_B || BASE).replace(/\/$/, '');
+const WS_B = BASE_B.replace(/^http/, 'ws') + '/ws';
 const SECRET = process.env.E2E_JWT_SECRET;
 const PG_URL = process.env.E2E_PG_URL;
 
@@ -105,7 +109,7 @@ check('link claim grants access', claim.status === 200, `got ${claim.status}`);
 // Sends `hello` from the open handler rather than awaiting open separately, so
 // the socket is never left idle against the server's handshake timeout.
 function connect(token, clientId, label) {
-  const ws = new WebSocket(WS);
+  const ws = new WebSocket(label === 'alice' ? WS : WS_B);
   const inbox = [];
   const waiters = [];
   let closed = null;
