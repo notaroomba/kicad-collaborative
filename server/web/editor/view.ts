@@ -178,6 +178,17 @@ export function svgText(x, y, size, color, text) {
   return t;
 }
 
+/** Our own boxes [x, y, w, h] (internal units) of the items a peer selected by id. */
+function peerBoxesOf(ids) {
+  const out = [], board = !isSch();
+  for (const id of ids) {
+    const it = E.kdoc.items.get(id); if (!it) continue;
+    const b = it.bbox, box = board ? KiCadCanvas.boardItemBox(it, E.IU) : b ? [b[0] * E.IU, b[1] * E.IU, (b[2] - b[0]) * E.IU, (b[3] - b[1]) * E.IU] : null;
+    if (box) out.push(box);
+  }
+  return out;
+}
+
 export function drawPeers(peers) {
   peersG.replaceChildren();
   const s = pxPerMm(), mm = (nm) => nm / E.IU;
@@ -218,7 +229,9 @@ export function drawPeers(peers) {
     // fill, one union box for a multi-selection, and nothing around the items a drag pulled
     // along (attached wires, riders -- listed in `dragAdded`), only what the peer picked.
     const dragAdded = new Set(st.dragAdded || []), sel = st.selection || [];
-    const own = (st.boxes || []).filter((b, i) => !(dragAdded.size && dragAdded.has(sel[i])));
+    let own = (st.boxes || []).filter((b, i) => !(dragAdded.size && dragAdded.has(sel[i])));
+    // a peer that names what it selected without boxes (the web at rest): outline our own copy of those items
+    if (!st.boxes && sel.length && E.kdoc) own = peerBoxesOf(sel);
     if (own.length) {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const b of own) { x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3]); }

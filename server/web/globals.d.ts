@@ -53,6 +53,8 @@ interface KRenderOpts {
 }
 
 interface KiCadCanvasApi {
+  boardItemBox(item: KItem, IU?: number): [number, number, number, number] | null;
+  presenceSelection(doc: KDoc | null, selection: Iterable<string> | null, IU: number, moving: boolean, max?: number): { selection: string[]; boxes?: [number, number, number, number][] } | null;
   parse(text: string): SNode | null;
   parseAll(text: string): SNode[];
   serialize(node: SNode): string;

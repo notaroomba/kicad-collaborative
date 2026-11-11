@@ -59,33 +59,28 @@ export function sendPresence(mmPos, ghostSegs) {
   const st = { cursor: [Math.round(at[0] * E.IU), Math.round(at[1] * E.IU)] };
   const vp = visibleRectNm(); if (vp) st.viewport = vp;
   if (ghostSegs) st.ghost = ghostSegs;
-  // What the peer has selected.  The desktop's rebuildOverlay draws a peer-coloured wash from
-  // `boxes` (live geometry, so a drag in progress shows) and falls back to resolving `selection`
-  // ids in its own copy; with neither the peer is a bare cursor and the desktop cannot tell that
-  // the items moving under it belong to that person.  Same frame as the desktop sends:
-  // BOX2I(origin, size) in internal units.
-  // Everything this client has picked: the multi-selection, the single symbol / footprint (E.selected) and the
-  // schematic module's own single pick (a wire, label, junction ...).
+  // What the peer has selected (desktop rebuildOverlay pairs selection[i] with boxes[i] and at[i]; boxes are
+  // BOX2I(origin, size) in IU).  Everything this client has picked: the multi-selection, the single symbol /
+  // footprint (E.selected), and the schematic or board module's own pick (wires, labels, tracks, vias, graphics).
   const picked = new Set(E.selection || []);
   if (E.selected && E.selected.id) picked.add(E.selected.id);
-  const schSel = E.DOC_TYPE === "kicad_sch" && window.CollabTools && window.CollabTools.sch && window.CollabTools.sch.state ? window.CollabTools.sch.state.sel : null;
-  if (typeof schSel === "string" && schSel) picked.add(schSel);
-  if (E.kdoc && picked.size) {
-    const sel = [], boxes = [], at = [], plain = [];
-    for (const id of picked) {
-      if (sel.length >= MAX_PRESENCE_ITEMS) break;
-      const it = E.kdoc.items.get(id), b = it && it.bbox;
-      if (!b) { plain.push(id); continue; }
-      // rebuildOverlay pairs selection[i] with boxes[i] (and at[i]), so only items that contribute a box
-      // go in both lists; anything without geometry falls back to the id-only form.
-      sel.push(id);
-      boxes.push([Math.round(b[0] * E.IU), Math.round(b[1] * E.IU), Math.round((b[2] - b[0]) * E.IU), Math.round((b[3] - b[1]) * E.IU)]);
+  const T = typeof CollabTools !== "undefined" ? CollabTools : null;
+  if (E.DOC_TYPE === "kicad_sch") {
+    const schSel = T && T.sch && T.sch.state ? T.sch.state.sel : null;
+    if (typeof schSel === "string" && schSel) picked.add(schSel);
+  } else {
+    const modSel = E.kdoc && T && T.pcb && T.pcb.state && T.pcb.state.sel;
+    if (modSel) for (const id of modSel) picked.add(id);
+  }
+  const sel = picked.size ? presenceSelection(E.kdoc, picked, E.IU, presenceMoving()) : null;
+  if (sel) {
+    st.selection = sel.selection;
+    if (sel.boxes) {
+      st.boxes = sel.boxes;
       // The item's anchor (its GetPosition on the desktop): a receiver that holds the item ghosts it displaced by
-      // `at − its own anchor`, which is exact, where a bounding-box difference never is (fonts, text layers).
-      const a = anchorMm(it); at.push(a ? [Math.round(a[0] * E.IU), Math.round(a[1] * E.IU)] : null);
+      // `at - its own anchor`, which is exact, where a bounding-box difference never is (fonts, text layers).
+      st.at = sel.selection.map((id) => { const it = E.kdoc.items.get(id), a = it && anchorMm(it); return a ? [Math.round(a[0] * E.IU), Math.round(a[1] * E.IU)] : null; });
     }
-    if (boxes.length) { st.selection = sel; st.boxes = boxes; st.at = at; }
-    else if (plain.length) st.selection = plain;
   }
   // The desktop only draws a peer that says which sheet it is on: SCH_COLLAB_TOOL::rebuildOverlay
   // skips any peer whose state.sheetFile differs from the sheet it is showing, and an absent field
@@ -106,6 +101,32 @@ export function anchorMm(it) {
   const pts = K.ptsOf(n); if (pts.length) return pts[0];
   const poly = K.kid(n, "polyline"); if (poly) { const pp = K.ptsOf(poly); if (pp.length) return pp[0]; }
   return null;
+}
+
+/**
+ * What this client has selected, for peers.
+ *
+ * The desktop's rebuildOverlay (pcbnew/collab/pcb_collab_tool.cpp, eeschema/collab/sch_collab_tool.cpp) reads
+ * `boxes` as BOX2I(origin, size) in internal units — the sender's GetBoundingBox() of each selected item,
+ * paired by index with `selection` — and takes any difference between a box's origin and its own
+ * GetBoundingBox() of that item as "the peer is dragging it": it then paints a copy of the item displaced by
+ * the difference and airwires to it.  With only `selection` it resolves the ids in its own board and outlines
+ * its own boxes.  So:
+ *   · at rest a board sends ids alone: the desktop's own geometry is exact, where any box computed here that
+ *     is off by more than one unit (a footprint's box hangs on text extents and on what the desktop shows)
+ *     would draw a second, shifted copy of everything selected;
+ *   · while something is being moved the boxes go along, computed the way pcbnew does (canvas/kicad-bbox.ts),
+ *     so the difference the desktop sees is the move itself.
+ * A schematic keeps sending its boxes always (the renderer's extents), as before.
+ */
+export const presenceSelection = (doc, selection, IU, moving) => KiCadCanvas.presenceSelection(doc, selection, IU, moving, MAX_PRESENCE_ITEMS);
+
+/** Is a move in flight — the app's own drag, or one of the board / schematic modules' — so that live boxes matter? */
+function presenceMoving() {
+  if (E.drag && (E.drag.moved || E.drag.group)) return true;
+  const T = typeof CollabTools !== "undefined" ? CollabTools : null;
+  const p = T && T.pcb && T.pcb.state, sc = T && T.sch && T.sch.state;
+  return !!((p && ((p.move && p.move.moved) || p.drag || p.carry)) || (sc && sc.drag));
 }
 
 /** ws.rs rejects a presence state over 8 KB outright, and the desktop caps its own lists too. */

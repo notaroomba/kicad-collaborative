@@ -46,6 +46,7 @@ import { displayNetName, netCode } from "./geom-pcb";
 import { unitLetter } from "./geom-sch";
 import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } from "./render";
 import { pcbSizes } from "./pcb-sizes";
+import { boardItemBox, presenceSelection } from "./kicad-bbox";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS,
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
@@ -71,5 +72,6 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
   pcbSizes };
 
+api.boardItemBox = boardItemBox; api.presenceSelection = presenceSelection;   // BOARD_ITEM::GetBoundingBox for the presence payload (web/canvas/kicad-bbox.ts)
 api.pcbNetlist = pcbNetlist; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;
