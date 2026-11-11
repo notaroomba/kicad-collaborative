@@ -181,8 +181,9 @@ try {
   r = await call('POST', `/api/projects/${pid}/github/push`, { message: `kicad-collab real test ${STAMP}: as a pull request`, pullRequest: true });
   check('push as a pull request', r.status === 200 && r.j.pullRequest?.number > 0, JSON.stringify(r.j));
   if (r.j?.pullRequest?.number) {
-    cleanup.push(() => gh('PATCH', `/repos/${REPO}/pulls/${r.j.pullRequest.number}`, { state: 'closed' }));
-    cleanup.push(() => gh('DELETE', `/repos/${REPO}/git/refs/heads/${r.j.branch}`));
+    const prNumber = r.j.pullRequest.number, prBranch = r.j.branch;
+    cleanup.push(() => gh('PATCH', `/repos/${REPO}/pulls/${prNumber}`, { state: 'closed' }));
+    cleanup.push(() => gh('DELETE', `/repos/${REPO}/git/refs/heads/${prBranch}`));
     const pr = gh('GET', `/repos/${REPO}/pulls/${r.j.pullRequest.number}`).j;
     check('…which is open against main with the one file', pr.state === 'open' && pr.base.ref === 'main' && pr.changed_files === 1, `${pr.state} ${pr.base?.ref} ${pr.changed_files}`);
     check('main did not move', ghHead() === ghHead() && ghFile(`${folder}/${pcbName}`) === want);
